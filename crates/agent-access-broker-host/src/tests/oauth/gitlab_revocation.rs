@@ -113,14 +113,13 @@ impl OAuthFixture {
             .unwrap()
     }
 
-    /// Makes every pending revocation due now and wakes the worker.
+    /// Makes every pending revocation and each of its tokens due now, as
+    /// if every retry wait had ended, and wakes the worker.
     fn revocations_due_now(&self) {
-        rusqlite::Connection::open(self.store_path())
+        self.runtime
+            .managed_store()
             .unwrap()
-            .execute(
-                "UPDATE oauth_revocations SET due_at=0 WHERE ciphertext IS NOT NULL",
-                [],
-            )
+            .oauth_revocations_due_now()
             .unwrap();
         agent_access_core::oauth_revocation_signal().notify_waiters();
     }
@@ -337,6 +336,15 @@ async fn a_restarted_broker_resumes_a_pending_revocation() {
             .await,
         json!({"disconnected": true, "remoteRevocation": "pending"})
     );
+    // Its tokens' retry waits end before the restart, so the next broker's
+    // startup pass finds them due. This broker's worker sleeps until the
+    // first wait would have ended.
+    fixture
+        .runtime
+        .managed_store()
+        .unwrap()
+        .oauth_revocations_due_now()
+        .unwrap();
     let OAuthFixture {
         _dir: dir,
         broker,
@@ -351,10 +359,6 @@ async fn a_restarted_broker_resumes_a_pending_revocation() {
         revocation_rows_at(&config),
         [("disconnect".into(), "pending".into(), true)]
     );
-    rusqlite::Connection::open(&config.managed_store.as_ref().unwrap().path)
-        .unwrap()
-        .execute("UPDATE oauth_revocations SET due_at=0", [])
-        .unwrap();
     let restarted =
         start_oauth_broker(&config, vec![ServiceProvider::from(Arc::clone(&consumer))]).await;
     let started = std::time::Instant::now();

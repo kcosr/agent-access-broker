@@ -3,7 +3,7 @@
 //! readiness, the used-key inventory, rewrap, and the frozen encrypted
 //! record.
 use super::*;
-use crate::oauth::revocation::{MemberOutcome, MemberType, PendingRefresh, RevocationMember};
+use crate::oauth::revocation::{KeptFamily, MemberOutcome, MemberType, RevocationMember};
 
 // A pending revocation as the first release of `028_oauth_revocations`
 // wrote it under key `golden` (`[9; 32]`). Upgrades must keep decrypting
@@ -11,11 +11,13 @@ use crate::oauth::revocation::{MemberOutcome, MemberType, PendingRefresh, Revoca
 // spellings and the payload encoding are a persisted contract. Adapt
 // assertions to a changed API, but never regenerate this vector to make a
 // change pass.
+const GOLDEN_FAMILY: &str = "9a5e2b8f-3c71-4d0a-8e6b-1f2c3d4e5f60";
+const GOLDEN_ATTEMPT: &str = "4b7d2c9e-8f1a-4e3b-9c6d-2a5f8e1b7c30";
 const GOLDEN_REVOCATION: (&str, &str, &str, &str) = (
     "5d1c3c1e-6c0f-4f0e-9b1a-6a3f2f0d8c41",
     "d11c02781d5768a3b87793792b940453b12faf457979621c595b76cb8873765d",
-    "7af923a3e1dc9c970d253eba",
-    "826b02268d317deb3d5c7c33901b54d7f8c72e0ee6cc0f14242711ca7bf58a28c09964c948ab28fc19d23bf3033abb16d57f46d7d02033994e6b1685c166cd6349f7247f5a0e3022a54c69d8e3686c6c0a7a90dd94e7d7dae0de4dcf016b02418ac057c065d4dcd98bcdb0b8cc4bf902c9292bb46ef201d6a5c6f5bc661a7ce2fc34645878e34126eef5dc7126f107fd0548f2b30e77f6ff363f99c611e9133ffd78fa41f358e1467d3c50684889c200383759b34e1e4e8065e85ffb310e284bbacee0132e831bea398da11365dfb0de7befd817608ef94429e3826d79cacb7125f7334a25a9e2a40ce1e129e4131a12eb8f67de9cb8517385edbca82249ffdddb25c93acecb35ec29552c26eb0a80a9705125b69c6d220dd9b60cfa61b7065c353bcb4b385cdb2977a314724696c06246f8b98d7aa6b39ce098b03c55a270ac0b6bfcc7e1555eabb211a374782dcd7cacda407c3e4b6d6272db248156854beba7e6e95bf46110ab75d5",
+    "42bf499aafd9be8ba40c40ab",
+    "82b55d94f8cc2b0606fe2df3e0e57c9b9be73c24750607dcb04cac5938579a38c6801bdab46dac9fd24611ec7028eb61fe77b16f9cc0b13429888055ff4526a6ea1d2b8fd8e23a3bef2dad859e769e80c340e5885e48625b2cf2b123ee521fbc6d28663a98eab2fe6939747b816f710bf33f69b4287f32c8f307554e0e78de05ae5cdfe75015987570ffdace2be1efdb66dbefdf36704af3f5d66f206e639be2522b652b0e0cdbf66e316eb8b85b061a5d44677d7104f2d7eee63719604a2dee1b9b4828d0a366d008307a4c4d4443c4191da9dac7189541b356ccc70aff6acb1cff77cd94fa1cdcf80ff647a8b0268ba4c296ca6fa3ea55802f1de6228967bb44861151f01ea7ca2e2535c4879cc2612aa40f8360c1fb775828891bdee8516025c0cfb070d5bf8918062f84dacd4cd4f96c46b435b57b206f02513f084de652",
 );
 
 fn golden_hex(value: &str) -> Vec<u8> {
@@ -37,25 +39,23 @@ fn golden_ring() -> CredentialKeyRing {
 
 fn golden_material() -> RevocationMaterial {
     RevocationMaterial {
-        family_id: "9a5e2b8f-3c71-4d0a-8e6b-1f2c3d4e5f60".into(),
         members: vec![
             RevocationMember {
                 token: "golden-refresh-token".into(),
                 token_type: MemberType::RefreshToken,
                 outcome: MemberOutcome::Pending,
-                tries: 0,
+                tries: 2,
+                not_before: 1_792_000_120,
             },
             RevocationMember {
                 token: "golden-access-token".into(),
                 token_type: MemberType::AccessToken,
                 outcome: MemberOutcome::Revoked,
                 tries: 1,
+                not_before: 1_791_999_990,
             },
         ],
-        refresh_attempt: Some(PendingRefresh {
-            id: "golden-refresh-attempt".into(),
-            expires_at: 1_792_000_000,
-        }),
+        refresh_awaited_until: Some(1_792_000_000),
         unknown_successor: false,
     }
 }
@@ -103,9 +103,16 @@ fn insert_golden(store: &ManagedStore) {
         .lock()
         .unwrap()
         .execute(
-            "INSERT INTO oauth_revocations(revocation_id,owner_principal_id,registration_id,config_fingerprint,cause,state,due_at,created_at,updated_at,payload_version,key_id,nonce,ciphertext)
-             VALUES(?1,'alice','gitlab',?2,'disconnect','pending',1792000001,'2026-10-16T00:00:00Z','2026-10-16T00:00:00Z',1,'golden',?3,?4)",
-            params![id, fingerprint, golden_hex(nonce), golden_hex(ciphertext)],
+            "INSERT INTO oauth_revocations(revocation_id,owner_principal_id,registration_id,config_fingerprint,family_id,cause,state,refresh_attempt_id,due_at,created_at,updated_at,payload_version,key_id,nonce,ciphertext)
+             VALUES(?1,'alice','gitlab',?2,?3,'disconnect','pending',?4,1792000001,'2026-10-16T00:00:00Z','2026-10-16T00:00:00Z',1,'golden',?5,?6)",
+            params![
+                id,
+                fingerprint,
+                GOLDEN_FAMILY,
+                GOLDEN_ATTEMPT,
+                golden_hex(nonce),
+                golden_hex(ciphertext)
+            ],
         )
         .unwrap();
 }
@@ -116,22 +123,22 @@ fn assert_golden(row: &RevocationRow) {
     assert_eq!(row.owner, "alice");
     assert_eq!(row.registration, "gitlab");
     assert_eq!(row.fingerprint, fingerprint);
+    assert_eq!(row.family_id, GOLDEN_FAMILY);
     assert_eq!(row.cause, RevocationCause::Disconnect);
     assert_eq!(row.state, RemoteRevocation::Pending);
+    assert_eq!(row.refresh_attempt.as_deref(), Some(GOLDEN_ATTEMPT));
     assert_eq!(row.due_at, 1_792_000_001);
     let material = row.material.as_ref().unwrap();
     let expected = golden_material();
-    assert_eq!(material.family_id, expected.family_id);
     assert_eq!(material.members.len(), 2);
     for (member, expected) in material.members.iter().zip(&expected.members) {
         assert_eq!(member.token, expected.token);
         assert_eq!(member.token_type, expected.token_type);
         assert_eq!(member.outcome, expected.outcome);
         assert_eq!(member.tries, expected.tries);
+        assert_eq!(member.not_before, expected.not_before);
     }
-    let attempt = material.refresh_attempt.as_ref().unwrap();
-    assert_eq!(attempt.id, "golden-refresh-attempt");
-    assert_eq!(attempt.expires_at, 1_792_000_000);
+    assert_eq!(material.refresh_awaited_until, Some(1_792_000_000));
     assert!(!material.unknown_successor);
     assert_eq!(material.state(), RemoteRevocation::Pending);
 }
@@ -145,13 +152,13 @@ fn golden_revocation_record_still_decrypts() {
     let (id, fingerprint, _, _) = GOLDEN_REVOCATION;
     assert_eq!(
         String::from_utf8(aad(
-            (id, "alice", "gitlab", fingerprint),
+            (id, "alice", "gitlab", fingerprint, GOLDEN_FAMILY),
             "disconnect",
             "golden"
         ))
         .unwrap(),
         format!(
-            r#"["broker-oauth-revocation",1,"{id}","alice","gitlab","{fingerprint}","disconnect","golden"]"#
+            r#"["broker-oauth-revocation",1,"{id}","alice","gitlab","{fingerprint}","{GOLDEN_FAMILY}","disconnect","golden"]"#
         )
     );
     assert_golden(&store.oauth_revocation_read(&ring, id).unwrap().unwrap());
@@ -161,6 +168,7 @@ fn golden_revocation_record_still_decrypts() {
         ("owner_principal_id", "mallory"),
         ("registration_id", "other"),
         ("config_fingerprint", "changed"),
+        ("family_id", "other-family"),
         ("cause", "superseded"),
     ] {
         test_sql_revocation(
@@ -234,28 +242,42 @@ fn schema_027_upgrades_to_028_with_rows_unchanged() {
     let conn = store.connection.lock().unwrap();
     assert_eq!(snapshot(&conn), before);
     assert!(sqlite_object_exists(&conn, "table", "oauth_revocations").unwrap());
-    // The constraints keep pending rows encrypted and finished rows empty.
-    for (state, material) in [
-        ("pending", "NULL,NULL,NULL,NULL"),
+    // The constraints keep pending rows encrypted and finished rows empty,
+    // and name a refresh attempt only while revocation is pending or
+    // unconfirmed.
+    for (state, attempt, material) in [
+        ("pending", "NULL", "NULL,NULL,NULL,NULL"),
         (
             "revoked",
+            "NULL",
             "1,'golden',x'000102030405060708090a0b',x'00112233445566778899aabbccddeeff'",
         ),
-        ("pending", "1,NULL,NULL,NULL"),
-        ("unknown", "NULL,NULL,NULL,NULL"),
+        ("pending", "NULL", "1,NULL,NULL,NULL"),
+        ("unknown", "NULL", "NULL,NULL,NULL,NULL"),
+        ("revoked", "'attempt'", "NULL,NULL,NULL,NULL"),
+        ("failed", "'attempt'", "NULL,NULL,NULL,NULL"),
+        ("unconfirmed", "''", "NULL,NULL,NULL,NULL"),
     ] {
         assert!(
             conn.execute(
                 &format!(
-                    "INSERT INTO oauth_revocations(revocation_id,owner_principal_id,registration_id,config_fingerprint,cause,state,due_at,created_at,updated_at,payload_version,key_id,nonce,ciphertext)
-                     VALUES('00000000-0000-4000-8000-000000000000','alice','gitlab','fingerprint','disconnect','{state}',0,'t','t',{material})"
+                    "INSERT INTO oauth_revocations(revocation_id,owner_principal_id,registration_id,config_fingerprint,family_id,cause,state,refresh_attempt_id,due_at,created_at,updated_at,payload_version,key_id,nonce,ciphertext)
+                     VALUES('00000000-0000-4000-8000-000000000000','alice','gitlab','fingerprint','family','disconnect','{state}',{attempt},0,'t','t',{material})"
                 ),
                 [],
             )
             .is_err(),
-            "{state} {material}"
+            "{state} {attempt} {material}"
         );
     }
+    // A finished unconfirmed revocation may still name its attempt.
+    conn.execute(
+        "INSERT INTO oauth_revocations(revocation_id,owner_principal_id,registration_id,config_fingerprint,family_id,cause,state,refresh_attempt_id,due_at,created_at,updated_at)
+         VALUES('00000000-0000-4000-8000-000000000000','alice','gitlab','fingerprint','family','refresh_uncertain','unconfirmed','attempt',0,'t','t')",
+        [],
+    )
+    .unwrap();
+    conn.execute("DELETE FROM oauth_revocations", []).unwrap();
     drop(conn);
     insert_golden(&store);
     assert_golden(
@@ -325,7 +347,7 @@ fn revocations_join_key_readiness_inventory_and_rewrap() {
     let finished = {
         let conn = store.connection.lock().unwrap();
         let mut material = golden_material();
-        material.refresh_attempt = None;
+        material.refresh_awaited_until = None;
         material.members.truncate(1);
         insert(
             &conn,
@@ -335,7 +357,11 @@ fn revocations_join_key_readiness_inventory_and_rewrap() {
                 registration: "gitlab",
                 fingerprint: "fingerprint",
                 cause: RevocationCause::PrincipalDisabled,
-                material,
+                family: KeptFamily {
+                    family_id: "family".into(),
+                    refresh_attempt: None,
+                    material,
+                },
                 now: 5,
             },
         )

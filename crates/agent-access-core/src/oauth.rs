@@ -1582,6 +1582,9 @@ impl OAuthManager {
             c.family.attempt = Some(attempt.clone());
             Ok((current, ()))
         })?;
+        // A fence that ends the family while this attempt is in flight names
+        // it in the family's revocation, which learns what it did.
+        let fenced = (connection.family.id.as_str(), attempt.id.as_str());
         // The persisted attempt means possibly sent, even if the process dies immediately before this call.
         let started = Instant::now();
         let result = r
@@ -1600,7 +1603,7 @@ impl OAuthManager {
             Err(error) => {
                 self.fail_attempt(owner, &binding.registration, &attempt.id, error.clone())
                     .inspect_err(|_| {
-                        self.settle_fenced(owner, binding, r, &attempt.id, Err(error.clone()))
+                        self.settle_fenced(owner, binding, r, fenced, Err(error.clone()))
                     })?;
                 let current = self.read(owner, &binding.registration)?;
                 let c = current.connection.as_ref().ok_or(OAuthError::Stale)?;
@@ -1624,13 +1627,7 @@ impl OAuthManager {
                     OAuthError::InvalidResponse,
                 )
                 .inspect_err(|_| {
-                    self.settle_fenced(
-                        owner,
-                        binding,
-                        r,
-                        &attempt.id,
-                        Err(OAuthError::InvalidResponse),
-                    )
+                    self.settle_fenced(owner, binding, r, fenced, Err(OAuthError::InvalidResponse))
                 })?;
                 return Err(refresh_error(
                     OAuthError::InvalidResponse,
@@ -1649,13 +1646,7 @@ impl OAuthManager {
                     OAuthError::InvalidResponse,
                 )
                 .inspect_err(|_| {
-                    self.settle_fenced(
-                        owner,
-                        binding,
-                        r,
-                        &attempt.id,
-                        Err(OAuthError::InvalidResponse),
-                    )
+                    self.settle_fenced(owner, binding, r, fenced, Err(OAuthError::InvalidResponse))
                 })?;
                 return Err(refresh_error(
                     OAuthError::InvalidResponse,
@@ -1699,7 +1690,7 @@ impl OAuthManager {
                 .insert(binding.permission_profile.clone(), entry.clone());
             Ok((current, ()))
         })
-        .inspect_err(|_| self.settle_fenced(owner, binding, r, &attempt.id, Ok(successor)))?;
+        .inspect_err(|_| self.settle_fenced(owner, binding, r, fenced, Ok(successor)))?;
         tracing::info!(target:"agent_access_core::oauth",event="refresh_result",owner,registration=%binding.registration,connection_id=%connection.id,attempt_id=%attempt.id,outcome="committed",duration_ms=started.elapsed().as_millis() as u64);
         self.validate_entry_targets(owner, binding, &slot, &entry, profile, r)
             .await
@@ -1784,17 +1775,16 @@ impl OAuthManager {
         eligibility?;
         Ok(make_lease(owner, binding, &current, c, entry, profile))
     }
-    /// After refresh attempt `id` could not record its result because a
-    /// fence ended the family, tells the family's pending revocation what
-    /// the refresh did: `Ok` holds the successor it issued; `Err` the
-    /// refresh's failure, which either proves nothing was consumed or
-    /// leaves the outcome unknown.
+    /// After `attempt` could not record its result because a fence ended
+    /// its family, tells the family's revocation what the refresh did: `Ok`
+    /// holds the successor it issued; `Err` the refresh's failure, which
+    /// either proves nothing was consumed or leaves the outcome unknown.
     fn settle_fenced(
         &self,
         owner: &str,
         binding: &OAuthBinding,
         r: &ResolvedRegistration,
-        id: &str,
+        (family, attempt): (&str, &str),
         result: Result<(Option<String>, String), OAuthError>,
     ) {
         if !r.dialect.supports_revocation() {
@@ -1810,7 +1800,7 @@ impl OAuthManager {
             }
             Err(_) => FencedRefresh::NotConsumed,
         };
-        self.settle_fenced_refresh(owner, &binding.registration, id, outcome);
+        self.settle_fenced_refresh((owner, &binding.registration, family), attempt, outcome);
     }
     fn fail_attempt(
         &self,

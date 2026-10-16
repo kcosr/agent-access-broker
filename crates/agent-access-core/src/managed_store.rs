@@ -224,7 +224,7 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
     },
     ManagedStoreMigration {
         version: MANAGED_STORE_OAUTH_REVOCATIONS_VERSION,
-        checksum: "9c8f23b36148e01bbc5524e6e16b36f612dc8e56336d349ac538480bf56afe00",
+        checksum: "54ad925a25730925cd410d948b0691cdaecc2ba791681023f639be89fd1bf986",
         sql: include_str!("managed_store/oauth_revocations.sql"),
         seed: None,
         structural_validation: imported_store::validate_oauth_revocations_structure,

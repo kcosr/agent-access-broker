@@ -10,8 +10,9 @@ use std::time::Duration;
 
 /// The `stub` dialect's wire with GitLab-style revocation: `POST
 /// /oauth/revoke` with the token and its type hint; 2xx revokes, an
-/// `invalid_token` error reports an already invalid token, 429 and 5xx are
-/// retryable and anything else is final.
+/// `invalid_token` error reports an already invalid token, 429 (with its
+/// `Retry-After`), 5xx and a rejected client authentication are retryable
+/// and anything else is final.
 struct RevokingDialect;
 pub(in crate::oauth::tests) static REVOKING_DIALECT:
     agent_access_provider::OAuthDialectRegistration =
@@ -106,7 +107,12 @@ impl OAuthDialect for RevokingDialect {
         let response = http.send(request, "oauth.revoke").await?;
         match response.status() {
             200..=299 => Ok(RevocationOutcome::Revoked),
-            429 => Err(OAuthDialectError::RetryAfter(1)),
+            429 => Err(OAuthDialectError::RetryAfter(
+                response
+                    .header("retry-after")
+                    .and_then(agent_access_provider::UpstreamRetryAfter::parse)
+                    .map_or(1, |wait| wait.seconds()),
+            )),
             status if status >= 500 => Err(OAuthDialectError::Failed),
             _ => match response
                 .json()
@@ -116,6 +122,9 @@ impl OAuthDialect for RevokingDialect {
                 .and_then(|body| body["error"].as_str())
             {
                 Some("invalid_token") => Ok(RevocationOutcome::AlreadyInvalid),
+                Some("invalid_client" | "unauthorized_client") => {
+                    Err(OAuthDialectError::ClientRejected)
+                }
                 _ => Err(OAuthDialectError::RequestRejected),
             },
         }
@@ -220,6 +229,93 @@ fn revocation_ids(store: &ManagedStore) -> Vec<String> {
         .unwrap()
 }
 
+/// The refresh attempt each stored revocation names, oldest first.
+fn named_attempts(store: &ManagedStore) -> Vec<Option<String>> {
+    let conn = database(store);
+    let mut statement = conn
+        .prepare(
+            "SELECT refresh_attempt_id FROM oauth_revocations ORDER BY created_at,revocation_id",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// The refresh attempt the stored slot holds in flight.
+fn attempt_id(manager: &OAuthManager) -> String {
+    manager
+        .read("user", "stub")
+        .unwrap()
+        .connection
+        .unwrap()
+        .family
+        .attempt
+        .unwrap()
+        .id
+}
+
+/// Lets the slot's refresh attempt expire, as if it had been in flight for
+/// longer than its lifetime.
+fn expire_attempt(manager: &OAuthManager) {
+    manager
+        .update("user", "stub", |_, current| {
+            let mut current = current.unwrap();
+            let attempt = current
+                .connection
+                .as_mut()
+                .unwrap()
+                .family
+                .attempt
+                .as_mut()
+                .unwrap();
+            attempt.expires_at = now() - 1;
+            Ok((current, ()))
+        })
+        .unwrap();
+}
+
+/// Ends the wait of the stored revocation's awaited refresh and makes it
+/// due, as if the attempt had expired; its tokens keep their own waits.
+fn expire_awaited_refresh(store: &ManagedStore, ring: &CredentialKeyRing) {
+    let id = revocation_ids(store).remove(0);
+    store
+        .oauth_revocation_update(ring, &id, |row| {
+            let material = row.material.as_mut().unwrap();
+            assert!(material.refresh_awaited_until.is_some());
+            material.refresh_awaited_until = Some(now() - 1);
+            row.due_at = 0;
+        })
+        .unwrap();
+}
+
+/// The connection holds no token after its family ended: a late successor
+/// was not installed.
+fn holds_no_token(manager: &OAuthManager) {
+    if let Some(connection) = manager.read("user", "stub").unwrap().connection {
+        assert!(connection.family.refresh_token.is_none());
+        assert!(connection.family.access.is_empty());
+        assert!(connection.family.attempt.is_none());
+    }
+}
+
+/// A token endpoint answering the next refresh with family `number` after
+/// `delay`, so the test can end the family meanwhile.
+async fn delayed_refresh(server: &MockServer, number: usize, delay: Duration) {
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(token(number))
+                .set_delay(delay),
+        )
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
 /// How many stored revocations hold an encrypted payload.
 fn revocation_keys(store: &ManagedStore) -> i64 {
     database(store)
@@ -231,12 +327,10 @@ fn revocation_keys(store: &ManagedStore) -> i64 {
         .unwrap()
 }
 
-/// Makes every stored revocation due now, as if its retry wait ended.
+/// Makes every stored revocation and each of its tokens due now, as if
+/// every retry wait ended.
 fn make_due(store: &ManagedStore) {
-    test_sql(
-        store,
-        "UPDATE oauth_revocations SET due_at=0 WHERE ciphertext IS NOT NULL",
-    );
+    store.oauth_revocations_due_now().unwrap();
 }
 
 fn due_in(store: &ManagedStore) -> i64 {
@@ -453,6 +547,9 @@ async fn lost_refresh_response_keeps_the_predecessor_and_is_unconfirmed() {
         stored(&store),
         [("refresh_uncertain".into(), "unconfirmed".into(), true)]
     );
+    // This process ran the refresh and lost its outcome for good: no later
+    // report can name it.
+    assert_eq!(named_attempts(&store), [None]);
     assert_eq!(
         manager.remote_revocation("user", "stub").unwrap(),
         RemoteRevocation::Unconfirmed
@@ -618,6 +715,304 @@ async fn late_refresh_success_after_principal_disable_is_revoked() {
     );
 }
 
+/// Another process (here a second manager on the same store) presumes a
+/// refresh attempt lost once it expires, keeps the predecessor and revokes
+/// it. When the attempt's own process then receives the successor, it is
+/// never installed: it joins the finished revocation, which reopens,
+/// revokes it and stays unconfirmed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_successor_after_another_process_presumed_its_refresh_lost_is_revoked() {
+    let (dir, store, ring, manager, server) = revoking_fixture().await;
+    connected(&manager, &server).await;
+    let other = stub_manager(store.clone(), ring.clone(), manager.config().clone()).unwrap();
+    other.activate().unwrap();
+    expire(&manager);
+    server.reset().await;
+    identity(&server).await;
+    delayed_refresh(&server, 1, Duration::from_secs(3)).await;
+    revoke_responds(&server, ResponseTemplate::new(200)).await;
+    let refreshing = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.acquire("user", &binding()).await })
+    };
+    attempt_persisted(&manager).await;
+    let attempt = attempt_id(&manager);
+    expire_attempt(&manager);
+    // The other process finds the attempt expired and not its own.
+    assert_eq!(
+        other.acquire("user", &binding()).await.unwrap_err(),
+        OAuthError::RefreshUncertain
+    );
+    assert_eq!(
+        stored(&store),
+        [("refresh_uncertain".into(), "unconfirmed".into(), true)]
+    );
+    assert_eq!(named_attempts(&store), [Some(attempt.clone())]);
+    assert_eq!(other.revoke_due().await.unwrap(), None);
+    assert_eq!(
+        revoked(&server).await.into_iter().collect::<BTreeSet<_>>(),
+        family(0)
+    );
+    assert_eq!(
+        stored(&store),
+        [("refresh_uncertain".into(), "unconfirmed".into(), false)]
+    );
+    assert_eq!(named_attempts(&store), [Some(attempt)]);
+    // The original process receives the successor after all.
+    assert_eq!(refreshing.await.unwrap().unwrap_err(), OAuthError::Stale);
+    holds_no_token(&manager);
+    assert_eq!(
+        stored(&store),
+        [("refresh_uncertain".into(), "unconfirmed".into(), true)]
+    );
+    assert_eq!(named_attempts(&store), [None]);
+    assert_eq!(other.revoke_due().await.unwrap(), None);
+    assert_eq!(
+        revoked(&server).await.into_iter().collect::<BTreeSet<_>>(),
+        family(0).into_iter().chain(family(1)).collect()
+    );
+    assert_eq!(revoked(&server).await.len(), 4);
+    assert_eq!(
+        stored(&store),
+        [("refresh_uncertain".into(), "unconfirmed".into(), false)]
+    );
+    assert_eq!(
+        manager.remote_revocation("user", "stub").unwrap(),
+        RemoteRevocation::Unconfirmed
+    );
+    assert_eq!(
+        manager.status("user", "stub").unwrap().status,
+        OAuthConnectionStatus::ReconnectRequired
+    );
+    holds_no_token(&manager);
+    no_plaintext(&dir, &["protected-refresh-1", "protected-access-1"]);
+}
+
+/// A refresh in flight in one process when another disconnects: the other
+/// process's pass presumes it lost once it expires and finishes the
+/// revocation unconfirmed. The successor that arrives afterwards is still
+/// captured and revoked, and never installed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_successor_after_its_revocation_finished_is_still_revoked() {
+    let (_dir, store, ring, manager, server) = revoking_fixture().await;
+    connected(&manager, &server).await;
+    let other = stub_manager(store.clone(), ring.clone(), manager.config().clone()).unwrap();
+    other.activate().unwrap();
+    expire(&manager);
+    server.reset().await;
+    identity(&server).await;
+    delayed_refresh(&server, 1, Duration::from_secs(3)).await;
+    revoke_responds(&server, ResponseTemplate::new(200)).await;
+    let refreshing = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.acquire("user", &binding()).await })
+    };
+    attempt_persisted(&manager).await;
+    let attempt = attempt_id(&manager);
+    assert_eq!(
+        other.disconnect("user", "stub").await.unwrap(),
+        RemoteRevocation::Pending
+    );
+    assert_eq!(named_attempts(&store), [Some(attempt.clone())]);
+    expire_awaited_refresh(&store, &ring);
+    assert_eq!(other.revoke_due().await.unwrap(), None);
+    assert_eq!(
+        stored(&store),
+        [("disconnect".into(), "unconfirmed".into(), false)]
+    );
+    assert_eq!(named_attempts(&store), [Some(attempt)]);
+    assert_eq!(refreshing.await.unwrap().unwrap_err(), OAuthError::Stale);
+    assert_eq!(
+        stored(&store),
+        [("disconnect".into(), "unconfirmed".into(), true)]
+    );
+    assert_eq!(other.revoke_due().await.unwrap(), None);
+    assert_eq!(
+        revoked(&server).await.into_iter().collect::<BTreeSet<_>>(),
+        family(0).into_iter().chain(family(1)).collect()
+    );
+    assert_eq!(
+        stored(&store),
+        [("disconnect".into(), "unconfirmed".into(), false)]
+    );
+    assert_eq!(named_attempts(&store), [None]);
+    assert_eq!(
+        manager.status("user", "stub").unwrap().status,
+        OAuthConnectionStatus::Disconnected
+    );
+    holds_no_token(&manager);
+}
+
+/// Each token waits out its own retry: a predecessor GitLab throttles with
+/// `Retry-After: 900` is not tried again when the successor of a refresh in
+/// flight at the fence arrives, and that successor is revoked at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_throttled_predecessor_keeps_its_deadline_when_a_late_successor_arrives() {
+    let (_dir, store, _ring, manager, server) = revoking_fixture().await;
+    connected(&manager, &server).await;
+    expire(&manager);
+    server.reset().await;
+    identity(&server).await;
+    delayed_refresh(&server, 1, Duration::from_millis(1500)).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .and(wiremock::matchers::body_string_contains("-0&"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "900"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .and(wiremock::matchers::body_string_contains("-1&"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let refreshing = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.acquire("user", &binding()).await })
+    };
+    attempt_persisted(&manager).await;
+    assert_eq!(
+        manager.disconnect("user", "stub").await.unwrap(),
+        RemoteRevocation::Pending
+    );
+    assert_eq!(
+        revoked(&server).await.into_iter().collect::<BTreeSet<_>>(),
+        family(0)
+    );
+    assert_eq!(refreshing.await.unwrap().unwrap_err(), OAuthError::Stale);
+    // The successor is due at once; the predecessor is not.
+    assert!(due_in(&store) <= 0);
+    let wait = manager.revoke_due().await.unwrap().unwrap().as_secs();
+    assert!((895..=900).contains(&wait), "{wait}");
+    let requests = revoked(&server).await;
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[2..].iter().cloned().collect::<BTreeSet<_>>(),
+        family(1)
+    );
+    assert!((895..=901).contains(&due_in(&store)));
+    assert_eq!(
+        manager.remote_revocation("user", "stub").unwrap(),
+        RemoteRevocation::Pending
+    );
+    // Nothing else is due before the predecessor's wait ends.
+    manager.revoke_due().await.unwrap();
+    assert_eq!(revoked(&server).await.len(), 4);
+}
+
+/// An awaited refresh expiring settles the family without trying a token
+/// before its own retry wait ends.
+#[tokio::test]
+async fn an_awaited_refresh_expiring_tries_no_throttled_token_early() {
+    let (_dir, store, ring, manager, server) = revoking_fixture().await;
+    connected(&manager, &server).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "900"))
+        .mount(&server)
+        .await;
+    manager
+        .update("user", "stub", |_, current| {
+            let mut current = current.unwrap();
+            let family = &mut current.connection.as_mut().unwrap().family;
+            family.attempt = Some(RefreshAttempt {
+                id: "dead-process-attempt".into(),
+                material_version: family.material_version.clone(),
+                expires_at: now() + ATTEMPT_TTL,
+            });
+            Ok((current, ()))
+        })
+        .unwrap();
+    assert_eq!(
+        manager.disconnect("user", "stub").await.unwrap(),
+        RemoteRevocation::Pending
+    );
+    assert_eq!(revoked(&server).await.len(), 2);
+    // Due when the awaited refresh expires, before the tokens' wait.
+    assert!((ATTEMPT_TTL - 5..=ATTEMPT_TTL + 1).contains(&due_in(&store)));
+    expire_awaited_refresh(&store, &ring);
+    manager.revoke_due().await.unwrap();
+    assert_eq!(revoked(&server).await.len(), 2);
+    assert_eq!(
+        manager.remote_revocation("user", "stub").unwrap(),
+        RemoteRevocation::Unconfirmed
+    );
+    assert!((895..=901).contains(&due_in(&store)));
+    // Their own wait ended: both are tried again.
+    make_due(&store);
+    manager.revoke_due().await.unwrap();
+    assert_eq!(revoked(&server).await.len(), 4);
+}
+
+/// A rejected client authentication may be the registration's secret,
+/// which an operator can correct: each token is retried on the bounded
+/// schedule and fails after its fifth try, and a corrected client revokes
+/// it on its next try.
+#[tokio::test]
+async fn rejected_client_authentication_is_retried_on_the_bounded_schedule() {
+    for error in ["invalid_client", "unauthorized_client"] {
+        let (_dir, store, _ring, manager, server) = revoking_fixture().await;
+        connected(&manager, &server).await;
+        revoke_responds(
+            &server,
+            ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": error})),
+        )
+        .await;
+        assert_eq!(
+            manager.disconnect("user", "stub").await.unwrap(),
+            RemoteRevocation::Pending,
+            "{error}"
+        );
+        assert!((25..=31).contains(&due_in(&store)), "{error}");
+        for (pass, wait) in [(2, 120), (3, 600), (4, 3600)] {
+            make_due(&store);
+            manager.revoke_due().await.unwrap();
+            assert_eq!(revoked(&server).await.len(), 2 * pass, "{error}");
+            assert!((wait - 5..=wait + 1).contains(&due_in(&store)), "{error}");
+            assert_eq!(
+                manager.remote_revocation("user", "stub").unwrap(),
+                RemoteRevocation::Pending
+            );
+        }
+        make_due(&store);
+        assert_eq!(manager.revoke_due().await.unwrap(), None);
+        assert_eq!(revoked(&server).await.len(), 10, "{error}");
+        assert_eq!(
+            manager.remote_revocation("user", "stub").unwrap(),
+            RemoteRevocation::Failed,
+            "{error}"
+        );
+        assert_eq!(
+            manager.acquire("user", &binding()).await.unwrap_err(),
+            OAuthError::ReconnectRequired
+        );
+    }
+    // The operator corrects the client secret between tries.
+    let (_dir, store, _ring, manager, server) = revoking_fixture().await;
+    connected(&manager, &server).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": "invalid_client"})),
+        )
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    revoke_responds(&server, ResponseTemplate::new(200)).await;
+    assert_eq!(
+        manager.disconnect("user", "stub").await.unwrap(),
+        RemoteRevocation::Pending
+    );
+    make_due(&store);
+    assert_eq!(manager.revoke_due().await.unwrap(), None);
+    assert_eq!(
+        manager.remote_revocation("user", "stub").unwrap(),
+        RemoteRevocation::Revoked
+    );
+    assert_eq!(revoked(&server).await.len(), 4);
+}
+
 /// A refresh attempt persisted by a process that died, or by another
 /// process, is waited for until it expires: then its outcome is unknown.
 #[tokio::test]
@@ -647,13 +1042,7 @@ async fn refresh_attempt_of_a_dead_process_is_unconfirmed_once_it_expires() {
     let id = revocation_ids(&store).remove(0);
     store
         .oauth_revocation_update(&ring, &id, |row| {
-            row.material
-                .as_mut()
-                .unwrap()
-                .refresh_attempt
-                .as_mut()
-                .unwrap()
-                .expires_at = now() - 1;
+            row.material.as_mut().unwrap().refresh_awaited_until = Some(now() - 1);
             row.due_at = 0;
         })
         .unwrap();

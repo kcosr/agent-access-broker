@@ -8,11 +8,13 @@
 //! every other connection reports [`RemoteRevocation::NotRequested`].
 //!
 //! Revocation passes then revoke each kept token at the provider, with a
-//! bounded number of tries, from the stored record, so they resume after a
-//! restart. A refresh in flight when its family was fenced is recorded with
-//! the revocation: a successor it returns afterwards is never installed and
-//! joins the revocation, and an outcome nobody learns leaves an unknown
-//! successor, so the family is only ever reported
+//! bounded number of tries on each token's own schedule, from the stored
+//! record, so they resume after a restart. A refresh in flight when its
+//! family was fenced is recorded with the revocation, which names it until
+//! its process reports what it did: a successor it returns is never
+//! installed and joins the revocation, even after the attempt was presumed
+//! lost or every other token was revoked. An outcome nobody learns leaves an
+//! unknown successor, so the family is only ever reported
 //! [`RemoteRevocation::Unconfirmed`]. A remote failure never restores local
 //! access.
 use super::*;
@@ -61,6 +63,13 @@ impl RemoteRevocation {
             Self::Failed => "failed",
             Self::Unconfirmed => "unconfirmed",
         }
+    }
+
+    /// Whether revocation is still in progress or needs provider-side
+    /// cleanup: `pending`, `failed` or `unconfirmed`. Connection listings
+    /// keep such a registration whatever its owner's entitlement.
+    pub fn needs_attention(self) -> bool {
+        matches!(self, Self::Pending | Self::Failed | Self::Unconfirmed)
     }
 
     /// A stored revocation's state; `not_requested` is never stored.
@@ -129,17 +138,20 @@ impl RevocationCause {
 }
 
 /// A kept family's encrypted payload: its known tokens and what each
-/// revocation found, the refresh in flight when it was fenced, and whether
-/// a successor the Broker never learned may exist.
+/// revocation found, until when a refresh in flight at the fence is awaited
+/// (the row names that attempt), and whether a successor the Broker never
+/// learned may exist.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RevocationMaterial {
-    pub(crate) family_id: String,
     pub(crate) members: Vec<RevocationMember>,
-    pub(crate) refresh_attempt: Option<PendingRefresh>,
+    pub(crate) refresh_awaited_until: Option<i64>,
     pub(crate) unknown_successor: bool,
 }
 
+/// One known token, with its outcome, its tries so far and when it may be
+/// tried next: at once, after its retry wait, or after the provider's longer
+/// `Retry-After`.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RevocationMember {
@@ -147,6 +159,7 @@ pub(crate) struct RevocationMember {
     pub(crate) token_type: MemberType,
     pub(crate) outcome: MemberOutcome,
     pub(crate) tries: u8,
+    pub(crate) not_before: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,15 +177,6 @@ pub(crate) enum MemberOutcome {
     Failed,
 }
 
-/// A refresh that was in flight when its family was fenced: whether it
-/// returned a successor is learned only when it finishes.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PendingRefresh {
-    pub(crate) id: String,
-    pub(crate) expires_at: i64,
-}
-
 impl MemberType {
     fn sdk(self) -> OAuthTokenType {
         match self {
@@ -183,29 +187,30 @@ impl MemberType {
 }
 
 impl RevocationMaterial {
-    fn new(family_id: &str) -> Self {
+    fn new() -> Self {
         Self {
-            family_id: family_id.into(),
             members: Vec::new(),
-            refresh_attempt: None,
+            refresh_awaited_until: None,
             unknown_successor: false,
         }
     }
 
-    fn add(&mut self, token: &str, token_type: MemberType) {
+    /// Adds `token`, due at `now`, unless the family already holds it or is
+    /// full.
+    fn add(&mut self, token: &str, token_type: MemberType, now: i64) {
         if self.members.len() < MAX_MEMBERS && !self.members.iter().any(|m| m.token == token) {
             self.members.push(RevocationMember {
                 token: token.into(),
                 token_type,
                 outcome: MemberOutcome::Pending,
                 tries: 0,
+                not_before: now,
             });
         }
     }
 
     pub(crate) fn well_formed(&self) -> bool {
-        !self.family_id.is_empty()
-            && self.members.len() <= MAX_MEMBERS
+        self.members.len() <= MAX_MEMBERS
             && self.members.iter().all(|member| {
                 !member.token.is_empty()
                     && member.token.len() <= MAX_TOKEN_BYTES
@@ -220,7 +225,26 @@ impl RevocationMaterial {
     }
 
     fn finished(&self) -> bool {
-        self.refresh_attempt.is_none() && self.pending().next().is_none()
+        self.refresh_awaited_until.is_none() && self.pending().next().is_none()
+    }
+
+    /// When a pass next has something to do: the earliest pending token's
+    /// next try, or just after an awaited refresh expires, independently of
+    /// each other. `now` when there is nothing left.
+    pub(crate) fn next_due(&self, now: i64) -> i64 {
+        self.pending()
+            .map(|member| member.not_before)
+            .chain(self.refresh_awaited_until.map(|until| until + 1))
+            .min()
+            .unwrap_or(now)
+    }
+
+    /// Test support: every pending token may be tried at once.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn make_due(&mut self) {
+        for member in &mut self.members {
+            member.not_before = 0;
+        }
     }
 
     /// The state this payload reports.
@@ -241,36 +265,52 @@ impl RevocationMaterial {
     }
 }
 
-/// The tokens of `connection`'s family, with the refresh in flight unless
-/// the family is ended because that refresh's outcome is unknown. `None`
-/// when there is nothing to revoke.
-fn family_material(
+/// A family to keep for revocation: its ID, the refresh attempt whose
+/// outcome its process may still report, and its payload.
+pub(crate) struct KeptFamily {
+    pub(crate) family_id: String,
+    pub(crate) refresh_attempt: Option<String>,
+    pub(crate) material: RevocationMaterial,
+}
+
+/// The tokens of `connection`'s family, each due at `now`, and its refresh
+/// in flight. The refresh is awaited until it expires unless `outcome_lost`
+/// ended the family because its outcome is unknown; it is named for a late
+/// successor unless `outcome_lost` and this process ran it (`live`), whose
+/// result is then lost for good. `None` when there is nothing to revoke.
+fn kept_family(
     connection: &ConnectionState,
-    unknown_successor: bool,
-) -> Option<RevocationMaterial> {
+    now: i64,
+    outcome_lost: bool,
+    live: impl FnOnce(&str) -> bool,
+) -> Option<KeptFamily> {
     let family = &connection.family;
-    let mut material = RevocationMaterial::new(&family.id);
+    let mut material = RevocationMaterial::new();
     if let Some(token) = &family.refresh_token {
-        material.add(token, MemberType::RefreshToken);
+        material.add(token, MemberType::RefreshToken, now);
     }
     for entry in family.access.values() {
-        material.add(&entry.token, MemberType::AccessToken);
+        material.add(&entry.token, MemberType::AccessToken, now);
     }
-    material.unknown_successor = unknown_successor;
-    if !unknown_successor {
-        material.refresh_attempt = family.attempt.as_ref().map(|attempt| PendingRefresh {
-            id: attempt.id.clone(),
-            expires_at: attempt.expires_at,
-        });
+    material.unknown_successor = outcome_lost;
+    let mut refresh_attempt = family.attempt.as_ref();
+    if outcome_lost {
+        refresh_attempt = refresh_attempt.filter(|attempt| !live(&attempt.id));
+    } else {
+        material.refresh_awaited_until = refresh_attempt.map(|attempt| attempt.expires_at);
     }
-    (!material.members.is_empty() || material.refresh_attempt.is_some()).then_some(material)
+    (!material.members.is_empty() || refresh_attempt.is_some()).then(|| KeptFamily {
+        family_id: family.id.clone(),
+        refresh_attempt: refresh_attempt.map(|attempt| attempt.id.clone()),
+        material,
+    })
 }
 
 /// The family a stored slot holds, as principal disablement keeps it.
-pub(crate) fn slot_material(slot: &SlotState) -> Option<RevocationMaterial> {
+pub(crate) fn slot_family(slot: &SlotState, now: i64) -> Option<KeptFamily> {
     slot.connection
         .as_ref()
-        .and_then(|connection| family_material(connection, false))
+        .and_then(|connection| kept_family(connection, now, false, |_| false))
 }
 
 /// The OAuth clock, as revocation schedules use it.
@@ -280,8 +320,8 @@ pub(crate) fn clock() -> i64 {
 
 /// Sets `row`'s state from its payload and schedules it: a finished
 /// revocation drops its tokens and answers until the retention ends; any
-/// other is next due at `due`.
-fn schedule(row: &mut RevocationRow, now: i64, due: i64) {
+/// other is next due when one of its tokens or its awaited refresh is.
+fn schedule(row: &mut RevocationRow, now: i64) {
     let Some(material) = &row.material else {
         return;
     };
@@ -290,11 +330,13 @@ fn schedule(row: &mut RevocationRow, now: i64, due: i64) {
         row.material = None;
         row.due_at = now + RETENTION_SECONDS;
     } else {
-        row.due_at = due;
+        row.due_at = material.next_due(now);
     }
 }
 
 /// Failures the provider may not repeat: the token is tried again later.
+/// A rejected client authentication is among them, because an operator can
+/// correct the registration's client secret in the meantime.
 fn retryable(error: &OAuthDialectError) -> bool {
     matches!(
         error,
@@ -308,10 +350,13 @@ fn retryable(error: &OAuthDialectError) -> bool {
 
 type Tries = Vec<(String, Result<RevocationOutcome, OAuthDialectError>)>;
 
-/// Applies one pass's `tries` to `row` as it is now. `revocable` is false
-/// when no configured registration can revoke the family any more; its
-/// tokens then fail without a request. A refresh in flight at the fence
-/// that is no longer live past its expiry leaves an unknown successor.
+/// Applies one pass's `tries` to `row` as it is now; each tried token gets
+/// its own outcome and next try, and the others keep theirs. `revocable` is
+/// false when no configured registration can revoke the family any more;
+/// its tokens then fail without a request and no successor is captured. A
+/// refresh awaited past its expiry that is not live in this process leaves
+/// an unknown successor, but the row keeps naming it, so a successor its
+/// process still reports joins the revocation.
 fn apply_pass(
     row: &mut RevocationRow,
     tries: &Tries,
@@ -322,13 +367,20 @@ fn apply_pass(
     let Some(material) = row.material.as_mut() else {
         return;
     };
-    if let Some(attempt) = &material.refresh_attempt
-        && (!revocable || (attempt.expires_at <= now && !live.contains(&attempt.id)))
+    if !revocable {
+        row.refresh_attempt = None;
+    }
+    if let Some(until) = material.refresh_awaited_until
+        && (!revocable
+            || (until <= now
+                && !row
+                    .refresh_attempt
+                    .as_ref()
+                    .is_some_and(|attempt| live.contains(attempt))))
     {
-        material.refresh_attempt = None;
+        material.refresh_awaited_until = None;
         material.unknown_successor = true;
     }
-    let mut wait = 0;
     for member in material
         .members
         .iter_mut()
@@ -347,30 +399,21 @@ fn apply_pass(
                 member.tries = member.tries.saturating_add(1);
                 if member.tries >= MAX_TRIES {
                     member.outcome = MemberOutcome::Failed;
+                    continue;
                 }
-                if let OAuthDialectError::RetryAfter(seconds) = error {
-                    wait = wait.max(
-                        (*seconds).min(agent_access_provider::UPSTREAM_RETRY_AFTER_MAX_SECONDS)
-                            as i64,
-                    );
-                }
+                let wait = RETRY_DELAYS[usize::from(member.tries - 1).min(RETRY_DELAYS.len() - 1)];
+                let retry_after = match error {
+                    OAuthDialectError::RetryAfter(seconds) => (*seconds)
+                        .min(agent_access_provider::UPSTREAM_RETRY_AFTER_MAX_SECONDS)
+                        as i64,
+                    _ => 0,
+                };
+                member.not_before = now + wait.max(retry_after);
             }
             Err(_) => member.outcome = MemberOutcome::Failed,
         }
     }
-    let retry = material
-        .pending()
-        .map(|member| match member.tries {
-            0 => now,
-            tries => now + RETRY_DELAYS[usize::from(tries - 1).min(RETRY_DELAYS.len() - 1)],
-        })
-        .min();
-    let attempt = material
-        .refresh_attempt
-        .as_ref()
-        .map(|attempt| attempt.expires_at.max(now) + 1);
-    let due = retry.into_iter().chain(attempt).min().unwrap_or(now);
-    schedule(row, now, due.max(now + wait));
+    schedule(row, now);
 }
 
 /// What a refresh in flight when its family was fenced turned out to do.
@@ -451,6 +494,24 @@ impl OAuthManager {
         ))
     }
 
+    /// What the Broker knows about revoking `owner`'s ended families at the
+    /// provider, by registration, for every registration with a stored
+    /// revocation, configured or not. Every other registration is
+    /// `not_requested`.
+    pub fn remote_revocations(
+        &self,
+        owner: &str,
+    ) -> Result<BTreeMap<String, RemoteRevocation>, OAuthError> {
+        self.active()?;
+        Ok(self
+            .inner
+            .store
+            .oauth_revocation_states_by_registration(owner)?
+            .into_iter()
+            .map(|(registration, states)| (registration, RemoteRevocation::summarize(states)))
+            .collect())
+    }
+
     /// Works through the revocations due now, prunes finished ones whose
     /// answering period ended, and returns how long until the next one is
     /// due. The host's revocation worker calls it at startup, after each
@@ -495,6 +556,12 @@ impl OAuthManager {
         let Some(material) = &row.material else {
             return Ok(());
         };
+        // Only tokens whose own retry wait has ended are tried; an awaited
+        // refresh's expiry or a new successor tries no other token early.
+        let started = now();
+        let eligible = material
+            .pending()
+            .filter(|member| member.not_before <= started);
         // Only the registration that issued the family, unchanged, has a
         // client the provider accepts its revocation from.
         let registration = self
@@ -505,7 +572,7 @@ impl OAuthManager {
         let tries: Tries = match registration {
             Some(r) => {
                 let client = r.client();
-                futures_util::future::join_all(material.pending().map(|member| {
+                futures_util::future::join_all(eligible.map(|member| {
                     let client = &client;
                     async move {
                         let result = r
@@ -557,9 +624,19 @@ impl OAuthManager {
         if !r.dialect.supports_revocation() {
             return Ok(None);
         }
-        let Some(material) =
-            family_material(connection, cause == RevocationCause::RefreshUncertain)
-        else {
+        let now = now();
+        let Some(family) = kept_family(
+            connection,
+            now,
+            cause == RevocationCause::RefreshUncertain,
+            |attempt| {
+                self.inner
+                    .live_refresh_attempts
+                    .lock()
+                    .expect("OAuth live refresh attempts")
+                    .contains(attempt)
+            },
+        ) else {
             return Ok(None);
         };
         Ok(Some(store::insert(
@@ -570,57 +647,56 @@ impl OAuthManager {
                 registration: &r.id,
                 fingerprint: &r.fingerprint,
                 cause,
-                material,
-                now: now(),
+                family,
+                now,
             },
         )?))
     }
 
-    /// Records what refresh attempt `attempt` did after a fence ended its
-    /// family: a successor joins the revocation that recorded the attempt
-    /// and is never installed; a lost outcome leaves an unknown successor.
-    /// Nothing changes when no revocation recorded the attempt.
+    /// Records what refresh attempt `attempt` of `owner`'s `registration`
+    /// family `family` did after a fence ended that family. A successor
+    /// joins the revocation that names the attempt and is never installed,
+    /// also when the revocation presumed the attempt lost or had finished,
+    /// which it reopens; it then stays unconfirmed. A lost outcome leaves an
+    /// unknown successor; a proof that nothing was consumed ends the wait.
+    /// Nothing changes when no revocation names the attempt.
     pub(super) fn settle_fenced_refresh(
         &self,
-        owner: &str,
-        registration: &str,
+        (owner, registration, family): (&str, &str, &str),
         attempt: &str,
         outcome: FencedRefresh,
     ) {
-        let mut outcome = Some(outcome);
         let result = self.inner.store.oauth_revocation_settle(
             &self.inner.ring,
-            owner,
-            registration,
+            (owner, registration, family),
+            attempt,
             |row| {
-                let Some(material) = row.material.as_mut() else {
-                    return false;
-                };
-                if material
-                    .refresh_attempt
-                    .as_ref()
-                    .is_none_or(|pending| pending.id != attempt)
-                {
-                    return false;
-                }
-                material.refresh_attempt = None;
+                row.refresh_attempt = None;
                 let now = now();
-                let due = match outcome.take() {
-                    Some(FencedRefresh::Succeeded { refresh, access }) => {
+                if row.material.is_none() {
+                    // The attempt was presumed lost and every other token
+                    // has its outcome: only a successor reopens the
+                    // revocation, which stays unconfirmed.
+                    if !matches!(outcome, FencedRefresh::Succeeded { .. }) {
+                        return;
+                    }
+                    let mut material = RevocationMaterial::new();
+                    material.unknown_successor = true;
+                    row.material = Some(material);
+                }
+                let material = row.material.as_mut().expect("open revocation");
+                material.refresh_awaited_until = None;
+                match outcome {
+                    FencedRefresh::Succeeded { refresh, access } => {
                         if let Some(refresh) = &refresh {
-                            material.add(refresh, MemberType::RefreshToken);
+                            material.add(refresh, MemberType::RefreshToken, now);
                         }
-                        material.add(&access, MemberType::AccessToken);
-                        now
+                        material.add(&access, MemberType::AccessToken, now);
                     }
-                    Some(FencedRefresh::Uncertain) => {
-                        material.unknown_successor = true;
-                        row.due_at
-                    }
-                    Some(FencedRefresh::NotConsumed) | None => row.due_at,
-                };
-                schedule(row, now, due);
-                true
+                    FencedRefresh::Uncertain => material.unknown_successor = true,
+                    FencedRefresh::NotConsumed => {}
+                }
+                schedule(row, now);
             },
         );
         match result {
