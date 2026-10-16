@@ -70,7 +70,7 @@ connection still needs its own grant. Service-mode actions use the configured
 shared identity and may not require a personal credential. Teams destination
 URLs are managed by administrators.
 
-For Gmail and other supported OAuth-backed services, your administrator enables
+For Gmail, GitLab and other supported OAuth-backed services, your administrator enables
 self-service, configures the connection's OAuth registration, and grants you or
 one of your current groups an active `per_user` action grant on a service that
 uses it. No separate
@@ -87,8 +87,8 @@ registration.
 See [administrator OAuth setup](administrator-guide.md#enable-personal-oauth-connections).
 Do not paste an OAuth access token into a generic API-token field. OAuth consent requires a
 signed-in browser session; the CLI setup token alone cannot authorize it. See
-[Gmail](providers-gmail.md), [OAuth connections](oauth.md), and
-[imported OAuth](imported-oauth.md).
+[Gmail](providers-gmail.md), [GitLab](oauth.md#gitlab),
+[OAuth connections](oauth.md), and [imported OAuth](imported-oauth.md).
 
 An imported MCP connection may show **Server-default permissions**. Its
 authorization server chooses the permissions for that service. **Known scopes**

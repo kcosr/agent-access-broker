@@ -68,7 +68,7 @@ create permission to invoke an action. For each integration:
 | CloudBees CI | Username/API token; service/per-user | Controller/job resources plus individual actions | [CloudBees setup](providers-cloudbees-ci.md#configuration) |
 | Gmail | Per-user delegated Google OAuth | Individual mailbox actions; no resource selection | [Gmail setup](providers-gmail.md#setup) |
 | Teams | Signed Workflow URL held in a private managed resource; service mode | Destination resources and `notification.send` | [Teams setup](providers-teams.md#operator-setup) |
-| Git HTTP | Gateway execution credential; service/per-user | Canonical repositories and fetch/push actions | [Gateway configuration](configuration.md#gateways) and [Git setup](git-http-gateway.md#access-surfaces-and-examples) |
+| Git HTTP | Gateway execution credential; service/per-user, or per-user delegated GitLab OAuth shared with GitLab REST | Canonical repositories and fetch/push actions | [Gateway configuration](configuration.md#gateways) and [Git setup](git-http-gateway.md#access-surfaces-and-examples) |
 | Imported MCP/OpenAPI | Reviewed connection authentication | Accepted actions; no resource/query containment | [Import setup](imported-services.md) |
 
 The Broker cannot increase the upstream account's permissions. Conversely, the

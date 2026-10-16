@@ -2318,8 +2318,9 @@ Their subsequent direct use is governed by GitLab, independently of Broker grant
 [The OAuth foundation](oauth.md) adds browser-owned connection consent and
 on-demand versioned token leases beneath typed per-user actions. Refresh
 material remains encrypted in the managed store, outside invocation tokens and
-agent containers. Production integrations include Google for Gmail and approved
-imported MCP OAuth registrations. An independent development-only test provider
+agent containers. Production integrations include Google for Gmail, GitLab for
+GitLab REST and GitLab Git gateways sharing one connection per instance, and
+approved imported MCP OAuth registrations. An independent development-only test provider
 exercises collection resources and lifecycle fault recovery.
 
 Personal OAuth setup requires self-service, a credential connection that selects

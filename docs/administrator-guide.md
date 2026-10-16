@@ -123,9 +123,11 @@ never falls back from one method to the other:
 | Service account | Uses the token you provision, if the connection sets `token_profile` | Uses the token you provision |
 | `system` principal | Stores its own token, if the connection sets `token_profile` | Stores its own token |
 
-OAuth is available for services that accept delegated credentials: Gmail and
-imported MCP OAuth services. An import with a personal binding publishes its
-own connection under its service ID. See
+OAuth is available for services that accept delegated credentials: Gmail,
+GitLab REST and GitLab Git gateways, which share one GitLab OAuth connection
+per instance ([GitLab setup](oauth.md#gitlab)), and imported MCP OAuth
+services. An import with a personal binding publishes its own connection under
+its service ID. See
 [credential connections](configuration.md#credential-connections) for every
 rule.
 
@@ -220,13 +222,15 @@ version checks and caller setup.
 
 ## Enable personal OAuth connections
 
-For Gmail and imported MCP OAuth, enable the human owner's self-service setting,
-configure a credential connection whose `oauth` names the registration and
-permission profile (imports publish theirs), and assign a matching active action
-grant with `credentialMode = "per_user"` on a service that uses the connection
-to the user or one of their current groups. The same setup applies to an administrator connecting a
-personal account. A signed-in browser session is required; a setup bearer alone
-cannot perform consent. Use the registration's row in **My access > Credentials**.
+For Gmail, GitLab (GitLab REST and GitLab Git gateways on one connection; see
+[GitLab setup](oauth.md#gitlab)) and imported MCP OAuth, enable the human
+owner's self-service setting, configure a credential connection whose `oauth`
+names the registration and permission profile (imports publish theirs), and
+assign a matching active action grant with `credentialMode = "per_user"` on a
+service that uses the connection to the user or one of their current groups.
+The same setup applies to an administrator connecting a personal account. A
+signed-in browser session is required; a setup bearer alone cannot perform
+consent. Use the registration's row in **My access > Credentials**.
 
 Setup does not require a resource or execution context to be usable now, and the
 matching grant need not win invocation precedence. A user can prepare an account
