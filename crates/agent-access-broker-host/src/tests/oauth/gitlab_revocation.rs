@@ -229,6 +229,127 @@ async fn grant_loss_revokes_nothing_until_the_owner_cleans_up() {
     );
 }
 
+impl OAuthFixture {
+    /// alice's `oauth_stub` connection row from her own
+    /// `GET /v1/credentials` and from an administrator's
+    /// `GET /v1/admin/principals/alice/credentials`, when listed.
+    async fn credential_rows(&self, request_id: &str) -> [Option<Value>; 2] {
+        let row = |list: Value| {
+            list["result"]["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["connection"] == "oauth_stub")
+                .cloned()
+        };
+        let own = self
+            .browser(Method::GET, "/v1/credentials", request_id, None)
+            .await;
+        assert_eq!(own.status(), StatusCode::OK);
+        let store = self.runtime.managed_store().unwrap();
+        let admin = store
+            .issue_broker_token(
+                self.runtime.broker_token_hasher().unwrap(),
+                BrokerTokenIssueRequest {
+                    principal_id: "admin".into(),
+                    name: format!("admin {request_id}"),
+                    token_class: BrokerTokenClass::Admin,
+                    scopes: json!({}),
+                    expires_at: None,
+                    created_by: "test".into(),
+                },
+            )
+            .unwrap()
+            .token;
+        let administered = authed_json_request(
+            self.app.clone(),
+            Method::GET,
+            "/v1/admin/principals/alice/credentials",
+            request_id,
+            "Authorization",
+            format!("Bearer {admin}"),
+            None,
+        )
+        .await;
+        assert_eq!(administered.status(), StatusCode::OK);
+        [
+            row(response_json(own).await),
+            row(response_json(administered).await),
+        ]
+    }
+}
+
+/// After its owner lost the last grant and disconnected, a registration
+/// whose remote revocation is pending, failed or unconfirmed stays listed
+/// as a cleanup-only row: in `GET /v1/oauth/connections`, the owner's
+/// `GET /v1/credentials` and an administrator's view of the owner, so the
+/// GitLab-side cleanup it may need stays visible. A revoked one is not
+/// kept.
+#[tokio::test]
+async fn unfinished_cleanup_revocations_stay_listed_after_grant_loss() {
+    for (response, expected) in [
+        (ResponseTemplate::new(503), "pending"),
+        (
+            ResponseTemplate::new(400).set_body_json(json!({"error": "unsupported_token_type"})),
+            "failed",
+        ),
+        (ResponseTemplate::new(200), "unconfirmed"),
+        (ResponseTemplate::new(200), "revoked"),
+    ] {
+        let (gitlab, _consumer, fixture) = connected_gitlab().await;
+        mount_revoke(&gitlab, response).await;
+        fixture
+            .runtime
+            .disable_managed_policy_grant(agent_access_core::ManagedPolicyGrantStatusRequest {
+                grant_id: "personal-oauth".into(),
+                expected_version: 1,
+                updated_by: "admin".into(),
+            })
+            .unwrap();
+        let disconnected = fixture.disconnect_gitlab("gitlab-cleanup-disconnect").await;
+        if expected == "unconfirmed" {
+            // The core lifecycle tests cover how a lost refresh outcome
+            // leaves a family unconfirmed; this gives the finished
+            // revocation that state directly.
+            assert_eq!(disconnected["remoteRevocation"], "revoked");
+            rusqlite::Connection::open(fixture.store_path())
+                .unwrap()
+                .execute("UPDATE oauth_revocations SET state='unconfirmed'", [])
+                .unwrap();
+        } else {
+            assert_eq!(
+                disconnected,
+                json!({"disconnected": true, "remoteRevocation": expected})
+            );
+        }
+        let rows = fixture.gitlab_rows("gitlab-rows-after-cleanup").await;
+        let [own, administered] = fixture.credential_rows("gitlab-credentials-cleanup").await;
+        if expected == "revoked" {
+            assert_eq!(rows, Vec::<Value>::new());
+            assert_eq!(own, None);
+            assert_eq!(administered, None);
+            continue;
+        }
+        assert_eq!(rows.len(), 1, "{expected}");
+        let row = &rows[0];
+        assert_eq!(row["registration"], "gitlab");
+        assert_eq!(row["remoteRevocation"], expected);
+        assert_eq!(row["consumers"], json!([]));
+        assert_eq!(row["canConnect"], false);
+        assert_eq!(row["connectUnavailableReason"], "no_personal_access");
+        assert_eq!(row["canDisconnect"], false);
+        assert_eq!(row["connection"]["connectionId"], Value::Null);
+        assert_eq!(row["connection"]["status"], "disconnected");
+        for row in [own, administered] {
+            let row = row.unwrap_or_else(|| panic!("{expected}: credential row"));
+            assert_eq!(row["method"], "oauth");
+            assert_eq!(row["registration"], "gitlab");
+            assert_eq!(row["remoteRevocation"], expected);
+            assert_eq!(row["consumers"], json!([]));
+        }
+    }
+}
+
 /// A token GitLab refuses to revoke fails the revocation; local access
 /// never returns.
 #[tokio::test]

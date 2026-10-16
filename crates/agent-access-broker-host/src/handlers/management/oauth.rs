@@ -6,8 +6,8 @@ use super::common::{
 use super::connections;
 use crate::state::AppState;
 use agent_access_core::{
-    OAuthBinding, OAuthConnectIntent, OAuthError, OAuthManagementAdmission, OAuthReturnPath,
-    RemoteRevocation,
+    OAuthBinding, OAuthConnectIntent, OAuthConnection, OAuthConnectionStatus, OAuthError,
+    OAuthManagementAdmission, OAuthReturnPath, RemoteRevocation,
 };
 use agent_access_provider::{CorrelationContext, ReasonCode, host::with_correlation_context};
 use axum::Json;
@@ -170,6 +170,16 @@ pub(crate) async fn list(
         Ok(c) => c,
         Err(e) => return error(&context, operation, e).await,
     };
+    let revocations = match manager.remote_revocations(&context.identity.principal) {
+        Ok(revocations) => revocations,
+        Err(e) => return error(&context, operation, e).await,
+    };
+    let remote_revocation = |registration: &str| {
+        revocations
+            .get(registration)
+            .copied()
+            .unwrap_or(RemoteRevocation::NotRequested)
+    };
     let mut rows = Vec::new();
     let selected_registrations = selected_registrations(&context);
     for (registration_id, selected) in &selected_registrations {
@@ -182,10 +192,13 @@ pub(crate) async fn list(
             .iter()
             .find(|c| c.registration == registration_id);
         let owned = connection.is_some_and(|c| c.connection_id.is_some());
+        let remote_revocation = remote_revocation(&registration_id);
         // Without a consumer to set up through, an owned connection stays
-        // listed for local disconnect.
+        // listed for local disconnect, and a registration whose remote
+        // revocation is unfinished or needs provider-side cleanup stays
+        // listed as a cleanup-only row.
         let unavailable = if entitled.is_empty() {
-            if !owned {
+            if !owned && !remote_revocation.needs_attention() {
                 continue;
             }
             Some(if reasons.contains(&"service_unavailable") {
@@ -213,11 +226,6 @@ pub(crate) async fn list(
             continue;
         };
         let (consumers, other_consumers) = registration_consumer_view(runtime, selected, &entitled);
-        let remote_revocation =
-            match manager.remote_revocation(&context.identity.principal, &registration_id) {
-                Ok(state) => state,
-                Err(failure) => return error(&context, operation, failure).await,
-            };
         // An entitled consumer's backend describes the connection; the
         // caller learns nothing of consumers it is not entitled to.
         let description = entitled
@@ -242,27 +250,34 @@ pub(crate) async fn list(
     // An owned connection whose registration no credential connection
     // selects for the caller any more, because its last consumer was
     // removed or rebound, stays listed for local disconnect on ownership
-    // alone; so does one whose remote revocation still needs attention
-    // after that disconnect. No binding names its permission profile, and
-    // the slot keeps no durable record of the consented one, so its profile
-    // fields are null.
-    for connection in owned_connections
+    // alone; so does any registration whose remote revocation still needs
+    // attention, including one no longer configured, as a cleanup-only
+    // row. No binding names its permission profile, and the slot keeps no
+    // durable record of the consented one, so its profile fields are null.
+    let mut unselected = owned_connections
         .iter()
         .filter(|connection| !selected_registrations.contains_key(&connection.registration))
-    {
-        let remote_revocation = match manager
-            .remote_revocation(&context.identity.principal, &connection.registration)
-        {
-            Ok(state) => state,
-            Err(failure) => return error(&context, operation, failure).await,
-        };
+        .map(|connection| (connection.registration.clone(), connection.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for registration in revocations.keys() {
+        if !selected_registrations.contains_key(registration) {
+            unselected
+                .entry(registration.clone())
+                .or_insert_with(|| OAuthConnection {
+                    registration: registration.clone(),
+                    connection_id: None,
+                    subject_id: None,
+                    display_name: None,
+                    status: OAuthConnectionStatus::Disconnected,
+                    reason: None,
+                    targets: Vec::new(),
+                });
+        }
+    }
+    for connection in unselected.values() {
+        let remote_revocation = remote_revocation(&connection.registration);
         let owned = connection.connection_id.is_some();
-        if !owned
-            && matches!(
-                remote_revocation,
-                RemoteRevocation::NotRequested | RemoteRevocation::Revoked
-            )
-        {
+        if !owned && !remote_revocation.needs_attention() {
             continue;
         }
         rows.push(json!({"registration":connection.registration,

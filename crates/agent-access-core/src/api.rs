@@ -1329,7 +1329,7 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
     });
     routes[0].result_schema = Some(json!({
         "type":"array",
-        "description":"One row per OAuth registration the caller's credential connections select: registrations available for setup, plus existing owned connections available for local disconnect. Setup requires self-service and a matching per-user grant on a consuming service or the administrator import-discovery exception; it does not authorize invocation.",
+        "description":"One row per OAuth registration the caller's credential connections select: registrations available for setup, plus existing owned connections available for local disconnect, plus cleanup-only rows for registrations whose remoteRevocation is pending, failed or unconfirmed, whatever the caller's entitlement or ownership. Setup requires self-service and a matching per-user grant on a consuming service or the administrator import-discovery exception; it does not authorize invocation.",
         "items":{
             "type":"object","additionalProperties":false,
             "required":["registration","displayName","connectionDescription","consumers","otherConsumers","permissionProfile","scopeMode","requestedScopes","target","canConnect","canDisconnect","connectUnavailableReason","remoteRevocation","connection"],
@@ -2903,7 +2903,7 @@ fn credential_targets_result_schema() -> Value {
 fn remote_revocation_schema() -> Value {
     json!({
         "enum":["not_requested","pending","revoked","failed","unconfirmed"],
-        "description":"Remote revocation of the owner's ended token families for the registration, most severe first: unconfirmed (a successor the Broker never learned may exist; revoke the application at the provider), failed (a known token could not be revoked), pending (in progress), revoked (every known token revoked and no unknown successor can exist), not_requested (nothing kept for revocation, as for dialects that do not revoke). Local access ends at disconnect whatever this reports."
+        "description":"Remote revocation of the owner's ended token families for the registration (disconnected, replaced by a reconnect or account replacement, ended by an uncertain refresh or by disablement), never of its current connection, most severe first: unconfirmed (a successor the Broker never learned may exist; revoke the application at the provider), failed (a known token could not be revoked), pending (in progress), revoked (every known token revoked and no unknown successor can exist), not_requested (nothing kept for revocation, as for dialects that do not revoke). Local access ends at disconnect whatever this reports."
     })
 }
 
@@ -2914,7 +2914,7 @@ fn personal_credentials_result_schema() -> Value {
         "properties": {
             "connections": {
                 "type": "array",
-                "description": "Credential connections the principal is entitled to through a consuming service, plus any connection whose active token the principal still owns.",
+                "description": "Credential connections the principal is entitled to through a consuming service, plus any connection whose active token the principal still owns, plus any OAuth connection whose remoteRevocation is pending, failed or unconfirmed.",
                 "items": {
                     "type": "object", "additionalProperties": false,
                     "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "profile", "credentialKind", "registration", "remoteRevocation", "credential"],

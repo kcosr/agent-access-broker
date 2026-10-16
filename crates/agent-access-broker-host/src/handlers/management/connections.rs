@@ -270,8 +270,9 @@ pub(super) struct CredentialList {
 }
 
 /// `identity`'s credential list from its stored `rows`: every connection
-/// it is entitled to through a consumer, whatever the method, and every
-/// connection whose active token it still owns, then its retained rows.
+/// it is entitled to through a consumer, whatever the method, every
+/// connection whose active token it still owns, and every OAuth connection
+/// whose remote revocation still needs attention, then its retained rows.
 /// `readable` restricts a classless caller to the token connections its
 /// rights cover.
 pub(super) fn credential_list(
@@ -296,17 +297,6 @@ pub(super) fn credential_list(
             .iter()
             .find(|row| row.service == connection)
             .cloned();
-        let include = match readable {
-            Some(readable) => readable.contains(&connection),
-            None => !entitled.is_empty() || credential.is_some(),
-        };
-        if !include {
-            continue;
-        }
-        let (consumers, other_consumers) = consumer_view(runtime, &connection, &entitled);
-        let token = (method == ConnectionMethod::Token)
-            .then(|| token_selection(runtime, &connection, kind))
-            .flatten();
         let registration = match selection {
             Selection::OAuth(oauth) => Some(oauth.registration.clone()),
             _ => None,
@@ -319,6 +309,24 @@ pub(super) fn credential_list(
                 .remote_revocation(&identity.principal, registration)
                 .ok()
         });
+        // An OAuth connection whose remote revocation is unfinished or needs
+        // provider-side cleanup stays listed after its owner lost every
+        // grant on it.
+        let include = match readable {
+            Some(readable) => readable.contains(&connection),
+            None => {
+                !entitled.is_empty()
+                    || credential.is_some()
+                    || remote_revocation.is_some_and(RemoteRevocation::needs_attention)
+            }
+        };
+        if !include {
+            continue;
+        }
+        let (consumers, other_consumers) = consumer_view(runtime, &connection, &entitled);
+        let token = (method == ConnectionMethod::Token)
+            .then(|| token_selection(runtime, &connection, kind))
+            .flatten();
         listed.push(ConnectionRow {
             display_name: display_name(runtime, &connection),
             connection,
