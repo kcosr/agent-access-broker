@@ -5676,6 +5676,112 @@ async fn git_gateway_credential_verify_uses_upload_pack_discovery() {
     assert!(requests[0].body.is_empty());
 }
 
+/// Git credential verification presents the credential exactly as gateway
+/// forwarding does: a `bearer_token` credential as `upstream_token_auth`
+/// selects, and a `basic_api_token` credential with its own username under
+/// either scheme.
+#[tokio::test]
+async fn git_gateway_credential_verify_uses_the_gateway_token_presentation() {
+    use crate::GatewayUpstreamTokenAuth;
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let oauth2 = GatewayUpstreamTokenAuth::Basic {
+        username: "oauth2".to_string(),
+    };
+    for (token_auth, credential, expected) in [
+        (
+            GatewayUpstreamTokenAuth::Bearer {},
+            bearer_credential("runtime-token"),
+            "Bearer runtime-token",
+        ),
+        (
+            oauth2.clone(),
+            bearer_credential("runtime-token"),
+            "Basic b2F1dGgyOnJ1bnRpbWUtdG9rZW4=",
+        ),
+        (
+            GatewayUpstreamTokenAuth::Bearer {},
+            basic_credential("deploy-user", "runtime-token"),
+            "Basic ZGVwbG95LXVzZXI6cnVudGltZS10b2tlbg==",
+        ),
+        (
+            oauth2,
+            basic_credential("deploy-user", "runtime-token"),
+            "Basic ZGVwbG95LXVzZXI6cnVudGltZS10b2tlbg==",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sip/service.git/info/refs"))
+            .and(query_param("service", "git-upload-pack"))
+            .and(header("authorization", expected))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes("001e# service=git-upload-pack\n0000".as_bytes())
+                    .insert_header(
+                        "Content-Type",
+                        "application/x-git-upload-pack-advertisement",
+                    ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let identity_token_path = write_temp_secret("agent-one-token");
+        let store_path = write_temp_secret(r#"{"credentials":[]}"#);
+        let mut config = base_fake_config();
+        config.identity =
+            static_identity_config("required", &identity_token_path, "agent-one", Vec::new());
+        config.credentials.per_user.insert(
+            "gitlab_git".to_string(),
+            fake_per_user_credential(store_path.to_str().unwrap()),
+        );
+        let mut gateway = git_gateway_config();
+        gateway.credential_modes = vec!["per_user".to_string()];
+        config.gateways.insert("gitlab_git".to_string(), gateway);
+        config.policy.grants.push(PolicyGrantConfig {
+            subjects: vec!["user:agent-one".to_string()],
+            service: "gitlab_git".to_string(),
+            actions: vec!["repo.fetch".to_string()],
+            resources: resource_selection(&["repository-sip-service"]),
+            execution_contexts: None,
+            credential_mode: "per_user".to_string(),
+            priority: None,
+        });
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let mut runtime_config = (*runtime.config).clone();
+        let gateway = runtime_config.gateways.get_mut("gitlab_git").unwrap();
+        gateway.upstream_base_url = server.uri();
+        gateway.allowed_upstream_hosts = vec![format!("{}/**", server.uri())];
+        gateway.upstream_token_auth = token_auth.clone();
+        let runtime = runtime_with_replaced_config(&runtime, runtime_config);
+        let identity = runtime.identity_from_principal_groups(
+            "agent-one".to_string(),
+            Some("agent-one".to_string()),
+            Vec::new(),
+            None,
+            None,
+        );
+
+        let verification = runtime
+            .verify_execution_credential(
+                "gitlab_git",
+                &credential,
+                &identity,
+                CredentialVerificationInput {
+                    repository: Some("sip/service".to_string()),
+                },
+                CorrelationContext::for_tests(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{token_auth:?} {credential:?}: {error:?}"))
+            .unwrap();
+        assert_eq!(verification.upstream_status, 200, "{token_auth:?}");
+        server.verify().await;
+    }
+}
+
 #[tokio::test]
 async fn git_gateway_credential_verify_rejects_non_git_discovery_success() {
     use wiremock::matchers::{method, path, query_param};
@@ -7884,6 +7990,7 @@ fn runtime_preflights_gateway_proxy_secrets() {
             auth_modes: vec!["basic_broker_token".to_string()],
             basic_broker_token_username: "agent-access".to_string(),
             credential_modes: vec!["service".to_string()],
+            upstream_token_auth: Default::default(),
             redirect_policy: "none".to_string(),
             request_body_max_bytes: None,
             response_body_max_bytes: None,
@@ -8056,6 +8163,7 @@ fn runtime_rejects_provider_service_that_shadows_a_gateway() {
             auth_modes: vec!["basic_broker_token".to_string()],
             basic_broker_token_username: "agent-access".to_string(),
             credential_modes: vec!["service".to_string()],
+            upstream_token_auth: Default::default(),
             redirect_policy: "none".to_string(),
             request_body_max_bytes: None,
             response_body_max_bytes: None,
@@ -8396,6 +8504,7 @@ fn git_gateway_config() -> crate::GatewayConfig {
         auth_modes: vec!["basic_broker_token".to_string()],
         basic_broker_token_username: "agent-access".to_string(),
         credential_modes: vec!["service".to_string()],
+        upstream_token_auth: Default::default(),
         redirect_policy: "none".to_string(),
         request_body_max_bytes: Some(1024 * 1024),
         response_body_max_bytes: Some(1024 * 1024),

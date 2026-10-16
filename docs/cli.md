@@ -1707,7 +1707,9 @@ agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
 
 # Store and verify a Git gateway credential against one repository. GitLab Git
 # HTTP accepts only Basic credentials: GITLAB_GIT_USERNAME may be any non-empty
-# name, such as oauth2, for an access token.
+# name, such as oauth2, for an access token. A gateway that sets
+# upstream_token_auth = { scheme = "basic", ... } takes a token-only
+# git-bearer-token credential instead.
 agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
   credentials put gitlab_git default --profile git-basic-api-token \
   --username-env GITLAB_GIT_USERNAME \

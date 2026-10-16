@@ -453,7 +453,9 @@ resolves to, depend on the surrounding config:
 | any Git HTTP gateway | `git-basic-api-token` | `basic_api_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
 | any Git HTTP gateway | `git-bearer-token` | `bearer_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
 
-Any other profile fails validation.
+Any other profile fails validation. A Git gateway presents a `git-bearer-token`
+credential as its [`upstream_token_auth`](#gateways) selects, and a
+`git-basic-api-token` credential with its own username.
 
 ### Secret-ref syntax
 
@@ -1417,6 +1419,7 @@ allowed_upstream_hosts = ["https://gitlab.example.com/**"]
 auth_modes = ["basic_broker_token"]
 basic_broker_token_username = "agent-access" # default
 credential_modes = ["service"]               # service and/or per_user
+upstream_token_auth = { scheme = "bearer" }  # default; for bearer_token credentials
 redirect_policy = "none"                     # default; only supported value
 correlation_headers = true                   # default
 request_body_max_bytes = 536870912           # optional
@@ -1433,7 +1436,9 @@ deny_ref_patterns = ["refs/heads/main"]
 deny_delete_refs = true
 receive_pack_prefix_max_bytes = 65536
 
-# GitLab's Git HTTP endpoint accepts only Basic credentials.
+# GitLab's Git HTTP endpoint accepts only Basic credentials. Use a basic
+# credential, or a bearer_token credential with the gateway's
+# upstream_token_auth = { scheme = "basic", username = "oauth2" }.
 [credentials.service.gitlab_git]
 type = "basic_api_token"
 username_ref = "env:GITLAB_GIT_USERNAME"     # any non-empty name, such as oauth2
@@ -1482,6 +1487,16 @@ Gateway keys (`[gateways.<name>]`):
 - `credential_modes` is required (non-empty); each value must be `service` or
   `per_user` and must have a matching configured credential for the gateway
   service.
+- `upstream_token_auth` selects how the gateway presents a `bearer_token`
+  upstream credential, service or per-user, as one table tagged by `scheme`:
+  `{ scheme = "bearer" }`, the default, sends `Authorization: Bearer <token>`,
+  and `{ scheme = "basic", username = "<name>" }` sends the token as the HTTP
+  Basic password under `username`, as GitLab requires. `scheme` is required in
+  the table. `username` is required with `basic` and rejected with `bearer`; it
+  must be 1 to 64 printable ASCII characters without a colon. A
+  `basic_api_token` credential always presents its own stored username.
+  Credential verification presents credentials the same way; see
+  [upstream credential presentation](git-http-gateway.md#credentials-limits-and-audit).
 - `redirect_policy` must be `none`; upstream redirects are not followed.
 - `correlation_headers` controls whether forwarded upstream Git requests carry
   `X-Agent-Access-Request-Id` and `X-Agent-Access-Broker-Request-Id`.

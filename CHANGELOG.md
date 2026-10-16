@@ -600,6 +600,19 @@ All notable changes to this project are documented in this file.
   includes personal spaces subject to the same upstream permissions, exclusions,
   and token restrictions. No caller-relative home selection is implied.
 
+- Git HTTP gateways can present `bearer_token` credentials as HTTP Basic, as
+  GitLab's Git endpoint requires: `[gateways.<name>].upstream_token_auth =
+  { scheme = "basic", username = "oauth2" }` sends the token as the Basic
+  password under the configured username, for service and per-user
+  (`git-bearer-token`) credentials alike. The default, `{ scheme = "bearer" }`
+  or no setting, keeps `Authorization: Bearer`. `username` is required with
+  `basic` and rejected with `bearer`, and must be 1 to 64 printable ASCII
+  characters without a colon. `basic_api_token` credentials keep their own
+  stored username. Git credential verification presents credentials the same
+  way as forwarding. The provider SDK adds the host-only placement
+  `host::token_as_basic`, for static and delegated tokens; the crate-boundary
+  check rejects it in native, adapter, reference and helper crates.
+
 ### Changed
 
 - Existing Confluence `all` resources used by grants, groups, and token

@@ -17740,6 +17740,7 @@ fn test_git_gateway_config() -> agent_access_core::GatewayConfig {
         auth_modes: vec!["basic_broker_token".to_string()],
         basic_broker_token_username: "agent-access".to_string(),
         credential_modes: vec!["service".to_string()],
+        upstream_token_auth: Default::default(),
         redirect_policy: "none".to_string(),
         request_body_max_bytes: Some(1024 * 1024),
         response_body_max_bytes: Some(1024 * 1024),

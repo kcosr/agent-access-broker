@@ -3830,31 +3830,35 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
     );
 }
 
+/// The sample configuration with `gateway` as `gitlab_git`, its service
+/// credential and a `repo.fetch` grant in the `default` context.
+fn config_with_git_gateway(gateway: GatewayConfig) -> BrokerConfig {
+    let mut config = sample_broker();
+    config.credentials.service.insert(
+        "gitlab_git".to_string(),
+        fake_service_credential("env:GITLAB_SERVICE_TOKEN"),
+    );
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    let resources = select_resources(
+        &mut config,
+        GIT_REPOSITORY_RESOURCE.id().clone(),
+        &[exact("sip/service")],
+    );
+    config.policy.grants.push(PolicyGrantConfig {
+        subjects: vec!["group:anonymous".to_string()],
+        service: "gitlab_git".to_string(),
+        actions: vec!["repo.fetch".to_string()],
+        resources,
+        execution_contexts: Some(vec!["default".to_string()]),
+        credential_mode: "service".to_string(),
+        priority: None,
+    });
+    config
+}
+
 #[test]
 fn git_http_gateway_rejects_invalid_gateway_options() {
-    let config_with_gateway = |gateway: GatewayConfig| {
-        let mut config = sample_broker();
-        config.credentials.service.insert(
-            "gitlab_git".to_string(),
-            fake_service_credential("env:GITLAB_SERVICE_TOKEN"),
-        );
-        config.gateways.insert("gitlab_git".to_string(), gateway);
-        let resources = select_resources(
-            &mut config,
-            GIT_REPOSITORY_RESOURCE.id().clone(),
-            &[exact("sip/service")],
-        );
-        config.policy.grants.push(PolicyGrantConfig {
-            subjects: vec!["group:anonymous".to_string()],
-            service: "gitlab_git".to_string(),
-            actions: vec!["repo.fetch".to_string()],
-            resources,
-            execution_contexts: None,
-            credential_mode: "service".to_string(),
-            priority: None,
-        });
-        config
-    };
+    let config_with_gateway = config_with_git_gateway;
 
     let mut config = config_with_gateway(git_http_gateway_config());
     let mut duplicate = git_http_gateway_config();
@@ -3932,6 +3936,108 @@ fn git_http_gateway_rejects_invalid_gateway_options() {
     gateway.git.as_mut().unwrap().receive_pack_prefix_max_bytes = Some(0);
     let errors = validation_errors(validate_broker_config(&config_with_gateway(gateway)));
     assert_contains(&errors, "receive_pack_prefix_max_bytes must be non-zero");
+}
+
+/// `upstream_token_auth` has one table shape: `scheme` is required, and
+/// `username` is required for `basic` and rejected for `bearer`.
+#[test]
+fn git_http_gateway_upstream_token_auth_is_one_table_shape() {
+    let sample =
+        std::fs::read_to_string(workspace_root().join("agent-access-broker.sample.toml")).unwrap();
+    let document = |token_auth: &str| {
+        format!(
+            "{sample}\n[gateways.gitlab_git]\nkind = \"git_http\"\ndisplay_name = \"GitLab Git\"\nupstream_base_url = \"https://gitlab.example.com\"\n{token_auth}\n"
+        )
+    };
+    let parsed = |token_auth: &str| {
+        parse_test_config(&document(token_auth))
+            .unwrap()
+            .gateways
+            .remove("gitlab_git")
+            .unwrap()
+            .upstream_token_auth
+    };
+    let oauth2 = GatewayUpstreamTokenAuth::Basic {
+        username: "oauth2".to_string(),
+    };
+    assert_eq!(parsed(""), GatewayUpstreamTokenAuth::Bearer {});
+    assert_eq!(
+        parsed("upstream_token_auth = { scheme = \"bearer\" }"),
+        GatewayUpstreamTokenAuth::Bearer {}
+    );
+    assert_eq!(
+        parsed("upstream_token_auth = { scheme = \"basic\", username = \"oauth2\" }"),
+        oauth2
+    );
+    assert_eq!(
+        parsed(
+            "[gateways.gitlab_git.upstream_token_auth]\nscheme = \"basic\"\nusername = \"oauth2\""
+        ),
+        oauth2
+    );
+    for (token_auth, expected) in [
+        (
+            "upstream_token_auth = { scheme = \"basic\" }",
+            "missing field `username`",
+        ),
+        (
+            "upstream_token_auth = { scheme = \"bearer\", username = \"oauth2\" }",
+            "unknown field `username`",
+        ),
+        (
+            "upstream_token_auth = { username = \"oauth2\" }",
+            "missing field `scheme`",
+        ),
+        (
+            "upstream_token_auth = { scheme = \"digest\" }",
+            "unknown variant `digest`, expected `bearer` or `basic`",
+        ),
+        (
+            "upstream_token_auth = { scheme = \"basic\", username = \"oauth2\", password = \"secret\" }",
+            "unknown field `password`",
+        ),
+        ("upstream_token_auth = \"basic\"", "invalid type: string"),
+    ] {
+        let error = parse_test_config(&document(token_auth)).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{token_auth}: expected {expected:?}, got {error}"
+        );
+    }
+}
+
+#[test]
+fn git_http_gateway_upstream_token_auth_validates_the_basic_username() {
+    let with_username = |username: &str| {
+        let mut gateway = git_http_gateway_config();
+        gateway.upstream_token_auth = GatewayUpstreamTokenAuth::Basic {
+            username: username.to_string(),
+        };
+        config_with_git_gateway(gateway)
+    };
+    let longest = "~".repeat(64);
+    for valid in ["oauth2", "service account", longest.as_str()] {
+        validate_broker_config(&with_username(valid))
+            .unwrap_or_else(|error| panic!("{valid:?}: {error}"));
+    }
+    validate_broker_config(&config_with_git_gateway(git_http_gateway_config())).unwrap();
+
+    let too_long = "a".repeat(65);
+    for (username, problem) in [
+        ("", "must not be empty"),
+        ("oauth:2", "must not contain a colon"),
+        ("tab\tname", "must not contain control characters"),
+        ("line\nbreak", "must not contain control characters"),
+        ("\u{7f}", "must not contain control characters"),
+        ("uni\u{e9}code", "must be printable ASCII"),
+        (too_long.as_str(), "must be at most 64 characters"),
+    ] {
+        let errors = validation_errors(validate_broker_config(&with_username(username)));
+        assert_contains(
+            &errors,
+            &format!("gateways.gitlab_git.upstream_token_auth.username {problem}"),
+        );
+    }
 }
 
 #[test]
@@ -4908,6 +5014,7 @@ fn git_http_gateway_config() -> GatewayConfig {
         auth_modes: vec!["basic_broker_token".to_string()],
         basic_broker_token_username: "agent-access".to_string(),
         credential_modes: vec!["service".to_string()],
+        upstream_token_auth: Default::default(),
         redirect_policy: "none".to_string(),
         request_body_max_bytes: None,
         response_body_max_bytes: None,

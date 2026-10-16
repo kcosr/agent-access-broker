@@ -583,9 +583,10 @@ only on the service's own origin. Debug output names only the kind or header,
 and release builds offer no credential comparison; test builds compare in
 constant time. A cooperating provider therefore cannot log, return or forward
 the material by mistake. The host's own Git smart HTTP gateway and credential
-verification attach credentials to their requests through a host-only port that
-the crate-boundary check forbids in provider, adapter, reference and helper
-crates. OAuth companions are the exception by role: they exchange and refresh
+verification attach credentials to their requests through a host-only port, and
+can present a token as HTTP Basic under a configured username through a
+host-only placement; the crate-boundary check forbids both in provider,
+adapter, reference and helper crates. OAuth companions are the exception by role: they exchange and refresh
 tokens with authorization servers through the OAuth dialect contract. Command
 imports are the other, deliberate exception: the Broker writes credential
 plaintext to the stdin of operator-approved local commands; see

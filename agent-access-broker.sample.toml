@@ -317,6 +317,18 @@ read_only = true
 # type = "managed_store"
 # credential_name = "default"
 # profile = "git-basic-api-token"
+#
+# Alternatively, keep token-only credentials and have the gateway present the
+# token as Basic: set upstream_token_auth on [gateways.gitlab_git] below.
+#
+# [credentials.service.gitlab_git]
+# type = "bearer_token"
+# token_ref = "env:GITLAB_SERVICE_TOKEN"
+#
+# [credentials.per_user.gitlab_git]
+# type = "managed_store"
+# credential_name = "default"
+# profile = "git-bearer-token"
 
 [policy]
 authority = "toml"
@@ -729,6 +741,10 @@ max_results = 50
 # auth_modes = ["basic_broker_token"]
 # basic_broker_token_username = "agent-access"
 # credential_modes = ["service"]
+# How bearer_token credentials are presented upstream; basic_api_token
+# credentials keep their own username. The default is { scheme = "bearer" };
+# GitLab accepts only Basic:
+# upstream_token_auth = { scheme = "basic", username = "oauth2" }
 # redirect_policy = "none"
 # request_body_max_bytes = 536870912
 # response_body_max_bytes = 536870912

@@ -221,12 +221,55 @@ self-service credential verifier requires a repository that the principal can
 fetch and uses `streaming_idle_timeout_ms` for stalled upstream discovery
 headers or body reads.
 
-The gateway sends a `basic_api_token` credential (per-user profile
-`git-basic-api-token`) as HTTP Basic and a `bearer_token` credential (profile
-`git-bearer-token`) as a Bearer token. GitLab's Git HTTP endpoint accepts only
-Basic credentials, so use a basic credential for a GitLab upstream: the access
-token with any non-empty username, such as `oauth2`. A GitLab deploy token
-requires its own username.
+The gateway presents a `basic_api_token` credential (per-user profile
+`git-basic-api-token`) as HTTP Basic with its own stored username. It presents
+a `bearer_token` credential (per-user profile `git-bearer-token`) as the
+gateway's `upstream_token_auth` setting selects:
+
+| `upstream_token_auth` | Upstream header |
+| --- | --- |
+| Absent, or `{ scheme = "bearer" }` | `Authorization: Bearer <token>` |
+| `{ scheme = "basic", username = "<name>" }` | `Authorization: Basic <base64 of name:token>` |
+
+The setting applies to service and per-user bearer-kind credentials alike; a
+basic credential keeps its stored username under either scheme. `username` is
+required with `basic` and rejected with `bearer`, and must be 1 to 64 printable
+ASCII characters without a colon. Under `basic`, a token that is empty, longer
+than 32,768 characters, or contains a space or other character outside visible
+ASCII fails the request with `credential_invalid` before anything is sent.
+Credential verification presents the credential exactly as forwarded requests
+do.
+
+GitLab's Git HTTP endpoint accepts only Basic credentials. With an access token
+any non-empty username works, and `oauth2` is GitLab's convention; avoid
+usernames GitLab treats specially, such as `gitlab-ci-token`. Either setup works
+for a GitLab upstream:
+
+- **A basic credential**: a `basic_api_token` service credential, or the
+  per-user profile `git-basic-api-token`, holding the access token with any
+  non-empty username, such as `oauth2`. A GitLab deploy token requires its own
+  username, so use this setup for deploy tokens.
+- **A bearer-kind credential presented as Basic**: a `bearer_token` service
+  credential, or the per-user profile `git-bearer-token`, with the gateway set
+  to `upstream_token_auth = { scheme = "basic", username = "oauth2" }`. Users
+  store only the token.
+
+```toml
+[gateways.gitlab_git]
+kind = "git_http"
+# ... broker_hosts, upstream_base_url and the other gateway keys
+credential_modes = ["service", "per_user"]
+upstream_token_auth = { scheme = "basic", username = "oauth2" }
+
+[credentials.service.gitlab_git]
+type = "bearer_token"
+token_ref = "env:GITLAB_GIT_TOKEN"
+
+[credentials.per_user.gitlab_git]
+type = "managed_store"
+credential_name = "default"
+profile = "git-bearer-token"
+```
 
 Gateway responses are raw Git smart HTTP streams, not broker JSON envelopes.
 That protocol passthrough behavior is unchanged by the Jira, Confluence, and

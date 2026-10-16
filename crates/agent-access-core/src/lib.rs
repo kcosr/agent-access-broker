@@ -25,6 +25,7 @@ mod backends;
 mod command_imports_config;
 mod config_error;
 mod fs_permissions;
+mod gateway_token_auth;
 mod import_names;
 pub mod imports;
 mod imports_config;
@@ -49,6 +50,7 @@ pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
 pub use command_imports_config::*;
 pub use config_error::{ConfigError, HostConfigError, load_secret_ref_value};
+pub use gateway_token_auth::{GatewayUpstreamTokenAuth, authorize_gateway_upstream_request};
 pub use import_names::*;
 pub use imports_config::*;
 pub use invocation_limits::*;
@@ -1148,6 +1150,9 @@ pub struct GatewayConfig {
     pub basic_broker_token_username: String,
     #[serde(default)]
     pub credential_modes: Vec<String>,
+    /// How the gateway presents a token-kind upstream credential.
+    #[serde(default)]
+    pub upstream_token_auth: GatewayUpstreamTokenAuth,
     #[serde(default = "default_gateway_redirect_policy")]
     pub redirect_policy: String,
     pub request_body_max_bytes: Option<u64>,
@@ -3353,6 +3358,11 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
                 ));
             }
         }
+        gateway_token_auth::validate_upstream_token_auth(
+            service,
+            &gateway.upstream_token_auth,
+            errors,
+        );
         if gateway.redirect_policy != "none" {
             errors.push(format!(
                 "gateways.{service}.redirect_policy must be none in V1"
