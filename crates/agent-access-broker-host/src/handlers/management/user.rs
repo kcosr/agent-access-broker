@@ -566,14 +566,26 @@ pub(crate) async fn user_credential_targets(
         credential_targets(&context.snapshot.runtime, Some(&allowed_services))
     } else {
         let principal = context.identity.principal.clone();
-        let candidates = credential_targets(&context.snapshot.runtime, None);
+        // Credential rights are keyed by the connection a service consumes.
+        let candidates = credential_targets(&context.snapshot.runtime, None)
+            .into_iter()
+            .map(|target| {
+                let key = context
+                    .snapshot
+                    .runtime
+                    .personal_credential_key(&target.service)
+                    .unwrap_or(&target.service)
+                    .to_owned();
+                (key, target)
+            })
+            .collect::<Vec<_>>();
         match management_store_call(&context, move |store| {
             let mut allowed = Vec::new();
-            for target in candidates {
+            for (key, target) in candidates {
                 if store.has_credential_right(
                     &principal,
                     "credentials:self:write",
-                    &target.service,
+                    &key,
                     &target.credential_name,
                 )? {
                     allowed.push(target);

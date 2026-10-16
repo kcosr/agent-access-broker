@@ -522,18 +522,32 @@ pub(super) fn credential_targets(
             {
                 return None;
             }
-            if credential.kind != "managed_store" {
-                return None;
-            }
-            let credential_name = credential
-                .credential_name
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
+            let (credential_name, profile, credential_kind) = match credential.kind.as_str() {
+                "connection" => {
+                    let (profile, kind) = runtime.personal_token_profile(service)?;
+                    (
+                        agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string(),
+                        profile.to_string(),
+                        kind,
+                    )
+                }
+                "managed_store" => {
+                    let profile = credential.profile.clone()?;
+                    let kind = runtime.credential_profile_kind(service, &profile)?;
+                    (
+                        credential
+                            .credential_name
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string()),
+                        profile,
+                        kind,
+                    )
+                }
+                _ => return None,
+            };
             if !is_action_name(&credential_name) {
                 return None;
             }
-            let profile = credential.profile.clone()?;
-            let credential_kind = runtime.credential_profile_kind(service, &profile)?;
             let input_schema =
                 runtime.credential_input_schema(service, &profile, credential_kind)?;
             let descriptor = runtime.service_descriptor(service)?;

@@ -60,6 +60,25 @@ impl PrincipalCredentialTarget {
             &self.name,
         ))
     }
+
+    /// The stored `service` column this target addresses: the ID of the
+    /// credential connection the service consumes, or the route's service
+    /// when it consumes none.
+    fn store_service(&self, runtime: &BrokerRuntime) -> String {
+        runtime
+            .personal_credential_key(&self.service)
+            .unwrap_or(&self.service)
+            .to_owned()
+    }
+}
+
+/// Whether `profile` is the service's own declared profile or its credential
+/// connection's token profile.
+fn profile_supported(runtime: &BrokerRuntime, service: &str, profile: &str) -> bool {
+    runtime.credential_profile_kind(service, profile).is_some()
+        || runtime
+            .personal_token_profile(service)
+            .is_some_and(|(configured, _)| configured == profile)
 }
 
 fn validate_management_service_name(service: &str) -> bool {
@@ -98,6 +117,15 @@ fn credential_profile_for_service(
         .per_user
         .get(service)
         .ok_or("managed per_user credentials are not configured for service")?;
+    if configured.kind == "connection" {
+        let (configured_profile, kind) = runtime
+            .personal_token_profile(service)
+            .ok_or("managed per_user credentials are not configured for service")?;
+        if profile.is_some_and(|profile| profile != configured_profile) {
+            return Err("credential profile does not match configured managed profile");
+        }
+        return Ok((configured_profile.to_string(), kind.to_string()));
+    }
     if configured.kind != "managed_store" {
         return Err("managed per_user credentials are not configured for service");
     }
@@ -124,6 +152,9 @@ fn configured_managed_credential_name(
         .per_user
         .get(service)
         .ok_or("managed per_user credentials are not configured for service")?;
+    if configured.kind == "connection" && runtime.personal_token_profile(service).is_some() {
+        return Ok(agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string());
+    }
     if configured.kind != "managed_store" {
         return Err("managed per_user credentials are not configured for service");
     }
@@ -299,7 +330,7 @@ pub(super) async fn get_credential_for_principal(
         return *response;
     }
     let principal_for_store = request.principal.clone();
-    let service_for_store = request.service.clone();
+    let service_for_store = request.store_service(&context.snapshot.runtime);
     let name_for_store = request.name.clone();
     let right_for_store = right.to_string();
     let enforce_right = request.enforce_right;
@@ -357,7 +388,7 @@ pub(super) async fn credential_input_schema_for_principal(
     }
     if request.enforce_right {
         let principal_for_store = request.principal.clone();
-        let service_for_store = request.service.clone();
+        let service_for_store = request.store_service(&context.snapshot.runtime);
         let name_for_store = request.name.clone();
         if let Err(error) = management_store_call(&context, move |store| {
             store.require_credential_right(
@@ -443,7 +474,7 @@ pub(super) async fn put_credential_for_principal(
     }
     if request.enforce_right {
         let principal_for_store = request.principal.clone();
-        let service_for_store = request.service.clone();
+        let service_for_store = request.store_service(&context.snapshot.runtime);
         let name_for_store = request.name.clone();
         if let Err(error) = management_store_call(&context, move |store| {
             store.require_credential_right(
@@ -491,7 +522,7 @@ pub(super) async fn put_credential_for_principal(
     }
     let actor = context.identity.principal.clone();
     let owner_principal_id = request.principal.clone();
-    let service = request.service.clone();
+    let service = request.store_service(&context.snapshot.runtime);
     let name = request.name.clone();
     match management_store_call(&context, move |store| {
         store.upsert_user_credential(
@@ -552,7 +583,7 @@ pub(super) async fn verify_credential_for_principal(
         return *response;
     }
     let principal_for_store = request.principal.clone();
-    let service_for_store = request.service.clone();
+    let service_for_store = request.store_service(&context.snapshot.runtime);
     let name_for_store = request.name.clone();
     let enforce_right = request.enforce_right;
     let metadata = match management_store_call(&context, move |store| {
@@ -573,12 +604,11 @@ pub(super) async fn verify_credential_for_principal(
             return management_store_error_response(&context, operation, target, error).await;
         }
     };
-    if context
-        .snapshot
-        .runtime
-        .credential_profile_kind(&request.service, &metadata.profile)
-        .is_none()
-    {
+    if !profile_supported(
+        &context.snapshot.runtime,
+        &request.service,
+        &metadata.profile,
+    ) {
         return management_context_error_response(
             &context,
             StatusCode::BAD_REQUEST,
@@ -623,7 +653,7 @@ pub(super) async fn verify_credential_for_principal(
         return *response;
     }
     let principal_for_store = request.principal.clone();
-    let service_for_store = request.service.clone();
+    let service_for_store = request.store_service(&context.snapshot.runtime);
     let name_for_store = request.name.clone();
     let profile = metadata.profile.clone();
     let verification_candidate = match management_store_call(&context, move |store| {
@@ -779,7 +809,7 @@ pub(super) async fn delete_credential_for_principal(
     }
     if request.enforce_right {
         let principal_for_store = request.principal.clone();
-        let service_for_store = request.service.clone();
+        let service_for_store = request.store_service(&context.snapshot.runtime);
         let name_for_store = request.name.clone();
         if let Err(error) = management_store_call(&context, move |store| {
             store.require_credential_right(
@@ -800,7 +830,7 @@ pub(super) async fn delete_credential_for_principal(
         return *response;
     }
     let principal_for_store = request.principal.clone();
-    let service_for_store = request.service.clone();
+    let service_for_store = request.store_service(&context.snapshot.runtime);
     let name_for_store = request.name.clone();
     match management_store_call(&context, move |store| {
         store.delete_user_credential(

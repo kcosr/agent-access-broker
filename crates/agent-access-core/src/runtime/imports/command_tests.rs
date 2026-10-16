@@ -156,6 +156,8 @@ fn credential_free_command_imports_use_service_mode_without_a_slot() {
         ["service"]
     );
     assert!(!effective.credentials.per_user.contains_key("ticketing"));
+    // A credential-free import publishes no credential connection.
+    assert!(!effective.credentials.connections.contains_key("ticketing"));
     assert!(crate::credential_mode_available(
         &effective.credentials,
         "ticketing",
@@ -213,12 +215,32 @@ fn credentialed_command_imports_need_their_slot_and_declare_their_profile() {
             effective.credentials.imported_modes["ticketing"],
             ["per_user"]
         );
+        // The personal binding publishes a single-consumer connection under
+        // the import's ID with the declared profile and no OAuth.
         assert_eq!(
-            effective.credentials.per_user["ticketing"]
-                .profile
-                .as_deref(),
-            Some(profile)
+            effective.credentials.connections["ticketing"],
+            crate::ConnectionConfig {
+                display_name: Some("Ticketing".into()),
+                token_profile: Some(profile.into()),
+                oauth: None,
+            }
         );
+        let connection = effective
+            .credentials
+            .personal_connection("ticketing")
+            .unwrap();
+        assert_eq!(connection.id, "ticketing");
+        for principal_kind in [
+            crate::PrincipalKind::User,
+            crate::PrincipalKind::ServiceAccount,
+            crate::PrincipalKind::System,
+        ] {
+            assert_eq!(
+                connection.select(Some(principal_kind)),
+                crate::Selection::Token(profile)
+            );
+        }
+        assert_eq!(connection.select(None), crate::Selection::Unavailable);
         record
             .slot_versions
             .insert(ImportedCredentialPurpose::Execution, "slot-version".into());
@@ -229,4 +251,44 @@ fn credentialed_command_imports_need_their_slot_and_declare_their_profile() {
             ["service", "per_user"]
         );
     }
+}
+
+#[test]
+fn only_a_supported_personal_binding_publishes_a_connection() {
+    let config = config();
+    // Service mode alone: no personal setup target or selection.
+    let mut service_only = command_record(
+        &[ImportedCredentialMode::Service],
+        Some(ImportedCredentialKind::Token),
+    );
+    service_only
+        .slot_versions
+        .insert(ImportedCredentialPurpose::Execution, "slot-version".into());
+    let mut effective = config.clone();
+    effective_credentials(&mut effective, &catalog(service_only));
+    assert_eq!(
+        effective.credentials.imported_modes["ticketing"],
+        ["service"]
+    );
+    assert!(effective.credentials.connections.is_empty());
+    assert!(effective.credentials.per_user.is_empty());
+
+    // Personal mode added after acceptance publishes the connection on the
+    // next publication, from configuration alone.
+    let personal = command_record(
+        &[
+            ImportedCredentialMode::Service,
+            ImportedCredentialMode::PerUser,
+        ],
+        Some(ImportedCredentialKind::Token),
+    );
+    effective_credentials(&mut effective, &catalog(personal));
+    assert!(effective.credentials.connections.contains_key("ticketing"));
+    assert_eq!(
+        effective
+            .credentials
+            .connection_consumers("ticketing")
+            .collect::<Vec<_>>(),
+        ["ticketing"]
+    );
 }

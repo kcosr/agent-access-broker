@@ -191,6 +191,29 @@ fn declared_profile_kind<'a>(
     Ok(kind)
 }
 
+/// The kind of a connection's token profile as its consumers declare it,
+/// when they agree; `None` when the profile is unset, undeclared or
+/// declared with different kinds, which validation rejects.
+pub(crate) fn connection_token_kind(
+    credentials: &CredentialsConfig,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    connection: &str,
+) -> Option<&'static str> {
+    let profile = credentials
+        .connections
+        .get(connection)?
+        .token_profile
+        .as_deref()?;
+    declared_profile_kind(
+        profile,
+        credentials
+            .connection_consumers(connection)
+            .filter_map(|service| services.get(service).map(Arc::as_ref)),
+    )
+    .ok()
+    .flatten()
+}
+
 /// Checks `[credentials.connections]` against the configured services: the
 /// ID namespace, at least one method, every consumer's profile and
 /// delegated-access support, the OAuth registration binding, and one

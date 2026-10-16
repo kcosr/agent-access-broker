@@ -18,6 +18,29 @@ impl BrokerRuntime {
         Some((connection, connection.select(identity.principal_kind)))
     }
 
+    /// The token profile of `service`'s credential connection and the
+    /// credential kind its consumers declare for it; `None` without a
+    /// connection or a token profile. A Git gateway consumer can store a
+    /// profile another consumer of its connection declares.
+    pub fn personal_token_profile(&self, service: &str) -> Option<(&str, &'static str)> {
+        let connection = self.effective_credentials.personal_connection(service)?;
+        let profile = connection.config.token_profile.as_deref()?;
+        let kind = crate::connections::connection_token_kind(
+            &self.effective_credentials,
+            &self.services,
+            connection.id,
+        )?;
+        Some((profile, kind))
+    }
+
+    /// The `service` column of `service`'s personal token rows: the ID of
+    /// the credential connection it consumes, if any.
+    pub fn personal_credential_key(&self, service: &str) -> Option<&str> {
+        self.effective_credentials
+            .personal_connection(service)
+            .map(|connection| connection.id)
+    }
+
     /// The caller's token for `service`'s connection, which execution,
     /// both lookup phases and the gateway use. An OAuth selection cannot
     /// supply a static credential, and an unavailable selection never falls
