@@ -19,6 +19,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod delegated_lookups;
 #[path = "oauth/gitlab_dialect.rs"]
 mod gitlab_dialect;
+#[path = "oauth/gitlab_gateway.rs"]
+mod gitlab_gateway;
 #[path = "oauth/gitlab_rest.rs"]
 mod gitlab_rest;
 #[path = "oauth/token_only.rs"]
@@ -319,13 +321,19 @@ async fn oauth_fixture_with(
     }
 }
 
-/// `config`'s broker serving `providers`. A Microsoft sign-in it enables
-/// is never reached: tests link Microsoft login methods in the store.
+/// `config`'s broker serving `providers`, with a gateway listener when it
+/// configures gateways. A Microsoft sign-in it enables is never reached:
+/// tests link Microsoft login methods in the store.
 async fn start_oauth_broker(
     config: &BrokerConfig,
     providers: Vec<agent_access_provider::ServiceProvider>,
 ) -> TestBroker {
     let mut application = TestBroker::config_builder(config);
+    if !config.gateways.is_empty() {
+        application = application
+            .gateway_listener()
+            .expect("loopback gateway listener");
+    }
     if config.browser_auth.oidc.microsoft.enabled {
         application = application.microsoft_oidc_components(
             Arc::new(UnreachableMicrosoft),

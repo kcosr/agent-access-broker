@@ -1879,8 +1879,18 @@ successor, a lost refresh response requiring reconnect, token-only actions
 refused for OAuth, and GitLab REST alone validating on an OAuth connection.
 Core's `oauth::tests::a_second_process_reports_refresh_busy_while_another_refreshes`
 covers a second process on the same store; the Broker fixture cannot start a
-second Broker on one store. No test reaches a real GitLab instance.
+second Broker on one store.
 
+`tests::oauth::gitlab_gateway` connects a person through browser consent and
+drives the Git gateway against a fake GitLab instance over TLS, whose token
+endpoint revokes earlier tokens on every refresh and whose Git routes accept
+only current access as Basic `oauth2:<token>`: fetch and push presentation and
+audit, ref discovery's one recovery, pack POSTs that are never replayed,
+refreshes racing in-flight requests, a shared refresh, unknown refresh outcomes
+and throttling, a service account's stored token, and a real `git` clone whose
+rejection Git reports without asking its credential helper to erase the Broker
+token (it requires `git` and `git http-backend`). No test reaches a real GitLab
+instance.
 
 ## Imported MCP services
 
