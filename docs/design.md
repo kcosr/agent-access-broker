@@ -1949,6 +1949,19 @@ independent intake admission. Local-password hashes run outside the managed
 SQLite mutex with two login/change jobs and one reserved administrative job per
 store, plus a fresh account/password-state check before commit.
 
+**Raw downloads.** `max_download_bytes` bounds every raw download the Broker
+delivers, whatever bound the provider applies. Providers reject a declared
+length over their cap and stop reading upstream past it; the host independently
+counts the bytes of each provider stream as it delivers them, without buffering.
+The chunk that would take the body past the limit is not delivered: the stream
+fails there with `attachment_size_denied`, the reason the SDK's bounded downloads
+report for this limit, and stops reading the provider's stream. An in-memory body
+over the limit fails before its first byte. The failure is a late stream failure:
+the committed 200 response ends without completing its body, and the stream's
+terminal audit record is `failed` with `decision = error`, the reason, and the
+delivered byte count and digest. The CLI and stdio MCP report such a download as
+failed and leave an existing destination unchanged.
+
 All numeric limits must be non-zero; invocation limits accept 1 to 1,000,000
 requests and windows from `1s` to `1d`.
 

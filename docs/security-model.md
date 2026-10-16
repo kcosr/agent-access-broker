@@ -694,7 +694,8 @@ Agent Access Broker applies these controls in the request path:
   `atlas_doc_format`; Confluence page hierarchy writes are limited to same-space
   pages through narrow create-parent and `page.move` target/position fields,
   without raw move passthrough; upload sizes, media types, checksums, and
-  download limits are enforced before or during provider calls.
+  download limits are enforced before or during provider calls, and the Broker
+  itself stops any raw download that would pass `limits.max_download_bytes`.
 - **Bounded validation feedback**: broker-local malformed-body and unsupported
   body-format failures remain actionable through lookup-backed flows. Only
   after an authorized Jira, Confluence, or GitLab REST mutation may the broker

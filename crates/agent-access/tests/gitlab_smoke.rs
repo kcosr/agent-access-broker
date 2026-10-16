@@ -47,9 +47,11 @@ use agent_access_gitlab::{
 };
 use agent_access_provider::{GIT_REPOSITORY_RESOURCE, ProviderResultStream, SearchLimitsConfig};
 use async_trait::async_trait;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::pin::Pin;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
@@ -918,6 +920,95 @@ async fn broker_exposes_gitlab_merge_request_review_reads_against_stubbed_backen
     assert!(!audit.contains(&reviewer_page_token));
 
     stop(broker).await;
+}
+
+/// The Broker stops a raw download at `limits.max_download_bytes` even when
+/// the provider streams past it: the CLI reports the truncated download as a
+/// failure and keeps the existing destination, and the terminal audit record
+/// keeps the overflow. A body exactly at the limit downloads.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broker_download_limit_fails_a_raw_diff_streamed_past_it() {
+    let output_path = temp_path("gitlab-download-limit.diff");
+    std::fs::write(&output_path, b"original").unwrap();
+    let backend = stub_backend();
+    backend.streamed_raw_diffs.lock().unwrap().extend([
+        // 16 bytes: the first chunk fits the 12-byte limit, the second
+        // would pass it.
+        vec![&b"0123456789"[..], &b"abcdef"[..]],
+        // Exactly 12 bytes.
+        vec![&b"0123456789"[..], &b"ab"[..]],
+    ]);
+    let mut provider_config = gitlab_provider_config(2);
+    provider_config.content.max_raw_download_bytes = 12;
+    let mut document = gitlab_document();
+    document.provider = provider_config.clone();
+    document.max_download_bytes = Some(12);
+    let broker = start_broker(&document, gitlab_service(provider_config, backend)).await;
+    let audit = broker.audit().unwrap();
+    let base_url = broker.public_url();
+    let diff_raw = || {
+        gitlab_cli(&base_url)
+            .args([
+                "gitlab",
+                "merge-request",
+                "diff-raw",
+                "sip/service",
+                "5",
+                "--output",
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    };
+
+    let overrun = diff_raw();
+    assert_eq!(
+        overrun.status.code(),
+        Some(5),
+        "an overrun download must fail as a transfer: stdout={} stderr={}",
+        String::from_utf8_lossy(&overrun.stdout),
+        String::from_utf8_lossy(&overrun.stderr)
+    );
+    assert!(overrun.stdout.is_empty(), "no download receipt is printed");
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"original");
+
+    let at_limit = diff_raw();
+    assert_success("raw diff at the download limit", &at_limit);
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"0123456789ab");
+    stop(broker).await;
+
+    let terminal = audit
+        .require_action("gitlab", "merge_request.diff.raw.download")
+        .into_iter()
+        .filter(|record| record["providerAudit"]["streamPhase"] != "started")
+        .collect::<Vec<_>>();
+    assert_eq!(terminal.len(), 2, "{terminal:?}");
+    let failed = terminal
+        .iter()
+        .find(|record| record["providerAudit"]["streamPhase"] == "failed")
+        .expect("the overrun's terminal record");
+    assert_eq!(failed["decision"], "error");
+    assert_eq!(failed["reasonCode"], "attachment_size_denied");
+    assert_eq!(
+        failed["providerAudit"]["streamMessage"],
+        "raw download exceeded the download limit"
+    );
+    // Only the chunk within the limit was delivered.
+    assert_eq!(failed["providerAudit"]["streamBytes"], 10);
+    assert_eq!(
+        failed["providerAudit"]["streamSha256"],
+        "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882"
+    );
+    let completed = terminal
+        .iter()
+        .find(|record| record["providerAudit"]["streamPhase"] == "completed")
+        .expect("the at-limit download's terminal record");
+    assert_eq!(completed["providerAudit"]["streamBytes"], 12);
+    assert_eq!(
+        completed["providerAudit"]["streamSha256"],
+        "d407ad901895723f32d31e6515f5284beb4c01e70e56720d65099da4771f3193"
+    );
+    std::fs::remove_file(output_path).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -6900,6 +6991,20 @@ struct StubGitlabBackend {
     next_webhook_id: Mutex<u64>,
     last_webhook_write: Mutex<Option<GitlabWebhookWriteRequest>>,
     last_webhook_header: Mutex<Option<GitlabWebhookCustomHeaderRequest>>,
+    /// Raw diffs served in turn before the fixed diff: each a live stream of
+    /// these chunks with no declared size, which ignores the byte cap.
+    streamed_raw_diffs: Mutex<VecDeque<Vec<&'static [u8]>>>,
+}
+
+/// A live body yielding its chunks one by one.
+struct ChunkStream(VecDeque<bytes::Bytes>);
+
+impl agent_access_provider::deps::futures_core::Stream for ChunkStream {
+    type Item = Result<bytes::Bytes, agent_access_provider::ProviderStreamError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.0.pop_front().map(Ok))
+    }
 }
 
 impl StubGitlabBackend {
@@ -8318,6 +8423,18 @@ impl GitlabBackend for StubGitlabBackend {
         if project_id != 42 || iid != 5 {
             return Err(GitlabBackendError::NotFound);
         }
+        if let Some(chunks) = self.streamed_raw_diffs.lock().unwrap().pop_front() {
+            let chunks = chunks.into_iter().map(bytes::Bytes::from_static).collect();
+            return Ok(GitlabBackendResponse {
+                value: GitlabRawFile {
+                    size: None,
+                    content_type: "text/x-diff".to_string(),
+                    stream: ProviderResultStream::from_stream("text/x-diff", ChunkStream(chunks)),
+                },
+                status: 200,
+                duration_ms: 35,
+            });
+        }
         let bytes = b"diff --git a/src/old.rs b/src/new.rs\n".to_vec();
         Ok(GitlabBackendResponse {
             value: GitlabRawFile {
@@ -9690,6 +9807,8 @@ struct GitlabDocument {
     grants: Vec<GitlabGrant>,
     /// `limits.max_upstream_response_bytes`, when not the default.
     max_upstream_response_bytes: Option<u64>,
+    /// `limits.max_download_bytes`, when not the default.
+    max_download_bytes: Option<u64>,
     /// `limits.invocations.default`: requests per window.
     default_invocation_limit: Option<(u64, &'static str)>,
 }
@@ -9707,6 +9826,7 @@ fn gitlab_document() -> GitlabDocument {
             credential_mode: "service".to_string(),
         }],
         max_upstream_response_bytes: None,
+        max_download_bytes: None,
         default_invocation_limit: None,
     }
 }
@@ -9905,6 +10025,9 @@ upload_spool_dir = {spool}
         ));
         if let Some(bytes) = self.max_upstream_response_bytes {
             document.push_str(&format!("max_upstream_response_bytes = {bytes}\n"));
+        }
+        if let Some(bytes) = self.max_download_bytes {
+            document.push_str(&format!("max_download_bytes = {bytes}\n"));
         }
         if let Some((requests, window)) = self.default_invocation_limit {
             document.push_str(&format!(
@@ -10301,6 +10424,7 @@ fn stub_backend() -> Arc<StubGitlabBackend> {
         next_webhook_id: Mutex::new(43),
         last_webhook_write: Mutex::new(None),
         last_webhook_header: Mutex::new(None),
+        streamed_raw_diffs: Mutex::new(VecDeque::new()),
     })
 }
 

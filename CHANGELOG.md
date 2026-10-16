@@ -794,6 +794,15 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- The Broker now enforces `limits.max_download_bytes` on every raw download
+  itself instead of relying on each provider to bound its stream. A download
+  that would pass the limit delivers only the bytes within it, then fails as a
+  late stream failure with `attachment_size_denied`, the reason the SDK's
+  bounded downloads report; its terminal audit record is `failed` with the
+  delivered byte count and digest. An in-memory body over the limit fails
+  before its first byte. The CLI and stdio MCP report the truncated download as
+  failed and leave an existing destination unchanged. Provider limits are
+  unchanged.
 - Management credential verification and imported-service discovery report a
   provider failure's own decision in the response and its management audit
   record instead of always `deny`: upstream failures such as `upstream_timeout`,

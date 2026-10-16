@@ -987,6 +987,12 @@ fn attachment_download(
 }
 ```
 
+The host also stops every raw download, streamed or in memory, at
+`max_download_bytes`, with an `attachment_size_denied` late stream failure. This
+is a backstop, not a replacement: keep rejecting a declared length over the cap
+while it can still be an ordinary error, and bound your own stream so the
+provider stops reading upstream and applies any smaller limit of its own.
+
 Report upstream throttling with `upstream_rate_limited(service, retry_after)`,
 where `UpstreamRetryAfter::from_headers` reads a bounded `Retry-After`. Its
 result names the service and the wait. Throttling after a mutation was applied
@@ -1304,7 +1310,9 @@ the provider's domain reasons are also accepted. A bounded download
 (`ProviderResultStream::from_bounded_response`) reports a stall or an expired
 client deadline as `upstream_timeout`, another read failure as
 `upstream_connection_failed`, a size mismatch as `upstream_protocol_failed` and
-an overrun of its byte cap with the reason its `BoundedDownload` names.
+an overrun of its byte cap with the reason its `BoundedDownload` names. The host
+fails a download that passes `max_download_bytes` the same way, with
+`attachment_size_denied`, whatever bound the provider applied.
 
 ### Upstream traces
 
