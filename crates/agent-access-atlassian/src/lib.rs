@@ -18,6 +18,11 @@ pub fn validate_atlassian_gateway_credential(
     errors: &mut Vec<String>,
 ) {
     let uses_gateway = uses_atlassian_gateway_host(patterns);
+    if credentials.per_user_delegated {
+        errors.push(format!(
+            "credentials.per_user.{service} offers delegated (OAuth) access, which {service} does not accept"
+        ));
+    }
     let execution_credentials = [
         ("credentials.service", credentials.service),
         ("credentials.per_user", credentials.per_user),
@@ -319,6 +324,43 @@ mod tests {
             egress_proxy: None,
             allowed_upstream_hosts: hosts,
         }
+    }
+
+    #[test]
+    fn gateway_validation_accepts_bearer_kinds_and_rejects_delegated_access() {
+        let validate = |credentials: ServiceCredentialKinds<'_>| {
+            let mut errors = Vec::new();
+            validate_atlassian_gateway_credential(
+                "jira",
+                &hosts(true),
+                Some(CLOUD_ID),
+                credentials,
+                &mut errors,
+            );
+            errors
+        };
+        assert!(validate(ServiceCredentialKinds::new(None, Some("bearer_token"))).is_empty());
+        // A connection with a bearer token profile that also offers OAuth is
+        // still rejected: delegated access is not supported here.
+        assert_eq!(
+            validate(
+                ServiceCredentialKinds::new(None, Some("bearer_token"))
+                    .with_per_user_delegated(true)
+            ),
+            [
+                "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept"
+            ]
+        );
+        assert_eq!(
+            validate(
+                ServiceCredentialKinds::new(None, Some("oauth")).with_per_user_delegated(true)
+            ),
+            [
+                "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept",
+                "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.per_user.jira does not resolve to a bearer_token credential",
+                "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token execution credential is configured",
+            ]
+        );
     }
 
     #[test]

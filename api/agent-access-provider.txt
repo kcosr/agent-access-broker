@@ -3498,9 +3498,11 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ServiceC
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ServiceCapabilities
 #[non_exhaustive] pub struct agent_access_provider::ServiceCredentialKinds<'a>
 pub agent_access_provider::ServiceCredentialKinds::per_user: core::option::Option<&'a str>
+pub agent_access_provider::ServiceCredentialKinds::per_user_delegated: bool
 pub agent_access_provider::ServiceCredentialKinds::service: core::option::Option<&'a str>
 impl<'a> agent_access_provider::ServiceCredentialKinds<'a>
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::new(core::option::Option<&'a str>, core::option::Option<&'a str>) -> Self
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_per_user_delegated(self, bool) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::ServiceCredentialKinds<'a>
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::clone(&self) -> agent_access_provider::ServiceCredentialKinds<'a>
 impl<'a> core::default::Default for agent_access_provider::ServiceCredentialKinds<'a>

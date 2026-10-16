@@ -3275,6 +3275,39 @@ fn backend_validation_resolves_connection_token_profiles() {
 }
 
 #[test]
+fn backend_validation_reports_delegated_access_beside_a_token_profile() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    use_connection(
+        &mut config,
+        "jira",
+        ConnectionConfig {
+            oauth: Some(ConnectionOAuthConfig {
+                registration: "atlassian".to_string(),
+                profile: "default".to_string(),
+            }),
+            ..token_connection("jira-bearer-token")
+        },
+        &["jira"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    // The backend sees the bearer token profile and the delegated access
+    // beside it; the Atlassian backends accept only bearer tokens.
+    assert_contains(
+        &errors,
+        "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.contains("does not resolve to a bearer_token credential")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn accepts_atlassian_gateway_with_bearer_connection_per_user_credentials() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);

@@ -4379,6 +4379,12 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
                     .and_then(|credential| {
                         resolved_credential_kind(&config.credentials, credential, &descriptor)
                     }),
+            )
+            .with_per_user_delegated(
+                config
+                    .credentials
+                    .personal_connection(kind)
+                    .is_some_and(|connection| connection.config.oauth.is_some()),
             ),
         );
         backend.validate(&context, errors);

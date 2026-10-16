@@ -211,22 +211,42 @@ impl<'a> ValidationContext<'a> {
 }
 
 /// The credential kinds configured under `credentials.service.<service>` and
-/// `credentials.per_user.<service>`: `basic_api_token` or `bearer_token` for
-/// a static credential or a `managed_store` profile (which reports its
-/// profile's kind), `secret_store` when each stored record carries its own
-/// kind, and `oauth` for delegated access. `None` means the mode is not
-/// configured, or its `managed_store` profile is unsupported (credential
-/// validation reports that separately).
+/// `credentials.per_user.<service>`.
+///
+/// - `service` is `basic_api_token` or `bearer_token` for a static
+///   credential.
+/// - `per_user` is the kind of the per-user credential connection's token
+///   profile (`basic_api_token` or `bearer_token`), `oauth` for a connection
+///   that offers only delegated access, or `secret_store` when each stored
+///   record carries its own kind.
+/// - `per_user_delegated` is set when the per-user connection also offers
+///   delegated (OAuth) access, whether or not it has a token profile. A
+///   backend that cannot accept delegated access must reject it.
+///
+/// `None` means the mode is not configured, or its connection's token
+/// profile is unsupported (credential validation reports that separately).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceCredentialKinds<'a> {
     pub service: Option<&'a str>,
     pub per_user: Option<&'a str>,
+    pub per_user_delegated: bool,
 }
 
 impl<'a> ServiceCredentialKinds<'a> {
+    /// Kinds without delegated per-user access.
     pub fn new(service: Option<&'a str>, per_user: Option<&'a str>) -> Self {
-        Self { service, per_user }
+        Self {
+            service,
+            per_user,
+            per_user_delegated: false,
+        }
+    }
+
+    /// Reports whether the per-user connection offers delegated access.
+    pub fn with_per_user_delegated(mut self, delegated: bool) -> Self {
+        self.per_user_delegated = delegated;
+        self
     }
 }
 
