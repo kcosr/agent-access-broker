@@ -2233,8 +2233,9 @@ agent containers. Production integrations include Google for Gmail and approved
 imported MCP OAuth registrations. An independent development-only test provider
 exercises collection resources and lifecycle fault recovery.
 
-Personal OAuth setup requires self-service, a configured binding, and a matching
-active `per_user` action grant for the owner or their current groups. Resource and
+Personal OAuth setup requires self-service, a credential connection that selects
+OAuth for the owner, and a matching active `per_user` action grant on a service
+that uses it, for the owner or their current groups. Resource and
 execution-context availability and invocation precedence do not govern setup;
 invocation still evaluates them independently. Existing bound connections remain
 inspectable and locally disconnectable after grant loss.

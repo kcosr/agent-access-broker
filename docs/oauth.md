@@ -132,7 +132,7 @@ setup authority is hidden. Static API-token deletion retains its separate
 configured-target authorization; this OAuth cleanup rule does not change it.
 
 Disconnect of an owned connection removes local material and fences late callbacks
-and refresh responses. It is idempotent: for a configured binding, an authorized
+and refresh responses. It is idempotent: for a configured registration, an authorized
 owner's repeated DELETE succeeds even when no connection remains. Browser,
 self-service and CSRF requirements still apply; a setup grant is not required
 for local disconnect. Without an owned connection, DELETE is a no-op and leaves
