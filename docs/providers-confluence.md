@@ -105,6 +105,19 @@ Confluence's permissions still apply. An `all` space selector includes personal
 spaces permitted by the selected upstream credential, subject to the grant's
 exclusions and token restrictions.
 
+This coverage applies to existing `all` resources in grants, groups, and token
+restrictions too. Review them before upgrading, especially service-mode grants
+using shared credentials. Select exact team-space resources when access must
+remain limited to team spaces. Exact personal-space exclusions cover only the
+listed keys; newly created personal spaces remain within `all` coverage.
+
+Exclusions also compare the exact key, including case: excluding `~Alice` has
+no effect on a space reported as `~alice`. Copy the key from a Broker content
+result's `space` field and preserve it in the excluded resource. Confirm an
+exclusion using a page ID, for example
+`agent-access confluence page view 123456`, as well as search; the ID lookup
+checks the space reported by Confluence.
+
 For example, search the granted space with
 `agent-access confluence page search --space '~alice' --text 'notes'`.
 Use a page ID or a supported page URL to read a page; the space overview URL

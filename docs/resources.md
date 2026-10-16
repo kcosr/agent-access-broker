@@ -75,7 +75,11 @@ matching upstream objects that have never been individually registered,
 including objects created later. An administrator can therefore provide broad
 internal access without entering every project, space, or repository. For
 Confluence this includes personal spaces, subject to upstream permissions and
-the effective grant and token restrictions.
+the effective grant and token restrictions. Review existing Confluence `all`
+resources in grants, groups, and token restrictions before upgrading, especially
+service-mode grants using shared credentials. Use exact team-space resources
+when access must remain limited to team spaces. Exact personal-space exclusions
+cover only the listed keys; future personal spaces remain within `all` coverage.
 
 Teams destinations additionally require configured exact entries. An all selector
 can authorize those entries but cannot invent an endpoint for an unknown alias.
@@ -216,6 +220,12 @@ An exclusion uses its resource's selector even when that entry is disabled or
 does not allow the request context. Disabling an entry must not accidentally
 expose an excluded repository through a wildcard. Remove the exclusion from the
 group to stop applying it.
+
+Confluence personal-space exclusions must use the key exactly as Confluence
+reports it, including case. Excluding `~Alice` does not exclude `~alice`. Copy
+the key from a Broker content result's `space` field and confirm the exclusion
+with a page-ID read, such as `agent-access confluence page view 123456`, as well
+as search.
 
 ## Contexts and grants
 
