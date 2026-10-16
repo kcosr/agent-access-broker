@@ -5233,6 +5233,71 @@ fn mutation_throttling_is_rejected_but_throttled_readback_is_unverified() {
     );
 }
 
+/// Delegated access that cannot be presented, or that GitLab rejected,
+/// keeps its own failure when it stops a write, which applied nothing, or a
+/// review's version check; stopping a readback, it leaves the applied write
+/// unverified.
+#[test]
+fn credential_failures_reject_the_write_but_leave_a_readback_unverified() {
+    let failures = [
+        ProviderError::error(
+            ReasonCode::UpstreamRateLimited,
+            "gitlab OAuth token refresh is rate limited",
+        )
+        .with_upstream_rate_limit("gitlab", Some(UpstreamRetryAfter::after_seconds(30))),
+        ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
+        ProviderError::deny(ReasonCode::VersionConflict, "oauth_consent_pending"),
+        ProviderError::deny(ReasonCode::CredentialInvalid, "oauth_reconnect_required"),
+    ];
+    for failure in failures {
+        let credential = || GitlabBackendError::Credential(failure.clone());
+        let locators = || MutationSafeLocators::new().with_webhook_ids(vec![5]);
+        assert_eq!(
+            mutation_backend_error(
+                credential(),
+                MutationVerificationStage::MutationResponse,
+                locators(),
+            ),
+            failure
+        );
+        assert_eq!(
+            PlainWrite::new(json!({ "project": "sip/service" })).failed(credential()),
+            failure
+        );
+        assert_eq!(
+            gitlab_review_submit_version_backend_error(credential()),
+            failure
+        );
+        let unverified = mutation_backend_error(
+            credential(),
+            MutationVerificationStage::MutationReadback,
+            locators(),
+        );
+        assert_eq!(
+            unverified.reason_code(),
+            ReasonCode::MutationVerificationFailed
+        );
+        assert_eq!(
+            unverified.result.as_deref(),
+            Some(&json!({
+                "mutationStatus": "applied_unverified",
+                "retrySafe": false,
+                "verificationStage": "mutation_readback",
+                "safeLocators": { "webhookIds": [5] },
+            }))
+        );
+    }
+    // Other version-check failures remain a failed version discovery.
+    for error in [
+        GitlabBackendError::Unauthorized,
+        GitlabBackendError::HttpStatus(404),
+    ] {
+        let failure = gitlab_review_submit_version_backend_error(error);
+        assert_eq!(failure.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(failure.message, "GitLab version discovery failed");
+    }
+}
+
 #[tokio::test]
 async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
     let date = UpstreamRetryAfter::after_seconds(300)

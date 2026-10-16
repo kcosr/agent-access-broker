@@ -785,7 +785,10 @@ All notable changes to this project are documented in this file.
   without `/api/v4`) and the `gitlab` audience. A 401 marks the presented
   access rejected and renews it once per invocation, whether it answered a
   lookup or the execution, and repeats that request, including a write or an
-  upload; a further 401 fails as `credential_invalid`. Static tokens are
+  upload; a further 401 fails as `credential_invalid`. A connection failure
+  that stops a read-back after GitLab applied a write reports the write as
+  `mutation_verification_failed` with an `applied_unverified` receipt,
+  `retrySafe: false` and its safe locators. Static tokens are
   presented as before. Token-only project and service-account token actions
   stay unavailable through OAuth. See
   [GitLab REST OAuth connections](docs/providers-gitlab-rest.md#oauth-connections).

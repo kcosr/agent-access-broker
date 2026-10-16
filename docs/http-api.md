@@ -2617,8 +2617,11 @@ delivers only the bytes within the limit.
 
 A delegated OAuth credential's own failures pass through providers unchanged.
 In particular, a refresh already in progress for the same connection reports
-`concurrency_limited` (HTTP 429, `decision = error`) through Gmail and imported
-MCP actions, although providers cannot report that reason themselves. The same
+`concurrency_limited` (HTTP 429, `decision = error`) through Gmail, GitLab REST
+and imported MCP actions, although providers cannot report that reason
+themselves. A GitLab write that GitLab already applied when such a failure
+stopped its read-back reports `mutation_verification_failed` with an
+`applied_unverified` receipt instead. The same
 applies to the SDK's own contract failures: a provider that finds its operation
 state missing or of another type, or asks for an authority its action was not
 admitted with, reports `broker_provider_contract_failed`.

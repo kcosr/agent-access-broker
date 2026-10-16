@@ -120,7 +120,13 @@ without `/api/v4`, or `config validate` rejects the connection.
   reconnect GitLab in the portal. Connection failures, such as a connection
   that needs reconnecting after a lost refresh response, consent in progress,
   or refresh busy or throttled, are reported as described in
-  [refresh, durability and recovery](oauth.md#refresh-durability-and-recovery).
+  [refresh, durability and recovery](oauth.md#refresh-durability-and-recovery),
+  with their retry metadata, including at a review submission's GitLab version
+  check. Such a failure before a write applied nothing. One that stops the
+  read-back of a write GitLab applied reports the write as
+  `mutation_verification_failed` with `mutationStatus = "applied_unverified"`,
+  `retrySafe = false` and its safe locators instead; see
+  [unsent and unanswered writes](#unsent-and-unanswered-writes).
 - **Token-only actions.** Project and service-account token issuance and
   rotation need a personal access token, so they are unavailable through an
   OAuth connection; see [bot accounts and issued tokens](#bot-accounts-and-issued-tokens).
@@ -1352,11 +1358,13 @@ may have done:
 - when GitLab definitively rejected the request, with a redirect, a 4xx status
   such as 401, 403, 404, 409 or 422 (provisioning reports 400 and 422 as
   `input_invalid`), or throttling (`upstream_rate_limited`), the action keeps
-  its ordinary error without a receipt.
+  its ordinary error without a receipt. So does a failure of the person's
+  OAuth connection that stops the request, which applies nothing.
 
 A readback after the mutation that was never sent, timed out, failed, was
-throttled, answered 5xx or returned an unusable response also returns the
-`applied_unverified` contract.
+throttled, answered 5xx, returned an unusable response, or that the person's
+OAuth connection could not authorize (refresh throttled, busy or uncertain, or
+a reconnect required) also returns the `applied_unverified` contract.
 
 Other writes (issue, note, merge-request and merge, general discussion,
 discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline and

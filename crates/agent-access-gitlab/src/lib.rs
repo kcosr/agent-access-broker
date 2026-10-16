@@ -3055,6 +3055,11 @@ impl GitlabProvider {
             Err(GitlabBackendError::NotSent { timed_out }) => {
                 return Err(mutation_not_sent(timed_out));
             }
+            // Delegated access that could not be presented, or that GitLab
+            // rejected, applied nothing: the failure keeps its own reason
+            // rather than reading as unverified when the probe below fails
+            // the same way.
+            Err(GitlabBackendError::Credential(error)) => return Err(error),
             Err(error) => {
                 let remaining = self
                     .all_current_drafts(project.id, inputs.iid, credential)
@@ -3527,6 +3532,11 @@ impl GitlabProvider {
             Err(GitlabBackendError::NotSent { timed_out }) => {
                 return Err(mutation_not_sent(timed_out));
             }
+            // Delegated access that could not be presented, or that GitLab
+            // rejected, applied nothing: the failure keeps its own reason
+            // rather than reading as unverified when the probe below fails
+            // the same way.
+            Err(GitlabBackendError::Credential(error)) => return Err(error),
             Err(error) => {
                 let unchanged = self
                     .backend
@@ -3711,6 +3721,11 @@ impl GitlabProvider {
             Err(GitlabBackendError::NotSent { timed_out }) => {
                 return Err(mutation_not_sent(timed_out));
             }
+            // Delegated access that could not be presented, or that GitLab
+            // rejected, applied nothing: the failure keeps its own reason
+            // rather than reading as unverified when the probe below fails
+            // the same way.
+            Err(GitlabBackendError::Credential(error)) => return Err(error),
             Err(error) => {
                 let unchanged = self
                     .ensure_suggestions_state(&project, &merge_request, &inputs, credential, false)
@@ -12661,7 +12676,12 @@ fn mutation_backend_error(
         // Throttling rejects the mutation request itself, but a throttled
         // readback leaves an applied mutation unverified. It must not read as
         // upstream_rate_limited: waiting and retrying would repeat the write.
-        GitlabBackendError::RateLimited(_)
+        // Likewise, delegated access that cannot be presented (an OAuth
+        // refresh throttled, busy or uncertain, or a reconnect required) or
+        // that GitLab rejected: stopping the write itself, it applied nothing
+        // and keeps its own reason; stopping the readback, it leaves the
+        // applied write unverified.
+        GitlabBackendError::RateLimited(_) | GitlabBackendError::Credential(_)
             if stage != MutationVerificationStage::MutationResponse =>
         {
             mutation_verification_failed(stage, locators)
@@ -14075,14 +14095,22 @@ impl PlainWrite {
     }
 }
 
+/// The failure of the version check before a review submission. Throttling,
+/// and delegated access that could not be presented (an OAuth refresh
+/// throttled or busy, consent pending, a reconnect required) or that GitLab
+/// rejected again, keep their own reason and retry metadata; anything else is
+/// a failed version discovery.
 fn gitlab_review_submit_version_backend_error(error: GitlabBackendError) -> ProviderError {
-    if let GitlabBackendError::RateLimited(retry_after) = error {
-        return upstream_rate_limited("gitlab", retry_after);
+    match error {
+        GitlabBackendError::RateLimited(retry_after) => {
+            upstream_rate_limited("gitlab", retry_after)
+        }
+        GitlabBackendError::Credential(error) => error,
+        _ => ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "GitLab version discovery failed",
+        ),
     }
-    ProviderError::error(
-        ReasonCode::UpstreamProtocolFailed,
-        "GitLab version discovery failed",
-    )
 }
 
 fn gitlab_backend_error(error: GitlabBackendError) -> ProviderError {

@@ -10,7 +10,7 @@ use agent_access_provider::test_support::{
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const PROJECT_PATH: &str = "/api/v4/projects/sip%2Fservice";
 
@@ -25,7 +25,8 @@ struct Lease {
     /// Each revalidation renews the access, as a refresh by another
     /// operation between two requests does.
     renew_on_revalidate: bool,
-    revalidation_failure: Option<ProviderError>,
+    /// Every revalidation fails with this, once set.
+    revalidation_failure: Mutex<Option<ProviderError>>,
     recovered: AtomicBool,
     recoveries: AtomicUsize,
     rejected: Mutex<Vec<String>>,
@@ -39,7 +40,7 @@ impl Lease {
             binding: "alice-gitlab",
             current: AtomicUsize::new(1),
             renew_on_revalidate: false,
-            revalidation_failure: None,
+            revalidation_failure: Mutex::default(),
             recovered: AtomicBool::new(false),
             recoveries: AtomicUsize::new(0),
             rejected: Mutex::default(),
@@ -78,8 +79,8 @@ impl DelegatedLease for Lease {
         delegated_binding_id(self.binding)
     }
     async fn revalidate(&self) -> Result<(), ProviderError> {
-        if let Some(failure) = &self.revalidation_failure {
-            return Err(failure.clone());
+        if let Some(failure) = self.revalidation_failure.lock().unwrap().clone() {
+            return Err(failure);
         }
         if self.renew_on_revalidate {
             self.current.fetch_add(1, Ordering::SeqCst);
@@ -197,6 +198,71 @@ async fn requests(server: &MockServer) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Answers with `response`, after which every revalidation of `lease`
+/// fails with `failure`: GitLab took this request, then the OAuth
+/// connection failed before the next one.
+struct ThenLeaseFails {
+    lease: Arc<Lease>,
+    failure: ProviderError,
+    response: ResponseTemplate,
+}
+
+impl Respond for ThenLeaseFails {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        *self.lease.revalidation_failure.lock().unwrap() = Some(self.failure.clone());
+        self.response.clone()
+    }
+}
+
+/// Answers `verb` on `route` with `response`, then fails `lease`.
+async fn answer_then_fail(
+    server: &MockServer,
+    verb: &str,
+    route: &str,
+    response: ResponseTemplate,
+    lease: &Arc<Lease>,
+    failure: &ProviderError,
+) {
+    Mock::given(method(verb))
+        .and(path(route))
+        .respond_with(ThenLeaseFails {
+            lease: lease.clone(),
+            failure: failure.clone(),
+            response,
+        })
+        .mount(server)
+        .await;
+}
+
+/// Serves `route` to any token with `body`.
+async fn serve(server: &MockServer, route: &str, body: Value) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+/// The host's lease failures when access needs refreshing: GitLab
+/// throttled the refresh, with its wait, or the connection needs a
+/// reconnect.
+fn lease_failures() -> [ProviderError; 2] {
+    [
+        port_failure(
+            HostPort::DelegatedLease,
+            ProviderError::error(
+                ReasonCode::UpstreamRateLimited,
+                "gitlab OAuth token refresh is rate limited",
+            )
+            .with_upstream_rate_limit("gitlab", Some(UpstreamRetryAfter::after_seconds(30))),
+        ),
+        port_failure(
+            HostPort::DelegatedLease,
+            ProviderError::deny(ReasonCode::CredentialInvalid, "oauth_reconnect_required"),
+        ),
+    ]
 }
 
 /// Backend validation accepts a per-user connection that offers only OAuth,
@@ -612,7 +678,7 @@ async fn delegated_access_is_refused_before_sending_unless_pinned_to_this_instan
         ProviderError::error(ReasonCode::ConcurrencyLimited, "oauth_refresh_busy"),
     );
     let lease = Lease {
-        revalidation_failure: Some(busy.clone()),
+        revalidation_failure: Mutex::new(Some(busy.clone())),
         ..Lease::new(&server.uri())
     };
     let credential = delegated_credential(Arc::new(lease));
@@ -680,4 +746,210 @@ async fn static_tokens_are_presented_as_before_and_never_repeated() {
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert_eq!(requests(&server).await.len(), 1);
+}
+
+/// GitLab accepted a webhook write, then the OAuth connection failed before
+/// the write's readback: refresh throttled, or a reconnect required. The
+/// write is reported applied but unverified, with the webhook it touched and
+/// `retrySafe: false`, and is sent exactly once.
+#[tokio::test]
+async fn delegated_access_lost_after_an_accepted_webhook_write_keeps_its_receipt() {
+    let hooks = "/api/v4/projects/42/hooks";
+    let hook = "/api/v4/projects/42/hooks/9";
+    let header = "/api/v4/projects/42/hooks/9/custom_headers/X-Trace";
+    let webhook = json!({
+        "id": 9, "project_id": 42,
+        "url": "https://hooks.example.com/gitlab/events", "push_events": true,
+    });
+    let writes = [
+        (
+            "webhook.create",
+            json!({
+                "project": "sip/service",
+                "url": "https://hooks.example.com/gitlab/events",
+                "events": ["push"],
+            }),
+            "POST",
+            hooks,
+            ResponseTemplate::new(201).set_body_json(webhook.clone()),
+        ),
+        (
+            "webhook.update",
+            json!({ "project": "sip/service", "webhookId": 9, "name": "renamed" }),
+            "PUT",
+            hook,
+            ResponseTemplate::new(200).set_body_json(webhook.clone()),
+        ),
+        (
+            "webhook.custom_header.set",
+            json!({ "project": "sip/service", "webhookId": 9, "key": "X-Trace", "value": "on" }),
+            "PUT",
+            header,
+            ResponseTemplate::new(204),
+        ),
+    ];
+    for failure in lease_failures() {
+        for (action, inputs, verb, route, accepted) in writes.clone() {
+            let server = MockServer::start().await;
+            serve(&server, PROJECT_PATH, project()).await;
+            // The current webhook an update reads first; a readback would
+            // read it again.
+            serve(&server, hook, webhook.clone()).await;
+            let lease = Arc::new(Lease::new(&server.uri()));
+            answer_then_fail(&server, verb, route, accepted, &lease, &failure).await;
+            let mut config = config(&server);
+            config.webhooks.allowed_destinations =
+                vec!["https://hooks.example.com/gitlab/**".into()];
+            let provider = GitlabProvider::new(config, &TestHost::default().context()).unwrap();
+
+            let error = provider
+                .invoke(delegated_invocation(
+                    action,
+                    inputs,
+                    &delegated_credential(lease.clone()),
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.decision(), Decision::Error, "{action}");
+            assert_eq!(
+                error.reason_code(),
+                ReasonCode::MutationVerificationFailed,
+                "{action}: {error:?}"
+            );
+            assert_eq!(
+                error.result.as_deref(),
+                Some(&json!({
+                    "mutationStatus": "applied_unverified",
+                    "retrySafe": false,
+                    "verificationStage": "mutation_readback",
+                    "safeLocators": { "webhookIds": [9] },
+                })),
+                "{action}"
+            );
+            // The write was sent once and nothing followed it.
+            let sent = requests(&server).await;
+            assert_eq!(
+                sent.iter().filter(|line| !line.starts_with("GET ")).count(),
+                1,
+                "{action}: {sent:?}"
+            );
+            assert_eq!(
+                sent.last(),
+                Some(&format!("{verb} {route} Bearer oauth-1")),
+                "{action}"
+            );
+            assert!(lease.rejected().is_empty());
+        }
+    }
+}
+
+/// Delegated access that fails before a write whose failure the action
+/// probes for (approval, draft publication, suggestion apply) applied
+/// nothing: the lease's failure is reported unchanged, with its retry
+/// metadata and no receipt, rather than read as an unverified write. The
+/// same failure at a review submission's GitLab version check keeps its
+/// reason too, instead of reading as a failed version discovery.
+#[tokio::test]
+async fn delegated_access_lost_before_a_write_or_version_check_keeps_its_reason() {
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+    let merge_request = "/api/v4/projects/42/merge_requests/5";
+    let approvals = format!("{merge_request}/approvals");
+    let drafts = format!("{merge_request}/draft_notes");
+    let discussion = format!("{merge_request}/discussions/discussion-1");
+    let draft = json!([{ "id": 3, "author_id": 77, "merge_request_id": 500 }]);
+    let cases = [
+        (
+            "merge_request.unapprove",
+            json!({ "project": "sip/service", "iid": 5 }),
+            approvals,
+            json!({ "approved_by": [{ "user": { "id": 77, "username": "alice" } }] }),
+        ),
+        (
+            "merge_request.draft_note.publish_all",
+            json!({ "project": "sip/service", "iid": 5 }),
+            drafts.clone(),
+            draft.clone(),
+        ),
+        (
+            "merge_request.suggestion.apply",
+            json!({
+                "project": "sip/service", "iid": 5, "expectedHeadSha": SHA,
+                "discussionId": "discussion-1", "noteId": 900, "suggestionId": 456,
+            }),
+            discussion,
+            json!({
+                "id": "discussion-1",
+                "notes": [{
+                    "id": 900,
+                    "position": {
+                        "position_type": "text", "base_sha": SHA, "start_sha": SHA,
+                        "head_sha": SHA, "old_path": "src/lib.rs", "new_path": "src/lib.rs",
+                        "new_line": 3,
+                    },
+                    "suggestions": [{
+                        "id": 456, "from_line": 3, "to_line": 3, "applicable": true,
+                        "applied": false, "from_content": "old", "to_content": "new",
+                    }],
+                }],
+            }),
+        ),
+        // Fails at the version check, which follows the drafts.
+        (
+            "merge_request.review.submit",
+            json!({ "project": "sip/service", "iid": 5, "reviewerState": "reviewed" }),
+            drafts,
+            draft,
+        ),
+    ];
+    for failure in lease_failures() {
+        for (action, inputs, last_read, body) in cases.clone() {
+            let server = MockServer::start().await;
+            serve(&server, PROJECT_PATH, project()).await;
+            serve(
+                &server,
+                merge_request,
+                json!({
+                    "id": 500, "iid": 5, "project_id": 42, "source_project_id": 42,
+                    "target_project_id": 42, "sha": SHA,
+                }),
+            )
+            .await;
+            serve(
+                &server,
+                "/api/v4/user",
+                json!({ "id": 77, "username": "alice" }),
+            )
+            .await;
+            let lease = Arc::new(Lease::new(&server.uri()));
+            answer_then_fail(
+                &server,
+                "GET",
+                &last_read,
+                ResponseTemplate::new(200).set_body_json(body),
+                &lease,
+                &failure,
+            )
+            .await;
+            let mut request = InvocationBuilder::from(delegated_invocation(
+                action,
+                inputs,
+                &delegated_credential(lease.clone()),
+            ));
+            if action == "merge_request.suggestion.apply" {
+                request = request.state(ProviderState::new(GitlabSuggestionScopePreflight {
+                    target_project_id: 42,
+                    source_project_id: 42,
+                }));
+            }
+
+            let error = provider(&server).invoke(request.build()).await.unwrap_err();
+            assert_eq!(error, failure, "{action}");
+            // Nothing was sent after the read that preceded the failure.
+            assert_eq!(
+                requests(&server).await.last(),
+                Some(&format!("GET {last_read} Bearer oauth-1")),
+                "{action}"
+            );
+        }
+    }
 }
