@@ -6757,3 +6757,66 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
         );
     }
 }
+
+/// A delegated lease that no GitLab path may use.
+struct UnusedLease;
+
+#[async_trait]
+impl DelegatedLease for UnusedLease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("unused")
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        panic!("GitLab must not revalidate delegated lookup access");
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        panic!("GitLab must not mark delegated lookup access rejected");
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        panic!("GitLab must not recover delegated lookup access");
+    }
+}
+
+/// GitLab accepts no delegated credentials, so delegated lookup access fails
+/// closed in scope resolution and at execution, before any upstream call,
+/// instead of standing in for a static credential.
+#[tokio::test]
+async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
+    let server = MockServer::start().await;
+    let provider = provider_for_server(&server);
+    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
+    let inputs = json!({ "project": "sip/service" });
+    let assert_unsupported = |error: ProviderError| {
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+        assert_eq!(
+            error.message,
+            "GitLab lookups do not accept delegated credentials"
+        );
+    };
+
+    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "gitlab",
+        "project.view",
+        inputs.clone(),
+    )
+    .delegated_lookup(delegated.clone());
+    assert_unsupported(
+        provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err(),
+    );
+
+    let invocation = InvocationBuilder::new("gitlab", "project.view")
+        .inputs(inputs)
+        .resources(repository_scopes_from_path("sip/service"))
+        .credential(test_credential())
+        .delegated_lookup(delegated)
+        .build();
+    assert_unsupported(provider.invoke(invocation).await.unwrap_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}

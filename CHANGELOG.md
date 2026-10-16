@@ -12,8 +12,8 @@ All notable changes to this project are documented in this file.
     and `resolve_scopes_with_lookup_context` are replaced by one required
     `async fn resolve_scopes(&self, request: ScopeRequest<'_>) -> Result<ScopeResolution, ProviderError>`.
     `ScopeRequest` carries the action, validated inputs, host-selected execution
-    context, minimal identity, correlation and an optional host-selected lookup
-    credential. `ScopeResolution` returns canonical resource scopes
+    context, minimal identity, correlation and optional host-selected lookup
+    access. `ScopeResolution` returns canonical resource scopes
     (`resources`/`no_resources`) and optional provider state (`with_state`).
   - **Provider state.** JSON `provider_preflight` is replaced by the in-process
     `ProviderState` (typed `new`, `downcast_ref`, `require` and `optional`, with
@@ -46,8 +46,11 @@ All notable changes to this project are documented in this file.
     the crate-boundary check rejects in native, adapter, reference and helper
     crates. Debug output is redacted. Credentials compare with `==` only under
     the `test-support` feature, in constant time. Execution material is
-    selected through `ExecutionAccess::{None, Static, Delegated}`. Lookup
-    credentials are static-only. Stored credential rows and the
+    selected through `ExecutionAccess::{None, Static, Delegated}`, and lookup
+    material through the non-exhaustive `LookupAccess::{Static, Delegated}`
+    (`lookup_access()` on scope and admitted requests). Delegated lookup
+    access holds the operation's one delegated lease, shared with execution,
+    so its clones never add a 401 recovery. Stored credential rows and the
     `basic_api_token`/`bearer_token` kind spellings are unchanged, so stored
     credentials keep working.
   - **Delegated leases.** `DelegatedLease` gains the required

@@ -2153,6 +2153,16 @@ struct CredentialObservation {
     credential: Option<ExecutionCredential>,
 }
 
+/// The static credential of lookup access a trace provider received. No
+/// trace configures delegated lookups, so receiving one fails the test.
+fn static_lookup(access: Option<&LookupAccess>) -> Option<&ExecutionCredential> {
+    access.map(|access| {
+        access
+            .static_credential()
+            .expect("trace providers receive only static lookup access")
+    })
+}
+
 struct LookupTraceProvider {
     observations: Arc<Mutex<Vec<CredentialObservation>>>,
     service: String,
@@ -2266,13 +2276,13 @@ impl Provider for LookupTraceProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
-        self.record("pre_scope", request.lookup_credential());
+        self.record("pre_scope", static_lookup(request.lookup_access()));
         self.local_scopes(request.action(), request.inputs())
             .map(ScopeResolution::resources)
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
-        self.record("execution_lookup", request.lookup_credential());
+        self.record("execution_lookup", static_lookup(request.lookup_access()));
         self.record("execution", request.execution().static_credential());
         Ok(ProviderResult::new(json!({
             "credentialMode": request.credential_mode(),
@@ -2458,7 +2468,7 @@ impl Provider for DependencyPolicyTraceProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
-        self.record("pre_scope", request.lookup_credential());
+        self.record("pre_scope", static_lookup(request.lookup_access()));
         self.local_scopes(request.action(), request.inputs())
             .map(ScopeResolution::resources)
     }

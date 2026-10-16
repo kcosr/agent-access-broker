@@ -9685,3 +9685,77 @@ fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
         assert_eq!(action.documentation, Some(documentation));
     }
 }
+
+/// A delegated lease that no Confluence path may use.
+struct UnusedLease;
+
+#[async_trait::async_trait]
+impl DelegatedLease for UnusedLease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("unused")
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        panic!("Confluence must not revalidate delegated lookup access");
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        panic!("Confluence must not mark delegated lookup access rejected");
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        panic!("Confluence must not recover delegated lookup access");
+    }
+}
+
+/// Confluence accepts no delegated credentials, so delegated lookup access
+/// fails closed in scope resolution and in body admission, before any
+/// upstream call, instead of standing in for a static credential.
+#[tokio::test]
+async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
+    let server = MockServer::start().await;
+    let provider = ConfluenceProvider::with_backend(
+        confluence_config(),
+        ProviderLimits::default(),
+        Arc::new(http_confluence_backend_for_server(&server)),
+    );
+    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
+    let assert_unsupported = |error: ProviderError| {
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+        assert_eq!(
+            error.message,
+            "Confluence lookups do not accept delegated credentials"
+        );
+    };
+
+    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "confluence",
+        "page.view",
+        json!({ "pageId": "123456" }),
+    )
+    .delegated_lookup(delegated.clone());
+    assert_unsupported(
+        provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err(),
+    );
+
+    let admitted = InvocationBuilder::new("confluence", "attachment.add")
+        .inputs(json!({ "pageId": "123456", "attachments": [] }))
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .credential(credential())
+        .delegated_lookup(delegated)
+        .admitted();
+    assert_unsupported(
+        provider
+            .authorize_body_parts(&admitted, None)
+            .await
+            .unwrap_err(),
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}

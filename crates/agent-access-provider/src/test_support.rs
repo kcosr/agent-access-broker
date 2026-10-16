@@ -5,10 +5,10 @@ use crate::host::{
     UpstreamClientFactoryError, scope_request,
 };
 use crate::{
-    BuildContext, ClientProfile, CorrelationContext, DelegatedBindingId, EgressDeclaration,
-    EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity, Provider,
-    ProviderAttributionConfig, ProviderLimits, ScopeRequest, ServiceDescriptor, ServiceProvider,
-    SigningError, StableSigningKey, is_literal_loopback,
+    BuildContext, ClientProfile, CorrelationContext, DelegatedBindingId, DelegatedCredential,
+    EgressDeclaration, EgressProxySource, EgressRoute, ExecutionCredential, InvocationIdentity,
+    LookupAccess, Provider, ProviderAttributionConfig, ProviderLimits, ScopeRequest,
+    ServiceDescriptor, ServiceProvider, SigningError, StableSigningKey, is_literal_loopback,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -255,8 +255,8 @@ pub fn test_signing_key(byte: u8) -> Arc<dyn StableSigningKey> {
 }
 
 /// Owned inputs for a [`ScopeRequest`] in provider tests: an anonymous
-/// caller in the `internal` execution context, with no lookup credential
-/// unless one is supplied.
+/// caller in the `internal` execution context, with no lookup access unless
+/// some is supplied.
 #[derive(Debug, Clone)]
 pub struct ScopeRequestFixture {
     service: String,
@@ -265,7 +265,7 @@ pub struct ScopeRequestFixture {
     execution_context: String,
     identity: InvocationIdentity,
     correlation: CorrelationContext,
-    lookup_credential: Option<ExecutionCredential>,
+    lookup_access: Option<LookupAccess>,
 }
 
 impl ScopeRequestFixture {
@@ -277,17 +277,22 @@ impl ScopeRequestFixture {
             execution_context: "internal".to_owned(),
             identity: InvocationIdentity::anonymous(),
             correlation: CorrelationContext::for_tests(),
-            lookup_credential: None,
+            lookup_access: None,
         }
     }
 
-    pub fn lookup_credential(mut self, credential: ExecutionCredential) -> Self {
-        self.lookup_credential = Some(credential);
-        self
+    /// Static lookup access, replacing any other lookup access.
+    pub fn lookup_credential(self, credential: ExecutionCredential) -> Self {
+        self.lookup_access(Some(LookupAccess::Static(credential)))
     }
 
-    pub fn maybe_lookup_credential(mut self, credential: Option<ExecutionCredential>) -> Self {
-        self.lookup_credential = credential;
+    /// Delegated lookup access, replacing any other lookup access.
+    pub fn delegated_lookup(self, credential: DelegatedCredential) -> Self {
+        self.lookup_access(Some(LookupAccess::Delegated(credential)))
+    }
+
+    pub fn lookup_access(mut self, lookup_access: Option<LookupAccess>) -> Self {
+        self.lookup_access = lookup_access;
         self
     }
 
@@ -309,7 +314,7 @@ impl ScopeRequestFixture {
             execution_context: &self.execution_context,
             identity: &self.identity,
             correlation: &self.correlation,
-            lookup_credential: self.lookup_credential.as_ref(),
+            lookup_access: self.lookup_access.as_ref(),
         })
     }
 }

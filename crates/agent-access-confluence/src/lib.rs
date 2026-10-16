@@ -1775,7 +1775,7 @@ impl Provider for ConfluenceProvider {
         self.lookup_scopes(
             request.action(),
             request.inputs(),
-            request.lookup_credential(),
+            static_lookup_credential(request.lookup_access())?,
         )
         .await
         .map(ScopeResolution::resources)
@@ -8047,12 +8047,28 @@ fn invocation_credential(
 }
 
 fn lookup_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
-    request.lookup_credential().ok_or_else(|| {
+    static_lookup_credential(request.lookup_access())?.ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
             "lookup credential material is unavailable",
         )
     })
+}
+
+/// The static lookup credential the host selected, if any. Confluence does not
+/// accept delegated credentials, so delegated or unknown lookup access fails
+/// closed instead of standing in for a static credential.
+fn static_lookup_credential(
+    lookup_access: Option<&LookupAccess>,
+) -> Result<Option<&ExecutionCredential>, ProviderError> {
+    match lookup_access {
+        None => Ok(None),
+        Some(LookupAccess::Static(credential)) => Ok(Some(credential)),
+        Some(_) => Err(ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            "Confluence lookups do not accept delegated credentials",
+        )),
+    }
 }
 
 fn required_lookup_credential(

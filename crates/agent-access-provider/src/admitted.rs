@@ -1,9 +1,9 @@
 //! What the host admitted for one operation: the read-only context shared by
 //! multipart admission and invocation, and the invocation built from it.
 use crate::{
-    BrokerBodyPart, CorrelationContext, CredentialMode, ExecutionAccess, ExecutionCredential,
-    InvocationIdentity, ProviderError, ProviderState, ReasonCode, ResourceAttributes,
-    ResourceScopes, SearchAuthorization,
+    BrokerBodyPart, CorrelationContext, CredentialMode, ExecutionAccess, InvocationIdentity,
+    LookupAccess, ProviderError, ProviderState, ReasonCode, ResourceAttributes, ResourceScopes,
+    SearchAuthorization,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -143,14 +143,14 @@ impl std::fmt::Debug for AdmittedContext {
 }
 
 /// The view multipart admission receives: the admitted context, validated
-/// inputs and the selected credentials. It has neither consumed body data nor
-/// decrypted private resource attributes.
+/// inputs and the selected execution and lookup material. It has neither
+/// consumed body data nor decrypted private resource attributes.
 #[derive(Debug, Clone)]
 pub struct AdmittedRequest {
     context: AdmittedContext,
     inputs: Value,
     execution: ExecutionAccess,
-    lookup_credential: Option<ExecutionCredential>,
+    lookup_access: Option<LookupAccess>,
 }
 
 /// One admitted invocation: the admitted request plus what the host staged
@@ -221,9 +221,12 @@ macro_rules! admitted_accessors {
             &self.$request().execution
         }
 
-        /// Static lookup material, never a stand-in for execution material.
-        pub fn lookup_credential(&self) -> Option<&ExecutionCredential> {
-            self.$request().lookup_credential.as_ref()
+        /// Lookup material the host selected, never a stand-in for
+        /// execution material. Delegated lookup access shares the
+        /// operation's lease and recovery budget with delegated execution
+        /// material.
+        pub fn lookup_access(&self) -> Option<&LookupAccess> {
+            self.$request().lookup_access.as_ref()
         }
     };
 }
@@ -233,13 +236,13 @@ impl AdmittedRequest {
         context: AdmittedContext,
         inputs: Value,
         execution: ExecutionAccess,
-        lookup_credential: Option<ExecutionCredential>,
+        lookup_access: Option<LookupAccess>,
     ) -> Self {
         Self {
             context,
             inputs,
             execution,
-            lookup_credential,
+            lookup_access,
         }
     }
 
@@ -395,7 +398,12 @@ mod tests {
         assert_eq!(invocation.credential_mode(), CredentialMode::PerUser);
         assert_eq!(invocation.inputs(), &json!({"key": "value"}));
         assert!(invocation.execution().static_credential().is_some());
-        assert!(invocation.lookup_credential().is_some());
+        assert!(
+            invocation
+                .lookup_access()
+                .and_then(LookupAccess::static_credential)
+                .is_some()
+        );
         assert_eq!(invocation.state().unwrap().downcast_ref::<u8>(), Ok(&7));
         let debug = format!("{invocation:?}");
         for secret in ["execution-secret", "lookup-secret", "private-endpoint"] {

@@ -190,6 +190,7 @@ mod finalization;
 pub mod host;
 mod identifiers;
 mod invocation;
+mod lookup;
 mod module;
 mod mutation_receipt;
 mod oauth_dialect;
@@ -270,6 +271,7 @@ pub use invocation::{
     BrokerBodyPart, BrokerBodyPartFile, BrokerBodyPartSpec, InvocationIdentity,
     SearchAuthorization, SearchAuthorizationScope,
 };
+pub use lookup::LookupAccess;
 pub use module::{ModuleMetadata, SDK_PACKAGE};
 pub use mutation_receipt::{MutationReceipt, MutationStatus};
 pub use oauth_dialect::{

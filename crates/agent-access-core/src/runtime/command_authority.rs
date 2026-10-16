@@ -605,7 +605,8 @@ impl BrokerRuntime {
                         execution_context: context.as_str(),
                         identity: &scope_identity,
                         correlation,
-                        lookup_credential: None,
+                        // Command actions declare no lookups.
+                        lookup_access: None,
                     },
                 )),
             ),

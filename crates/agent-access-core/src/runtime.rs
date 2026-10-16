@@ -4953,7 +4953,7 @@ impl BrokerRuntime {
                                 execution_context: execution_context.as_str(),
                                 identity: &scope_identity,
                                 correlation: &correlation,
-                                lookup_credential: pre_scope_lookup.as_ref(),
+                                lookup_access: pre_scope_lookup.access(),
                             },
                         )),
                     ),
@@ -5143,12 +5143,12 @@ impl BrokerRuntime {
             }
         };
 
-        let (lookup_credential, credential_mode, authority) = match self
-            .resolve_lookup_credential_if_required(
+        let (lookup_access, credential_mode, authority) = match self
+            .resolve_lookup_access_if_required(
                 action_descriptor.lookup,
                 &service,
                 &policy,
-                credentials.static_credential(),
+                &credentials,
                 &pre_scope_lookup,
             )
             .await
@@ -5224,7 +5224,7 @@ impl BrokerRuntime {
                 authority,
                 inputs: request.inputs,
                 execution: credentials,
-                lookup_credential,
+                lookup_access,
             },
         );
         Ok(PreparedInvocation {
@@ -5756,8 +5756,8 @@ impl BrokerRuntime {
             return Ok(ExecutionAccess::None);
         }
         if credential_mode == "per_user" {
-            if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
-                return Ok(ExecutionAccess::Static(credential.clone()));
+            if let Some(execution) = pre_scope_lookup.personal_execution() {
+                return execution;
             }
             if let Some((_, crate::Selection::OAuth(oauth))) =
                 self.personal_selection(service, identity)
