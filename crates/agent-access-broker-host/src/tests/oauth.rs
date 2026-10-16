@@ -135,19 +135,20 @@ async fn oauth_fixture_with_subject(subject: Option<&str>) -> OAuthFixture {
         .insert(agent_access_fake::OAuthStubProviderConfig {
             base_url: server.uri(),
         });
+    config.credentials.connections.insert(
+        "oauth_stub".into(),
+        agent_access_core::ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(agent_access_core::ConnectionOAuthConfig {
+                registration: "stub".into(),
+                profile: "read".into(),
+            }),
+        },
+    );
     config.credentials.per_user.insert(
         "oauth_stub".into(),
-        CredentialConfig {
-            kind: "oauth".into(),
-            provider: Some("stub".into()),
-            profile: Some("read".into()),
-            connection: None,
-            username_ref: None,
-            token_ref: None,
-            path: None,
-            read_only: None,
-            credential_name: None,
-        },
+        super::connection_credential("oauth_stub"),
     );
     config.policy.authority = "managed".into();
     config.policy.grants.clear();

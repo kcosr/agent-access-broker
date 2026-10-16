@@ -249,14 +249,18 @@ token_ref = "env:JIRA_SERVICE_API_TOKEN"
 #   ]
 # }
 #
-# Alternative managed-store Jira per-user credential shape. The credential row
-# must exist in the managed store for the authenticated principal and the
-# configured credential name.
+# Alternative managed-store Jira per-user credential: a credential connection.
+# Each managed principal's token for it is stored in the managed store; users
+# and system principals provide their own, and administrators provision
+# service accounts'. Connections need managed_store and credential_encryption.
+#
+# [credentials.connections.jira]
+# display_name = "Jira"
+# token_profile = "jira-cloud-api-token"
 #
 # [credentials.per_user.jira]
-# type = "managed_store"
-# credential_name = "default"
-# profile = "jira-cloud-api-token"
+# type = "connection"
+# connection = "jira"
 
 [credentials.lookup.jira]
 type = "basic_api_token"
@@ -279,10 +283,13 @@ read_only = true
 # [credentials.lookup.confluence]. Service-mode lookup-backed policy still
 # requires the separate read-only lookup credential.
 #
+# [credentials.connections.confluence]
+# display_name = "Confluence"
+# token_profile = "confluence-cloud-api-token"
+#
 # [credentials.per_user.confluence]
-# type = "managed_store"
-# credential_name = "default"
-# profile = "confluence-cloud-api-token"
+# type = "connection"
+# connection = "confluence"
 
 [credentials.service.gitlab]
 type = "bearer_token"
@@ -299,10 +306,13 @@ type = "bearer_token"
 token_ref = "env:GITLAB_LOOKUP_TOKEN"
 read_only = true
 
+# [credentials.connections.gitlab]
+# display_name = "GitLab"
+# token_profile = "gitlab-access-token"
+#
 # [credentials.per_user.gitlab]
-# type = "managed_store"
-# credential_name = "default"
-# profile = "gitlab-access-token"
+# type = "connection"
+# connection = "gitlab"
 
 # GitLab's Git HTTP endpoint accepts only HTTP Basic credentials. Use the
 # access token with any non-empty username, such as oauth2; a deploy token
@@ -313,10 +323,13 @@ read_only = true
 # username_ref = "env:GITLAB_GIT_USERNAME"
 # token_ref = "env:GITLAB_SERVICE_TOKEN"
 #
+# [credentials.connections.gitlab_git]
+# display_name = "GitLab Git"
+# token_profile = "git-basic-api-token"
+#
 # [credentials.per_user.gitlab_git]
-# type = "managed_store"
-# credential_name = "default"
-# profile = "git-basic-api-token"
+# type = "connection"
+# connection = "gitlab_git"
 #
 # Alternatively, keep token-only credentials and have the gateway present the
 # token as Basic: set upstream_token_auth on [gateways.gitlab_git] below.
@@ -325,10 +338,9 @@ read_only = true
 # type = "bearer_token"
 # token_ref = "env:GITLAB_SERVICE_TOKEN"
 #
-# [credentials.per_user.gitlab_git]
-# type = "managed_store"
-# credential_name = "default"
-# profile = "git-bearer-token"
+# [credentials.connections.gitlab_git]
+# display_name = "GitLab Git"
+# token_profile = "git-bearer-token"
 
 [policy]
 authority = "toml"
@@ -882,10 +894,11 @@ durability = "write" # write | sync_data | sync_all
 # scopes = ["records.read", "offline_access"]
 # audience = "records-api"
 # target = "workspace-one"
+# [credentials.connections.oauth_stub]
+# oauth = { registration = "stub", profile = "read" }
 # [credentials.per_user.oauth_stub]
-# type = "oauth"
-# provider = "stub"
-# profile = "read"
+# type = "connection"
+# connection = "oauth_stub"
 
 # Imported MCP OAuth: add to a managed/browser-enabled deployment and allow the
 # exact endpoint in [imports] with allowed_kinds = ["mcp_http"]. Configure the
@@ -932,10 +945,13 @@ durability = "write" # write | sync_data | sync_all
 # audience = "https://gmail.googleapis.com/"
 # target = "me"
 #
+# [credentials.connections.gmail]
+# display_name = "Gmail"
+# oauth = { registration = "google", profile = "mail" }
+#
 # [credentials.per_user.gmail]
-# type = "oauth"
-# provider = "google"
-# profile = "mail"
+# type = "connection"
+# connection = "gmail"
 #
 # [[policy.grants]]
 # subjects = ["user:YOUR_BROKER_PRINCIPAL"]

@@ -454,8 +454,6 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                     path: None,
                     read_only: None,
                     provider: None,
-                    credential_name: None,
-                    profile: None,
                     connection: Some(service.clone()),
                 },
             );
@@ -1282,17 +1280,7 @@ impl BrokerRuntime {
             return Err(import_credential_unavailable());
         }
         if mode == "per_user" {
-            let credential = self
-                .effective_credentials
-                .per_user
-                .get(service)
-                .ok_or_else(import_credential_unavailable)?;
-            if credential.kind == "connection" {
-                return self.resolve_connection_token(service, identity).await;
-            }
-            return self
-                .resolve_managed_execution_credential(service, credential, identity)
-                .await;
+            return self.resolve_connection_token(service, identity).await;
         }
         let store = self
             .managed_store

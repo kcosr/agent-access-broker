@@ -990,8 +990,6 @@ mod tests {
                 username_ref: None,
                 token_ref: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );

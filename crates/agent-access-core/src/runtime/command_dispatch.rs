@@ -568,33 +568,14 @@ impl BrokerRuntime {
         service: &str,
         identity: &IdentityContext,
     ) -> Result<PersonalTokenRow, ProviderError> {
-        if let Some((connection, selection)) = self.personal_selection(service, identity) {
-            return match selection {
-                crate::Selection::Token(profile) => Ok(PersonalTokenRow {
-                    service: connection.id.to_owned(),
-                    name: crate::CONNECTION_CREDENTIAL_NAME.to_owned(),
-                    profile: profile.to_owned(),
-                }),
-                _ => Err(credential_unavailable()),
-            };
+        match self.personal_selection(service, identity) {
+            Some((connection, crate::Selection::Token(profile))) => Ok(PersonalTokenRow {
+                service: connection.id.to_owned(),
+                name: crate::CONNECTION_CREDENTIAL_NAME.to_owned(),
+                profile: profile.to_owned(),
+            }),
+            _ => Err(credential_unavailable()),
         }
-        let credential = self
-            .effective_credentials
-            .per_user
-            .get(service)
-            .filter(|credential| credential.kind == "managed_store")
-            .ok_or_else(credential_unavailable)?;
-        Ok(PersonalTokenRow {
-            service: service.to_owned(),
-            name: credential
-                .credential_name
-                .clone()
-                .unwrap_or_else(|| "default".into()),
-            profile: credential
-                .profile
-                .clone()
-                .ok_or_else(credential_unavailable)?,
-        })
     }
 
     /// The request's `caller`, read from the managed store: the principal's

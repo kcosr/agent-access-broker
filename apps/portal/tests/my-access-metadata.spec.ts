@@ -81,14 +81,16 @@ enabled = true
 mode = "create_if_empty"
 principal_id = "admin"
 initial_password = "${ADMIN_PASSWORD}"
+[credentials.connections.jira]
+token_profile = "jira-cloud-api-token"
 [credentials.per_user.jira]
-type = "managed_store"
-credential_name = "default"
-profile = "jira-cloud-api-token"
+type = "connection"
+connection = "jira"
+[credentials.connections.gitlab_git]
+token_profile = "git-bearer-token"
 [credentials.per_user.gitlab_git]
-type = "managed_store"
-credential_name = "default"
-profile = "git-bearer-token"
+type = "connection"
+connection = "gitlab_git"
 [providers.jira]
 tenant_host = "jira.example.invalid"
 allowed_upstream_hosts = ["https://jira.example.invalid/**"]

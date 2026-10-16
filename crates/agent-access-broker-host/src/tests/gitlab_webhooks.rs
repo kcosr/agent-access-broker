@@ -326,8 +326,6 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -340,8 +338,6 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );

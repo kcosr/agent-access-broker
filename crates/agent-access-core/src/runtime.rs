@@ -2922,8 +2922,6 @@ impl BrokerRuntime {
                 service,
                 "service",
                 credential,
-                self.accepts_delegated_credentials(service),
-                &self.config.oauth,
             )?;
         }
         for (service, credential) in &self.effective_credentials.per_user {
@@ -2932,14 +2930,7 @@ impl BrokerRuntime {
                 self.check_connection_ready(&label, service)?;
                 continue;
             }
-            check_credential_ready(
-                &label,
-                service,
-                "per_user",
-                credential,
-                self.accepts_delegated_credentials(service),
-                &self.config.oauth,
-            )?;
+            check_credential_ready(&label, service, "per_user", credential)?;
         }
         for (service, credential) in &self.effective_credentials.lookup {
             check_credential_ready(
@@ -2947,8 +2938,6 @@ impl BrokerRuntime {
                 service,
                 "lookup",
                 credential,
-                self.accepts_delegated_credentials(service),
-                &self.config.oauth,
             )?;
         }
         Ok(())
@@ -5767,26 +5756,9 @@ impl BrokerRuntime {
             if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
                 return Ok(ExecutionAccess::Static(credential.clone()));
             }
-            let binding = match self.personal_selection(service, identity) {
-                Some((_, crate::Selection::OAuth(oauth))) => Some(Some(oauth.binding())),
-                Some(_) => None,
-                None => self
-                    .effective_credentials
-                    .per_user
-                    .get(service)
-                    .filter(|credential| credential.kind == "oauth")
-                    .map(|credential| {
-                        credential
-                            .provider
-                            .clone()
-                            .zip(credential.profile.clone())
-                            .map(|(registration, permission_profile)| crate::OAuthBinding {
-                                registration,
-                                permission_profile,
-                            })
-                    }),
-            };
-            if let Some(binding) = binding {
+            if let Some((_, crate::Selection::OAuth(oauth))) =
+                self.personal_selection(service, identity)
+            {
                 let accepts_delegated =
                     descriptor.is_some_and(|descriptor| descriptor.delegated.is_some());
                 return with_provider_context(
@@ -5796,7 +5768,7 @@ impl BrokerRuntime {
                     self.acquire_delegated_credential(
                         service,
                         accepts_delegated,
-                        binding,
+                        oauth.binding(),
                         identity,
                     ),
                 )
@@ -5813,7 +5785,7 @@ impl BrokerRuntime {
         &self,
         service: &str,
         accepts_delegated: bool,
-        binding: Option<crate::OAuthBinding>,
+        binding: crate::OAuthBinding,
         identity: &IdentityContext,
     ) -> Result<DelegatedCredential, ProviderError> {
         if !accepts_delegated {
@@ -5828,7 +5800,7 @@ impl BrokerRuntime {
                 "delegated credentials require an authenticated identity",
             ));
         }
-        let (Some(manager), Some(binding)) = (self.oauth.clone(), binding) else {
+        let Some(manager) = self.oauth.clone() else {
             return Err(ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "delegated OAuth credential is not configured",
@@ -6313,61 +6285,7 @@ impl BrokerRuntime {
         if credential.kind == "connection" {
             return self.resolve_connection_token(service, identity).await;
         }
-        if credential.kind == "managed_store" {
-            return self
-                .resolve_managed_execution_credential(service, credential, identity)
-                .await;
-        }
         load_execution_credential(service, credential_mode, credential, Some(identity))
-    }
-
-    async fn resolve_managed_execution_credential(
-        &self,
-        service: &str,
-        credential: &CredentialConfig,
-        identity: &IdentityContext,
-    ) -> Result<ExecutionCredential, ProviderError> {
-        let identity = identity.authenticated.then_some(identity).ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "managed per_user credential requires authenticated identity",
-            )
-        })?;
-        let store = self.managed_store.clone().ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "managed credential store is not configured",
-            )
-        })?;
-        let key_ring = self.credential_key_ring.clone().ok_or_else(|| {
-            ProviderError::error(
-                ReasonCode::EncryptionKeyMissing,
-                "credential encryption key ring is not configured",
-            )
-        })?;
-        let credential_name = credential
-            .credential_name
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        let profile = credential.profile.clone().ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialInvalid,
-                "managed per_user credential profile is not configured",
-            )
-        })?;
-        let principal = identity.principal.clone();
-        let service = service.to_string();
-        managed_store_blocking(move || {
-            store.resolve_user_credential(
-                &key_ring,
-                &principal,
-                &service,
-                &credential_name,
-                &profile,
-            )
-        })
-        .await
-        .map_err(provider_error_from_managed_store)
     }
 
     async fn finalize(
@@ -8373,8 +8291,6 @@ fn check_credential_ready(
     service: &str,
     credential_mode: &str,
     credential: &CredentialConfig,
-    accepts_delegated: bool,
-    oauth: &crate::OAuthConfig,
 ) -> Result<(), RuntimeError> {
     match credential.kind.as_str() {
         "basic_api_token" | "bearer_token" => {
@@ -8386,43 +8302,6 @@ fn check_credential_ready(
                 })
         }
         "secret_store" => check_secret_store_ready(label, credential_mode, credential),
-        "oauth" => {
-            let profile = credential
-                .provider
-                .as_ref()
-                .and_then(|id| oauth.registrations.get(id))
-                .and_then(|registration| {
-                    credential
-                        .profile
-                        .as_ref()
-                        .and_then(|id| registration.permission_profiles.get(id))
-                });
-            if credential_mode == "per_user" && accepts_delegated && profile.is_some() {
-                // Application secrets and registration configuration are prepared
-                // by OAuthManager at startup/reload; local-state readiness checks
-                // encrypted slots. Readiness must not depend on any user's consent
-                // or send token requests to the upstream provider.
-                Ok(())
-            } else {
-                Err(RuntimeError::Credential {
-                    label: label.to_string(),
-                    message: "OAuth requires a configured per_user registration/profile binding"
-                        .into(),
-                })
-            }
-        }
-
-        "managed_store" => {
-            if credential_mode == "per_user" {
-                Ok(())
-            } else {
-                Err(RuntimeError::Credential {
-                    label: label.to_string(),
-                    message: "managed_store credentials are supported only for per_user execution"
-                        .to_string(),
-                })
-            }
-        }
         _ => Err(RuntimeError::Credential {
             label: label.to_string(),
             message: "credential kind is unsupported".to_string(),
@@ -10287,8 +10166,6 @@ pub fn fake_service_credential(token_ref: impl Into<String>) -> CredentialConfig
         provider: None,
         path: None,
         read_only: None,
-        credential_name: None,
-        profile: None,
         connection: None,
     }
 }

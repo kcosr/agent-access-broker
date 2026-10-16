@@ -16,7 +16,8 @@ let broker: ChildProcessWithoutNullStreams | undefined;
 let baseUrl = "";
 let tempDir = "";
 let requestCounter = 0;
-const credentialName = "workstation-token";
+// A credential connection stores one row per principal, named `default`.
+const credentialName = "default";
 const initialAdminPassword = "admin-password";
 const updatedAdminPassword = "admin-password-updated";
 
@@ -2988,10 +2989,12 @@ initial_password = ${tomlString(initialAdminPassword)}
 enabled = true
 public_url = "http://127.0.0.1:${port}/mcp"
 
+[credentials.connections.jira]
+token_profile = "jira-cloud-api-token"
+
 [credentials.per_user.jira]
-type = "managed_store"
-credential_name = ${tomlString(credentialName)}
-profile = "jira-cloud-api-token"
+type = "connection"
+connection = "jira"
 
 [credentials.service.confluence]
 type = "basic_api_token"

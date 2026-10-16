@@ -16,7 +16,7 @@ use agent_access_core::{
 };
 use agent_access_provider::{
     Decision, ProviderCredentialVerification, ProviderError, ProviderReason, ReasonCode,
-    ReasonCodeId, ResourceScopes, is_action_name,
+    ReasonCodeId, ResourceScopes,
 };
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
@@ -522,32 +522,12 @@ pub(super) fn credential_targets(
             {
                 return None;
             }
-            let (credential_name, profile, credential_kind) = match credential.kind.as_str() {
-                "connection" => {
-                    let (profile, kind) = runtime.personal_token_profile(service)?;
-                    (
-                        agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string(),
-                        profile.to_string(),
-                        kind,
-                    )
-                }
-                "managed_store" => {
-                    let profile = credential.profile.clone()?;
-                    let kind = runtime.credential_profile_kind(service, &profile)?;
-                    (
-                        credential
-                            .credential_name
-                            .clone()
-                            .unwrap_or_else(|| "default".to_string()),
-                        profile,
-                        kind,
-                    )
-                }
-                _ => return None,
-            };
-            if !is_action_name(&credential_name) {
+            if credential.kind != "connection" {
                 return None;
             }
+            let (profile, credential_kind) = runtime.personal_token_profile(service)?;
+            let credential_name = agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string();
+            let profile = profile.to_string();
             let input_schema =
                 runtime.credential_input_schema(service, &profile, credential_kind)?;
             let descriptor = runtime.service_descriptor(service)?;

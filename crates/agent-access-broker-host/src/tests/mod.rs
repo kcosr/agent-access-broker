@@ -1316,8 +1316,6 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -1330,8 +1328,6 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -1426,8 +1422,6 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -1440,8 +1434,6 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -2389,8 +2381,6 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -2533,8 +2523,6 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -6160,8 +6148,6 @@ async fn managed_store_admin_and_user_token_smoke() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -6179,53 +6165,17 @@ async fn managed_store_admin_and_user_token_smoke() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
-    config.credentials.per_user.insert(
-        "gitlab".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("gitlab-access-token".to_string()),
-            connection: None,
-        },
+    use_token_connection(&mut config, "gitlab", "gitlab-access-token", &["gitlab"]);
+    use_token_connection(
+        &mut config,
+        "gitlab_git",
+        "git-bearer-token",
+        &["gitlab_git"],
     );
-    config.credentials.per_user.insert(
-        "gitlab_git".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("git-bearer-token".to_string()),
-            connection: None,
-        },
-    );
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("jira-cloud-api-token".to_string()),
-            connection: None,
-        },
-    );
+    use_token_connection(&mut config, "jira", "jira-cloud-api-token", &["jira"]);
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["group:users".to_string()],
         execution_contexts: None,
@@ -13738,8 +13688,6 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -13892,8 +13840,6 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -13906,8 +13852,6 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -14068,8 +14012,6 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -14082,8 +14024,6 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -14306,8 +14246,6 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -14320,8 +14258,6 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -14423,8 +14359,6 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -14437,8 +14371,6 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -15008,20 +14940,7 @@ fn managed_jira_verify_config(
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("jira-cloud-api-token".to_string()),
-            connection: None,
-        },
-    );
+    use_token_connection(&mut config, "jira", "jira-cloud-api-token", &["jira"]);
     config
 }
 
@@ -16325,8 +16244,6 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -16339,8 +16256,6 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -16396,8 +16311,6 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
                     provider: None,
                     path: None,
                     read_only: None,
-                    credential_name: None,
-                    profile: None,
                     connection: None,
                 },
             )]),
@@ -16469,8 +16382,6 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -16483,8 +16394,6 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -16720,8 +16629,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -16745,8 +16652,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -16759,8 +16664,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: Some(true),
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -16821,8 +16724,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -16835,8 +16736,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: Some(true),
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -16887,8 +16786,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -16901,8 +16798,6 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: Some(true),
-                credential_name: None,
-                profile: None,
                 connection: None,
             },
         );
@@ -17490,8 +17385,6 @@ async fn service_policy_management_fixture_with_policy_authority(
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -17693,8 +17586,6 @@ where
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -18750,6 +18641,43 @@ thread_local! {
 /// helpers that build configurations need not return a guard. Call it on
 /// the test's own thread; a spawned thread's exit would remove the
 /// directory early.
+/// A personal credential entry consuming `connection`.
+pub(crate) fn connection_credential(connection: &str) -> CredentialConfig {
+    CredentialConfig {
+        kind: "connection".to_string(),
+        username_ref: None,
+        token_ref: None,
+        provider: None,
+        path: None,
+        read_only: None,
+        connection: Some(connection.to_string()),
+    }
+}
+
+/// Points each of `consumers`' personal credentials at the token connection
+/// `connection` with `profile`.
+pub(crate) fn use_token_connection(
+    config: &mut BrokerConfig,
+    connection: &str,
+    profile: &str,
+    consumers: &[&str],
+) {
+    config.credentials.connections.insert(
+        connection.to_string(),
+        agent_access_core::ConnectionConfig {
+            display_name: None,
+            token_profile: Some(profile.to_string()),
+            oauth: None,
+        },
+    );
+    for consumer in consumers {
+        config
+            .credentials
+            .per_user
+            .insert((*consumer).to_string(), connection_credential(connection));
+    }
+}
+
 pub(crate) fn test_temp_dir() -> PathBuf {
     let thread = std::thread::current();
     assert!(

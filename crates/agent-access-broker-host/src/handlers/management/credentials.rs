@@ -112,56 +112,23 @@ fn credential_profile_for_service(
     service: &str,
     profile: Option<&str>,
 ) -> Result<(String, String), &'static str> {
-    let configured = runtime
-        .effective_credentials()
-        .per_user
-        .get(service)
+    let (configured_profile, kind) = runtime
+        .personal_token_profile(service)
         .ok_or("managed per_user credentials are not configured for service")?;
-    if configured.kind == "connection" {
-        let (configured_profile, kind) = runtime
-            .personal_token_profile(service)
-            .ok_or("managed per_user credentials are not configured for service")?;
-        if profile.is_some_and(|profile| profile != configured_profile) {
-            return Err("credential profile does not match configured managed profile");
-        }
-        return Ok((configured_profile.to_string(), kind.to_string()));
-    }
-    if configured.kind != "managed_store" {
-        return Err("managed per_user credentials are not configured for service");
-    }
-    let configured_profile = configured
-        .profile
-        .as_deref()
-        .ok_or("managed credential profile is not configured for service")?;
     if profile.is_some_and(|profile| profile != configured_profile) {
         return Err("credential profile does not match configured managed profile");
     }
-    let profile = configured_profile.to_string();
-    let kind = runtime
-        .credential_profile_kind(service, &profile)
-        .ok_or("credential profile is not supported for service")?;
-    Ok((profile, kind.to_string()))
+    Ok((configured_profile.to_string(), kind.to_string()))
 }
 
 fn configured_managed_credential_name(
     runtime: &BrokerRuntime,
     service: &str,
 ) -> Result<String, &'static str> {
-    let configured = runtime
-        .effective_credentials()
-        .per_user
-        .get(service)
-        .ok_or("managed per_user credentials are not configured for service")?;
-    if configured.kind == "connection" && runtime.personal_token_profile(service).is_some() {
-        return Ok(agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string());
-    }
-    if configured.kind != "managed_store" {
-        return Err("managed per_user credentials are not configured for service");
-    }
-    Ok(configured
-        .credential_name
-        .clone()
-        .unwrap_or_else(|| "default".to_string()))
+    runtime
+        .personal_token_profile(service)
+        .map(|_| agent_access_core::CONNECTION_CREDENTIAL_NAME.to_string())
+        .ok_or("managed per_user credentials are not configured for service")
 }
 
 async fn enforce_user_configured_target(

@@ -131,10 +131,12 @@ scopes = ["openid", {gmail_scope}]
 audience = {gmail_audience}
 target = "me"
 
+[credentials.connections.gmail]
+oauth = {{ registration = "google", profile = "read" }}
+
 [credentials.per_user.gmail]
-type = "oauth"
-provider = "google"
-profile = "read"
+type = "connection"
+connection = "gmail"
 
 [policy]
 authority = "toml"

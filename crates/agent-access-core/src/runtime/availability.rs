@@ -361,48 +361,6 @@ impl BrokerRuntime {
         if credential.kind == "connection" {
             return self.check_connection_credential(service, identity, static_lookup);
         }
-        if credential.kind == "oauth" {
-            if static_lookup {
-                return Err(UnavailableCredential::missing());
-            }
-            let (true, Some(manager), Some(registration), Some(permission_profile)) = (
-                identity.authenticated,
-                self.oauth.as_ref(),
-                credential.provider.as_ref(),
-                credential.profile.as_ref(),
-            ) else {
-                return Err(UnavailableCredential::missing());
-            };
-            return manager
-                .check_credential(
-                    &identity.principal,
-                    &crate::OAuthBinding {
-                        registration: registration.clone(),
-                        permission_profile: permission_profile.clone(),
-                    },
-                )
-                .map_err(UnavailableCredential::from_oauth);
-        }
-        if credential.kind == "managed_store" {
-            let (true, Some(store), Some(ring), Some(profile)) = (
-                identity.authenticated,
-                self.managed_store.as_ref(),
-                self.credential_key_ring.as_ref(),
-                credential.profile.as_ref(),
-            ) else {
-                return Err(UnavailableCredential::missing());
-            };
-            return store
-                .check_user_credential(
-                    ring,
-                    &identity.principal,
-                    service,
-                    credential.credential_name.as_deref().unwrap_or("default"),
-                    profile,
-                )
-                .map_err(provider_error_from_managed_store)
-                .map_err(UnavailableCredential::from_provider);
-        }
         load_execution_credential(service, mode, credential, Some(identity))
             .map(drop)
             .map_err(UnavailableCredential::from_provider)

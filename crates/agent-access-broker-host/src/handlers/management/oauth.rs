@@ -76,30 +76,17 @@ async fn browser_context(
 }
 
 fn binding(context: &ManagementContext, service: &str) -> Result<OAuthBinding, OAuthError> {
-    let runtime = &context.snapshot.runtime;
-    if let Some(connection) = runtime.effective_credentials().personal_connection(service) {
-        // The signed-in principal's kind selects the connection's method.
-        return match connection.select(context.identity.principal_kind) {
-            agent_access_core::Selection::OAuth(oauth) => Ok(oauth.binding()),
-            _ => Err(OAuthError::Configuration),
-        };
-    }
-    let credential = runtime
+    let connection = context
+        .snapshot
+        .runtime
         .effective_credentials()
-        .per_user
-        .get(service)
-        .filter(|c| c.kind == "oauth")
+        .personal_connection(service)
         .ok_or(OAuthError::Configuration)?;
-    Ok(OAuthBinding {
-        registration: credential
-            .provider
-            .clone()
-            .ok_or(OAuthError::Configuration)?,
-        permission_profile: credential
-            .profile
-            .clone()
-            .ok_or(OAuthError::Configuration)?,
-    })
+    // The signed-in principal's kind selects the connection's method.
+    match connection.select(context.identity.principal_kind) {
+        agent_access_core::Selection::OAuth(oauth) => Ok(oauth.binding()),
+        _ => Err(OAuthError::Configuration),
+    }
 }
 
 fn setup_unavailable_reason(

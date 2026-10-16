@@ -5058,64 +5058,57 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
             )]),
         },
     );
-    let credential = CredentialConfig {
-        kind: "oauth".into(),
-        provider: Some("stub".into()),
-        profile: Some("read".into()),
-        connection: None,
-        username_ref: None,
-        token_ref: None,
-        path: None,
-        read_only: None,
-        credential_name: None,
-    };
-    config
-        .credentials
-        .per_user
-        .insert("oauth_stub".into(), credential.clone());
+    config.credentials.connections.insert(
+        "oauth_stub".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(crate::ConnectionOAuthConfig {
+                registration: "stub".into(),
+                profile: "read".into(),
+            }),
+        },
+    );
+    config.credentials.per_user.insert(
+        "oauth_stub".into(),
+        CredentialConfig {
+            kind: "connection".into(),
+            provider: None,
+            connection: Some("oauth_stub".into()),
+            username_ref: None,
+            token_ref: None,
+            path: None,
+            read_only: None,
+        },
+    );
     config
         .providers
         .insert(agent_access_fake::OAuthStubProviderConfig {
             base_url: "http://127.0.0.1:9".into(),
         });
-    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let mut runtime = BrokerRuntime::new(config.clone()).unwrap();
     runtime.readiness().await.unwrap();
+    runtime
+        .check_connection_ready("test", "oauth_stub")
+        .unwrap();
+    // Readiness fails closed when the published connection no longer names a
+    // configured registration and profile.
+    let mut credentials = (*runtime.effective_credentials).clone();
+    credentials
+        .connections
+        .get_mut("oauth_stub")
+        .unwrap()
+        .oauth
+        .as_mut()
+        .unwrap()
+        .profile = "missing".into();
+    runtime.effective_credentials = Arc::new(credentials);
     assert!(
-        check_credential_ready(
-            "test",
-            "oauth_stub",
-            "service",
-            &credential,
-            true,
-            &config.oauth
-        )
-        .is_err()
+        runtime
+            .check_connection_ready("test", "oauth_stub")
+            .is_err()
     );
-    let mut missing_profile = credential.clone();
-    missing_profile.profile = Some("missing".into());
-    assert!(
-        check_credential_ready(
-            "test",
-            "oauth_stub",
-            "per_user",
-            &missing_profile,
-            true,
-            &config.oauth
-        )
-        .is_err()
-    );
-    config.oauth.registrations.clear();
-    assert!(
-        check_credential_ready(
-            "test",
-            "oauth_stub",
-            "per_user",
-            &credential,
-            true,
-            &config.oauth
-        )
-        .is_err()
-    );
+    assert!(runtime.check_connection_ready("test", "fake").is_err());
 }
 
 #[test]
@@ -5224,8 +5217,6 @@ async fn readiness_accepts_configured_secret_store_references() {
             provider: Some("local_file".to_string()),
             path: Some(store_path.display().to_string()),
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -8930,8 +8921,6 @@ fn lookup_trace_basic_credential(token: &str, read_only: bool) -> CredentialConf
         provider: None,
         path: None,
         read_only: read_only.then_some(true),
-        credential_name: None,
-        profile: None,
         connection: None,
     }
 }
@@ -9133,8 +9122,6 @@ fn fake_per_user_credential(path: &str) -> CredentialConfig {
         provider: Some("local_file".to_string()),
         path: Some(path.to_string()),
         read_only: None,
-        credential_name: None,
-        profile: None,
         connection: None,
     }
 }

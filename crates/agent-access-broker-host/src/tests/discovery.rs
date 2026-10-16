@@ -46,8 +46,6 @@ async fn cloudbees_ci_catalog_and_discovery_follow_job_grant_and_context() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -192,8 +190,6 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );

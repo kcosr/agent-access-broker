@@ -5901,8 +5901,9 @@ mod tests {
         drain_gateway_test_audit(&runtime).await;
     }
 
-    /// A per-user managed `git-bearer-token` credential is presented under the
-    /// configured Basic username, like a static one.
+    /// A per-user `git-bearer-token` credential read through the gateway's
+    /// credential connection, keyed by the connection's ID, is presented
+    /// under the configured Basic username, like a static one.
     #[tokio::test]
     async fn gateway_presents_a_per_user_managed_bearer_credential_as_configured() {
         let temp = test_temp_dir();
@@ -5932,18 +5933,24 @@ mod tests {
             }],
         });
         config.credentials.service.clear();
+        config.credentials.connections.insert(
+            "gitlab".to_string(),
+            agent_access_core::ConnectionConfig {
+                display_name: None,
+                token_profile: Some("git-bearer-token".to_string()),
+                oauth: None,
+            },
+        );
         config.credentials.per_user.insert(
             "gitlab_git".to_string(),
             CredentialConfig {
-                kind: "managed_store".to_string(),
+                kind: "connection".to_string(),
                 username_ref: None,
                 token_ref: None,
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: Some("default".to_string()),
-                profile: Some("git-bearer-token".to_string()),
-                connection: None,
+                connection: Some("gitlab".to_string()),
             },
         );
         config
@@ -5978,7 +5985,7 @@ mod tests {
                 runtime.credential_key_ring().unwrap(),
                 agent_access_core::CredentialWriteRequest {
                     owner_principal_id: "gateway-user".to_string(),
-                    service: "gitlab_git".to_string(),
+                    service: "gitlab".to_string(),
                     name: "default".to_string(),
                     profile: "git-bearer-token".to_string(),
                     credential_kind: "bearer_token".to_string(),
@@ -6134,8 +6141,6 @@ mod tests {
                         provider: None,
                         path: None,
                         read_only: None,
-                        credential_name: None,
-                        profile: None,
                         connection: None,
                     },
                 )]),

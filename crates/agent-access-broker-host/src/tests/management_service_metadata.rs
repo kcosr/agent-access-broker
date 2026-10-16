@@ -78,20 +78,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
         ("gitlab_git", "git-bearer-token"),
         ("jira", "jira-cloud-api-token"),
     ] {
-        config.credentials.per_user.insert(
-            service.to_string(),
-            CredentialConfig {
-                kind: "managed_store".to_string(),
-                username_ref: None,
-                token_ref: None,
-                provider: None,
-                path: None,
-                read_only: None,
-                credential_name: Some("default".to_string()),
-                profile: Some(profile.to_string()),
-                connection: None,
-            },
-        );
+        super::use_token_connection(&mut config, service, profile, &[service]);
     }
     let grant = |service: &str, actions: &[&str], mode: &str, resources| PolicyGrantConfig {
         subjects: vec!["user:alice".to_string()],

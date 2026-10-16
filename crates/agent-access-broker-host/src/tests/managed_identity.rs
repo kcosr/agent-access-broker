@@ -1175,8 +1175,6 @@ async fn managed_git_fixture(token_free: bool, default_context: bool) -> Fixture
                     provider: None,
                     path: None,
                     read_only: None,
-                    credential_name: None,
-                    profile: None,
                     connection: None,
                 },
             );

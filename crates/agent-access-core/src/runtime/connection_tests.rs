@@ -33,8 +33,6 @@ fn connection_config(connection: &str) -> (BrokerConfig, PathBuf) {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: Some(connection.into()),
         },
     );

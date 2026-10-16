@@ -266,13 +266,19 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
         require_registered_principal_for_invocation: false,
         auto_migrate: true,
     });
+    config.credentials.connections.insert(
+        "jira".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profile: Some("jira-cloud-api-token".into()),
+            oauth: None,
+        },
+    );
     config.credentials.per_user.insert(
         "jira".into(),
         CredentialConfig {
-            kind: "managed_store".into(),
-            profile: Some("jira-cloud-api-token".into()),
-            connection: None,
-            credential_name: None,
+            kind: "connection".into(),
+            connection: Some("jira".into()),
             provider: None,
             path: None,
             token_ref: None,
@@ -282,6 +288,16 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
     );
     config.policy.grants[0].credential_mode = "per_user".into();
     let runtime = BrokerRuntime::new(config).unwrap();
+    // The managed user's kind selects the connection's token.
+    let summary = |runtime: &BrokerRuntime| {
+        let identity = IdentityContext {
+            principal_kind: Some(crate::PrincipalKind::User),
+            ..agent_one_identity()
+        };
+        runtime
+            .service_capabilities(&identity, &default_execution_context(), "jira")
+            .unwrap()
+    };
     let store = runtime.managed_store().unwrap();
     store
         .create_or_update_principal(crate::PrincipalWriteRequest {

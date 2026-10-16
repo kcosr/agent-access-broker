@@ -358,8 +358,6 @@ fn confluence_broker_config(audit_file: &str) -> BrokerConfig {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );
@@ -372,8 +370,6 @@ fn confluence_broker_config(audit_file: &str) -> BrokerConfig {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
             connection: None,
         },
     );

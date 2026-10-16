@@ -751,8 +751,6 @@ pub struct CredentialConfig {
     pub provider: Option<String>,
     pub path: Option<String>,
     pub read_only: Option<bool>,
-    pub credential_name: Option<String>,
-    pub profile: Option<String>,
     /// The credential connection a `type = "connection"` per-user entry
     /// names.
     pub connection: Option<String>,
@@ -2260,11 +2258,6 @@ fn validate_managed_sections(config: &BrokerConfig, errors: &mut Vec<String>) {
         .sources
         .iter()
         .any(|source| source.kind == "broker_tokens");
-    let has_managed_per_user = config
-        .credentials
-        .per_user
-        .values()
-        .any(|credential| credential.kind == "managed_store");
     let has_connections = !config.credentials.connections.is_empty();
 
     if has_broker_tokens_source && config.broker_tokens.is_none() {
@@ -2285,13 +2278,6 @@ fn validate_managed_sections(config: &BrokerConfig, errors: &mut Vec<String>) {
             "management.enabled without managed_store requires management.allow_classless_admin_identities, at least one management admin principal or group, and management.initial_admin.mode disabled"
                 .to_string(),
         );
-    }
-    if has_managed_per_user && config.managed_store.is_none() {
-        errors.push("credentials.per_user managed_store requires managed_store".to_string());
-    }
-    if has_managed_per_user && config.credential_encryption.is_none() {
-        errors
-            .push("credentials.per_user managed_store requires credential_encryption".to_string());
     }
     if has_connections && config.managed_store.is_none() {
         errors.push("credentials.connections requires managed_store".to_string());
@@ -3098,8 +3084,6 @@ fn validate_credential(
     if mode == "credentials.per_user"
         && credential.kind != "secret_store"
         && credential.kind != "connection"
-        && credential.kind != "managed_store"
-        && credential.kind != "oauth"
     {
         errors.push(format!(
             "{mode}.{service}.type must be connection or secret_store for per_user credentials"
@@ -3122,8 +3106,6 @@ fn validate_credential(
                 || credential.provider.is_some()
                 || credential.path.is_some()
                 || credential.read_only.is_some()
-                || credential.credential_name.is_some()
-                || credential.profile.is_some()
             {
                 errors.push(format!(
                     "{mode}.{service}.type connection sets only connection"
@@ -3140,36 +3122,6 @@ fn validate_credential(
                 errors.push(format!(
                     "{mode}.{service} uses a credential connection, but {service} is not a configured service"
                 ));
-            }
-        }
-        "oauth" => {
-            match services.get(service) {
-                Some(descriptor) if mode == "credentials.per_user" && descriptor.credentials.delegated.is_some() => {
-                    // A delegated credential cannot resolve lookups: they need a
-                    // static per-user credential before or beside the invocation.
-                    for action in descriptor.actions.iter().filter(|action| {
-                        action.lookup.credential_required()
-                            && action.credential_modes.iter().any(|m| m == "per_user")
-                    }) {
-                        errors.push(format!(
-                            "{mode}.{service}: action {} needs a per-user lookup credential, which an OAuth credential cannot provide",
-                            action.action
-                        ));
-                    }
-                }
-                _ => errors.push(format!(
-                    "{mode}.{service}: OAuth credentials are per_user only, for services that accept delegated credentials"
-                )),
-            }
-            if credential.username_ref.is_some() || credential.token_ref.is_some()
-                || credential.path.is_some() || credential.read_only.is_some()
-                || credential.credential_name.is_some()
-            {
-                errors.push(format!("{mode}.{service}: OAuth uses provider and profile only"));
-            }
-            let registration = credential.provider.as_ref().and_then(|id| config.oauth.registrations.get(id));
-            if registration.is_none() || credential.profile.as_ref().is_none_or(|id| !registration.unwrap().permission_profiles.contains_key(id)) {
-                errors.push(format!("{mode}.{service}: OAuth provider/profile must name a configured registration and permission profile"));
             }
         }
         "basic_api_token" => {
@@ -3215,43 +3167,8 @@ fn validate_credential(
                 None => errors.push(format!("{mode}.{service}.path is required for secret_store")),
             }
         }
-        "managed_store" => {
-            if mode != "credentials.per_user" {
-                errors.push(format!(
-                    "{mode}.{service}.type managed_store is supported only for credentials.per_user"
-                ));
-            }
-            if credential.username_ref.is_some()
-                || credential.token_ref.is_some()
-                || credential.provider.is_some()
-                || credential.path.is_some()
-                || credential.read_only.is_some()
-            {
-                errors.push(format!(
-                    "{mode}.{service}.type managed_store must not set username_ref, token_ref, provider, path, or read_only"
-                ));
-            }
-            if let Some(name) = credential.credential_name.as_deref()
-                && !is_action_name(name)
-            {
-                errors.push(format!(
-                    "{mode}.{service}.credential_name must match ^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*$"
-                ));
-            }
-            match credential.profile.as_deref() {
-                Some(profile)
-                    if services
-                        .get(service)
-                        .and_then(|descriptor| descriptor.credential_profile_kind(profile))
-                        .is_some() => {}
-                Some(profile) => errors.push(format!(
-                    "{mode}.{service}.profile {profile} is unsupported for service {service}"
-                )),
-                None => errors.push(format!("{mode}.{service}.profile is required for managed_store")),
-            }
-        }
         other => errors.push(format!(
-            "{mode}.{service}.type {other} is unsupported; expected basic_api_token, bearer_token, secret_store, managed_store, or oauth"
+            "{mode}.{service}.type {other} is unsupported; expected basic_api_token, bearer_token, secret_store, or connection"
         )),
     }
     if mode == "credentials.service"
@@ -3275,13 +3192,9 @@ fn reject_static_credential_extras(
     credential: &CredentialConfig,
     errors: &mut Vec<String>,
 ) {
-    if credential.provider.is_some()
-        || credential.path.is_some()
-        || credential.credential_name.is_some()
-        || credential.profile.is_some()
-    {
+    if credential.provider.is_some() || credential.path.is_some() {
         errors.push(format!(
-            "{mode}.{service} static credentials must not set provider, path, credential_name, or profile"
+            "{mode}.{service} static credentials must not set provider or path"
         ));
     }
 }
@@ -3294,12 +3207,10 @@ fn reject_secret_store_extras(
 ) {
     if credential.username_ref.is_some()
         || credential.token_ref.is_some()
-        || credential.credential_name.is_some()
-        || credential.profile.is_some()
         || credential.read_only.is_some()
     {
         errors.push(format!(
-            "{mode}.{service}.type secret_store must not set username_ref, token_ref, credential_name, profile, or read_only"
+            "{mode}.{service}.type secret_store must not set username_ref, token_ref, or read_only"
         ));
     }
 }
@@ -4476,10 +4387,10 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
 
 /// The credential kind backend validation sees for a configured credential:
 /// a `connection` entry resolves to its token profile's kind, or `oauth` for
-/// a connection with only OAuth; a `managed_store` entry resolves to its
-/// profile's kind; every other type (`basic_api_token`, `bearer_token`,
-/// `secret_store`, `oauth`) is passed as written. An unsupported profile or
-/// unknown connection resolves to nothing; credential validation reports it.
+/// a connection with only OAuth; every other type (`basic_api_token`,
+/// `bearer_token`, `secret_store`) is passed as written. An unsupported
+/// profile or unknown connection resolves to nothing; credential validation
+/// reports it.
 fn resolved_credential_kind<'a>(
     credentials: &'a CredentialsConfig,
     credential: &'a CredentialConfig,
@@ -4496,10 +4407,6 @@ fn resolved_credential_kind<'a>(
                 (None, None) => None,
             }
         }
-        "managed_store" => credential
-            .profile
-            .as_deref()
-            .and_then(|profile| descriptor.credential_profile_kind(profile)),
         other => Some(other),
     }
 }
