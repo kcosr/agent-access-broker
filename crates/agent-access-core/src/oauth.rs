@@ -4619,6 +4619,62 @@ pub(crate) mod tests {
         );
     }
 
+    /// A second Broker process on the same store finds the first one's
+    /// refresh persisted and in flight: it reports `RefreshBusy` at once,
+    /// neither waiting nor spending the consuming refresh token again, and
+    /// uses the successor once the first process stores it.
+    #[tokio::test]
+    async fn a_second_process_reports_refresh_busy_while_another_refreshes() {
+        let (_dir, store, ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        expire(&manager);
+        server.reset().await;
+        identity(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(token(1))
+                    .set_delay(std::time::Duration::from_millis(1500)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let other = stub_manager(store, ring, manager.config().clone()).unwrap();
+        other.activate().unwrap();
+        let refreshing = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.acquire("user", &binding()).await })
+        };
+        let persisted = || {
+            manager
+                .read("user", "stub")
+                .unwrap()
+                .connection
+                .unwrap()
+                .family
+                .attempt
+                .is_some()
+        };
+        let started = std::time::Instant::now();
+        while !persisted() {
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            other.acquire("user", &binding()).await.unwrap_err(),
+            OAuthError::RefreshBusy
+        );
+        assert_eq!(
+            refreshing.await.unwrap().unwrap().token(),
+            "protected-access-1"
+        );
+        assert_eq!(
+            other.acquire("user", &binding()).await.unwrap().token(),
+            "protected-access-1"
+        );
+    }
+
     #[tokio::test]
     async fn discovery_failure_keeps_rotated_successor_without_replaying_refresh() {
         let (_dir, _store, _ring, manager, server) = fixture().await;
