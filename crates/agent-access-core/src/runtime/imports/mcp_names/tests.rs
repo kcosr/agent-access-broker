@@ -42,6 +42,7 @@ fn record(service: &str, names: &[&str]) -> ImportedServiceRecord {
             })
             .collect(),
         slot_versions: BTreeMap::new(),
+        accepted_metadata: None,
         created_at: String::new(),
         created_by: String::new(),
         updated_at: String::new(),

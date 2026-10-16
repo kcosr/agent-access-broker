@@ -1880,7 +1880,8 @@ Base administrators use `admin imports list/get/create/update/discover/preview/a
 `admin imports status/action-status`, and `admin imports credentials put/delete`.
 Complex writes use `--request-file`; versioned writes require `--expected-version`
 and `--expected-catalog-revision`. Token writes use `--secret-file`, `--secret-env`,
-or `--secret-stdin`. Use `--confirm` for retirement and when re-enabling a service
+or `--secret-stdin`, plus `--username` for a command import's `username_token`
+execution credential. Use `--confirm` for retirement and when re-enabling a service
 or action with retained grants. See the [import management command workflow](imported-services.md#cli-and-http-management)
 for exact request shapes, discovery timeouts and credential ownership.
 

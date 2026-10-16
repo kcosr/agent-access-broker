@@ -1,0 +1,21 @@
+[package]
+name = "agent-access-command-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[package.metadata.agent-access]
+role = "adapter"
+
+[dependencies]
+agent-access-core = { path = "../agent-access-core" }
+agent-access-provider = { path = "../agent-access-provider" }
+async-trait.workspace = true
+libc.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }

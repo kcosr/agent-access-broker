@@ -71,8 +71,9 @@ impl ImportedAdapter for McpAdapter {
         definition: &ImportedServiceDefinition,
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+    ) -> Result<ImportedProvider, ProviderBuildError> {
         let mut compiled = BTreeMap::new();
         for action in actions {
             self.scoped_mcp_name(action)
@@ -82,13 +83,13 @@ impl ImportedAdapter for McpAdapter {
                 return Err(ProviderBuildError::invalid("duplicate imported action"));
             }
         }
-        Ok(Arc::new(McpProvider {
+        Ok(ImportedProvider::Upstream(Arc::new(McpProvider {
             wire: make_wire(definition, host)?,
             definition: definition.clone(),
             actions: compiled,
             transport_credential,
             timeout: Duration::from_millis(host.limits().request_timeout_ms),
-        }))
+        })))
     }
 
     async fn discover(
@@ -96,6 +97,7 @@ impl ImportedAdapter for McpAdapter {
         definition: &ImportedServiceDefinition,
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let wire = make_wire(definition, host).map_err(|_| {
@@ -430,6 +432,8 @@ fn static_authorization(
         ImportedCredentialDelivery::RawHeader { name } => CredentialPlacement::header(
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
         ),
+        // Stdin delivery belongs to command imports, never to HTTP.
+        ImportedCredentialDelivery::Stdin => return Err(credential_error()),
     };
     let mut authorization = vec![
         execution
@@ -614,6 +618,7 @@ async fn discover_tools(operation: &Operation) -> Result<ImportedDiscovery, Prov
                         protocol_version: version.into(),
                         metadata: json!({"adapterKind":"mcp_http", "pages":page + 1, "listings":listing_metadata, "serverInfo":server_info}),
                         tools,
+                        service_metadata: None,
                     });
                 }
                 Some(cursor)

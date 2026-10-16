@@ -29,10 +29,11 @@ static OAUTH_DIALECTS: [&OAuthDialectRegistration; 2] =
     [&GOOGLE_OAUTH_DIALECT, &STUB_OAUTH_DIALECT];
 
 /// The MCP selection contributes its mcp_oauth companion dialect.
-fn import_adapters() -> [ImportedAdapterRegistration; 2] {
+fn import_adapters() -> [ImportedAdapterRegistration; 3] {
     [
         agent_access_mcp_upstream::registration(),
         agent_access_openapi_upstream::registration(),
+        agent_access_command_import::registration(),
     ]
 }
 

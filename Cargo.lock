@@ -97,6 +97,7 @@ version = "0.1.0"
 dependencies = [
  "agent-access-broker-host",
  "agent-access-cloudbees-ci",
+ "agent-access-command-import",
  "agent-access-confluence",
  "agent-access-core",
  "agent-access-fake",
@@ -122,6 +123,7 @@ dependencies = [
  "aes-gcm",
  "agent-access-broker-host",
  "agent-access-cloudbees-ci",
+ "agent-access-command-import",
  "agent-access-confluence",
  "agent-access-conformance",
  "agent-access-core",
@@ -192,6 +194,20 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "agent-access-command-import"
+version = "0.1.0"
+dependencies = [
+ "agent-access-core",
+ "agent-access-provider",
+ "async-trait",
+ "libc",
+ "regex",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -293,6 +309,7 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]

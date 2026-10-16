@@ -220,7 +220,13 @@ impl BrokerRuntime {
         );
         let mut discovery = match agent_access_provider::host::with_hook_context(
             hook.clone(),
-            adapter.discover(&record.definition, &execution, transport, &host),
+            adapter.discover(
+                &record.definition,
+                &execution,
+                transport,
+                &super::imports::adapter_context(&self.config, &record),
+                &host,
+            ),
         )
         .await
         {

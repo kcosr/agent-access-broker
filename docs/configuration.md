@@ -29,7 +29,7 @@ Sections fall into three categories:
 | --- | --- | --- |
 | Mandatory | `identity`, `policy`, `limits` | parse error; an omitted `[limits]` is reported as its missing `upload_spool_dir` |
 | Optional | `execution_context`, `managed_store`, `credential_encryption`, `broker_tokens`, `audit` | feature-specific behavior described below; audit is disabled without `[audit]` |
-| Defaulted | `deployment`, `network`, `credentials`, `imports`, `oauth`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
+| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
 
 ### Conditional requirements
 
@@ -2094,14 +2094,16 @@ allowed_endpoints = ["https://tools.internal.example/mcp"]
 disabled_services = []
 ```
 
-`allowed_kinds` names linked adapters: `mcp_http` and `openapi_http` in this
-binary. An adapter that declares itself a development fixture is accepted only
+`allowed_kinds` names linked adapters: `mcp_http`, `openapi_http` and `command`
+in this binary. An adapter that declares itself a development fixture is accepted only
 with non-production `deployment.enable_fake_service`; the shipped adapters are not
 development fixtures.
 
 The endpoint allowlist uses the same origin/path matching rules as upstream host
 allowlists; prefer exact URLs. HTTPS is required except loopback HTTP outside
-production. Administrators manage import definitions; auditors can inspect definitions and
+production. `allowed_endpoints` gates HTTP(S) endpoints only. Command imports
+use `command:<name>` endpoints, approved by `[command_imports.<name>]` instead,
+so an operator who allows only `command` may leave `allowed_endpoints` empty. Administrators manage import definitions; auditors can inspect definitions and
 saved previews without running discovery or changing state. Disabling imports
 or naming a service in `disabled_services` prevents discovery and execution while
 retaining definitions, grants, credentials and delegated manager assignments.
@@ -2112,6 +2114,54 @@ Service and per-user credential ownership use existing grant selection rules.
 Imported credential bindings come from the effective runtime catalog, separately
 from the TOML credential definitions. See the [import workflow and supported
 limits](imported-services.md).
+
+### Command imports
+
+`[command_imports.<name>]` approves one local executable for the `command`
+import kind. An import names it by its endpoint, `command:<name>`; the path is
+not import identity, and administrators never supply one. The entry is usable
+only when imports are enabled with `command` in `imports.allowed_kinds`.
+
+```toml
+[imports]
+enabled = true
+allowed_kinds = ["command"]          # add "mcp_http" etc. if used
+
+[command_imports.ticketing]
+path = "/opt/agent-commands/ticketing/bin/ticketing-command"
+timeout = "30s"                      # default 30s, max 10m
+max_output_bytes = 1048576           # default 1 MiB
+max_concurrent = 4                   # default 4
+working_dir = "/var/lib/agent-commands/ticketing"   # optional, default "/"
+network = "inherit"                  # default; or "none"
+log_stderr = false                   # default
+
+[command_imports.ticketing.env]
+PATH = "/usr/local/bin:/usr/bin:/bin"
+LANG = "C.UTF-8"
+```
+
+| Key | Rule |
+| --- | --- |
+| `<name>` | `^[a-z][a-z0-9_-]{0,62}$` |
+| `path` | Absolute executable path. A missing or non-executable file only warns, so binaries can be replaced without stopping the Broker |
+| `timeout` | `s`, `m` or `h` syntax, 1 second to 10 minutes; covers the wait for a concurrency slot |
+| `max_output_bytes` | 1 to `limits.max_upstream_response_bytes` |
+| `max_concurrent` | 1 to `limits.max_concurrent_requests`; shared by every import of this command |
+| `working_dir` | Absolute path |
+| `network` | `inherit` passes the Broker's egress proxy route, its `NO_PROXY` entries, and the `[network.outbound_tls]` trust mode with the configured `ca_certificate` path, never certificates; `none` passes nothing. Neither restricts what the command can reach |
+| `log_stderr` | Opt-in for including up to 4 KiB of escaped stderr in failure logs. The Broker cannot redact secrets a command prints, so validation warns while it is on |
+| `env` | The process environment besides the network variables, at most 64 entries; keys match `^[A-Za-z_][A-Za-z0-9_]*$`, values have no NUL and at most 4 KiB. Not for secrets |
+
+Every process starts with an empty environment plus `env`. With `network =
+"inherit"`, `env` must not set `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`,
+`http_proxy`, `NO_PROXY`, `no_proxy`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` or
+`NODE_EXTRA_CA_CERTS`, which the Broker sets from its egress settings (the
+trust variables to the configured `ca_certificate` path, for the trust modes
+that use it); use `network = "none"` to supply your own. `config validate`, startup and reload stay offline and never run a
+command; they report warnings for missing executables, enabled `log_stderr`, and
+entries no allowed `command` kind can use. Removing an entry makes its imports
+unavailable but keeps their records, grants and credentials.
 
 ## Imported MCP OAuth
 

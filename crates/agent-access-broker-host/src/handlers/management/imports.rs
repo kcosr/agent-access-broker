@@ -75,6 +75,10 @@ struct SecretBody {
     #[serde(flatten)]
     versions: Versions,
     token: String,
+    /// Required for an execution slot whose accepted credential kind is
+    /// `username_token`, and rejected otherwise.
+    #[serde(default)]
+    username: Option<String>,
 }
 
 fn invalid(message: &str) -> ManagedStoreError {
@@ -126,7 +130,29 @@ fn check_versions(
 fn record_result(runtime: &BrokerRuntime, catalog: &ImportedCatalog, service: &str) -> Value {
     let record = catalog.service(service);
     let unavailable = runtime.imported_service_unavailable_reason(service);
-    json!({"catalogRevision": catalog.revision, "service":record, "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)})
+    let mut result = json!({"catalogRevision": catalog.revision, "service":record, "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)});
+    if let Some(version) = record.and_then(command_version) {
+        result["commandVersion"] = json!(version);
+    }
+    result
+}
+/// "Imported at version X": the version a command import's accepted
+/// manifest reported. Display only.
+fn command_version(record: &ImportedServiceRecord) -> Option<&str> {
+    record
+        .accepted_metadata
+        .as_ref()
+        .map(|metadata| metadata.version.as_str())
+}
+/// The approved command names, for the import editor's picker.
+fn command_imports(runtime: &BrokerRuntime) -> Value {
+    json!(
+        runtime
+            .approved_command_imports()
+            .into_iter()
+            .map(|name| json!({"name": name}))
+            .collect::<Vec<_>>()
+    )
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -298,7 +324,7 @@ pub(crate) async fn list(
         Err(r) => return *r,
     };
     let catalog = context.snapshot.runtime.imported_catalog();
-    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":catalog.services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"importAuthentication":context.snapshot.runtime.import_authentication()})).await
+    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":catalog.services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"commandImports":command_imports(&context.snapshot.runtime),"importAuthentication":context.snapshot.runtime.import_authentication()})).await
 }
 
 pub(crate) async fn get(
@@ -381,7 +407,11 @@ async fn preview_response(
         let by_action = grants_by_action(&store, &service_owned)?;
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
-        Ok(json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings}))
+        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        if let Some(version) = command_version(record) {
+            result["commandVersion"] = json!(version);
+        }
+        Ok(result)
     }).await;
     match result {
         Ok(result) if preaudited => {
@@ -644,6 +674,7 @@ async fn change(
                         version: 1,
                         actions: vec![],
                         slot_versions: Default::default(),
+                        accepted_metadata: None,
                         created_at: String::new(),
                         created_by: actor.clone(),
                         updated_at: String::new(),
@@ -677,6 +708,7 @@ async fn change(
                         expected_version: body.versions.expected_version,
                         expected_catalog_revision: body.versions.expected_catalog_revision,
                         token: body.token,
+                        username: body.username,
                         actor,
                     };
                     let mutation = store.write_imported_secret(
@@ -745,6 +777,11 @@ async fn change(
                             definition_hash: String::new(),
                         })
                         .collect();
+                    // An acceptance stores the preview's metadata; build the
+                    // provider from what will be committed, never the old one.
+                    if let Some(acceptance) = &request.accepted_preview {
+                        candidate.accepted_metadata = acceptance.accepted_metadata.clone();
+                    }
                     let providers = runtime.prepare_imported_service_change(&candidate, None)?;
                     let mutation = store.update_imported_service(request, |catalog| {
                         runtime.with_imported_catalog(catalog.clone(), providers)
@@ -800,13 +837,17 @@ fn require_enabled_credentials(
             "accept at least one action before enabling the import",
         ));
     }
-    if !record.definition.execution_bindings.iter().any(|binding| {
-        runtime.import_binding_available(&record.definition, binding)
-            && (binding.owner_mode == ImportedCredentialMode::PerUser
-                || record
-                    .slot_versions
-                    .contains_key(&ImportedCredentialPurpose::Execution))
-    }) {
+    // A credential-free command import (no execution bindings) enables
+    // without a credential; its grants use service mode without a slot.
+    if !runtime.import_credential_free(&record.definition)
+        && !record.definition.execution_bindings.iter().any(|binding| {
+            runtime.import_binding_available(&record.definition, binding)
+                && (binding.owner_mode == ImportedCredentialMode::PerUser
+                    || record
+                        .slot_versions
+                        .contains_key(&ImportedCredentialPurpose::Execution))
+        })
+    {
         return Err(invalid(
             "import has no supported provisioned execution credential mode",
         ));
@@ -945,6 +986,15 @@ fn prepare_update(
             }
             let manifest: ImportedDiscovery = serde_json::from_value(preview.manifest.clone())
                 .map_err(|_| invalid("stored discovery preview is invalid"))?;
+            // Service-level metadata is accepted from the persisted preview,
+            // never from the request.
+            let accepted_metadata = manifest.service_metadata.clone();
+            // Only command imports record service metadata, and they always do.
+            if accepted_metadata.is_some()
+                != runtime.import_records_service_metadata(&record.definition)
+            {
+                return Err(invalid("stored discovery preview is invalid"));
+            }
             if body.selections.is_empty() {
                 return Err(invalid("select at least one discovered tool"));
             }
@@ -1038,6 +1088,7 @@ fn prepare_update(
                 manifest_hash: preview.manifest_hash,
                 config_revision: preview.config_revision,
                 credential_versions: preview.credential_versions,
+                accepted_metadata,
             });
             Ok(request)
         }
@@ -1251,6 +1302,7 @@ mod tests {
             version: 1,
             actions: vec![],
             slot_versions: BTreeMap::new(),
+            accepted_metadata: None,
             created_at: String::new(),
             created_by: String::new(),
             updated_at: String::new(),
@@ -1293,6 +1345,7 @@ mod tests {
                 read_only_hint: None,
             })
             .collect(),
+            service_metadata: None,
         };
         let before = serde_json::to_value(&manifest).unwrap();
         let warnings = scoped_mcp_warnings(&record, &manifest, |definition| {

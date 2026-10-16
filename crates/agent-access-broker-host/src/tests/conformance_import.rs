@@ -72,8 +72,9 @@ impl ImportedAdapter for ConformanceImportAdapter {
         definition: &ImportedServiceDefinition,
         actions: &[ImportedActionDefinition],
         transport: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         _host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+    ) -> Result<ImportedProvider, ProviderBuildError> {
         definition.validate().map_err(ProviderBuildError::invalid)?;
         for action in actions {
             action
@@ -97,16 +98,19 @@ impl ImportedAdapter for ConformanceImportAdapter {
         } else {
             None
         };
-        Ok(Arc::new(ImportedConformanceProvider {
-            actions: actions.to_vec(),
-            transport_authority,
-        }))
+        Ok(ImportedProvider::Upstream(Arc::new(
+            ImportedConformanceProvider {
+                actions: actions.to_vec(),
+                transport_authority,
+            },
+        )))
     }
     async fn discover(
         &self,
         _definition: &ImportedServiceDefinition,
         authentication: &ImportedDiscoveryAuthentication,
         _transport: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         _host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         if let ImportedDiscoveryAuthentication::Static(credential) = authentication {
@@ -138,6 +142,7 @@ impl ImportedAdapter for ConformanceImportAdapter {
                 unsupported_reason: None,
                 read_only_hint: Some(true),
             }],
+            service_metadata: None,
         })
     }
 }

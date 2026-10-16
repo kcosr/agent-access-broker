@@ -1,20 +1,28 @@
 //! Immutable imported catalogs are published with the enclosing runtime snapshot.
 //! Existing providers, identity, audit and OAuth state are shared across import edits.
 use super::*;
+use crate::imports::{
+    ImportEndpointForm, ImportedAdapterContext, ImportedCredentialKind, ImportedProvider,
+};
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
 mod authentication_tests;
+#[cfg(test)]
+mod command_tests;
 mod mcp_names;
 
 /// Opaque provider preparation. Its provenance must match the committed catalog;
 /// callers cannot substitute arbitrary providers or attest their own token writes.
 pub struct PreparedImportedProviders {
     base_catalog: Arc<ImportedCatalog>,
-    providers: BTreeMap<String, Arc<dyn Provider>>,
+    providers: BTreeMap<String, ImportedProvider>,
     service: String,
     definition: ImportedServiceDefinition,
     status: ImportedServiceStatus,
     enabled_actions: Vec<ImportedActionDefinition>,
+    /// The accepted metadata the provider was built with; the committed
+    /// record must carry the same.
+    accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     transport: PreparedTransport,
 }
 
@@ -50,7 +58,7 @@ impl PreparedImportedProviders {
         self,
         runtime: &BrokerRuntime,
         catalog: &ImportedCatalog,
-    ) -> Result<BTreeMap<String, Arc<dyn Provider>>, ManagedStoreError> {
+    ) -> Result<BTreeMap<String, ImportedProvider>, ManagedStoreError> {
         if !Arc::ptr_eq(&self.base_catalog, &runtime.imported_catalog) {
             return Err(preparation_mismatch());
         }
@@ -60,6 +68,7 @@ impl PreparedImportedProviders {
         if record.definition != self.definition
             || record.status != self.status
             || enabled_definitions(record) != self.enabled_actions
+            || record.accepted_metadata != self.accepted_metadata
         {
             return Err(preparation_mismatch());
         }
@@ -97,7 +106,10 @@ impl PreparedImportedProviders {
             }
             match (runtime.providers.get(name), self.providers.get(name)) {
                 (None, None) => {}
-                (Some(old), Some(prepared)) if Arc::ptr_eq(old, prepared) => {}
+                (Some(old), Some(prepared))
+                    if Arc::ptr_eq(old, &prepared.provider())
+                        && runtime.command_providers.get(name).is_some()
+                            == prepared.command().is_some() => {}
                 _ => return Err(preparation_mismatch()),
             }
         }
@@ -115,22 +127,84 @@ fn enabled_definitions(record: &ImportedServiceRecord) -> Vec<ImportedActionDefi
     actions.sort_by(|left, right| left.action.cmp(&right.action));
     actions
 }
+/// Core's adapter inputs for `record`: its accepted metadata and, for a
+/// `command:<name>` endpoint, the operator's `[command_imports.<name>]` entry.
+pub(super) fn adapter_context<'a>(
+    config: &'a BrokerConfig,
+    record: &'a ImportedServiceRecord,
+) -> ImportedAdapterContext<'a> {
+    let command = record
+        .definition
+        .endpoint()
+        .ok()
+        .and_then(|endpoint| endpoint.command_name().map(str::to_owned))
+        .and_then(|name| config.command_imports.get(&name));
+    ImportedAdapterContext::new(record.accepted_metadata.as_ref(), command)
+}
+
+/// Whether an adapter built the provider shape its endpoint form requires:
+/// a command hook exactly for `command:<name>` endpoints.
+fn provider_matches_endpoint(
+    definition: &ImportedServiceDefinition,
+    provider: &ImportedProvider,
+) -> bool {
+    matches!(
+        (
+            definition.endpoint().map(|endpoint| endpoint.form()),
+            provider
+        ),
+        (Ok(ImportEndpointForm::Http), ImportedProvider::Upstream(_))
+            | (
+                Ok(ImportEndpointForm::Command),
+                ImportedProvider::Command(_)
+            )
+    )
+}
+
 fn preparation_mismatch() -> ManagedStoreError {
     ManagedStoreError::InputInvalid(
         "prepared imported provider does not match the committed definition or credential".into(),
     )
 }
 
+/// The stored kind of an import's execution credential: its accepted
+/// declaration, or a bearer token for imports that record none.
+fn execution_credential_kind(record: &ImportedServiceRecord) -> ImportedCredentialKind {
+    record
+        .accepted_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.credential.as_ref())
+        .map_or(ImportedCredentialKind::Token, |credential| credential.kind)
+}
+
+/// Whether an import declares no execution credential: a command import
+/// without execution bindings. Its actions use service mode without a slot,
+/// as backends without an execution credential do.
+pub(crate) fn credential_free(definition: &ImportedServiceDefinition) -> bool {
+    definition.execution_bindings.is_empty()
+        && definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
+}
+
+/// The credential modes an import's grants may name: its bindings' modes,
+/// or service mode alone for a credential-free import.
+fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
+    if credential_free(definition) {
+        return vec![ImportedCredentialMode::Service.as_str()];
+    }
+    definition
+        .execution_bindings
+        .iter()
+        .map(|binding| binding.owner_mode.as_str())
+        .collect()
+}
+
 pub(super) fn descriptor(
     record: &ImportedServiceRecord,
     config: &BrokerConfig,
 ) -> ServiceDescriptor {
-    let modes = record
-        .definition
-        .execution_bindings
-        .iter()
-        .map(|binding| binding.owner_mode.as_str())
-        .collect::<Vec<_>>();
+    let modes = declared_modes(&record.definition);
     // Arbitrary upstream content may contain private data or credentials.
     let sensitive_output_pointers: Vec<String> = config
         .providers
@@ -170,22 +244,23 @@ pub(super) fn descriptor(
         record.definition.display_name.clone(),
     )
     .with_actions(actions)
-    .with_credentials(
-        if record
-            .definition
-            .execution_bindings
-            .iter()
-            .any(|b| b.mechanism == ImportedAuthMechanism::Oauth)
-        {
-            CredentialDescriptor::default()
-                .profile("token", "bearer_token")
-                .delegated(
-                    "Connect your account to authorize this imported service's reviewed actions.",
-                )
-        } else {
-            CredentialDescriptor::default().profile("token", "bearer_token")
-        },
-    )
+    .with_credentials(if credential_free(&record.definition) {
+        CredentialDescriptor::without_execution_credential()
+    } else if record
+        .definition
+        .execution_bindings
+        .iter()
+        .any(|b| b.mechanism == ImportedAuthMechanism::Oauth)
+    {
+        CredentialDescriptor::default()
+            .profile("token", "bearer_token")
+            .delegated(
+                "Connect your account to authorize this imported service's reviewed actions.",
+            )
+    } else {
+        let kind = execution_credential_kind(record);
+        CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
+    })
 }
 
 fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefinition) -> bool {
@@ -202,8 +277,13 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
         return false;
     }
     definition.validate().is_ok()
+        && definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == adapter.endpoint_form())
         && adapter.validate_definition(definition).is_ok()
         && config.imports.permits(
+            &config.command_imports,
+            adapter.endpoint_form(),
             &definition.service,
             &definition.adapter_kind,
             &definition.endpoint,
@@ -213,6 +293,8 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
             .is_ok_and(|destinations| {
                 destinations.iter().all(|destination| {
                     config.imports.permits(
+                        &config.command_imports,
+                        adapter.endpoint_form(),
                         &definition.service,
                         &definition.adapter_kind,
                         destination,
@@ -315,20 +397,26 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
     config.credentials.imported_modes.clear();
     for record in &catalog.services {
         let service = &record.definition.service;
-        let modes = record
-            .definition
-            .execution_bindings
-            .iter()
-            .filter(|binding| {
-                binding.is_supported()
-                    && oauth_binding_allowed(config, &record.definition, binding)
-                    && (binding.owner_mode != ImportedCredentialMode::Service
-                        || record
-                            .slot_versions
-                            .contains_key(&ImportedCredentialPurpose::Execution))
-            })
-            .map(|binding| binding.owner_mode.as_str().to_string())
-            .collect::<Vec<_>>();
+        // A credential-free import is available in service mode without a
+        // slot; it has no bindings to select from.
+        let modes = if credential_free(&record.definition) {
+            vec![ImportedCredentialMode::Service.as_str().to_string()]
+        } else {
+            record
+                .definition
+                .execution_bindings
+                .iter()
+                .filter(|binding| {
+                    binding.is_supported()
+                        && oauth_binding_allowed(config, &record.definition, binding)
+                        && (binding.owner_mode != ImportedCredentialMode::Service
+                            || record
+                                .slot_versions
+                                .contains_key(&ImportedCredentialPurpose::Execution))
+                })
+                .map(|binding| binding.owner_mode.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
         config.credentials.per_user.remove(service);
         if modes.iter().any(|mode| mode == "per_user") {
             let binding = record
@@ -351,7 +439,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                     profile: if oauth {
                         binding.profile.clone()
                     } else {
-                        Some("token".into())
+                        Some(execution_credential_kind(record).personal_profile().into())
                     },
                 },
             );
@@ -379,11 +467,9 @@ pub(super) fn retention_config(config: &BrokerConfig, catalog: &ImportedCatalog)
     for record in &catalog.services {
         retained.credentials.imported_modes.insert(
             record.definition.service.clone(),
-            record
-                .definition
-                .execution_bindings
-                .iter()
-                .map(|binding| binding.owner_mode.as_str().to_string())
+            declared_modes(&record.definition)
+                .into_iter()
+                .map(str::to_owned)
                 .collect(),
         );
     }
@@ -393,6 +479,14 @@ pub(super) fn retention_config(config: &BrokerConfig, catalog: &ImportedCatalog)
 impl BrokerRuntime {
     pub fn imported_catalog(&self) -> &ImportedCatalog {
         &self.imported_catalog
+    }
+    /// The command hook of an available command import; core calls it
+    /// instead of `Provider::invoke` for that service.
+    pub fn command_provider(
+        &self,
+        service: &str,
+    ) -> Option<&Arc<dyn crate::imports::CommandProvider>> {
+        self.command_providers.get(service)
     }
     pub fn import_operator_allowed(&self, definition: &ImportedServiceDefinition) -> bool {
         destination_allowed(&self.config, definition)
@@ -418,6 +512,12 @@ impl BrokerRuntime {
             })
             .cloned()
             .collect()
+    }
+
+    /// The approved command names, `[command_imports]` keys, that command
+    /// imports may name as `command:<name>`. Paths are never exposed.
+    pub fn approved_command_imports(&self) -> Vec<String> {
+        self.config.command_imports.keys().cloned().collect()
     }
 
     pub fn import_catalog_revision(&self) -> u64 {
@@ -572,10 +672,12 @@ impl BrokerRuntime {
         let mut config = (*self.config).clone();
         let mut services = (*self.services).clone();
         let mut providers = (*self.providers).clone();
+        let mut command_providers = (*self.command_providers).clone();
         for old in &self.imported_catalog.services {
             let name = &old.definition.service;
             services.remove(name);
             providers.remove(name);
+            command_providers.remove(name);
             config.credentials.per_user.remove(name);
             config.limits.invocations.services.remove(name);
         }
@@ -642,12 +744,18 @@ impl BrokerRuntime {
                 ));
             }
         }
-        providers.extend(imported_providers);
+        for (name, provider) in imported_providers {
+            if let Some(command) = provider.command() {
+                command_providers.insert(name.clone(), command.clone());
+            }
+            providers.insert(name, provider.provider());
+        }
         effective_credentials(&mut config, &catalog);
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
         next.services = Arc::new(services);
         next.providers = Arc::new(providers);
+        next.command_providers = Arc::new(command_providers);
         next.imported_catalog = Arc::new(catalog);
         next.initialize_import_dispatch(Some(self));
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
@@ -771,7 +879,11 @@ pub(super) fn build_providers(
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
-) -> Result<BTreeMap<String, Arc<dyn Provider>>, RuntimeError> {
+) -> Result<BTreeMap<String, ImportedProvider>, RuntimeError> {
+    // Each generation reports approved commands it cannot use yet.
+    for warning in crate::command_import_warnings(config) {
+        tracing::warn!(event = "command_import_config_warning", warning = %warning);
+    }
     let mut providers = BTreeMap::new();
     for record in &catalog.services {
         let definition = &record.definition;
@@ -841,7 +953,14 @@ pub(super) fn build_providers(
         }) {
             continue;
         }
-        if let Ok(provider) = adapter.build(definition, &actions, transport, &host) {
+        if let Ok(provider) = adapter.build(
+            definition,
+            &actions,
+            transport,
+            &adapter_context(config, record),
+            &host,
+        ) && provider_matches_endpoint(definition, &provider)
+        {
             providers.insert(definition.service.clone(), provider);
         }
     }
@@ -872,6 +991,20 @@ impl BrokerRuntime {
         Ok(())
     }
 
+    /// Whether acceptance stores service metadata for `definition`: exactly
+    /// for `command:<name>` endpoints.
+    pub fn import_records_service_metadata(&self, definition: &ImportedServiceDefinition) -> bool {
+        definition
+            .endpoint()
+            .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
+    }
+
+    /// Whether `definition` declares no execution credential, so enabling
+    /// it needs no provisioned credential.
+    pub fn import_credential_free(&self, definition: &ImportedServiceDefinition) -> bool {
+        credential_free(definition)
+    }
+
     pub fn import_binding_available(
         &self,
         definition: &ImportedServiceDefinition,
@@ -897,6 +1030,16 @@ impl BrokerRuntime {
                     "import adapter is not linked in this broker".into(),
                 )
             })?;
+        if definition
+            .endpoint()
+            .map_err(ManagedStoreError::InputInvalid)?
+            .form()
+            != adapter.endpoint_form()
+        {
+            return Err(ManagedStoreError::InputInvalid(
+                "import endpoint form does not match the import kind".into(),
+            ));
+        }
         adapter
             .validate_definition(definition)
             .map_err(ManagedStoreError::InputInvalid)?;
@@ -932,9 +1075,12 @@ impl BrokerRuntime {
             .services
             .iter()
             .filter_map(|old| {
-                self.providers
-                    .get(&old.definition.service)
-                    .map(|provider| (old.definition.service.clone(), provider.clone()))
+                let name = &old.definition.service;
+                let provider = match self.command_providers.get(name) {
+                    Some(command) => ImportedProvider::Command(command.clone()),
+                    None => ImportedProvider::Upstream(self.providers.get(name)?.clone()),
+                };
+                Some((name.clone(), provider))
             })
             .collect::<BTreeMap<_, _>>();
         let definition = &record.definition;
@@ -958,6 +1104,7 @@ impl BrokerRuntime {
             definition: definition.clone(),
             status: record.status,
             enabled_actions: enabled_definitions(record),
+            accepted_metadata: record.accepted_metadata.clone(),
             transport: transport_provenance,
         };
         if record.status != ImportedServiceStatus::Enabled
@@ -1031,8 +1178,16 @@ impl BrokerRuntime {
             None,
         );
         let provider = adapter
-            .build(definition, &actions, transport, &host)
-            .map_err(|_| {
+            .build(
+                definition,
+                &actions,
+                transport,
+                &adapter_context(&self.config, record),
+                &host,
+            )
+            .ok()
+            .filter(|provider| provider_matches_endpoint(definition, provider))
+            .ok_or_else(|| {
                 ManagedStoreError::InputInvalid("imported provider could not be prepared".into())
             })?;
         prepared

@@ -324,6 +324,8 @@ pub(crate) fn auth(
                 HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
             )
         }
+        // Stdin delivery belongs to command imports, never to HTTP.
+        ImportedCredentialDelivery::Stdin => return Err(credential_error()),
     };
     credential
         .authorization_as(&placement)

@@ -29,10 +29,11 @@ static OAUTH_DIALECTS: [&OAuthDialectRegistration; 2] =
     [&GOOGLE_OAUTH_DIALECT, &STUB_OAUTH_DIALECT];
 
 /// Shipped import adapters, selected through their registrations.
-fn import_adapters() -> [ImportedAdapterRegistration; 2] {
+fn import_adapters() -> [ImportedAdapterRegistration; 3] {
     [
         agent_access_mcp_upstream::registration(),
         agent_access_openapi_upstream::registration(),
+        agent_access_command_import::registration(),
     ]
 }
 
@@ -84,7 +85,7 @@ mod tests {
         assert!(composition.oauth_dialect_ids().any(|id| id == "stub"));
         assert_eq!(
             composition.import_kinds().collect::<Vec<_>>(),
-            ["mcp_http", "openapi_http"]
+            ["mcp_http", "openapi_http", "command"]
         );
         assert_eq!(
             composition
@@ -133,6 +134,7 @@ mod tests {
             packages,
             [
                 "agent-access-cloudbees-ci: native cloudbees_ci",
+                "agent-access-command-import: import command",
                 "agent-access-confluence: native confluence",
                 "agent-access-fake: native fake, native oauth_stub, oauth stub",
                 "agent-access-gitlab: native gitlab",

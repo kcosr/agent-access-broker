@@ -143,12 +143,17 @@ also includes a same-origin browser portal frontend:
   seam, and the opaque `ImportedAdapterRegistration` that the shipped adapter
   crates build with an internal free function. That contract is Broker
   implementation, not a provider-author interface.
-- **Import adapter crates** — `agent-access-mcp-upstream` and
-  `agent-access-openapi-upstream` implement the internal import contract and
-  depend on core. Each exports `registration()`; the binary selects imports
-  only through it. The MCP registration contributes its `mcp_oauth` companion
-  dialect as the import-authentication role, and selecting that dialect again
-  is rejected as a duplicate. OpenAPI declares no companion.
+- **Import adapter crates** — `agent-access-mcp-upstream`,
+  `agent-access-openapi-upstream` and `agent-access-command-import` implement
+  the internal import contract and depend on core. Each exports
+  `registration()`; the binary selects imports only through it. The MCP
+  registration contributes its `mcp_oauth` companion dialect as the
+  import-authentication role, and selecting that dialect again is rejected as a
+  duplicate. OpenAPI and command imports declare no companion. Command imports
+  use `command:<name>` endpoints approved in `[command_imports]`; core passes the
+  approved entry and the accepted service metadata to the adapter, and runs a
+  command import's calls through its command hook with a core-built request
+  instead of `Provider::invoke`.
 - **`agent-access-content`** — rich-content formats shared by backends:
   bounded ADF, Confluence storage, and GitLab Markdown rendering; bounded
   Markdown/plain-text conversion into those formats; and attribution footers.

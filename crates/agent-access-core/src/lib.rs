@@ -22,6 +22,7 @@ mod api;
 mod attribution;
 mod audit_query;
 mod backends;
+mod command_imports_config;
 mod config_error;
 mod fs_permissions;
 mod import_names;
@@ -46,6 +47,7 @@ pub use api::*;
 pub use attribution::AttributionConfig;
 pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
+pub use command_imports_config::*;
 pub use config_error::{ConfigError, HostConfigError, load_secret_ref_value};
 pub use import_names::*;
 pub use imports_config::*;
@@ -544,6 +546,10 @@ pub struct BrokerConfig {
     pub credentials: CredentialsConfig,
     #[serde(default)]
     pub imports: ImportsConfig,
+    /// `[command_imports.<name>]`: operator-approved executables for the
+    /// `command` import kind, keyed by command name.
+    #[serde(default)]
+    pub command_imports: CommandImportsConfig,
     #[serde(default)]
     pub oauth: OAuthConfig,
     pub managed_store: Option<ManagedStoreConfig>,
@@ -1559,6 +1565,7 @@ pub fn load_cli_config(path: impl AsRef<Path>) -> Result<CliConfig, ConfigError>
 pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> {
     let mut errors = Vec::new();
     imports_config::validate_imports(config, &mut errors);
+    command_imports_config::validate_command_imports(config, &mut errors);
     if let Err(error) = config.oauth.validate() {
         errors.push(format!("oauth: {error}"));
     }
@@ -1882,13 +1889,17 @@ fn load_cli_tls_certificates_with_home(
     }
 }
 
+/// Validates a configuration file offline. A valid configuration may still
+/// carry warnings, such as an approved command whose executable is missing;
+/// they are returned for the caller to report.
 pub fn validate_broker_config_file(
     path: impl AsRef<Path>,
     backends: &Arc<BackendRegistry>,
-) -> Result<(), ConfigError> {
+) -> Result<Vec<String>, ConfigError> {
     let config = load_broker_config(path, backends)?;
     validate_broker_config(&config)?;
-    PreparedOutboundTls::load(&config.network.outbound_tls).map(|_| ())
+    PreparedOutboundTls::load(&config.network.outbound_tls)?;
+    Ok(command_import_warnings(&config))
 }
 
 pub fn validate_cli_config_file(path: impl AsRef<Path>) -> Result<(), ConfigError> {

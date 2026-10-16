@@ -4,6 +4,7 @@ members = [
   "crates/agent-access-broker",
   "crates/agent-access-broker-host",
   "crates/agent-access-cloudbees-ci",
+  "crates/agent-access-command-import",
   "crates/agent-access-confluence",
   "crates/agent-access-atlassian",
   "crates/agent-access-content",

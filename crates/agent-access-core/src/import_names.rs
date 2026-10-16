@@ -131,6 +131,7 @@ mod tests {
             version: 1,
             actions: vec![],
             slot_versions: BTreeMap::new(),
+            accepted_metadata: None,
             created_at: String::new(),
             created_by: String::new(),
             updated_at: String::new(),
@@ -158,6 +159,7 @@ mod tests {
                     read_only_hint: None,
                 })
                 .collect(),
+            service_metadata: None,
         }
     }
     #[test]

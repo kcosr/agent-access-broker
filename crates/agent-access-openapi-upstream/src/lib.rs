@@ -88,8 +88,9 @@ impl ImportedAdapter for OpenApiAdapter {
         definition: &ImportedServiceDefinition,
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
-    ) -> Result<Arc<dyn Provider>, ProviderBuildError> {
+    ) -> Result<ImportedProvider, ProviderBuildError> {
         let settings = Settings::parse(definition).map_err(ProviderBuildError::invalid)?;
         if transport_credential.is_some() {
             return Err(ProviderBuildError::invalid(
@@ -120,20 +121,21 @@ impl ImportedAdapter for OpenApiAdapter {
         let endpoint =
             config::endpoint(&definition.endpoint).map_err(ProviderBuildError::invalid)?;
         let allowed = [format!("{}/**", endpoint.as_str().trim_end_matches('/'))];
-        Ok(Arc::new(OpenApiProvider {
+        Ok(ImportedProvider::Upstream(Arc::new(OpenApiProvider {
             client: client(&endpoint, &allowed, host)?,
             endpoint,
             definition: definition.clone(),
             actions: compiled,
             max_bytes: host.limits().max_upstream_response_bytes as usize,
             timeout: Duration::from_millis(host.limits().request_timeout_ms),
-        }))
+        })))
     }
     async fn discover(
         &self,
         definition: &ImportedServiceDefinition,
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
+        _import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let settings = Settings::parse(definition).map_err(|reason| {
@@ -242,6 +244,7 @@ impl ImportedAdapter for OpenApiAdapter {
                 protocol_version: document.version.clone(),
                 metadata: document.metadata.clone(),
                 tools,
+                service_metadata: None,
             })
         };
         Ok(tokio::time::timeout(Duration::from_secs(60), operation)

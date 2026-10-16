@@ -288,6 +288,12 @@ and audit checks through the real `agent-access` binary.
 - `crates/agent-access-openapi-upstream`: imported OpenAPI 3.1 JSON parsing,
   bounded operation plans and single-attempt HTTP execution; `registration()`
   selects it, with no OAuth companion.
+- `crates/agent-access-command-import`: the `command` import kind for
+  operator-approved local executables (`[command_imports.<name>]`, endpoints
+  `command:<name>`): `describe` manifest parsing and mapping (`manifest.rs`,
+  `mapping.rs`) and the command provider whose hook core calls instead of
+  `Provider::invoke`; `registration()` selects it, with no OAuth companion.
+  Fixture commands live in its `tests/fixtures/`.
 - `crates/agent-access-teams`: notifications to managed Teams Workflows destinations.
 - `crates/agent-access-fake`: development fixtures, each selected separately:
   the `fake` backend used by smoke tests and fixtures, the `oauth_stub`

@@ -188,9 +188,11 @@ impl CompatFixture {
                 &definition(&self.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
             .unwrap()
+            .provider()
     }
     async fn invoke(&self) -> Result<ProviderResult, ProviderError> {
         self.provider(&test_host())
@@ -206,6 +208,7 @@ impl CompatFixture {
                 &definition(&self.endpoint),
                 &ImportedDiscoveryAuthentication::Static(credential("private-discovery-token")),
                 None,
+                &ImportedAdapterContext::default(),
                 &test_host().context(),
             )
             .await
@@ -945,9 +948,11 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
                 &oauth_definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         lease
             .reject_after
@@ -982,9 +987,11 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
             &oauth_definition(&fixture.endpoint),
             &[action()],
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     let (request, lease) = leased_invocation(&fixture.endpoint, false);
     provider.invoke(request).await.unwrap();
     assert_eq!(lease.validations.load(Ordering::SeqCst), 6);
@@ -1022,9 +1029,11 @@ async fn oauth_401_marks_only_the_normal_request_access_version_and_cleanup_401_
                 &oauth_definition(&fixture.endpoint),
                 &[action()],
                 None,
+                &ImportedAdapterContext::default(),
                 &host.context(),
             )
-            .unwrap();
+            .unwrap()
+            .provider();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         let outcome = provider.invoke(request).await;
         if phase == "cleanup" {
@@ -1081,9 +1090,11 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
             &oauth_definition(&fixture.endpoint),
             &[action()],
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
-        .unwrap();
+        .unwrap()
+        .provider();
     let (request, lease) = leased_invocation(&fixture.endpoint, false);
     lease.reject_after.store(1, Ordering::SeqCst);
     let error = provider.invoke(request).await.unwrap_err();
@@ -1109,8 +1120,15 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
             ImportedCredentialDelivery::Bearer,
         ));
     let provider = McpAdapter
-        .build(&def, &[action()], None, &host.context())
-        .unwrap();
+        .build(
+            &def,
+            &[action()],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     let mut alice = invocation(json!({"region":"east"}), "alice-private-token");
     alice = InvocationBuilder::from(alice)
         .credential_mode(CredentialMode::PerUser)
@@ -1296,6 +1314,7 @@ async fn pinned_sdk_previous_only_servers_support_sessions_and_sessionless_json_
                     &definition(&endpoint),
                     &ImportedDiscoveryAuthentication::Static(credential("sdk-secret")),
                     None,
+                    &ImportedAdapterContext::default(),
                     &host.context(),
                 )
                 .await
@@ -1307,8 +1326,15 @@ async fn pinned_sdk_previous_only_servers_support_sessions_and_sessionless_json_
                 "Pinned SDK fixture"
             );
             let provider = McpAdapter
-                .build(&definition(&endpoint), &[action()], None, &host.context())
-                .unwrap();
+                .build(
+                    &definition(&endpoint),
+                    &[action()],
+                    None,
+                    &ImportedAdapterContext::default(),
+                    &host.context(),
+                )
+                .unwrap()
+                .provider();
             let result = provider
                 .invoke(invocation(json!({"region":"sdk-east"}), "sdk-secret"))
                 .await
@@ -1396,14 +1422,22 @@ async fn pinned_sdk_both_versions_prefers_current_without_legacy_state() {
             &definition(&endpoint),
             &ImportedDiscoveryAuthentication::Static(credential("sdk-secret")),
             None,
+            &ImportedAdapterContext::default(),
             &host.context(),
         )
         .await
         .unwrap();
     assert_eq!(discovery.protocol_version, PROTOCOL_VERSION);
     let provider = McpAdapter
-        .build(&definition(&endpoint), &[action()], None, &host.context())
-        .unwrap();
+        .build(
+            &definition(&endpoint),
+            &[action()],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .provider();
     let result = provider
         .invoke(invocation(json!({"region":"sdk-east"}), "sdk-secret"))
         .await
@@ -1531,6 +1565,7 @@ async fn legacy_oauth_discovery_rechecks_authority_between_list_pages() {
                     request.execution().delegated().cloned().unwrap(),
                 ),
                 None,
+                &ImportedAdapterContext::default(),
                 &test_host().context(),
             )
             .await;
@@ -1620,9 +1655,11 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
                     &oauth_definition(&fixture.endpoint),
                     &[action()],
                     None,
+                    &ImportedAdapterContext::default(),
                     &test_host().context(),
                 )
-                .unwrap();
+                .unwrap()
+                .provider();
             let error = provider.invoke(request).await.unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
             assert_write(&error, false);

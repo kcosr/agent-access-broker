@@ -2,8 +2,10 @@
 //! No imported credential is represented by a synthetic principal.
 use super::*;
 use crate::imports::{
-    IMPORT_MAX_MANIFEST_BYTES, IMPORT_MAX_SERVICES, IMPORT_MAX_TOOLS, IMPORT_PREVIEW_TTL_SECONDS,
-    ImportedActionDefinition, ImportedCredentialPurpose, ImportedServiceDefinition,
+    IMPORT_MAX_MANIFEST_BYTES, IMPORT_MAX_METADATA_BYTES, IMPORT_MAX_SERVICES, IMPORT_MAX_TOOLS,
+    IMPORT_PREVIEW_TTL_SECONDS, ImportEndpointForm, ImportedActionDefinition,
+    ImportedCredentialKind, ImportedCredentialPurpose, ImportedServiceDefinition,
+    ImportedServiceMetadata,
 };
 
 // Retired identities have their own bounded retention allowance so replacing
@@ -64,6 +66,11 @@ pub struct ImportedServiceRecord {
     pub version: u64,
     pub actions: Vec<ImportedActionRecord>,
     pub slot_versions: BTreeMap<ImportedCredentialPurpose, String>,
+    /// The service-level metadata stored with the last accepted actions
+    /// (`accepted_metadata_json`); `None` for MCP and OpenAPI imports and
+    /// before a command import's first acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
@@ -108,6 +115,10 @@ pub struct ImportedPreviewAcceptance {
     pub manifest_hash: String,
     pub config_revision: String,
     pub credential_versions: BTreeMap<String, String>,
+    /// The service-level metadata accepted with the actions, reconstructed
+    /// from the persisted preview; written to `accepted_metadata_json` in the
+    /// acceptance transaction. `None` for adapters that record none.
+    pub accepted_metadata: Option<ImportedServiceMetadata>,
 }
 #[derive(Debug, Clone)]
 pub struct ImportedServiceUpdateRequest {
@@ -313,6 +324,21 @@ impl ManagedStore {
             ));
         }
         validate_retained_actions(&request.actions, &old.actions)?;
+        // The accepted credential declaration is fixed once stored, and it
+        // bounds the import's credential modes after every update, including
+        // the acceptance that stores it.
+        let metadata = match &request.accepted_preview {
+            Some(acceptance) => {
+                check_accepted_metadata(&old, acceptance.accepted_metadata.as_ref())?;
+                acceptance.accepted_metadata.as_ref()
+            }
+            None => old.accepted_metadata.as_ref(),
+        };
+        if let Some(metadata) = metadata {
+            metadata
+                .admits_bindings(&request.definition)
+                .map_err(input_invalid)?;
+        }
         // Retire old mappings before inserting replacements, regardless of the
         // caller's order, so the live-source uniqueness constraint stays valid.
         for action in request
@@ -342,6 +368,13 @@ impl ManagedStore {
         }
         let json = bounded_json(&request.definition, 32768)?;
         tx.execute("UPDATE imported_services SET definition_json=?2,status=?3,version=version+1,updated_at=?4,updated_by=?5 WHERE service=?1",params![request.definition.service,json,request.status.as_str(),normalized_now_string(),request.actor]).map_err(sql_unavailable)?;
+        if let Some(acceptance) = &request.accepted_preview {
+            write_accepted_metadata(
+                &tx,
+                &request.definition.service,
+                acceptance.accepted_metadata.as_ref(),
+            )?;
+        }
         tx.execute(
             "DELETE FROM imported_previews WHERE service=?1",
             [&request.definition.service],
@@ -731,6 +764,45 @@ fn finish<T>(
     tx.commit().map_err(sql_unavailable)?;
     Ok(ImportedMutationResult { catalog, value })
 }
+/// Checks the metadata an acceptance stores against the accepted record. The
+/// execution credential's declaration is fixed once stored: stored slots and
+/// personal credentials assume its kind, and grants its modes.
+fn check_accepted_metadata(
+    old: &ImportedServiceRecord,
+    metadata: Option<&ImportedServiceMetadata>,
+) -> Result<(), ManagedStoreError> {
+    if let (Some(previous), Some(metadata)) = (&old.accepted_metadata, metadata)
+        && previous.credential != metadata.credential
+    {
+        return Err(input_invalid(
+            "an accepted credential declaration cannot change; create a new import",
+        ));
+    }
+    if old.accepted_metadata.is_some() && metadata.is_none() {
+        return Err(input_invalid("accepted import metadata cannot be removed"));
+    }
+    Ok(())
+}
+/// Stores the metadata accepted with the actions, already checked by
+/// [`check_accepted_metadata`].
+fn write_accepted_metadata(
+    conn: &Connection,
+    service: &str,
+    metadata: Option<&ImportedServiceMetadata>,
+) -> Result<(), ManagedStoreError> {
+    let json = metadata
+        .map(|metadata| {
+            metadata.validate().map_err(input_invalid)?;
+            bounded_json(metadata, IMPORT_MAX_METADATA_BYTES)
+        })
+        .transpose()?;
+    conn.execute(
+        "UPDATE imported_services SET accepted_metadata_json=?2 WHERE service=?1",
+        params![service, json],
+    )
+    .map_err(sql_unavailable)?;
+    Ok(())
+}
 fn preview(conn: &Connection, service: &str) -> Result<Option<ImportedPreview>, ManagedStoreError> {
     let json: Option<String> = conn
         .query_row(
@@ -743,7 +815,24 @@ fn preview(conn: &Connection, service: &str) -> Result<Option<ImportedPreview>, 
     json.map(|v| serde_json::from_str(&v).map_err(|_| invalid_data()))
         .transpose()
 }
+/// The imported-service columns of a schema. A structural validator of an
+/// earlier migration runs before later migrations add columns, so it reads
+/// only the columns its own schema has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportSchema {
+    /// `023_imported_services` through `026_trusted_user_identity`: no
+    /// `accepted_metadata_json`.
+    BeforeCommandImports,
+    /// `027_command_imports` and later.
+    CommandImports,
+}
 fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
+    catalog_at(conn, ImportSchema::CommandImports)
+}
+fn catalog_at(
+    conn: &Connection,
+    schema: ImportSchema,
+) -> Result<ImportedCatalog, ManagedStoreError> {
     let mut statement = conn
         .prepare("SELECT service FROM imported_services ORDER BY service")
         .map_err(sql_unavailable)?;
@@ -754,7 +843,7 @@ fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
     )?;
     let services = names
         .iter()
-        .map(|name| service_record(conn, name)?.ok_or_else(invalid_data))
+        .map(|name| service_record_at(conn, name, schema)?.ok_or_else(invalid_data))
         .collect::<Result<Vec<_>, _>>()?;
     let result = ImportedCatalog {
         revision: revision(conn)?,
@@ -768,11 +857,49 @@ fn service_record(
     conn: &Connection,
     service: &str,
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
-    let row: Option<(String,String,u64,String,String,String,String)> = conn.query_row("SELECT definition_json,status,version,created_at,created_by,updated_at,updated_by FROM imported_services WHERE service=?1",[service],|r| Ok((r.get(0)?,r.get(1)?,row_version(r,2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional().map_err(sql_unavailable)?;
-    let Some((definition, status, version, created_at, created_by, updated_at, updated_by)) = row
+    service_record_at(conn, service, ImportSchema::CommandImports)
+}
+fn service_record_at(
+    conn: &Connection,
+    service: &str,
+    schema: ImportSchema,
+) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
+    let metadata_column = match schema {
+        ImportSchema::BeforeCommandImports => "NULL",
+        ImportSchema::CommandImports => "accepted_metadata_json",
+    };
+    type ServiceRow = (
+        String,
+        String,
+        u64,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    );
+    let row: Option<ServiceRow> = conn.query_row(&format!("SELECT definition_json,status,version,created_at,created_by,updated_at,updated_by,{metadata_column} FROM imported_services WHERE service=?1"),[service],|r| Ok((r.get(0)?,r.get(1)?,row_version(r,2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional().map_err(sql_unavailable)?;
+    let Some((
+        definition,
+        status,
+        version,
+        created_at,
+        created_by,
+        updated_at,
+        updated_by,
+        accepted_metadata,
+    )) = row
     else {
         return Ok(None);
     };
+    let accepted_metadata = accepted_metadata
+        .map(|json| {
+            let metadata: ImportedServiceMetadata =
+                serde_json::from_str(&json).map_err(|_| invalid_data())?;
+            metadata.validate().map_err(|_| invalid_data())?;
+            Ok::<_, ManagedStoreError>(metadata)
+        })
+        .transpose()?;
     let definition: ImportedServiceDefinition =
         serde_json::from_str(&definition).map_err(|_| invalid_data())?;
     // Evolving adapter/config validation must not make retained records unreadable.
@@ -825,6 +952,7 @@ fn service_record(
         version,
         actions,
         slot_versions,
+        accepted_metadata,
         created_at,
         created_by,
         updated_at,
@@ -839,7 +967,70 @@ pub struct ImportedSecretWriteRequest {
     pub expected_version: u64,
     pub expected_catalog_revision: u64,
     pub token: String,
+    /// Required exactly for an execution slot of an import whose accepted
+    /// credential kind is `username_token`.
+    pub username: Option<String>,
     pub actor: String,
+}
+
+/// The stored kind of an import's slot, and whether it takes a username.
+/// Discovery and transport slots, and execution slots of imports without
+/// accepted metadata, hold bearer material. A command import's execution
+/// slot follows its accepted credential declaration and exists only once
+/// that declaration is accepted.
+fn slot_kind(
+    record: &ImportedServiceRecord,
+    purpose: ImportedCredentialPurpose,
+) -> Result<ImportedCredentialKind, ManagedStoreError> {
+    if purpose != ImportedCredentialPurpose::Execution {
+        return Ok(ImportedCredentialKind::Token);
+    }
+    let command = record
+        .definition
+        .endpoint()
+        .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command);
+    match (&record.accepted_metadata, command) {
+        (Some(metadata), _) => metadata
+            .credential
+            .as_ref()
+            .map(|credential| credential.kind)
+            .ok_or_else(|| input_invalid("this import declares no execution credential")),
+        (None, true) => Err(input_invalid(
+            "accept the command's manifest before setting its credential",
+        )),
+        (None, false) => Ok(ImportedCredentialKind::Token),
+    }
+}
+
+/// The slot plaintext: the raw token for `bearer_token`, and the managed
+/// credential encoding `{"token","username"}` for `basic_api_token`.
+fn slot_plaintext(
+    kind: ImportedCredentialKind,
+    token: &str,
+    username: Option<&str>,
+) -> Result<String, ManagedStoreError> {
+    match (kind, username) {
+        (ImportedCredentialKind::Token, None) => Ok(token.to_owned()),
+        (ImportedCredentialKind::UsernameToken, Some(username))
+            if !username.is_empty()
+                && username.len() <= 256
+                && !username.chars().any(char::is_control) =>
+        {
+            let plaintext =
+                serde_json::to_string(&serde_json::json!({"username": username, "token": token}))
+                    .map_err(|_| input_invalid("import credential cannot be encoded"))?;
+            if plaintext.len() > 32768 {
+                return Err(input_invalid("import credential exceeds the size limit"));
+            }
+            Ok(plaintext)
+        }
+        (ImportedCredentialKind::UsernameToken, _) => Err(input_invalid(
+            "this import's credential requires a username of at most 256 characters",
+        )),
+        (ImportedCredentialKind::Token, Some(_)) => {
+            Err(input_invalid("this import's credential takes no username"))
+        }
+    }
 }
 /// Ephemeral attestation of the plaintext and version written by this transaction.
 /// Never serialized, logged, persisted, or constructible by publication callers.
@@ -921,16 +1112,18 @@ impl ManagedStore {
                 "retired imports cannot receive new credentials",
             ));
         }
+        let kind = slot_kind(&record, request.purpose)?;
+        let plaintext = slot_plaintext(kind, &request.token, request.username.as_deref())?;
         let mut row = SecretRow {
             service: request.service.clone(),
             purpose: request.purpose.as_str().into(),
-            credential_kind: "bearer_token".into(),
+            credential_kind: kind.credential_kind().into(),
             material_version: Uuid::new_v4().to_string(),
             key_id: ring.active_key_id().into(),
             nonce: Vec::new(),
             ciphertext: Vec::new(),
         };
-        let encrypted = encrypt(ring, &row, &request.token)?;
+        let encrypted = encrypt(ring, &row, &plaintext)?;
         row.nonce = encrypted.nonce;
         row.ciphertext = encrypted.ciphertext;
         tx.execute("INSERT INTO imported_secret_material(service,purpose,credential_kind,material_version,key_id,nonce,ciphertext) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(service,purpose) DO UPDATE SET credential_kind=excluded.credential_kind,material_version=excluded.material_version,key_id=excluded.key_id,nonce=excluded.nonce,ciphertext=excluded.ciphertext",params![row.service,row.purpose,row.credential_kind,row.material_version,row.key_id,row.nonce,row.ciphertext]).map_err(sql_unavailable)?;
@@ -994,15 +1187,19 @@ impl ManagedStore {
         if row.material_version != expected_material_version {
             return Err(ManagedStoreError::VersionConflict);
         }
-        // Imported secret slots hold only bearer material.
-        if row.credential_kind != "bearer_token" {
-            return Err(ManagedStoreError::CredentialInvalid(
+        let plaintext = decrypt(ring, &row)?;
+        match row.credential_kind.as_str() {
+            // Bearer slots keep the raw token, as every earlier release wrote.
+            "bearer_token" => Ok(agent_access_provider::host::bearer_credential(plaintext)),
+            "basic_api_token" => {
+                let secret = serde_json::from_str(&plaintext)
+                    .map_err(|_| ManagedStoreError::CredentialDecryptFailed)?;
+                super::execution_credential_from_secret("basic_api_token", secret)
+            }
+            _ => Err(ManagedStoreError::CredentialInvalid(
                 "unsupported credential kind".to_string(),
-            ));
+            )),
         }
-        Ok(agent_access_provider::host::bearer_credential(decrypt(
-            ring, &row,
-        )?))
     }
 }
 fn secret_row(
@@ -1125,6 +1322,29 @@ pub(super) fn rewrap(
 pub(super) fn validate_structure(conn: &Connection) -> Result<(), ManagedStoreError> {
     validate_structure_with_extension(conn, "")
 }
+/// The structure after `027_command_imports`: every migration through it,
+/// with readable imported records, including their accepted metadata.
+pub(super) fn validate_command_imports_structure(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    let expected = Connection::open_in_memory().map_err(sql_unavailable)?;
+    for migration in MANAGED_STORE_MIGRATIONS {
+        expected
+            .execute_batch(migration.sql)
+            .map_err(sql_unavailable)?;
+        if migration.version == MANAGED_STORE_COMMAND_IMPORTS_VERSION {
+            break;
+        }
+    }
+    compare_schema(conn, &expected)?;
+    run_foreign_key_check(conn)?;
+    run_quick_check(conn)?;
+    identity_access::check_integrity(conn)?;
+    check_secret_material_ready(conn, None)?;
+    check_policy_revision_ready(conn)?;
+    catalog(conn)?;
+    Ok(())
+}
 pub(super) fn validate_structure_with_extension(
     conn: &Connection,
     extension: &str,
@@ -1146,7 +1366,7 @@ pub(super) fn validate_structure_with_extension(
     run_quick_check(conn)?;
     check_secret_material_ready(conn, None)?;
     check_policy_revision_ready(conn)?;
-    catalog(conn)?;
+    catalog_at(conn, ImportSchema::BeforeCommandImports)?;
     Ok(())
 }
 
@@ -1160,6 +1380,7 @@ mod tests {
     use agent_access_provider::test_support::bearer_credential;
     use serde_json::json;
     include!("managed_store/imported_store_golden_tests.rs");
+    include!("managed_store/command_imports_store_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,
@@ -1271,6 +1492,7 @@ mod tests {
             expected_version: catalog.services[0].version,
             expected_catalog_revision: catalog.revision,
             token: token.into(),
+            username: None,
             actor: "admin".into(),
         }
     }
@@ -1723,6 +1945,7 @@ mod tests {
             manifest_hash: "wrong".into(),
             config_revision: preview.config_revision.clone(),
             credential_versions: preview.credential_versions.clone(),
+            accepted_metadata: None,
         });
         assert!(matches!(
             store.update_imported_service(request.clone(), accept),
@@ -2062,6 +2285,7 @@ mod tests {
             manifest_hash: preview.manifest_hash,
             config_revision: preview.config_revision,
             credential_versions: preview.credential_versions,
+            accepted_metadata: None,
         });
         assert!(matches!(
             store.update_imported_service(accept_request, accept),
@@ -2221,6 +2445,7 @@ mod tests {
             manifest_hash: preview.manifest_hash,
             config_revision: preview.config_revision,
             credential_versions: preview.credential_versions,
+            accepted_metadata: None,
         });
         assert!(matches!(
             store.update_imported_service(acceptance, accept),

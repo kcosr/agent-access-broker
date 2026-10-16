@@ -12,6 +12,7 @@ agent-access-broker-host = { path = "../agent-access-broker-host" }
 agent-access-teams = { path = "../agent-access-teams" }
 agent-access-gmail = { path = "../agent-access-gmail" }
 agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
+agent-access-command-import = { path = "../agent-access-command-import" }
 agent-access-confluence = { path = "../agent-access-confluence" }
 agent-access-fake = { path = "../agent-access-fake" }
 agent-access-gitlab = { path = "../agent-access-gitlab" }

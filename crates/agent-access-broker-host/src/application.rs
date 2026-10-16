@@ -112,7 +112,10 @@ impl BrokerApplication {
 
     fn validate_config(&self, config_path: &Path) -> BrokerExit {
         match validate_broker_config_file(config_path, self.composition.registry()) {
-            Ok(()) => {
+            Ok(warnings) => {
+                for warning in warnings {
+                    eprintln!("warning: {warning}");
+                }
                 println!("broker config valid: {}", config_path.display());
                 BrokerExit::status(EXIT_SUCCESS)
             }

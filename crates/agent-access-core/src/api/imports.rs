@@ -7,8 +7,10 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     let mut list = get_management_route(BASE, "admin.imports.list", RouteAccess::AdminRead);
     list.result_schema = Some(json!({"type":"object","additionalProperties":false,
-    "required":["catalogRevision","operatorEnabled","services","availableKinds","importAuthentication"],"properties":{
+    "required":["catalogRevision","operatorEnabled","services","availableKinds","commandImports","importAuthentication"],"properties":{
         "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"importAuthentication":import_authentication(),
+        "commandImports":{"type":"array","description":"Operator-approved command names a command import may name as command:<name>; paths are never returned.",
+            "items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}},
         "catalogRevision":revision(),"services":{"type":"array","items":service_record()}
     }}));
     routes.push(list);
@@ -101,6 +103,8 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut secret = versioned_request();
     secret["properties"]["token"] = json!({"type":"string","minLength":1,"maxLength":32768,
         "pattern":"^[!-~]+$","writeOnly":true,"description":"Backend token; never returned by management reads."});
+    secret["properties"]["username"] = json!({"type":"string","minLength":1,"maxLength":256,
+        "description":"Username of a username_token command credential; required for that execution slot and rejected for every other slot."});
     secret["required"]
         .as_array_mut()
         .unwrap()
@@ -171,7 +175,8 @@ fn action_name() -> Value {
 fn delivery() -> Value {
     json!({"oneOf":[
         {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"bearer"}}},
-        {"type":"object","additionalProperties":false,"required":["kind","name"],"properties":{"kind":{"const":"raw_header"},"name":{"type":"string","minLength":1,"maxLength":128}}}
+        {"type":"object","additionalProperties":false,"required":["kind","name"],"properties":{"kind":{"const":"raw_header"},"name":{"type":"string","minLength":1,"maxLength":128}}},
+        {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"stdin"}}}
     ]})
 }
 fn service_definition() -> Value {
@@ -180,7 +185,7 @@ fn service_definition() -> Value {
             "service":service_name_schema(),"displayName":{"type":"string","minLength":1,"maxLength":256},
             "adapterKind":service_name_schema(),"endpoint":{"type":"string","format":"uri","maxLength":4096},
             "connectionSettings":{"type":"object","maxProperties":16,"propertyNames":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9._-]+$"},"additionalProperties":{"type":"string","maxLength":4096},"default":{}},
-            "executionBindings":{"type":"array","minItems":1,"maxItems":2,"items":{
+            "executionBindings":{"type":"array","minItems":0,"maxItems":2,"description":"One or two bindings; a command import without a credential has none.","items":{
                 "type":"object","additionalProperties":false,"required":["ownerMode","mechanism","delivery","status"],"properties":{
                     "ownerMode":{"enum":["service","per_user"]},"mechanism":{"enum":["static_token","oauth"]},"delivery":delivery(),
                     "status":{"enum":["configured","unsupported"]},"adapterId":{"type":["string","null"],"minLength":1,"maxLength":256},
@@ -260,8 +265,29 @@ fn service_record() -> Value {
                 "version":version(),"definitionHash":{"type":"string"}
             }}},
         "slotVersions":{"type":"object","additionalProperties":{"type":"string"},"description":"Opaque credential slot versions; no token values."},
+        "acceptedMetadata":accepted_metadata(),
         "createdAt":{"type":"string","format":"date-time"},"createdBy":{"type":"string"},
         "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
+    }})
+}
+/// The service-level metadata a command import accepted with its actions.
+fn accepted_metadata() -> Value {
+    let attribute = json!({"type":"object","additionalProperties":false,"required":["name","label","description","required","pattern"],"properties":{
+        "name":{"type":"string"},"label":{"type":"string"},"description":{"type":"string"},"required":{"type":"boolean"},
+        "pattern":{"type":["string","null"]}
+    }});
+    json!({"type":"object","additionalProperties":false,"required":["format","version","credential","verify","resourceTypes"],"properties":{
+        "format":{"type":"string"},"version":{"type":"string"},
+        "credential":{"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["kind","modes"],"properties":{
+            "kind":{"enum":["token","username_token"]},"modes":{"type":"array","items":{"enum":["service","per_user"]}}
+        }}]},
+        "verify":{"type":"boolean"},
+        "resourceTypes":{"type":"array","items":{"type":"object","additionalProperties":false,
+            "required":["id","brokerType","label","pluralLabel","pattern","maxLength","example","attributes"],"properties":{
+                "id":{"type":"string"},"brokerType":{"type":"string"},"label":{"type":"string"},"pluralLabel":{"type":"string"},
+                "pattern":{"type":"string"},"maxLength":{"type":"integer","minimum":1},"example":{"type":"string"},
+                "attributes":{"type":"array","items":attribute}
+            }}}
     }})
 }
 /// The import-authentication projection: one group per selected import kind
@@ -295,10 +321,13 @@ fn scoped_mcp_warnings() -> Value {
         "codes":{"type":"array","minItems":1,"uniqueItems":true,"items":scoped_mcp_issue_code()}
     }}})
 }
+fn command_version() -> Value {
+    json!({"type":"string","description":"The version a command import's accepted manifest reported; display only."})
+}
 fn service_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
         "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
-        "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness()
+        "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version()
     }})
 }
 fn discovery_manifest() -> Value {
@@ -309,7 +338,8 @@ fn discovery_manifest() -> Value {
     }});
     json!({"type":"object","additionalProperties":false,"required":["protocolVersion","metadata","tools"],"properties":{
         "protocolVersion":{"type":"string"},"metadata":{},
-        "tools":{"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":tool}
+        "tools":{"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":tool},
+        "serviceMetadata":accepted_metadata()
     }})
 }
 fn preview_record() -> Value {
@@ -326,7 +356,8 @@ fn preview_result() -> Value {
         "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_record(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
-        "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings()
+        "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings(),
+        "commandVersion":command_version()
     }})
 }
 

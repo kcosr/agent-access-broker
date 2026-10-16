@@ -396,6 +396,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         invocation_limits: Arc::new(crate::ConfiguredInvocationLimits::from_config(&config)),
         config: Arc::new(config),
         providers: Arc::clone(&runtime.providers),
+        command_providers: Arc::clone(&runtime.command_providers),
         services: Arc::clone(&runtime.services),
         resource_types: Arc::clone(&runtime.resource_types),
         policy_snapshot,
@@ -7517,6 +7518,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         invocation_limits: runtime.invocation_limits.clone(),
         config: Arc::new(invalid_config),
         providers: runtime.providers.clone(),
+        command_providers: runtime.command_providers.clone(),
         services: runtime.services.clone(),
         resource_types: runtime.resource_types.clone(),
         policy_snapshot,
@@ -8049,6 +8051,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         write_temp_secret(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([19_u8; 32]));
     BrokerConfig {
         imports: Default::default(),
+        command_imports: Default::default(),
         oauth: Default::default(),
         deployment,
         network: crate::NetworkConfig::default(),

@@ -33,6 +33,7 @@ const DIFF_LINE_LIMIT = 4000;
 // adapter crate the assembly links. Each path names a root export.
 export const SELECTION_ENTRY_POINTS = Object.freeze({
   "agent-access-cloudbees-ci": ["agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND"],
+  "agent-access-command-import": ["agent_access_command_import::registration"],
   "agent-access-confluence": ["agent_access_confluence::CONFLUENCE_BACKEND"],
   "agent-access-fake": ["agent_access_fake::FAKE_BACKEND", "agent_access_fake::OAUTH_STUB_BACKEND",
     "agent_access_fake::STUB_OAUTH_DIALECT"],

@@ -220,6 +220,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
                     expected_version: record.version,
                     expected_catalog_revision: draft.revision,
                     token: format!("service-{service}-secret"),
+                    username: None,
                     actor: "admin".into(),
                 },
                 ring,

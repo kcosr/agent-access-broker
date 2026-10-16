@@ -1240,6 +1240,12 @@ separate **Identity access**, bindings and **Identity token** controls. Review
 against the current version-checked routes and
 [breaking changes](../CHANGELOG.md) before enabling traffic.
 
+Migration `027_command_imports` follows `026_trusted_user_identity`. It adds the
+nullable accepted-metadata column for command imports and widens imported
+credential slots to `basic_api_token`, copying every existing slot row unchanged.
+Stored import credentials keep working without reentry; no operator action is
+needed beyond the usual forward-migration steps.
+
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
 fresh store at a new path, then reconstruct principals, credentials, resources,

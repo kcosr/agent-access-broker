@@ -572,6 +572,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
                     expected_version: catalog.service("metrics").unwrap().version,
                     expected_catalog_revision: catalog.revision,
                     token: token.into(),
+                    username: None,
                     actor: "alice".into(),
                 },
                 &ring,

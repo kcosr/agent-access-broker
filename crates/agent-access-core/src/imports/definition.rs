@@ -39,11 +39,19 @@ pub enum ImportedBindingStatus {
     Configured,
     Unsupported,
 }
+/// Where an imported service's execution credential is presented. HTTP(S)
+/// endpoints use `Bearer` or `RawHeader`; a `command:<name>` endpoint uses
+/// `Stdin`, and only it may.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImportedCredentialDelivery {
     Bearer,
-    RawHeader { name: String },
+    RawHeader {
+        name: String,
+    },
+    /// The command import's request on stdin carries the credential; it is
+    /// never placed in arguments or the environment.
+    Stdin,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -147,7 +155,92 @@ pub struct ImportedActionDefinition {
     pub read_only: bool,
 }
 
+/// The prefix of a command import's endpoint, `command:<name>`.
+pub const COMMAND_ENDPOINT_PREFIX: &str = "command:";
+
+/// Whether `name` is a valid approved command name, the key of a
+/// `[command_imports.<name>]` table: `^[a-z][a-z0-9_-]{0,62}$`.
+pub fn is_command_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (1..=63).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-'))
+}
+
+/// The two endpoint forms an import adapter may select through
+/// [`super::ImportedAdapter::endpoint_form`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportEndpointForm {
+    /// An HTTP(S) URL, gated by `imports.allowed_endpoints`.
+    Http,
+    /// `command:<name>`, gated by the operator's `[command_imports.<name>]`
+    /// entry. The name, not the executable path, is the import's identity.
+    Command,
+}
+
+/// A parsed, structurally valid import endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportEndpoint<'a> {
+    Http(Url),
+    /// The approved command name of `command:<name>`.
+    Command(&'a str),
+}
+
+impl ImportEndpoint<'_> {
+    pub fn form(&self) -> ImportEndpointForm {
+        match self {
+            Self::Http(_) => ImportEndpointForm::Http,
+            Self::Command(_) => ImportEndpointForm::Command,
+        }
+    }
+
+    /// The approved command name, for a `command:<name>` endpoint.
+    pub fn command_name(&self) -> Option<&str> {
+        match self {
+            Self::Command(name) => Some(name),
+            Self::Http(_) => None,
+        }
+    }
+}
+
+/// Parses an import endpoint or additional destination into one of the two
+/// forms: `command:<name>` with a valid command name, or an HTTP(S) URL
+/// without userinfo, query or fragment.
+pub fn parse_import_endpoint(endpoint: &str) -> Result<ImportEndpoint<'_>, String> {
+    if let Some(name) = endpoint.strip_prefix(COMMAND_ENDPOINT_PREFIX) {
+        return if is_command_name(name) {
+            Ok(ImportEndpoint::Command(name))
+        } else {
+            Err(
+                "import command endpoint must be command:<name> with an approved command name"
+                    .into(),
+            )
+        };
+    }
+    let url = Url::parse(endpoint).map_err(|_| "import endpoint is invalid")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.query().is_some()
+        || endpoint.len() > 4096
+    {
+        return Err(
+            "import endpoint must be an HTTP(S) URL without userinfo, query, or fragment".into(),
+        );
+    }
+    Ok(ImportEndpoint::Http(url))
+}
+
 impl ImportedServiceDefinition {
+    /// The parsed endpoint; see [`parse_import_endpoint`].
+    pub fn endpoint(&self) -> Result<ImportEndpoint<'_>, String> {
+        parse_import_endpoint(&self.endpoint)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.service == "broker" || !is_service_name(&self.service) {
             return Err("import service name is invalid".into());
@@ -161,22 +254,28 @@ impl ImportedServiceDefinition {
         if !is_service_name(&self.adapter_kind) {
             return Err("import adapter kind is invalid".into());
         }
-        let endpoint = Url::parse(&self.endpoint).map_err(|_| "import endpoint is invalid")?;
-        if !matches!(endpoint.scheme(), "http" | "https")
-            || endpoint.host_str().is_none()
-            || !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || endpoint.fragment().is_some()
-            || endpoint.query().is_some()
-            || self.endpoint.len() > 4096
+        let form = self.endpoint()?.form();
+        // A command import may declare no execution credential; it then has
+        // no bindings and its grants use service mode without a slot.
+        let minimum_bindings = match form {
+            ImportEndpointForm::Http => 1,
+            ImportEndpointForm::Command => 0,
+        };
+        if self.execution_bindings.len() < minimum_bindings || self.execution_bindings.len() > 2 {
+            return Err(match form {
+                ImportEndpointForm::Http => "import requires one or two execution bindings",
+                ImportEndpointForm::Command => {
+                    "command import allows at most two execution bindings"
+                }
+            }
+            .into());
+        }
+        if form == ImportEndpointForm::Command
+            && (self.transport_auth || !self.connection_settings.is_empty())
         {
             return Err(
-                "import endpoint must be an HTTP(S) URL without userinfo, query, or fragment"
-                    .into(),
+                "command imports have no transport credential or connection settings".into(),
             );
-        }
-        if self.execution_bindings.is_empty() || self.execution_bindings.len() > 2 {
-            return Err("import requires one or two execution bindings".into());
         }
         let mut owners = BTreeSet::new();
         for binding in &self.execution_bindings {
@@ -203,6 +302,14 @@ impl ImportedServiceDefinition {
                 }
             }
             binding.delivery.validate()?;
+            if (binding.delivery == ImportedCredentialDelivery::Stdin)
+                != (form == ImportEndpointForm::Command)
+            {
+                return Err(
+                    "stdin credential delivery is for command endpoints, which deliver only on stdin"
+                        .into(),
+                );
+            }
             if self.transport_auth && binding.delivery == ImportedCredentialDelivery::Bearer {
                 return Err(
                     "transport bearer and execution bearer cannot share Authorization".into(),
@@ -608,6 +715,85 @@ mod tests {
             window_seconds: 86_401,
         });
         assert!(service.validate().is_err());
+    }
+    fn command_definition() -> ImportedServiceDefinition {
+        ImportedServiceDefinition {
+            service: "ticketing".into(),
+            display_name: "Ticketing".into(),
+            adapter_kind: "command".into(),
+            endpoint: "command:ticketing".into(),
+            connection_settings: BTreeMap::new(),
+            execution_bindings: vec![],
+            discovery: ImportedDiscoveryCredential::Anonymous,
+            transport_auth: false,
+            invocation_limit: None,
+        }
+    }
+    #[test]
+    fn command_endpoints_name_an_approved_command_and_deliver_on_stdin() {
+        let service = command_definition();
+        service.validate().unwrap();
+        assert_eq!(
+            service.endpoint().unwrap(),
+            ImportEndpoint::Command("ticketing")
+        );
+        assert_eq!(
+            service.endpoint().unwrap().form(),
+            ImportEndpointForm::Command
+        );
+        assert_eq!(
+            definition().endpoint().unwrap().form(),
+            ImportEndpointForm::Http
+        );
+        for endpoint in [
+            "command:",
+            "command:Ticketing",
+            "command:9tickets",
+            "command:/opt/bin/ticketing",
+            "command:ticketing tool",
+            &format!("command:{}", "a".repeat(64)),
+        ] {
+            let mut service = command_definition();
+            service.endpoint = endpoint.into();
+            assert!(service.validate().is_err(), "{endpoint}");
+        }
+        let mut service = command_definition();
+        service.endpoint = format!("command:{}", "a".repeat(63));
+        service.validate().unwrap();
+        // Credential-free commands have no bindings; HTTP imports need one.
+        let mut http = definition();
+        http.execution_bindings.clear();
+        assert!(http.validate().is_err());
+        let mut service = command_definition();
+        for mode in [
+            ImportedCredentialMode::Service,
+            ImportedCredentialMode::PerUser,
+        ] {
+            service
+                .execution_bindings
+                .push(ImportedCredentialBinding::token(
+                    mode,
+                    ImportedCredentialDelivery::Stdin,
+                ));
+            service.validate().unwrap();
+        }
+        service.execution_bindings[0].delivery = ImportedCredentialDelivery::Bearer;
+        assert!(service.validate().is_err());
+        let mut http = definition();
+        http.execution_bindings[0].delivery = ImportedCredentialDelivery::Stdin;
+        assert!(http.validate().is_err());
+        let mut service = command_definition();
+        service.transport_auth = true;
+        assert!(service.validate().is_err());
+        let mut service = command_definition();
+        service
+            .connection_settings
+            .insert("mode".into(), "strict".into());
+        assert!(service.validate().is_err());
+        assert_eq!(
+            serde_json::to_value(ImportedCredentialDelivery::Stdin).unwrap(),
+            json!({"kind":"stdin"})
+        );
     }
     #[test]
     fn schema_compilation_stays_local_and_honors_explicit_dialects() {

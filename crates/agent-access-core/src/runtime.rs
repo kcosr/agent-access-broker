@@ -1620,6 +1620,9 @@ enum PolicyGrantRef {
 pub struct BrokerRuntime {
     config: Arc<BrokerConfig>,
     providers: Arc<BTreeMap<String, Arc<dyn Provider>>>,
+    /// The command hooks of available command imports, keyed by service.
+    /// Each is the same object as the service's entry in `providers`.
+    command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
     imported_catalog: Arc<crate::ImportedCatalog>,
     effective_credentials: Arc<crate::CredentialsConfig>,
     import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
@@ -2098,12 +2101,16 @@ impl BrokerRuntime {
             credential_key_ring.as_ref(),
             &network,
         )?;
+        let mut command_providers = BTreeMap::new();
         for (service, provider) in imported_providers {
+            if let Some(command) = provider.command() {
+                command_providers.insert(service.clone(), command.clone());
+            }
             provider_map.insert(
                 service.clone(),
                 ServiceProvider::new(
                     (**services.get(&service).expect("retained import descriptor")).clone(),
-                    provider,
+                    provider.provider(),
                 ),
             );
         }
@@ -2144,6 +2151,7 @@ impl BrokerRuntime {
                     .map(|(service, provider)| (service, provider.provider))
                     .collect(),
             ),
+            command_providers: Arc::new(command_providers),
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
             import_dispatch: Arc::new(BTreeMap::new()),

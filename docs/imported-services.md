@@ -225,6 +225,8 @@ Upstream stdio process hosting remains outside this release.
 commands. Create/update/accept take `--request-file`. Versioned commands take
 `--expected-version` and `--expected-catalog-revision`. Shared token writes read
 `--secret-file`, `--secret-env`, or `--secret-stdin`; they never return plaintext.
+The execution slot of a command import whose credential kind is `username_token`
+also takes `--username` (`username` in the request body), and other slots reject it.
 Retirement uses `--confirm`. Typed discovery allows 75 seconds for the server's
 60-second discovery deadline. If a client times out, inspect the preview before
 starting another discovery.
@@ -243,7 +245,12 @@ The matching admin routes are under `/v1/admin/imports`:
 | PUT / DELETE | `/{service}/credentials/{purpose}` | Write / remove execution, discovery, or transport token |
 
 The runtime OpenAPI and JSON-send schemas carry exact request/result shapes and
-mark token input sensitive. List, inspect, and saved-preview reads permit
+mark token input sensitive. List results include `commandImports`, the
+operator-approved command names (never paths) a `command` import may name as
+`command:<name>`; command import results include `commandVersion`, the version
+its accepted manifest reported, and the record's `acceptedMetadata`. A command
+import's preview manifest carries the proposed `serviceMetadata` that acceptance
+stores. List, inspect, and saved-preview reads permit
 administrators and auditors. Discovery and all changes require administrator
 write authority and normal browser CSRF protection. They are not agent-facing MCP tools. Service-policy
 managers may manage grants for approved actions but cannot import tools or change

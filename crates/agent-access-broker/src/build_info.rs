@@ -7,9 +7,10 @@ const RELEASE_SOURCE: SourceRevision = SourceRevision::evidence(RELEASE_COMMIT);
 
 /// The module packages this assembly registers, all members of this
 /// workspace and so built from its one commit.
-const fn workspace_modules(source: SourceRevision) -> [ModuleProvenance; 9] {
+const fn workspace_modules(source: SourceRevision) -> [ModuleProvenance; 10] {
     [
         ModuleProvenance::new("agent-access-cloudbees-ci", VERSION, source),
+        ModuleProvenance::new("agent-access-command-import", VERSION, source),
         ModuleProvenance::new("agent-access-confluence", VERSION, source),
         ModuleProvenance::new("agent-access-fake", VERSION, source),
         ModuleProvenance::new("agent-access-gitlab", VERSION, source),
@@ -21,7 +22,7 @@ const fn workspace_modules(source: SourceRevision) -> [ModuleProvenance; 9] {
     ]
 }
 
-static RELEASE_MODULES: [ModuleProvenance; 9] = workspace_modules(RELEASE_SOURCE);
+static RELEASE_MODULES: [ModuleProvenance; 10] = workspace_modules(RELEASE_SOURCE);
 
 /// This executable's identity, stamped by `build.rs`. A release build was
 /// made from a verified clean checkout of one commit, which is the source of
@@ -55,7 +56,7 @@ mod tests {
     fn a_release_stamp_covers_every_registered_package_with_one_commit() {
         const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
         const SOURCE: SourceRevision = SourceRevision::evidence(COMMIT);
-        static MODULES: [ModuleProvenance; 9] = workspace_modules(SOURCE);
+        static MODULES: [ModuleProvenance; 10] = workspace_modules(SOURCE);
         let identity = AssemblyIdentity::new("agent-access-broker", VERSION)
             .with_source(SOURCE)
             .with_host_source(SOURCE)

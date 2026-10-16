@@ -79,6 +79,10 @@ pub(crate) enum ImportCredentialsCommand {
         version: ImportVersionArgs,
         #[command(flatten)]
         secret: ImportSecretArgs,
+        /// Username for the execution slot of a command import whose
+        /// credential kind is `username_token`.
+        #[arg(long)]
+        username: Option<String>,
     },
     Delete {
         service: String,
@@ -259,9 +263,13 @@ pub(crate) async fn run(ctx: &CliContext<'_>, command: &AdminImportsCommand) -> 
                 purpose,
                 version,
                 secret,
+                username,
             } => {
                 let mut body = version.body();
                 body["token"] = json!(require_cli_input(secret.read()));
+                if let Some(username) = username {
+                    body["username"] = json!(username);
+                }
                 (
                     reqwest::Method::PUT,
                     format!("{}/credentials/{purpose}", service_path(service)),
