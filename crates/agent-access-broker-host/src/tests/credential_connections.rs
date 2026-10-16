@@ -890,19 +890,36 @@ async fn connection_records_name_their_consumers_and_admin_records_a_sole_consum
     }
 }
 
-#[tokio::test]
-async fn classless_static_principals_select_no_stored_token() {
+struct ClasslessFixture {
+    _broker: TestBroker,
+    app: Router,
+    store: agent_access_core::ManagedStore,
+    probe: Arc<ProbeJira>,
+}
+
+/// TOML static principals with classless self-service: alice has a managed
+/// principal row (kind `user`) and a per_user Jira grant; ghost has no
+/// managed row.
+async fn classless_fixture() -> ClasslessFixture {
     let admin_token_path = temp_path("classless-connections-admin-token");
+    let ghost_token_path = temp_path("classless-connections-ghost-token");
     let key_path = temp_path("classless-connections-key");
     let store_path = temp_path("classless-connections-store.sqlite");
     let audit_path = temp_path("classless-connections.audit.jsonl");
     std::fs::write(&admin_token_path, "admin-token").unwrap();
+    std::fs::write(&ghost_token_path, "ghost-token").unwrap();
     std::fs::write(&key_path, URL_SAFE_NO_PAD.encode([9_u8; 32])).unwrap();
     let mut config =
         managed_jira_verify_config(&admin_token_path, &key_path, &store_path, &audit_path);
     config.management.allow_classless_user_management = true;
-    let broker =
-        TestBroker::start_with_providers(&config, vec![Arc::new(ProbeJira::default())]).await;
+    config.identity.sources[0]
+        .principals
+        .push(StaticPrincipalConfig {
+            principal: "ghost".to_string(),
+            token_refs: vec![format!("file:{}", ghost_token_path.display())],
+        });
+    let probe = Arc::new(ProbeJira::default());
+    let broker = TestBroker::start_with_providers(&config, vec![Arc::clone(&probe)]).await;
     let store = broker.runtime().managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
@@ -916,42 +933,187 @@ async fn classless_static_principals_select_no_stored_token() {
             created_by: "admin".to_string(),
         })
         .unwrap();
-    // Even a write right on (connection, default) gives a configured static
-    // principal no personal method.
-    store
-        .grant_right(agent_access_core::RightGrantRequest {
-            principal_id: "alice".into(),
-            right: "credentials:self:write".into(),
-            service: Some("jira".into()),
-            credential_name: Some("default".into()),
-            resource_scope_json: None,
-            created_by: "admin".into(),
-            expires_at: None,
-            reason: None,
-        })
-        .unwrap();
-    let app = broker.app();
-    let request = |method: Method, uri: &'static str, body: Option<&'static str>| {
-        authed_json_request(
-            app.clone(),
+    ClasslessFixture {
+        app: broker.app(),
+        _broker: broker,
+        store,
+        probe,
+    }
+}
+
+impl ClasslessFixture {
+    async fn request(
+        &self,
+        token: &str,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let body = body.map(|body| body.to_string());
+        let response = authed_json_request(
+            self.app.clone(),
             method,
             uri,
             "classless-connections",
             "Authorization",
-            "Bearer alice-token".to_string(),
-            body,
+            format!("Bearer {token}"),
+            body.as_deref(),
         )
-    };
-    let targets = request(Method::GET, "/v1/credentials/targets", None).await;
-    assert_eq!(targets.status(), StatusCode::OK);
-    assert_eq!(response_json(targets).await["result"], json!([]));
-    let put = request(
-        Method::PUT,
-        "/v1/credentials/connections/jira",
-        Some(r#"{"secret":{"username":"alice@example.com","token":"t"}}"#),
-    )
-    .await;
-    assert_eq!(put.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(response_json(put).await["reasonCode"], "input_invalid");
-    assert!(store.list_credentials(Some("alice")).unwrap().is_empty());
+        .await;
+        (response.status(), response_json(response).await)
+    }
+
+    fn grant(&self, right: &str, credential_name: &str) {
+        self.store
+            .grant_right(agent_access_core::RightGrantRequest {
+                principal_id: "alice".into(),
+                right: right.into(),
+                service: Some("jira".into()),
+                credential_name: Some(credential_name.into()),
+                resource_scope_json: None,
+                created_by: "admin".into(),
+                expires_at: None,
+                reason: None,
+            })
+            .unwrap();
+    }
+
+    /// Asserts `method uri` is denied for want of a credential right.
+    async fn assert_right_missing(&self, method: Method, uri: &str, body: Option<Value>) {
+        let (status, denied) = self.request("alice-token", method.clone(), uri, body).await;
+        assert_eq!(denied["ok"], false, "{method} {uri}: {denied}");
+        assert_eq!(
+            denied["reasonCode"], "right_missing",
+            "{method} {uri}: {denied}"
+        );
+        assert!(!status.is_success(), "{method} {uri}: {denied}");
+    }
+}
+
+/// A classless static principal with a managed principal row selects its
+/// connections' methods by that row's kind, and each operation on its
+/// token needs the matching right on `(connection, default)`.
+#[tokio::test]
+async fn classless_rights_on_the_connection_authorize_each_token_operation() {
+    let fixture = classless_fixture().await;
+    let connection = "/v1/credentials/connections/jira";
+    let secret = || Some(jira_secret("classless-token"));
+    let (status, targets) = fixture
+        .request("alice-token", Method::GET, "/v1/credentials/targets", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{targets}");
+    assert_eq!(targets["result"], json!([]));
+    fixture
+        .assert_right_missing(Method::PUT, connection, secret())
+        .await;
+    // A right on another credential name never applies.
+    fixture.grant("credentials:self:write", "secondary");
+    fixture
+        .assert_right_missing(Method::PUT, connection, secret())
+        .await;
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("alice"))
+            .unwrap()
+            .is_empty()
+    );
+
+    fixture.grant("credentials:self:write", "default");
+    let (status, targets) = fixture
+        .request("alice-token", Method::GET, "/v1/credentials/targets", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{targets}");
+    assert_eq!(targets["result"][0]["connection"], "jira", "{targets}");
+    let (status, schema) = fixture
+        .request(
+            "alice-token",
+            Method::GET,
+            &format!("{connection}/input-schema"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{schema}");
+    let (status, stored) = fixture
+        .request("alice-token", Method::PUT, connection, secret())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["result"]["connection"], "jira");
+
+    fixture
+        .assert_right_missing(Method::GET, connection, None)
+        .await;
+    fixture.grant("credentials:self:read_metadata", "default");
+    let (status, read) = fixture
+        .request("alice-token", Method::GET, connection, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(
+        read["result"]["credentialId"],
+        stored["result"]["credentialId"]
+    );
+    let (status, list) = fixture
+        .request("alice-token", Method::GET, "/v1/credentials", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(
+        connection_row(&list["result"], "jira")["credential"]["credentialId"],
+        stored["result"]["credentialId"]
+    );
+
+    let verify = format!("{connection}/verify");
+    fixture
+        .assert_right_missing(Method::POST, &verify, None)
+        .await;
+    fixture.grant("credentials:self:verify", "default");
+    let (status, verified) = fixture
+        .request("alice-token", Method::POST, &verify, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{verified}");
+    assert_eq!(
+        verified["result"]["verificationStatus"],
+        "upstream_verified"
+    );
+    assert_eq!(
+        *fixture.probe.verified.lock().unwrap(),
+        [basic_credential("alice@example.com", "classless-token")]
+    );
+
+    fixture
+        .assert_right_missing(Method::DELETE, connection, None)
+        .await;
+    fixture.grant("credentials:self:delete", "default");
+    let (status, deleted) = fixture
+        .request("alice-token", Method::DELETE, connection, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("alice"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A classless static principal without a managed principal row has no
+/// kind and no personal management.
+#[tokio::test]
+async fn classless_identities_without_a_managed_principal_fail_closed() {
+    let fixture = classless_fixture().await;
+    for (method, uri, body) in [
+        (Method::GET, "/v1/credentials/targets", None),
+        (
+            Method::PUT,
+            "/v1/credentials/connections/jira",
+            Some(jira_secret("ghost-token")),
+        ),
+    ] {
+        let (status, denied) = fixture
+            .request("ghost-token", method.clone(), uri, body)
+            .await;
+        assert!(!status.is_success(), "{method} {uri}: {denied}");
+        assert_eq!(denied["ok"], false, "{method} {uri}: {denied}");
+    }
+    assert!(fixture.store.list_credentials(None).unwrap().is_empty());
 }

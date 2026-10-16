@@ -232,12 +232,22 @@ async fn admit(
     let Some((profile, credential_kind)) =
         connections::token_selection(runtime, &request.connection, owner.principal_kind)
     else {
+        let message = match connections::selection(
+            runtime,
+            &request.connection,
+            owner.principal_kind,
+        ) {
+            Some(agent_access_core::Selection::OAuth(_)) => {
+                "credential connection uses OAuth for this principal; connect it through the OAuth connection routes"
+            }
+            _ => "credential connection offers no stored token for this principal",
+        };
         return Err(deny(
             context,
             operation_name,
             StatusCode::BAD_REQUEST,
             ReasonCode::InputInvalid,
-            "credential connection does not use a stored token for this principal",
+            message,
             target,
         )
         .await);

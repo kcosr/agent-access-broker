@@ -656,7 +656,7 @@ pub(crate) async fn management_context(
         .await
         .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
     }
-    let identity = match identity_result {
+    let mut identity = match identity_result {
         Ok(identity) if identity.authenticated => identity,
         Ok(_) => {
             let identity = agent_access_core::IdentityContext::anonymous();
@@ -724,6 +724,7 @@ pub(crate) async fn management_context(
     let mut policy_management_scope = None;
     let mut policy_write_scope = None;
     let mut policy_management_authorities = Vec::new();
+    let mut managed_principal_kind = None;
     let mut principal_role = None;
     let config = snapshot.runtime.config();
     // Credential class and principal authority are independent boundaries.
@@ -781,6 +782,7 @@ pub(crate) async fn management_context(
                 "managed authority could not be resolved",
             )),
             Ok(authority) => {
+                managed_principal_kind = authority.principal.principal_kind();
                 let role = authority.principal.role;
                 principal_role = Some(role);
                 let global_read = matches!(role, PrincipalRole::Admin | PrincipalRole::Auditor)
@@ -858,6 +860,13 @@ pub(crate) async fn management_context(
             })
             .await,
         ));
+    }
+    // A classless self-service identity is a configured static principal,
+    // which carries no kind; its managed principal row, which personal
+    // management requires, supplies the kind that selects its credential
+    // connections' methods.
+    if personal && token_class.is_none() {
+        identity.principal_kind = managed_principal_kind;
     }
     if browser_session_token_id.is_some() && browser_password_change_required {
         return Err(Box::new(

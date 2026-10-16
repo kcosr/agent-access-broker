@@ -776,7 +776,16 @@ owner after grant loss (classless callers need `credentials:self:read_metadata`
 and `credentials:self:delete`). Every personal route also requires self-service
 to be enabled. Credential rights are read as `(connection, default)`: a right on
 another credential name, or on a service that no longer names its own
-connection, no longer applies.
+connection, no longer applies. `POST /v1/admin/rights` grants one with the
+connection ID as `service` and `default` as `credentialName`, for example
+`{"principalId": "alice", "right": "credentials:self:write", "service": "jira", "credentialName": "default"}`.
+
+A classless self-service caller (`management.allow_classless_user_management`)
+is a configured static principal. Personal management requires its managed
+principal row, whose `kind` selects each connection's method for it, as for any
+managed principal; a classless identity without a managed row is denied. A
+connection that selects OAuth for the caller, or no method, refuses the token
+routes with HTTP 400 `input_invalid`, whatever rights the caller holds.
 
 Credential metadata responses include `verificationStatus`,
 `lastVerificationAttemptAt`, `lastVerifiedAt`, and

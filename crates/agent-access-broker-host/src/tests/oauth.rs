@@ -909,6 +909,57 @@ async fn connection_rows_describe_services_from_their_descriptors() {
     assert_eq!(rows[0]["canDisconnect"], false);
 }
 
+/// A connection that selects OAuth for its user stores no token: the token
+/// routes refuse it and point to the OAuth connection routes.
+#[tokio::test]
+async fn oauth_connections_refuse_stored_tokens() {
+    let fixture = oauth_fixture().await;
+    for (method, uri, body) in [
+        (
+            Method::PUT,
+            "/v1/credentials/connections/oauth_stub",
+            Some(json!({"secret": {"token": "not-a-connection-token"}})),
+        ),
+        (
+            Method::GET,
+            "/v1/credentials/connections/oauth_stub/input-schema",
+            None,
+        ),
+    ] {
+        let response = fixture
+            .browser(method.clone(), uri, "oauth-token-refused", body)
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{method} {uri}");
+        let body = response_json(response).await;
+        assert_eq!(body["reasonCode"], "input_invalid", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("uses OAuth"),
+            "{body}"
+        );
+    }
+    let response = fixture
+        .browser(Method::GET, "/v1/credentials", "oauth-token-list", None)
+        .await;
+    let list = response_json(response).await;
+    let row = &list["result"]["connections"][0];
+    assert_eq!(row["connection"], "oauth_stub", "{list}");
+    assert_eq!(row["method"], "oauth");
+    assert_eq!(row["registration"], "stub");
+    assert_eq!(row["credential"], Value::Null);
+    assert!(
+        fixture
+            .runtime
+            .managed_store()
+            .unwrap()
+            .list_credentials(Some("alice"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn oauth_setup_accepts_direct_and_current_group_grants_without_rights() {
     for subject in ["user:alice", "group:readers"] {
