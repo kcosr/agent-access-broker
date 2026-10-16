@@ -278,7 +278,11 @@ fn upgrade_preserves_import_rows(from: &str) {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(ledger.last().map(String::as_str), Some("027_command_imports"));
+    assert!(ledger.iter().any(|version| version == "027_command_imports"));
+    assert_eq!(
+        ledger.last().map(String::as_str),
+        Some(MANAGED_STORE_SCHEMA_VERSION)
+    );
     let row = secret_row(&conn, "observability", "execution")
         .unwrap()
         .unwrap();

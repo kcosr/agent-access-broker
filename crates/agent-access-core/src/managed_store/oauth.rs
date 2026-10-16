@@ -160,6 +160,36 @@ pub(crate) fn edit_stored_slot_json(
 
 const COLUMNS: &str =
     "owner_principal_id,registration_id,generation,config_fingerprint,key_id,nonce,ciphertext";
+
+/// A configured registration as activation reconciles stored slots with
+/// it.
+pub(crate) struct ReconciledRegistration {
+    pub(crate) fingerprint: String,
+    pub(crate) credential_revision: String,
+    /// Whether its dialect revokes the families the Broker ends.
+    pub(crate) revokes: bool,
+}
+
+/// Every slot `owner` holds, decrypted, by registration.
+pub(super) fn owner_slots(
+    conn: &Connection,
+    ring: &CredentialKeyRing,
+    owner: &str,
+) -> Result<Vec<(String, SlotState)>, ManagedStoreError> {
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM oauth_slots WHERE owner_principal_id=?1"
+        ))
+        .map_err(sql_unavailable)?;
+    let rows = collect_rows(
+        statement
+            .query_map([owner], from_row)
+            .map_err(sql_unavailable)?,
+    )?;
+    rows.into_iter()
+        .map(|row| Ok((row.registration.clone(), decrypt(ring, &row)?)))
+        .collect()
+}
 fn read(
     conn: &Connection,
     ring: &CredentialKeyRing,
@@ -345,7 +375,7 @@ impl ManagedStore {
     pub(crate) fn oauth_reconcile(
         &self,
         ring: &CredentialKeyRing,
-        registrations: &BTreeMap<String, (String, String)>,
+        registrations: &BTreeMap<String, ReconciledRegistration>,
     ) -> Result<(), OAuthError> {
         let mut conn = self.connection.lock().map_err(|_| OAuthError::Storage)?;
         let tx = conn
@@ -353,10 +383,10 @@ impl ManagedStore {
             .map_err(|_| OAuthError::Storage)?;
         tx.execute("DELETE FROM oauth_registrations", [])
             .map_err(|_| OAuthError::Storage)?;
-        for (id, (fingerprint, _)) in registrations {
+        for (id, registration) in registrations {
             tx.execute(
                 "INSERT INTO oauth_registrations(registration_id,fingerprint) VALUES(?1,?2)",
-                params![id, fingerprint],
+                params![id, registration.fingerprint],
             )
             .map_err(|_| OAuthError::Storage)?;
         }
@@ -372,7 +402,13 @@ impl ManagedStore {
         };
         let mut events = Vec::new();
         for row in rows {
-            if registrations.get(&row.registration).map(|v| &v.0) != Some(&row.fingerprint) {
+            // A changed registration may have no client the provider
+            // accepts revocation from, so its slots end without one.
+            if registrations
+                .get(&row.registration)
+                .map(|registration| &registration.fingerprint)
+                != Some(&row.fingerprint)
+            {
                 events.push((
                     row.owner.clone(),
                     row.registration.clone(),
@@ -386,7 +422,7 @@ impl ManagedStore {
                 .map_err(|_| OAuthError::Storage)?;
             } else {
                 let mut state = decrypt(ring, &row)?;
-                let revision = &registrations[&row.registration].1;
+                let revision = &registrations[&row.registration].credential_revision;
                 if state.credential_revision != *revision {
                     events.push((
                         row.owner.clone(),
@@ -399,6 +435,14 @@ impl ManagedStore {
             }
         }
         tx.commit().map_err(|_| OAuthError::Storage)?;
+        self.configure_oauth_revocation(Some(super::oauth_revocation::RevocationCapture {
+            ring: ring.clone(),
+            registrations: registrations
+                .iter()
+                .filter(|(_, registration)| registration.revokes)
+                .map(|(id, registration)| (id.clone(), registration.fingerprint.clone()))
+                .collect(),
+        }));
         for (owner, registration, outcome) in events {
             tracing::info!(target:"agent_access_core::oauth",event="activation_reconciliation",owner,registration,outcome);
         }
@@ -530,9 +574,16 @@ impl ManagedStore {
             .map_err(|_| OAuthError::Storage)?;
         tx.execute("DELETE FROM oauth_registrations", [])
             .map_err(|_| OAuthError::Storage)?;
+        // Without a registration no client can revoke the kept families.
+        let abandoned =
+            super::oauth_revocation::abandon_all(&tx, crate::oauth::revocation::clock())?;
         tx.commit().map_err(|_| OAuthError::Storage)?;
+        self.configure_oauth_revocation(None);
         for (owner, registration) in affected {
             tracing::info!(target:"agent_access_core::oauth",event="activation_reconciliation",owner,registration,outcome="oauth_disabled");
+        }
+        if abandoned > 0 {
+            tracing::info!(target:"agent_access_core::oauth",event="remote_revocation_abandoned",count=abandoned,outcome="oauth_disabled");
         }
         Ok(())
     }
@@ -557,7 +608,14 @@ mod tests {
         store
             .oauth_reconcile(
                 &ring,
-                &BTreeMap::from([("stub".into(), ("fingerprint".into(), "credential".into()))]),
+                &BTreeMap::from([(
+                    "stub".into(),
+                    ReconciledRegistration {
+                        fingerprint: "fingerprint".into(),
+                        credential_revision: "credential".into(),
+                        revokes: false,
+                    },
+                )]),
             )
             .unwrap();
         let state = SlotState {

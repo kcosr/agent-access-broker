@@ -1439,12 +1439,25 @@ pub(super) fn validate_structure(conn: &Connection) -> Result<(), ManagedStoreEr
 pub(super) fn validate_command_imports_structure(
     conn: &Connection,
 ) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_COMMAND_IMPORTS_VERSION)
+}
+/// The structure after `028_oauth_revocations`: every migration through it,
+/// whose pending OAuth revocations the table's constraints keep well formed;
+/// key readiness decrypts their payloads.
+pub(super) fn validate_oauth_revocations_structure(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION)
+}
+/// The structure every migration through `version` creates, with readable
+/// imported records, including their accepted metadata.
+fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {
     let expected = Connection::open_in_memory().map_err(sql_unavailable)?;
     for migration in MANAGED_STORE_MIGRATIONS {
         expected
             .execute_batch(migration.sql)
             .map_err(sql_unavailable)?;
-        if migration.version == MANAGED_STORE_COMMAND_IMPORTS_VERSION {
+        if migration.version == version {
             break;
         }
     }
