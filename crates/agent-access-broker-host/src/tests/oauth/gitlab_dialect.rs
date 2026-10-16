@@ -532,11 +532,9 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
             "rotate_both",
             base
         )),
-        [
-            registration(
-                "permission_profiles.default.target must be the GitLab instance base https://gitlab.example.com"
-            ),
-        ]
+        [registration(
+            "permission_profiles.default.target must be the GitLab instance base https://gitlab.example.com"
+        ),]
     );
     // A target on another instance than its consumers.
     let other = "https://gitlab.other.example";
@@ -562,10 +560,8 @@ fn gitlab_registration_and_consumer_mismatches_fail_offline_validation() {
     );
     assert_eq!(
         validation_errors(&gitlab_oauth_config(base, base, "rotate_refresh", base)),
-        [
-            registration(
-                "GitLab requires rotation = \"rotate_both\": every refresh replaces both the access and the refresh token"
-            ),
-        ]
+        [registration(
+            "GitLab requires rotation = \"rotate_both\": every refresh replaces both the access and the refresh token"
+        ),]
     );
 }
