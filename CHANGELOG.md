@@ -351,7 +351,10 @@ All notable changes to this project are documented in this file.
   discovery), `DELETE /v1/oauth/connections/{registration}` disconnects, and
   `GET /v1/oauth/connections` returns one row per registration with its
   `consumers` and `otherConsumers` instead of `service` and
-  `serviceDisplayName`. Consent is admitted for the registration as a whole,
+  `serviceDisplayName`; a registration the user still holds tokens for but no
+  connection selects is listed for disconnection only, with `permissionProfile`,
+  `scopeMode` and `target` null. A connection without `display_name` is named
+  by its ID. Consent is admitted for the registration as a whole,
   through any consuming service the user holds a `per_user` grant on, and
   consent flows left pending by an earlier version are discarded. Management
   audit targets name `{principal, connection}`, `{principal, credentialId}` for
