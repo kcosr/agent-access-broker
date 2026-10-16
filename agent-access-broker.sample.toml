@@ -306,6 +306,10 @@ type = "bearer_token"
 token_ref = "env:GITLAB_LOOKUP_TOKEN"
 read_only = true
 
+# One GitLab credential connection serves GitLab REST and the GitLab Git
+# gateway below: each principal stores one GitLab access token for both, and
+# grants stay per service.
+#
 # [credentials.connections.gitlab]
 # display_name = "GitLab"
 # token_profile = "gitlab-access-token"
@@ -314,33 +318,19 @@ read_only = true
 # type = "connection"
 # connection = "gitlab"
 
-# GitLab's Git HTTP endpoint accepts only HTTP Basic credentials. Use the
-# access token with any non-empty username, such as oauth2; a deploy token
-# needs its own username.
-#
-# [credentials.service.gitlab_git]
-# type = "basic_api_token"
-# username_ref = "env:GITLAB_GIT_USERNAME"
-# token_ref = "env:GITLAB_SERVICE_TOKEN"
-#
-# [credentials.connections.gitlab_git]
-# display_name = "GitLab Git"
-# token_profile = "git-basic-api-token"
-#
-# [credentials.per_user.gitlab_git]
-# type = "connection"
-# connection = "gitlab_git"
-#
-# Alternatively, keep token-only credentials and have the gateway present the
-# token as Basic: set upstream_token_auth on [gateways.gitlab_git] below.
+# GitLab's Git HTTP endpoint accepts only HTTP Basic credentials, so the
+# gateway presents token credentials as Basic with the username its
+# upstream_token_auth names, such as oauth2 (see [gateways.gitlab_git] below).
+# A basic_api_token credential, such as a deploy token with its own username,
+# keeps that username instead.
 #
 # [credentials.service.gitlab_git]
 # type = "bearer_token"
 # token_ref = "env:GITLAB_SERVICE_TOKEN"
 #
-# [credentials.connections.gitlab_git]
-# display_name = "GitLab Git"
-# token_profile = "git-bearer-token"
+# [credentials.per_user.gitlab_git]
+# type = "connection"
+# connection = "gitlab"
 
 [policy]
 authority = "toml"
@@ -752,10 +742,10 @@ max_results = 50
 # allowed_upstream_hosts = ["https://gitlab.example.com/**"]
 # auth_modes = ["basic_broker_token"]
 # basic_broker_token_username = "agent-access"
-# credential_modes = ["service"]
-# How bearer_token credentials are presented upstream; basic_api_token
-# credentials keep their own username. The default is { scheme = "bearer" };
-# GitLab accepts only Basic:
+# credential_modes = ["service", "per_user"]
+# How bearer_token credentials, including the shared gitlab connection's
+# tokens, are presented upstream; basic_api_token credentials keep their own
+# username. The default is { scheme = "bearer" }; GitLab accepts only Basic:
 # upstream_token_auth = { scheme = "basic", username = "oauth2" }
 # redirect_policy = "none"
 # request_body_max_bytes = 536870912
