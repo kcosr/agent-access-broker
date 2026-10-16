@@ -9,6 +9,7 @@ import path from "node:path";
 import type { AuditRecord, CatalogMutation, ResourceGroupRecord, ResourceRecord } from "../src/types";
 import { brokerBinary, portalDist, repoRoot } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
+import { releaseTestRoot } from "./support/test-root";
 
 let broker: ChildProcessWithoutNullStreams | undefined;
 let root = "";
@@ -118,7 +119,7 @@ test.afterEach(async ({}, testInfo) => {
   }
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   if (broker && broker.exitCode === null) {
     const exited = once(broker, "exit");
     broker.kill("SIGTERM");
@@ -126,7 +127,7 @@ test.afterAll(async () => {
     await exited;
     clearTimeout(timer);
   }
-  if (root) await fs.rm(root, { recursive: true, force: true });
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 function mutation(page: Page, method: string, pathname: string) {

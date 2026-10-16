@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brokerBinary, portalDist } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
+import { releaseTestRoot } from "./support/test-root";
 
 test.use({ actionTimeout: 15_000 });
 
@@ -117,7 +118,7 @@ default = { requests = 1000, window = "1m" }
   }));
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   if (broker && broker.exitCode === null) {
     const stopped = once(broker, "exit");
     broker.kill("SIGTERM");
@@ -125,9 +126,8 @@ test.afterAll(async () => {
     await stopped;
     clearTimeout(timer);
   }
-  await fs.writeFile(path.join(root, "broker.log"), logs.join(""));
-  await new Promise<void>((resolve) => upstream.close(() => resolve()));
-  // Preserve test database, logs and artifacts for this implementation review.
+  if (upstream) await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 async function signInAndChangePassword(page: Page) {

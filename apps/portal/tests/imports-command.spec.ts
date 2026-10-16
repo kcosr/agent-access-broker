@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brokerBinary, portalDist } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
+import { releaseTestRoot } from "./support/test-root";
 
 // A real Broker imports the reference command,
 // crates/agent-access/tests/fixtures/command-imports/ticketing.py, and runs it
@@ -126,7 +127,7 @@ test.beforeAll(async () => {
   }));
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   if (broker && broker.exitCode === null) {
     const stopped = once(broker, "exit");
     broker.kill("SIGTERM");
@@ -134,8 +135,7 @@ test.afterAll(async () => {
     await stopped;
     clearTimeout(timer);
   }
-  // Keep the Broker's output beside its state; nothing started without a root.
-  if (root) await fs.writeFile(path.join(root, "broker.log"), logs.join(""));
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 async function signInAndChangePassword(page: Page) {

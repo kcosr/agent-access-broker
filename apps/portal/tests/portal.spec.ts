@@ -8,6 +8,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { RESOURCE_TYPES } from "../unit/resource-types.fixture";
 import { brokerBinary, portalDist } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
+import { releaseTestRoot } from "./support/test-root";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -54,11 +55,9 @@ test.beforeAll(async () => {
   }));
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   await stopBroker();
-  if (tempDir) {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
+  await releaseTestRoot(tempDir, testInfo);
 });
 
 /** Options of a kit combobox (the list opens on click and closes again). */

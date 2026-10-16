@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { brokerBinary, portalDist, repoRoot } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
+import { releaseTestRoot } from "./support/test-root";
 
 test.use({ actionTimeout: 15_000 });
 
@@ -125,7 +126,7 @@ path = ${quoted("audit.jsonl")}
   }));
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   if (broker && broker.exitCode === null) {
     const stopped = once(broker, "exit");
     broker.kill("SIGTERM");
@@ -133,7 +134,7 @@ test.afterAll(async () => {
     await stopped;
     clearTimeout(timer);
   }
-  if (root) await fs.rm(root, { recursive: true, force: true });
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 async function signIn(page: Page, principalId: string, password: string) {

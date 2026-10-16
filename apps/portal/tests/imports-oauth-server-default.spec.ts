@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { brokerBinary, portalDist } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
 import { openOAuthWindow } from "./support/oauth-window";
+import { releaseTestRoot } from "./support/test-root";
 import type { OAuthConnectionTarget } from "../src/types";
 
 test.use({ actionTimeout: 15_000 });
@@ -199,7 +200,7 @@ test.afterAll(async ({}, testInfo) => {
   }
   if (issuerServer) await new Promise<void>((resolve) => issuerServer.close(() => resolve()));
   await testInfo.attach("broker-log", { body: logs.join(""), contentType: "text/plain" });
-  if (root) await fs.rm(root, { recursive: true, force: true });
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 const importTab = /\/ui\/admin\/catalog\/services\/metrics\/import$/;

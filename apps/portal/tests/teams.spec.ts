@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brokerBinary, portalDist } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
+import { releaseTestRoot } from "./support/test-root";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 let broker: ChildProcessWithoutNullStreams | undefined;
@@ -89,7 +90,7 @@ default = { requests = 1000, window = "1m" }
   }));
 });
 
-test.afterAll(async () => {
+test.afterAll(async ({}, testInfo) => {
   if (broker && broker.exitCode === null) {
     const stopped = once(broker, "exit");
     broker.kill("SIGTERM");
@@ -97,7 +98,7 @@ test.afterAll(async () => {
     await stopped;
     clearTimeout(timer);
   }
-  if (root) await fs.rm(root, { recursive: true, force: true });
+  await releaseTestRoot(root, testInfo, logs.join(""));
 });
 
 test("Teams destinations keep secrets private across creation, reveal and replacement", async ({ page }, testInfo) => {
