@@ -583,7 +583,13 @@ never hold a request that carries it. Static credentials and delegated access
 have no plaintext accessor: a provider hands an opaque authorization to the
 upstream client's send method together with its request, and the client adds
 the sensitive header to the request it builds, immediately before dispatch and
-only on the service's own origin. Debug output names only the kind or header,
+only on the service's own origin. Along a redirect chain it is presented only
+within the chain's authorized path, the client's base unless the provider names
+another prefix on that origin. With credentials, a hop on that origin outside the
+path is never sent, so on a gateway that serves many tenants from one origin,
+such as the Atlassian gateway, a redirect to another tenant cannot receive the
+credential or substitute that tenant's content. Delegated access is revalidated
+before each authorized hop. Debug output names only the kind or header,
 and release builds offer no credential comparison; test builds compare in
 constant time. A cooperating provider therefore cannot log, return or forward
 the material by mistake. The host's own Git smart HTTP gateway and credential

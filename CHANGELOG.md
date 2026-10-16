@@ -287,6 +287,22 @@ All notable changes to this project are documented in this file.
   A provider that needs credentials on another origin builds a client whose
   base is that origin, and marks custom credential headers sensitive. The
   shipped providers already met this rule.
+- `get_following_redirects` presents a chain's authorization only on hops
+  within its authorized path: the client's base origin at or below the base's
+  path, compared by whole segments, instead of any hop on the base origin.
+  `RedirectRules::with_authorized_prefix(&url)` names another path on that
+  origin, such as one tenant's path on a gateway shared by many tenants. With
+  an authorization, a hop on the base origin outside the path fails the chain
+  as `UpstreamError::Redirect` before it is sent, and a credential that
+  `with_decorate` adds outside it fails as `NotSent`. A path that a server could
+  decode into a dot segment, such as `..%2F`, is outside every path.
+  `RedirectRules::with_authorizer` takes the new implementable
+  `RedirectAuthorizer` trait, which supplies each authorized hop's
+  authorization immediately before that hop is sent, so delegated access is
+  revalidated per hop; its failure is the new `UpstreamError::Authorization`,
+  which carries the provider's own `ProviderError`. `with_authorization` keeps
+  presenting one static credential. CloudBees CI's redirects already stayed
+  within its controller base.
 - `[limits].upload_spool_dir` is now required. It previously defaulted to
   `<working directory>/target/agent-access-upload-spool`, which under a service
   manager such as systemd is `/target/agent-access-upload-spool`, and the Broker
@@ -861,7 +877,8 @@ All notable changes to this project are documented in this file.
   `https://api.atlassian.com/ex/{jira|confluence}/{cloudId}/`, while stored and
   service tokens keep routing by kind. Immediately before each request,
   including lookups, list pages and read-backs, the provider pins the access to
-  the gateway route's cloud ID and the `api.atlassian.com` audience. A 401
+  the gateway route's cloud ID and the `api.atlassian.com` audience; an
+  attachment download does so before each redirect hop within the site. A 401
   marks the presented access rejected and renews it once per invocation,
   whether it answered a lookup or the execution, and repeats that request,
   including a write or an upload; a further 401 fails as `credential_invalid`
@@ -1096,6 +1113,15 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Jira and Confluence attachment downloads through the Atlassian gateway
+  presented the credential, such as a service account's bearer token, on every
+  redirect hop to `api.atlassian.com`, whose one origin serves every Atlassian
+  site. A redirect to another site's cloud ID, directly or back from a media
+  host, therefore received the credential and could return that site's bytes.
+  Downloads now present the credential only within the route's site (the
+  configured cloud ID's `/ex/<product>/<cloudId>/` path, or the tenant host),
+  and such a redirect fails with `upstream_protocol_failed` before it is sent.
+  Media host redirects still work without the credential.
 - The Broker now enforces `limits.max_download_bytes` on every raw download
   itself instead of relying on each provider to bound its stream. A download
   that would pass the limit delivers only the bytes within it, then fails as a

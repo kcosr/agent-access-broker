@@ -1,18 +1,19 @@
 //! The credential an Atlassian request presents: static tokens as before,
 //! delegated access pinned to the gateway route's cloud ID and the gateway
-//! audience before every request, one recovery per operation, and the
-//! receipts of writes whose verification the connection stopped.
+//! audience before every request, one recovery per operation, attachment
+//! downloads whose redirects present it only within the route's site, and
+//! the receipts of writes whose verification the connection stopped.
 use super::*;
 use crate::{AtlassianProduct, AtlassianRoutes, AtlassianSite};
-use agent_access_provider::deps::async_trait;
 use agent_access_provider::host::{delegated_credential, port_failure};
 use agent_access_provider::test_support::{
     TestHost, basic_credential, bearer_credential, delegated_binding_id,
 };
 use agent_access_provider::{DelegatedAccess, DelegatedBindingId, DelegatedLease};
 use serde_json::json;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
 const OTHER_CLOUD_ID: &str = "99999999-8888-4777-8666-555555555555";
@@ -368,4 +369,324 @@ fn delegated_failures_after_an_accepted_write_report_unverified_writes() {
         receipted.result.as_deref().unwrap()["mutationStatus"],
         "unknown"
     );
+}
+
+const JIRA: AtlassianProduct = AtlassianProduct {
+    provider: "jira",
+    name: "Jira",
+    api_path: "rest/api/3/",
+    status_reasons: &[],
+};
+
+/// Jira's gateway clients for the configured site, with the gateway served
+/// by `gateway` and `media` allowed as an Atlassian media host.
+fn gateway_clients(gateway: &MockServer, media: &MockServer) -> AtlassianClients {
+    let hosts = [
+        format!("{}/**", gateway.uri()),
+        format!("{}/**", media.uri()),
+    ];
+    let site = AtlassianSite {
+        tenant_host: "example.atlassian.net",
+        cloud_id: Some(CLOUD_ID),
+        egress_proxy: None,
+        allowed_upstream_hosts: &hosts,
+    };
+    let base = format!("{}/ex/jira/{CLOUD_ID}/rest/api/3/", gateway.uri());
+    AtlassianClients::new(
+        JIRA,
+        &site,
+        Url::parse(&base).unwrap(),
+        &TestHost::default(),
+    )
+    .unwrap()
+}
+
+/// The path of `site`'s gateway route below `rest`.
+fn on_site(site: &str, rest: &str) -> String {
+    format!("/ex/jira/{site}/{rest}")
+}
+
+async fn redirect(server: &MockServer, route: &str, location: String) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", location))
+        .mount(server)
+        .await;
+}
+
+async fn serve(server: &MockServer, route: &str) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200).set_body_string("evidence"))
+        .mount(server)
+        .await;
+}
+
+/// The path and presented authorization of each request `server` got.
+async fn hops(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| {
+            let authorization = request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("-");
+            format!("{} {authorization}", request.url.path())
+        })
+        .collect()
+}
+
+async fn download(
+    credential: &AtlassianCredential,
+    clients: &AtlassianClients,
+    route: &str,
+) -> Result<Response, AtlassianDownloadError> {
+    let url = Url::parse(&format!(
+        "{}{route}",
+        clients.site_base.origin().ascii_serialization()
+    ));
+    credential
+        .download(
+            clients,
+            url.unwrap(),
+            5,
+            Duration::from_secs(5),
+            "attachment.download",
+            "Jira",
+        )
+        .await
+}
+
+/// On the gateway, which serves every Atlassian site from one origin, a
+/// download presents the credential (OAuth or a service account's bearer
+/// token) only within the configured site's path, including its paths
+/// outside the API. A redirect to another cloud ID or another product,
+/// directly or back from a media host, fails before it is sent; plain media
+/// redirects keep working without the credential.
+#[tokio::test]
+async fn downloads_present_credentials_only_within_the_configured_site() {
+    let lease = Lease::new(CLOUD_ID);
+    let credentials = [
+        (delegated(&lease, Some(CLOUD_ID)), "Bearer oauth-1"),
+        (
+            AtlassianCredential::from_static(bearer_credential("service-token")),
+            "Bearer service-token",
+        ),
+    ];
+    for (credential, presented) in credentials {
+        let gateway = MockServer::start().await;
+        let media = MockServer::start().await;
+        let content = |id: &str| on_site(CLOUD_ID, &format!("rest/api/3/attachment/content/{id}"));
+        let elsewhere = |id: &str| {
+            format!(
+                "{}{}",
+                gateway.uri(),
+                on_site(
+                    OTHER_CLOUD_ID,
+                    &format!("rest/api/3/attachment/content/{id}")
+                )
+            )
+        };
+        redirect(&gateway, &content("1"), elsewhere("1")).await;
+        redirect(&gateway, &content("2"), format!("{}/file/2", media.uri())).await;
+        redirect(&media, "/file/2", elsewhere("2")).await;
+        redirect(&gateway, &content("3"), format!("{}/file/3", media.uri())).await;
+        serve(&media, "/file/3").await;
+        let attachment = on_site(CLOUD_ID, "secure/attachment/4/evidence.txt");
+        redirect(
+            &gateway,
+            &content("4"),
+            format!("{}{attachment}", gateway.uri()),
+        )
+        .await;
+        serve(&gateway, &attachment).await;
+        let product = format!("/ex/confluence/{CLOUD_ID}/wiki/download/attachments/5/a.txt");
+        redirect(
+            &gateway,
+            &content("5"),
+            format!("{}{product}", gateway.uri()),
+        )
+        .await;
+        // Anything another site serves would be found here.
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("another site"))
+            .with_priority(10)
+            .mount(&gateway)
+            .await;
+        let clients = gateway_clients(&gateway, &media);
+
+        for id in ["1", "2", "5"] {
+            let error = download(&credential, &clients, &content(id))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error,
+                AtlassianDownloadError::Upstream(UpstreamError::Redirect),
+                "{id}"
+            );
+        }
+        for id in ["3", "4"] {
+            let response = download(&credential, &clients, &content(id)).await.unwrap();
+            assert_eq!(response.text().await.unwrap(), "evidence", "{id}");
+        }
+        assert_eq!(
+            hops(&gateway).await,
+            [
+                format!("{} {presented}", content("1")),
+                format!("{} {presented}", content("2")),
+                format!("{} {presented}", content("5")),
+                format!("{} {presented}", content("3")),
+                format!("{} {presented}", content("4")),
+                format!("{attachment} {presented}"),
+            ]
+        );
+        assert_eq!(hops(&media).await, ["/file/2 -", "/file/3 -"]);
+    }
+    assert!(lease.rejected().is_empty());
+}
+
+/// Answers with `response` after running `then`, such as a refresh or a
+/// lost connection between two hops.
+struct Then<F> {
+    then: F,
+    response: ResponseTemplate,
+}
+
+impl<F: Fn() + Send + Sync + 'static> Respond for Then<F> {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        (self.then)();
+        self.response.clone()
+    }
+}
+
+/// Every authorized hop presents delegated access revalidated immediately
+/// before it: a refresh between hops is picked up, and a lease lost between
+/// hops stops the download before the next one with the lease's own failure.
+/// A 401 marks the version that hop presented rejected and starts over once;
+/// a 401 from a media host, which got no credential, rejects nothing.
+#[tokio::test]
+async fn each_authorized_hop_presents_freshly_revalidated_access() {
+    let gateway = MockServer::start().await;
+    let media = MockServer::start().await;
+    let clients = gateway_clients(&gateway, &media);
+    let content = |id: &str| on_site(CLOUD_ID, &format!("rest/api/3/attachment/content/{id}"));
+    let attachment = |id: &str| on_site(CLOUD_ID, &format!("secure/attachment/{id}/a.txt"));
+    let found = |id: &str| {
+        ResponseTemplate::new(302)
+            .insert_header("Location", format!("{}{}", gateway.uri(), attachment(id)))
+    };
+
+    // Another operation refreshes the connection between the two hops.
+    let lease = Lease::new(CLOUD_ID);
+    let refreshed = lease.clone();
+    Mock::given(path(content("1")))
+        .respond_with(Then {
+            then: move || {
+                refreshed.current.fetch_add(1, Ordering::SeqCst);
+            },
+            response: found("1"),
+        })
+        .mount(&gateway)
+        .await;
+    serve(&gateway, &attachment("1")).await;
+    let credential = delegated(&lease, Some(CLOUD_ID));
+    let response = download(&credential, &clients, &content("1"))
+        .await
+        .unwrap();
+    assert_eq!(response.text().await.unwrap(), "evidence");
+    assert_eq!(
+        hops(&gateway).await,
+        [
+            format!("{} Bearer oauth-1", content("1")),
+            format!("{} Bearer oauth-2", attachment("1")),
+        ]
+    );
+    assert!(lease.rejected().is_empty());
+
+    // The connection is lost between the two hops.
+    let lost = [
+        refresh_busy(),
+        port_failure(
+            HostPort::DelegatedLease,
+            ProviderError::deny(ReasonCode::CredentialInvalid, "oauth_reconnect_required"),
+        ),
+    ];
+    for (index, failure) in lost.into_iter().enumerate() {
+        let id = format!("lost-{index}");
+        let lease = Lease::new(CLOUD_ID);
+        let failing = lease.clone();
+        let lease_failure = failure.clone();
+        Mock::given(path(content(&id)))
+            .respond_with(Then {
+                then: move || {
+                    *failing.revalidation_failure.lock().unwrap() = Some(lease_failure.clone());
+                },
+                response: found(&id),
+            })
+            .mount(&gateway)
+            .await;
+        let before = hops(&gateway).await.len();
+        let error = download(&delegated(&lease, Some(CLOUD_ID)), &clients, &content(&id))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            AtlassianDownloadError::Access(AtlassianAccessError::Credential(failure))
+        );
+        // The second hop was never sent.
+        assert_eq!(
+            hops(&gateway).await[before..],
+            [format!("{} Bearer oauth-1", content(&id))]
+        );
+        assert!(lease.rejected().is_empty());
+    }
+
+    // The site rejects the access the second hop presented: that version
+    // is rejected, and the download starts over once with renewed access.
+    redirect(
+        &gateway,
+        &content("2"),
+        format!("{}{}", gateway.uri(), attachment("2")),
+    )
+    .await;
+    Mock::given(path(attachment("2")))
+        .and(header("authorization", "Bearer oauth-1"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&gateway)
+        .await;
+    serve(&gateway, &attachment("2")).await;
+    let lease = Lease::new(CLOUD_ID);
+    let before = hops(&gateway).await.len();
+    let response = download(&delegated(&lease, Some(CLOUD_ID)), &clients, &content("2"))
+        .await
+        .unwrap();
+    assert_eq!(response.text().await.unwrap(), "evidence");
+    assert_eq!(
+        hops(&gateway).await[before..],
+        [
+            format!("{} Bearer oauth-1", content("2")),
+            format!("{} Bearer oauth-1", attachment("2")),
+            format!("{} Bearer oauth-2", content("2")),
+            format!("{} Bearer oauth-2", attachment("2")),
+        ]
+    );
+    assert_eq!(lease.rejected(), ["v1"]);
+
+    // A media host's 401 answered no credential.
+    redirect(&gateway, &content("3"), format!("{}/file/3", media.uri())).await;
+    Mock::given(path("/file/3"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&media)
+        .await;
+    let lease = Lease::new(CLOUD_ID);
+    let response = download(&delegated(&lease, Some(CLOUD_ID)), &clients, &content("3"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(lease.rejected().is_empty());
+    assert_eq!(lease.recoveries.load(Ordering::SeqCst), 0);
 }

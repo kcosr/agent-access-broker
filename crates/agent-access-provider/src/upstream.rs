@@ -2,7 +2,8 @@
 //! clients the host constructs (outbound TLS trust, the selected egress route,
 //! the requested time profile and no automatic redirects), allowlisted
 //! destinations, correlation headers and credentials only toward the
-//! service's own origin, and one trace event per upstream request.
+//! service's own origin (and, along a redirect chain, only within its
+//! authorized path), and one trace event per upstream request.
 //!
 //! Backends own their protocol (URLs, authentication scheme, status and body
 //! handling); they build clients and send requests through this module.
@@ -11,10 +12,11 @@ use crate::correlation::apply_current_correlation_headers;
 use crate::host::{ClientTransportSpec, UpstreamClientFactory};
 use crate::trace::{checked_trace_reason, emit_upstream_request_completed_for};
 use crate::{
-    EgressDeclaration, EgressRoute, ProviderBuildError, ProviderReason, ReasonCode,
+    EgressDeclaration, EgressRoute, ProviderBuildError, ProviderError, ProviderReason, ReasonCode,
     UpstreamAuthorization, UpstreamTrace, current_provider_action, same_origin,
     url_allowed_by_patterns,
 };
+use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use reqwest::{Method, RequestBuilder, Response};
 use std::path::Path;
@@ -120,10 +122,18 @@ pub enum UpstreamError {
     Transport(String),
     #[error("upstream redirect is invalid")]
     Redirect,
+    /// The [`RedirectAuthorizer`] of a redirect chain returned this failure
+    /// for its next authorized hop, such as a delegated lease that needs a
+    /// reconnect. That hop was never sent. Report the failure itself.
+    #[error("upstream authorization is unavailable")]
+    Authorization(Box<ProviderError>),
 }
 
 impl UpstreamError {
-    /// The reason code a trace or error records for this failure.
+    /// The reason code a trace or error records for this failure. For
+    /// [`Self::Authorization`] it is the failure's standard reason, or
+    /// `credential_invalid` for a domain reason; report that failure itself
+    /// instead.
     pub fn reason_code(&self) -> ReasonCode {
         match self {
             Self::Timeout
@@ -132,6 +142,10 @@ impl UpstreamError {
             } => ReasonCode::UpstreamTimeout,
             Self::Transport(_) | Self::NotSent { .. } => ReasonCode::UpstreamConnectionFailed,
             Self::NotAllowed | Self::Redirect => ReasonCode::UpstreamProtocolFailed,
+            Self::Authorization(failure) => failure
+                .reason_code()
+                .standard()
+                .unwrap_or(ReasonCode::CredentialInvalid),
         }
     }
 }
@@ -187,6 +201,33 @@ impl<'a> UpstreamCall<'a> {
 /// Last time an upload body made progress.
 pub type UploadProgress = watch::Receiver<tokio::time::Instant>;
 
+/// Supplies the authorization each authorized hop of a redirect chain
+/// presents ([`RedirectRules::with_authorizer`]), obtained immediately before
+/// that hop is sent rather than once for the whole chain.
+///
+/// A provider presenting delegated access implements it with
+/// [`DelegatedCredential::revalidated_access_for`](crate::DelegatedCredential::revalidated_access_for),
+/// so every authorized hop presents access the lease has just revalidated and
+/// pinned to the provider's target and audience, and a refresh between hops
+/// is picked up. It may record what each hop presented, such as the access
+/// version an upstream 401 would reject.
+#[async_trait]
+pub trait RedirectAuthorizer: Send + Sync {
+    /// The authorization the hop to `url` presents, which lies within the
+    /// rules' authorized scope. A failure, such as the lease's own, stops the
+    /// chain before that hop is sent as [`UpstreamError::Authorization`].
+    async fn authorize(&self, url: &Url) -> Result<UpstreamAuthorization, ProviderError>;
+}
+
+/// Where the authorization of a redirect chain comes from.
+#[derive(Clone, Copy)]
+enum HopAuthorization<'a> {
+    /// The same static authorization on every authorized hop.
+    Fixed(&'a UpstreamAuthorization),
+    /// The authorizer's answer for each authorized hop.
+    PerHop(&'a dyn RedirectAuthorizer),
+}
+
 /// How [`UpstreamClient::get_following_redirects`] walks a redirect chain.
 #[non_exhaustive]
 pub struct RedirectRules<'a> {
@@ -195,7 +236,8 @@ pub struct RedirectRules<'a> {
     correlate_other_origins: bool,
     vet: &'a (dyn Fn(&Url) -> bool + Sync),
     decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
-    authorization: Option<&'a UpstreamAuthorization>,
+    authorization: Option<HopAuthorization<'a>>,
+    authorized_prefix: Option<&'a Url>,
 }
 
 impl<'a> RedirectRules<'a> {
@@ -206,7 +248,8 @@ impl<'a> RedirectRules<'a> {
     /// Hops to other origins carry no correlation headers, no hop carries a
     /// credential, every hop is sent as built, and the chain needs only the
     /// allowlist and the absence of embedded credentials, until the builders
-    /// below change that.
+    /// below change that. The authorized scope is the client's base: its
+    /// origin and every path at or below the base's path.
     pub fn new(max_redirects: u32, deadline: Duration) -> Self {
         Self {
             max_redirects,
@@ -215,14 +258,38 @@ impl<'a> RedirectRules<'a> {
             vet: &accept_every_hop,
             decorate: &undecorated_hop,
             authorization: None,
+            authorized_prefix: None,
         }
     }
 
-    /// Hops on the service's own origin present `authorization`. The client
-    /// adds its header after the hop's decoration, immediately before
-    /// dispatch; hops to other origins never carry it.
+    /// Hops within the authorized scope present `authorization`, the same
+    /// static credential on each. The client adds its header after the hop's
+    /// decoration, immediately before dispatch. Hops to other origins never
+    /// carry it, and a hop on the service's origin outside the scope fails
+    /// the chain as [`UpstreamError::Redirect`] before it is sent. Present
+    /// delegated access with [`Self::with_authorizer`] instead. Replaces any
+    /// authorization set before.
     pub fn with_authorization(mut self, authorization: &'a UpstreamAuthorization) -> Self {
-        self.authorization = Some(authorization);
+        self.authorization = Some(HopAuthorization::Fixed(authorization));
+        self
+    }
+
+    /// Hops within the authorized scope present the authorization
+    /// `authorizer` returns for each, obtained immediately before that hop is
+    /// sent, as delegated access requires. Otherwise as
+    /// [`Self::with_authorization`], which this replaces.
+    pub fn with_authorizer(mut self, authorizer: &'a dyn RedirectAuthorizer) -> Self {
+        self.authorization = Some(HopAuthorization::PerHop(authorizer));
+        self
+    }
+
+    /// The authorized scope is `prefix` instead of the client's base: hops on
+    /// the client's base origin at or below `prefix`'s path, compared by
+    /// whole path segments, such as one tenant's path on a gateway shared by
+    /// many tenants. It may be wider or narrower than the base's path. A
+    /// prefix on another origin authorizes no hop.
+    pub fn with_authorized_prefix(mut self, prefix: &'a Url) -> Self {
+        self.authorized_prefix = Some(prefix);
         self
     }
 
@@ -241,9 +308,9 @@ impl<'a> RedirectRules<'a> {
     }
 
     /// Headers every hop carries. A credential-bearing header (see
-    /// [`UpstreamClient::request`]) makes a hop to another origin fail as
-    /// [`UpstreamError::NotSent`]; authorize hops with
-    /// [`Self::with_authorization`] instead.
+    /// [`UpstreamClient::request`]) makes a hop outside the authorized scope
+    /// fail as [`UpstreamError::NotSent`]; authorize hops with
+    /// [`Self::with_authorization`] or [`Self::with_authorizer`] instead.
     pub fn with_decorate(
         mut self,
         decorate: &'a (dyn Fn(RequestBuilder) -> RequestBuilder + Sync),
@@ -259,6 +326,38 @@ fn accept_every_hop(_: &Url) -> bool {
 
 fn undecorated_hop(request: RequestBuilder) -> RequestBuilder {
     request
+}
+
+/// Whether `url` lies within the scope `prefix` names: on its origin, at or
+/// below its path by whole segments. A path that a server decoding an
+/// escaped `/` or `\` would read as a `.` or `..` segment is outside every
+/// scope, so `/tenant/..%2Fother/` never counts as below `/tenant/`.
+fn within_prefix(url: &Url, prefix: &Url) -> bool {
+    if !same_origin(url, prefix) {
+        return false;
+    }
+    let directory = prefix.path();
+    let directory = directory.strip_suffix('/').unwrap_or(directory);
+    let path = url.path();
+    let below = path == directory
+        || path
+            .strip_prefix(directory)
+            .is_some_and(|rest| rest.starts_with('/'));
+    below && !path.split('/').any(escapes_when_decoded)
+}
+
+/// Whether a path segment holds an escaped separator that, once decoded,
+/// would put a `.` or `..` segment into the path.
+fn escapes_when_decoded(segment: &str) -> bool {
+    if !segment.contains('%') {
+        return false;
+    }
+    let decoded = segment
+        .to_ascii_lowercase()
+        .replace("%2f", "/")
+        .replace("%5c", "/")
+        .replace("%2e", ".");
+    decoded.contains('/') && decoded.split('/').any(|part| part == "." || part == "..")
 }
 
 /// An HTTP client for one upstream service.
@@ -352,8 +451,14 @@ impl UpstreamClient {
         request: RequestBuilder,
         call: UpstreamCall<'_>,
     ) -> Result<Response, UpstreamError> {
-        self.send_bounded(request, None, call, AuthorizationPosition::AfterCorrelation)
-            .await
+        self.send_bounded(
+            request,
+            None,
+            call,
+            AuthorizationPosition::AfterCorrelation,
+            None,
+        )
+        .await
     }
 
     /// [`Self::send`] with a deadline for the response headers, for clients
@@ -369,6 +474,7 @@ impl UpstreamClient {
             Some(deadline),
             call,
             AuthorizationPosition::AfterCorrelation,
+            None,
         )
         .await
     }
@@ -388,7 +494,7 @@ impl UpstreamClient {
             return self.send(request, call).await;
         };
         let (request, trace) =
-            self.prepare(request, call, AuthorizationPosition::AfterCorrelation)?;
+            self.prepare(request, call, AuthorizationPosition::AfterCorrelation, None)?;
         let mut send = Box::pin(self.client.execute(request));
         loop {
             let deadline = *progress.borrow_and_update() + idle_timeout;
@@ -416,10 +522,20 @@ impl UpstreamClient {
         }
     }
 
-    /// GETs `url`, following redirects by hand under `rules`. Every hop must
-    /// be allowlisted, carry no embedded credentials, and pass `rules.vet`;
-    /// only hops on the service's own origin present the rules'
-    /// authorization.
+    /// GETs `url`, following redirects by hand under `rules`. Every hop,
+    /// including the first, must be allowlisted, carry no embedded
+    /// credentials, and pass `rules.vet`.
+    ///
+    /// Only hops within the rules' authorized scope (the client's base, or
+    /// [`RedirectRules::with_authorized_prefix`]) present the rules'
+    /// authorization, obtained for each hop immediately before it is sent
+    /// when it comes from a [`RedirectAuthorizer`]. Hops to other origins
+    /// never carry a credential. When the rules carry an authorization, a hop
+    /// on the service's origin outside the scope, such as another tenant's
+    /// path on a shared gateway, fails the chain as [`UpstreamError::Redirect`]
+    /// before it is sent, with or without credentials: its bytes would come
+    /// from outside the authority the credential was lent for.
+    ///
     /// Each redirect hop records its own trace; the final response carries a
     /// pending one.
     pub async fn get_following_redirects(
@@ -428,12 +544,26 @@ impl UpstreamClient {
         rules: RedirectRules<'_>,
         operation: &str,
     ) -> Result<Response, UpstreamError> {
+        let scope = rules.authorized_prefix.unwrap_or(&self.base);
         let mut url = url;
         for hop in 0..=rules.max_redirects {
-            if !self.redirect_target_allowed(&url, &rules) {
+            if !self.redirect_target_allowed(&url, &rules, scope) {
                 return Err(UpstreamError::Redirect);
             }
             let trusted = same_origin(&url, &self.base);
+            let authorized = trusted && within_prefix(&url, scope);
+            let presented = match rules.authorization {
+                Some(HopAuthorization::Fixed(authorization)) if authorized => {
+                    Some(authorization.clone())
+                }
+                Some(HopAuthorization::PerHop(authorizer)) if authorized => Some(
+                    authorizer
+                        .authorize(&url)
+                        .await
+                        .map_err(|failure| UpstreamError::Authorization(Box::new(failure)))?,
+                ),
+                _ => None,
+            };
             let request = self.client.get(url.clone());
             let request = if trusted || rules.correlate_other_origins {
                 apply_current_correlation_headers(request)
@@ -442,9 +572,9 @@ impl UpstreamClient {
             };
             let request = (rules.decorate)(request);
             let call = UpstreamCall::new(operation).with_attempt(hop + 1);
-            let call = match rules.authorization {
-                Some(authorization) if trusted => call.with_authorization(authorization),
-                _ => call,
+            let call = match &presented {
+                Some(authorization) => call.with_authorization(authorization),
+                None => call,
             };
             let mut response = self
                 .send_bounded(
@@ -452,6 +582,7 @@ impl UpstreamClient {
                     Some(rules.deadline),
                     call,
                     AuthorizationPosition::End,
+                    Some(scope),
                 )
                 .await?;
             if !response.status().is_redirection() {
@@ -460,7 +591,7 @@ impl UpstreamClient {
             let next = (hop < rules.max_redirects)
                 .then(|| redirect_location(&response, &url))
                 .flatten()
-                .filter(|next| self.redirect_target_allowed(next, &rules));
+                .filter(|next| self.redirect_target_allowed(next, &rules, scope));
             let Some(next) = next else {
                 complete_upstream_trace(
                     &mut response,
@@ -474,9 +605,15 @@ impl UpstreamClient {
         Err(UpstreamError::Redirect)
     }
 
-    fn redirect_target_allowed(&self, url: &Url, rules: &RedirectRules<'_>) -> bool {
+    /// Whether a redirect chain may request `url`. With an authorization, a
+    /// URL on the service's origin must lie within the authorized `scope`.
+    fn redirect_target_allowed(&self, url: &Url, rules: &RedirectRules<'_>, scope: &Url) -> bool {
+        let outside_scope = rules.authorization.is_some()
+            && same_origin(url, &self.base)
+            && !within_prefix(url, scope);
         url.username().is_empty()
             && url.password().is_none()
+            && !outside_scope
             && url_allowed_by_patterns(url, &self.allowed_upstream_hosts)
             && (rules.vet)(url)
     }
@@ -487,8 +624,9 @@ impl UpstreamClient {
         deadline: Option<Duration>,
         call: UpstreamCall<'_>,
         position: AuthorizationPosition,
+        scope: Option<&Url>,
     ) -> Result<Response, UpstreamError> {
-        let (request, trace) = self.prepare(request, call, position)?;
+        let (request, trace) = self.prepare(request, call, position, scope)?;
         let send = self.client.execute(request);
         let response = match deadline {
             Some(deadline) => match tokio::time::timeout(deadline, send).await {
@@ -503,12 +641,14 @@ impl UpstreamClient {
     /// Builds the provider's request and adds the call's authorizations at
     /// `position`. The credential exists only in the built request, which
     /// the client then checks and dispatches itself; the provider never holds
-    /// it.
+    /// it. A request may carry credentials only on the service's origin and,
+    /// for a redirect hop, within the chain's authorized `scope`.
     fn prepare(
         &self,
         request: RequestBuilder,
         call: UpstreamCall<'_>,
         position: AuthorizationPosition,
+        scope: Option<&Url>,
     ) -> Result<(reqwest::Request, TraceEvent), UpstreamError> {
         let (client, request) = request.build_split();
         let request = request.and_then(|mut request| {
@@ -541,11 +681,20 @@ impl UpstreamClient {
             request.url().origin().ascii_serialization(),
             request.method().as_str(),
         );
-        if !same_origin(request.url(), &self.base) && carries_credentials(request.headers()) {
-            return Err(trace.fail(UpstreamError::NotSent {
-                timed_out: false,
-                detail: "credentials are sent only to the service origin".to_string(),
-            }));
+        if carries_credentials(request.headers()) {
+            let detail = if !same_origin(request.url(), &self.base) {
+                Some("credentials are sent only to the service origin")
+            } else if scope.is_some_and(|scope| !within_prefix(request.url(), scope)) {
+                Some("credentials are sent only within the redirect chain's authorized path")
+            } else {
+                None
+            };
+            if let Some(detail) = detail {
+                return Err(trace.fail(UpstreamError::NotSent {
+                    timed_out: false,
+                    detail: detail.to_string(),
+                }));
+            }
         }
         Ok((request, trace))
     }
@@ -1203,6 +1352,292 @@ mod tests {
             .filter(|request| request.url.path() == "/loop")
             .count();
         assert_eq!(loops, 3);
+    }
+
+    /// The path and presented authorization of each request `server` got.
+    async fn hops(server: &MockServer) -> Vec<String> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                format!(
+                    "{} {}",
+                    request.url.path(),
+                    request
+                        .headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("-")
+                )
+            })
+            .collect()
+    }
+
+    async fn redirect(server: &MockServer, route: &str, location: String) {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", location))
+            .mount(server)
+            .await;
+    }
+
+    async fn serve_bytes(server: &MockServer, route: &str) {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_string("bytes"))
+            .mount(server)
+            .await;
+    }
+
+    #[test]
+    fn authorized_scopes_compare_whole_segments_on_one_origin() {
+        let url = |text: &str| Url::parse(text).unwrap();
+        let tenant = url("https://gateway.example.test/ex/notes/tenant-a/");
+        for inside in [
+            "https://gateway.example.test/ex/notes/tenant-a",
+            "https://gateway.example.test/ex/notes/tenant-a/",
+            "https://gateway.example.test/ex/notes/tenant-a/files/blob?version=2",
+            "https://gateway.example.test/ex/notes/tenant-a/files/report%20a%2Fb.txt",
+            "https://gateway.example.test:443/ex/notes/tenant-a/x/../files",
+            "https://gateway.example.test/ex/notes/tenant-b/../tenant-a/files",
+            "https://gateway.example.test/ex/notes/tenant-a/%2e%2e%2e/files",
+        ] {
+            assert!(within_prefix(&url(inside), &tenant), "{inside}");
+        }
+        for outside in [
+            "https://gateway.example.test/ex/notes/tenant-b/files",
+            "https://gateway.example.test/ex/notes/tenant-ab/files",
+            "https://gateway.example.test/ex/notes/TENANT-A/files",
+            "https://gateway.example.test/ex/notes/tenant-a/../tenant-b/files",
+            "https://gateway.example.test/ex/notes/tenant-a/%2e%2e/tenant-b/files",
+            "https://gateway.example.test/ex/notes/tenant-a/..%2Ftenant-b/files",
+            "https://gateway.example.test/ex/notes/tenant-a/..%5ctenant-b/files",
+            "https://gateway.example.test/ex/notes/tenant-a/files%2F%2E%2E%2F%2E%2E/tenant-b",
+            "https://gateway.example.test/ex/notes/",
+            "http://gateway.example.test/ex/notes/tenant-a/files",
+            "https://gateway.example.test:8443/ex/notes/tenant-a/files",
+            "https://other.example.test/ex/notes/tenant-a/files",
+        ] {
+            assert!(!within_prefix(&url(outside), &tenant), "{outside}");
+        }
+        // A base without a trailing slash names the same directory, and the
+        // root names the whole origin.
+        let unslashed = url("https://ci.example.test/controller");
+        assert!(within_prefix(
+            &url("https://ci.example.test/controller/job/a"),
+            &unslashed
+        ));
+        assert!(!within_prefix(
+            &url("https://ci.example.test/controllers/job/a"),
+            &unslashed
+        ));
+        assert!(within_prefix(
+            &url("https://ci.example.test/any/path"),
+            &url("https://ci.example.test/")
+        ));
+    }
+
+    /// On a gateway that serves many tenants from one origin, the
+    /// authorization reaches only the configured tenant's path. A hop to
+    /// another tenant, directly or back from a credential-free media hop, is
+    /// never sent, with or without the credential; the media hop itself still
+    /// works without it.
+    #[tokio::test]
+    async fn redirect_authorization_stays_within_the_authorized_prefix() {
+        let gateway = MockServer::start().await;
+        let media = MockServer::start().await;
+        let tenant = format!("{}/ex/notes/tenant-a", gateway.uri());
+        let other = format!("{}/ex/notes/tenant-b", gateway.uri());
+        redirect(
+            &gateway,
+            "/ex/notes/tenant-a/api/download",
+            format!("{tenant}/files/blob"),
+        )
+        .await;
+        redirect(
+            &gateway,
+            "/ex/notes/tenant-a/api/cross",
+            format!("{other}/files/blob"),
+        )
+        .await;
+        redirect(
+            &gateway,
+            "/ex/notes/tenant-a/api/escape",
+            format!("{tenant}/..%2Ftenant-b/files/blob"),
+        )
+        .await;
+        redirect(
+            &gateway,
+            "/ex/notes/tenant-a/api/media",
+            format!("{}/file", media.uri()),
+        )
+        .await;
+        redirect(&media, "/file", format!("{other}/files/blob")).await;
+        serve_bytes(&gateway, "/ex/notes/tenant-a/files/blob").await;
+        serve_bytes(&gateway, "/ex/notes/tenant-b/files/blob").await;
+        let base = Url::parse(&format!("{tenant}/api/")).unwrap();
+        let client = client(
+            base.as_str(),
+            &allow(&[&gateway, &media]),
+            ClientProfile::Stream,
+        );
+        let prefix = Url::parse(&format!("{tenant}/")).unwrap();
+        let scoped = || rules(5, &|_| true).with_authorized_prefix(&prefix);
+        let url = |route: &str| base.join(route).unwrap();
+
+        // The configured tenant's own paths outside the API base receive it.
+        let response = client
+            .get_following_redirects(url("download"), scoped(), "item.download")
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "bytes");
+        for route in ["cross", "escape", "media"] {
+            let error = client
+                .get_following_redirects(url(route), scoped(), "item.download")
+                .await
+                .unwrap_err();
+            assert_eq!(error, UpstreamError::Redirect, "{route}");
+        }
+        assert_eq!(
+            hops(&gateway).await,
+            [
+                "/ex/notes/tenant-a/api/download Bearer service-secret",
+                "/ex/notes/tenant-a/files/blob Bearer service-secret",
+                "/ex/notes/tenant-a/api/cross Bearer service-secret",
+                "/ex/notes/tenant-a/api/escape Bearer service-secret",
+                "/ex/notes/tenant-a/api/media Bearer service-secret",
+            ]
+        );
+        assert_eq!(hops(&media).await, ["/file -"]);
+
+        // Without a prefix the scope is the client's base, so the tenant's
+        // paths outside it are refused too.
+        let error = client
+            .get_following_redirects(url("download"), rules(5, &|_| true), "item.download")
+            .await
+            .unwrap_err();
+        assert_eq!(error, UpstreamError::Redirect);
+        assert_eq!(hops(&gateway).await.len(), 6);
+
+        // A chain without an authorization carries no credential and is
+        // vetted by the allowlist alone; a credential its decoration adds is
+        // refused outside the scope.
+        let response = client
+            .get_following_redirects(
+                url("cross"),
+                RedirectRules::new(5, Duration::from_secs(5)),
+                "item.download",
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "bytes");
+        let error = client
+            .get_following_redirects(
+                url("cross"),
+                RedirectRules::new(5, Duration::from_secs(5))
+                    .with_authorized_prefix(&prefix)
+                    .with_decorate(&|request| request.bearer_auth("service-secret")),
+                "item.download",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, UpstreamError::NotSent { .. }), "{error:?}");
+        assert_eq!(
+            hops(&gateway).await[6..],
+            [
+                "/ex/notes/tenant-a/api/cross -",
+                "/ex/notes/tenant-b/files/blob -",
+                "/ex/notes/tenant-a/api/cross Bearer service-secret",
+            ]
+        );
+    }
+
+    /// Issues `Bearer token-<n>` for its `n`th hop, records each hop it
+    /// authorized, and fails from hop `fail_from` on.
+    struct CountingAuthorizer {
+        authorized: Mutex<Vec<String>>,
+        fail_from: usize,
+    }
+
+    #[async_trait]
+    impl RedirectAuthorizer for CountingAuthorizer {
+        async fn authorize(&self, url: &Url) -> Result<UpstreamAuthorization, ProviderError> {
+            let mut authorized = self.authorized.lock().unwrap();
+            authorized.push(url.path().to_owned());
+            if authorized.len() >= self.fail_from {
+                return Err(crate::host::port_failure(
+                    crate::host::HostPort::DelegatedLease,
+                    ProviderError::deny(ReasonCode::CredentialInvalid, "oauth_reconnect_required"),
+                ));
+            }
+            let token = format!("token-{}", authorized.len());
+            Ok(crate::test_support::bearer_credential(&token).authorization())
+        }
+    }
+
+    /// An authorizer is asked for each authorized hop immediately before it
+    /// is sent, never for hops to other origins, and its failure stops the
+    /// chain before that hop.
+    #[tokio::test]
+    async fn redirect_authorizers_authorize_each_hop_as_it_is_sent() {
+        let service = MockServer::start().await;
+        let media = MockServer::start().await;
+        let service_uri = service.uri();
+        redirect(&service, "/download", format!("{service_uri}/files/blob")).await;
+        redirect(&service, "/files/blob", format!("{}/file", media.uri())).await;
+        redirect(&media, "/file", format!("{service_uri}/files/final")).await;
+        serve_bytes(&service, "/files/final").await;
+        let client = client(
+            &service_uri,
+            &allow(&[&service, &media]),
+            ClientProfile::Stream,
+        );
+        let url = Url::parse(&format!("{service_uri}/download")).unwrap();
+
+        let authorizer = CountingAuthorizer {
+            authorized: Mutex::default(),
+            fail_from: usize::MAX,
+        };
+        let rules = RedirectRules::new(5, Duration::from_secs(5)).with_authorizer(&authorizer);
+        let response = client
+            .get_following_redirects(url.clone(), rules, "item.download")
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "bytes");
+        assert_eq!(
+            hops(&service).await,
+            [
+                "/download Bearer token-1",
+                "/files/blob Bearer token-2",
+                "/files/final Bearer token-3",
+            ]
+        );
+        assert_eq!(hops(&media).await, ["/file -"]);
+        assert_eq!(
+            *authorizer.authorized.lock().unwrap(),
+            ["/download", "/files/blob", "/files/final"]
+        );
+
+        let authorizer = CountingAuthorizer {
+            authorized: Mutex::default(),
+            fail_from: 2,
+        };
+        let rules = RedirectRules::new(5, Duration::from_secs(5)).with_authorizer(&authorizer);
+        let error = client
+            .get_following_redirects(url, rules, "item.download")
+            .await
+            .unwrap_err();
+        let UpstreamError::Authorization(failure) = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(failure.message, "oauth_reconnect_required");
+        assert_eq!(
+            failure.reason_code().host_port(),
+            Some(crate::host::HostPort::DelegatedLease)
+        );
+        assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
+        // The hop the authorizer failed for was never sent.
+        assert_eq!(hops(&service).await[3..], ["/download Bearer token-1"]);
     }
 
     #[tokio::test]

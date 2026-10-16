@@ -13,14 +13,25 @@
 //! once. The lease holds the operation's one recovery budget, shared by its
 //! lookups and its execution, and decides whether recovery is still
 //! possible. A static token's 401 is reported as before and never repeated.
-use crate::ATLASSIAN_OAUTH_AUDIENCE;
+//!
+//! An attachment download follows Atlassian's redirects, presenting the
+//! credential only on hops within the route's site
+//! ([`AtlassianClients::site_base`]): on the gateway, which serves every
+//! site from one origin, a hop to another cloud ID is never sent. Each
+//! authorized hop presents freshly revalidated access.
+use crate::{ATLASSIAN_OAUTH_AUDIENCE, AtlassianClients};
 use agent_access_provider::host::HostPort;
 use agent_access_provider::{
     DelegatedAccessError, DelegatedCredential, ExecutionAccess, ExecutionCredential, LookupAccess,
-    MutationReceipt, ProviderError, ReasonCode, StaticCredentialKind, UpstreamAuthorization,
+    MutationReceipt, ProviderError, ReasonCode, RedirectAuthorizer, RedirectRules,
+    StaticCredentialKind, UpstreamAuthorization, UpstreamError, complete_upstream_trace,
 };
+use async_trait::async_trait;
+use reqwest::{Response, StatusCode};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+use url::Url;
 
 /// The credential one Jira or Confluence request presents. Clones share a
 /// delegated credential's lease and its one recovery budget.
@@ -55,6 +66,18 @@ impl PresentedAccess {
     pub fn is_delegated(&self) -> bool {
         self.version.is_some()
     }
+}
+
+/// Why an attachment download ([`AtlassianCredential::download`]) returned
+/// no response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AtlassianDownloadError {
+    /// The redirect chain failed, including a redirect to a URL outside the
+    /// allowlist or, on the route's origin, outside its site.
+    Upstream(UpstreamError),
+    /// The credential could not be presented on the next authorized hop,
+    /// which was not sent, or the upstream rejected delegated access again.
+    Access(AtlassianAccessError),
 }
 
 /// Why a request's credential could not be presented. Nothing was sent.
@@ -161,15 +184,15 @@ impl AtlassianCredential {
     /// anything is sent.
     pub async fn present(&self) -> Result<PresentedAccess, AtlassianAccessError> {
         match &self.0 {
-            Material::Static(credential) => match credential.kind() {
-                StaticCredentialKind::BasicApiToken | StaticCredentialKind::BearerToken => {
-                    Ok(PresentedAccess {
-                        authorization: credential.authorization(),
-                        version: None,
-                    })
+            Material::Static(credential) => {
+                if !presentable_kind(credential.kind()) {
+                    return Err(AtlassianAccessError::UnsupportedKind);
                 }
-                _ => Err(AtlassianAccessError::UnsupportedKind),
-            },
+                Ok(PresentedAccess {
+                    authorization: credential.authorization(),
+                    version: None,
+                })
+            }
             Material::Delegated {
                 credential,
                 cloud_id,
@@ -230,6 +253,127 @@ impl AtlassianCredential {
             .await
             .map_err(AtlassianAccessError::Credential)?;
         Ok(replay)
+    }
+
+    /// GETs `url` through `clients`' stream client, following at most
+    /// `max_redirects` redirects, such as Atlassian's media redirects, and
+    /// waiting at most `deadline` for each hop's response headers.
+    ///
+    /// Only hops within the route's site ([`AtlassianClients::site_base`])
+    /// present the credential, each with delegated access revalidated and
+    /// pinned immediately before it is sent ([`Self::present`]); a lease
+    /// failure stops the download before that hop. A hop on the route's
+    /// origin outside its site, such as another cloud ID on the gateway,
+    /// fails the download before it is sent. Hops to other allowlisted
+    /// origins, such as Atlassian's media hosts, carry the correlation
+    /// headers but no credential.
+    ///
+    /// A 401 answering delegated access marks the version that hop
+    /// presented rejected, recovers once and starts the download over
+    /// ([`Self::rejected`]); a 401 from a hop that presented nothing is
+    /// returned like any other status.
+    pub async fn download(
+        &self,
+        clients: &AtlassianClients,
+        url: Url,
+        max_redirects: u32,
+        deadline: Duration,
+        operation: &str,
+        product: &str,
+    ) -> Result<Response, AtlassianDownloadError> {
+        if let Material::Static(credential) = &self.0
+            && !presentable_kind(credential.kind())
+        {
+            return Err(AtlassianDownloadError::Access(
+                AtlassianAccessError::UnsupportedKind,
+            ));
+        }
+        let mut attempt = 1;
+        loop {
+            let hops = HopPresenter {
+                credential: self,
+                last: Mutex::default(),
+            };
+            let rules = RedirectRules::new(max_redirects, deadline)
+                .with_authorizer(&hops)
+                .with_authorized_prefix(&clients.site_base)
+                // Atlassian media hosts join broker logs by these headers.
+                .correlating_other_origins();
+            let mut response = clients
+                .stream_client
+                .get_following_redirects(url.clone(), rules, operation)
+                .await
+                .map_err(|error| match error {
+                    UpstreamError::Authorization(failure) => {
+                        AtlassianDownloadError::Access(AtlassianAccessError::Credential(*failure))
+                    }
+                    other => AtlassianDownloadError::Upstream(other),
+                })?;
+            if response.status() == StatusCode::UNAUTHORIZED
+                && let Some(presented) = hops
+                    .presented_for(&response)
+                    .filter(PresentedAccess::is_delegated)
+            {
+                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+                self.rejected(&presented, (attempt == 1).then_some(()), product)
+                    .await
+                    .map_err(AtlassianDownloadError::Access)?;
+                attempt += 1;
+                continue;
+            }
+            return Ok(response);
+        }
+    }
+}
+
+/// The static credential kinds Atlassian providers present.
+fn presentable_kind(kind: StaticCredentialKind) -> bool {
+    matches!(
+        kind,
+        StaticCredentialKind::BasicApiToken | StaticCredentialKind::BearerToken
+    )
+}
+
+/// Presents a download's credential on each authorized hop, revalidating
+/// delegated access immediately before each one, and remembers what the last
+/// one presented.
+struct HopPresenter<'a> {
+    credential: &'a AtlassianCredential,
+    last: Mutex<Option<(Url, PresentedAccess)>>,
+}
+
+impl HopPresenter<'_> {
+    /// What the hop that answered `response` presented, if that hop was
+    /// authorized: the last authorized hop, when it was also the last hop.
+    fn presented_for(&self, response: &Response) -> Option<PresentedAccess> {
+        let last = self
+            .last
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        last.filter(|(url, _)| url == response.url())
+            .map(|(_, presented)| presented)
+    }
+}
+
+#[async_trait]
+impl RedirectAuthorizer for HopPresenter<'_> {
+    async fn authorize(&self, url: &Url) -> Result<UpstreamAuthorization, ProviderError> {
+        let presented = self
+            .credential
+            .present()
+            .await
+            .map_err(|error| match error {
+                AtlassianAccessError::Credential(failure) => failure,
+                // `download` refuses an unsupported static kind before the chain.
+                _ => ProviderError::deny(
+                    ReasonCode::CredentialNotProvisioned,
+                    "selected credential material is unavailable",
+                ),
+            })?;
+        let authorization = presented.authorization().clone();
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some((url.clone(), presented));
+        Ok(authorization)
     }
 }
 

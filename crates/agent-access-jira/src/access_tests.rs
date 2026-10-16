@@ -2,12 +2,14 @@
 //! gateway on the configured site, pinned to its cloud ID and the gateway
 //! audience before each one, with one 401 recovery per operation across
 //! lookups and execution, and receipts for writes whose read-back the
-//! connection stopped. Static tokens keep their routes.
+//! connection stopped. Static tokens keep their routes. Attachment
+//! downloads present either only within the configured site, revalidating
+//! delegated access before each authorized redirect hop.
 use super::*;
 use agent_access_atlassian::ATLASSIAN_OAUTH_AUDIENCE;
 use agent_access_provider::host::{HostPort, delegated_credential, port_failure};
 use agent_access_provider::test_support::{
-    InvocationBuilder, ScopeRequestFixture, basic_credential, bearer_credential,
+    InvocationBuilder, ScopeRequestFixture, TestHost, basic_credential, bearer_credential,
     delegated_binding_id,
 };
 use std::sync::Mutex;
@@ -138,13 +140,13 @@ fn provider(server: &MockServer) -> JiraProvider {
         .attachments
         .media_types
         .push("text/plain".to_string());
-    let mut backend = HttpJiraBackend::new_with_api_base(
+    let backend = HttpJiraBackend::new_with_api_base(
         config.clone(),
         ProviderLimits::default(),
         Url::parse(&format!("{}{SITE}/", server.uri())).unwrap(),
-    );
-    backend.routes.gateway_mut().unwrap().api_base =
-        Url::parse(&format!("{}{GATEWAY}/", server.uri())).unwrap();
+    )
+    .with_gateway_origin(&server.uri(), &TestHost::default())
+    .unwrap();
     JiraProvider::from_backend(config, ProviderLimits::default(), Arc::new(backend))
 }
 
@@ -690,4 +692,222 @@ async fn uploads_and_downloads_repeat_once_after_a_delegated_401() {
         ]
     );
     assert_eq!(lease.rejected(), ["v1"]);
+}
+
+/// Jira's backend for one site with the gateway enabled and served by
+/// `server`, allowing `media` as an Atlassian media host.
+fn backend_with_media(server: &MockServer, media: &MockServer) -> HttpJiraBackend {
+    let config: JiraProviderConfig = serde_json::from_value(json!({
+        "tenant_host": "example.atlassian.net",
+        "cloud_id": CLOUD_ID,
+        "allowed_upstream_hosts": [
+            format!("{}/**", server.uri()),
+            format!("{}/**", media.uri()),
+            "https://api.atlassian.com/ex/jira/**",
+        ],
+    }))
+    .unwrap();
+    HttpJiraBackend::new_with_api_base(
+        config,
+        ProviderLimits::default(),
+        Url::parse(&format!("{}{SITE}/", server.uri())).unwrap(),
+    )
+    .with_gateway_origin(&server.uri(), &TestHost::default())
+    .unwrap()
+}
+
+async fn redirect(server: &MockServer, route: &str, location: String) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", location))
+        .mount(server)
+        .await;
+}
+
+async fn serve(server: &MockServer, route: &str) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_bytes(b"evidence".to_vec()),
+        )
+        .mount(server)
+        .await;
+}
+
+/// An attachment download on the gateway presents OAuth access or a
+/// service account's bearer token only within the configured site. A
+/// redirect to another site's cloud ID, directly or back from a media host,
+/// fails before it is sent; a plain media redirect still works and carries
+/// no credential.
+#[tokio::test]
+async fn attachment_downloads_never_present_credentials_to_another_site() {
+    let lease = Lease::new(CLOUD_ID);
+    let credentials = [
+        (
+            AtlassianCredential::delegated(
+                delegated_credential(lease.clone()),
+                Some(Arc::from(CLOUD_ID)),
+            ),
+            "Bearer oauth-1",
+        ),
+        (
+            AtlassianCredential::from_static(bearer_credential("service-token")),
+            "Bearer service-token",
+        ),
+    ];
+    for (credential, presented) in credentials {
+        let server = MockServer::start().await;
+        let media = MockServer::start().await;
+        let content = |id: &str| format!("{GATEWAY}/attachment/content/{id}");
+        let elsewhere = |id: &str| {
+            format!(
+                "{}{}/attachment/content/{id}",
+                server.uri(),
+                GATEWAY.replace(CLOUD_ID, OTHER_CLOUD_ID)
+            )
+        };
+        redirect(&server, &content("10001"), elsewhere("10001")).await;
+        redirect(
+            &server,
+            &content("10002"),
+            format!("{}/file/10002", media.uri()),
+        )
+        .await;
+        redirect(&media, "/file/10002", elsewhere("10002")).await;
+        redirect(
+            &server,
+            &content("10003"),
+            format!("{}/file/10003", media.uri()),
+        )
+        .await;
+        serve(&media, "/file/10003").await;
+        // Whatever the other site would serve.
+        for id in ["10001", "10002"] {
+            let other_site = GATEWAY.replace(CLOUD_ID, OTHER_CLOUD_ID);
+            serve(&server, &format!("{other_site}/attachment/content/{id}")).await;
+        }
+        let backend = backend_with_media(&server, &media);
+
+        for id in ["10001", "10002"] {
+            let error = backend
+                .attachment_content(id, &credential)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error,
+                JiraBackendError::Protocol("Jira attachment redirect is invalid".to_string()),
+                "{id}"
+            );
+        }
+        let response = backend
+            .attachment_content("10003", &credential)
+            .await
+            .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            requests(&server).await,
+            [
+                format!("GET {} {presented}", content("10001")),
+                format!("GET {} {presented}", content("10002")),
+                format!("GET {} {presented}", content("10003")),
+            ]
+        );
+        let media_hops = media.received_requests().await.unwrap();
+        assert_eq!(media_hops.len(), 2);
+        assert!(
+            media_hops
+                .iter()
+                .all(|hop| !hop.headers.contains_key("authorization"))
+        );
+    }
+    assert!(lease.rejected().is_empty());
+}
+
+/// Answers with `response` after another operation refreshed `lease`.
+struct ThenRefreshed {
+    lease: Arc<Lease>,
+    response: ResponseTemplate,
+}
+
+impl Respond for ThenRefreshed {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        self.lease.current.fetch_add(1, Ordering::SeqCst);
+        self.response.clone()
+    }
+}
+
+/// Each authorized hop of a download presents access revalidated
+/// immediately before it: a refresh between hops reaches the next hop, and a
+/// connection lost between hops fails the download with the lease's own
+/// failure before the next hop is sent.
+#[tokio::test]
+async fn attachment_downloads_revalidate_access_before_each_hop() {
+    let server = MockServer::start().await;
+    let media = MockServer::start().await;
+    let backend = backend_with_media(&server, &media);
+    let content = |id: &str| format!("{GATEWAY}/attachment/content/{id}");
+    let attachment = |id: &str| format!("{GATEWAY}/attachment/{id}/evidence.txt");
+    let found = |id: &str| {
+        ResponseTemplate::new(302)
+            .insert_header("Location", format!("{}{}", server.uri(), attachment(id)))
+    };
+
+    let lease = Lease::new(CLOUD_ID);
+    Mock::given(path(content("10001")))
+        .respond_with(ThenRefreshed {
+            lease: lease.clone(),
+            response: found("10001"),
+        })
+        .mount(&server)
+        .await;
+    serve(&server, &attachment("10001")).await;
+    let credential = AtlassianCredential::delegated(
+        delegated_credential(lease.clone()),
+        Some(Arc::from(CLOUD_ID)),
+    );
+    let response = backend
+        .attachment_content("10001", &credential)
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        requests(&server).await,
+        [
+            format!("GET {} Bearer oauth-1", content("10001")),
+            format!("GET {} Bearer oauth-2", attachment("10001")),
+        ]
+    );
+
+    for (index, failure) in lease_failures().into_iter().enumerate() {
+        let id = format!("1002{index}");
+        let lease = Lease::new(CLOUD_ID);
+        Mock::given(path(content(&id)))
+            .respond_with(ThenLeaseFails {
+                lease: lease.clone(),
+                failure: failure.clone(),
+                response: found(&id),
+            })
+            .mount(&server)
+            .await;
+        serve(&server, &attachment(&id)).await;
+        let credential = AtlassianCredential::delegated(
+            delegated_credential(lease.clone()),
+            Some(Arc::from(CLOUD_ID)),
+        );
+        let before = requests(&server).await.len();
+        let error = backend
+            .attachment_content(&id, &credential)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error, JiraBackendError::Credential(failure));
+        assert_eq!(
+            requests(&server).await[before..],
+            [format!("GET {} Bearer oauth-1", content(&id))]
+        );
+        assert!(lease.rejected().is_empty());
+    }
 }

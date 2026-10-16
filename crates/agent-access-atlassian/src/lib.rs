@@ -1,15 +1,16 @@
 //! The `atlassian` OAuth dialect ([`ATLASSIAN_OAUTH_DIALECT`]) and the
 //! helpers the Jira and Confluence backends share: configuration
 //! validation, the credential each request presents ([`AtlassianCredential`],
-//! with delegated access pinned per request and one 401 recovery), the
+//! with delegated access pinned per request and one 401 recovery, and
+//! attachment downloads whose redirects keep it on the route's site), the
 //! tenant/gateway client routes, the credential binding of their
 //! continuations and the receipts of writes whose verification failed.
 mod access;
 mod oauth;
 
 pub use access::{
-    AtlassianAccessError, AtlassianCredential, AtlassianWriteVerification, PresentedAccess,
-    is_delegated_access_failure,
+    AtlassianAccessError, AtlassianCredential, AtlassianDownloadError, AtlassianWriteVerification,
+    PresentedAccess, is_delegated_access_failure,
 };
 pub use oauth::{ATLASSIAN_OAUTH_AUDIENCE, ATLASSIAN_OAUTH_DIALECT};
 
@@ -312,19 +313,41 @@ impl AtlassianSite<'_> {
 #[derive(Clone)]
 pub struct AtlassianClients {
     pub api_base: Url,
+    /// The root of the route's site, which `api_base` extends with the
+    /// product's API path: `https://<tenant_host>/` on the tenant route, or
+    /// `https://api.atlassian.com/ex/<provider>/<cloud_id>/` on the gateway,
+    /// whose one origin serves every site. Attachment download redirects
+    /// present the credential only within it.
+    pub site_base: Url,
     pub client: UpstreamClient,
     pub stream_client: UpstreamClient,
 }
 
 impl AtlassianClients {
-    /// Clients for `api_base` with the site's egress declaration and
-    /// allowlist, labelled `providers.<provider>.egress_proxy`.
+    /// Clients for `api_base`, which must end with the product's API path,
+    /// with the site's egress declaration and allowlist, labelled
+    /// `providers.<provider>.egress_proxy`.
     pub fn new(
         product: AtlassianProduct,
         site: &AtlassianSite<'_>,
         api_base: Url,
         factory: &dyn UpstreamClientFactory,
     ) -> Result<Self, ProviderBuildError> {
+        let site_root = api_base
+            .path()
+            .strip_suffix(product.api_path)
+            .filter(|root| root.ends_with('/'))
+            .ok_or_else(|| {
+                ProviderBuildError::invalid(format!(
+                    "providers.{}: the API base {api_base} does not end with {}",
+                    product.provider, product.api_path
+                ))
+            })?
+            .to_owned();
+        let mut site_base = api_base.clone();
+        site_base.set_path(&site_root);
+        site_base.set_query(None);
+        site_base.set_fragment(None);
         let label = format!("providers.{}.egress_proxy", product.provider);
         let client = |profile| {
             UpstreamClient::build(
@@ -344,6 +367,7 @@ impl AtlassianClients {
             client: client(ClientProfile::Request)?,
             stream_client: client(ClientProfile::Stream)?,
             api_base,
+            site_base,
         })
     }
 }
@@ -674,31 +698,37 @@ mod tests {
         }
     }
 
+    /// Each route's API base extends its site's root, the scope its
+    /// download redirects present the credential in: the tenant host, or
+    /// the configured cloud ID's path on the gateway shared by every site.
     #[test]
     fn credentials_route_to_the_tenant_or_the_gateway() {
         let host = TestHost::default();
         let allowed = hosts(true);
         let routes = AtlassianRoutes::new(PRODUCT, &site(Some(CLOUD_ID), &allowed), &host).unwrap();
+        let tenant = routes
+            .for_credential(&AtlassianCredential::from_static(basic_credential(
+                "agent@example.com",
+                "token",
+            )))
+            .unwrap();
         assert_eq!(
-            routes
-                .for_credential(&AtlassianCredential::from_static(basic_credential(
-                    "agent@example.com",
-                    "token"
-                )))
-                .unwrap()
-                .api_base
-                .as_str(),
+            tenant.api_base.as_str(),
             "https://example.atlassian.net/wiki/rest/api/"
         );
+        assert_eq!(tenant.site_base.as_str(), "https://example.atlassian.net/");
+        let gateway = routes
+            .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                "token",
+            )))
+            .unwrap();
         assert_eq!(
-            routes
-                .for_credential(&AtlassianCredential::from_static(bearer_credential(
-                    "token"
-                )))
-                .unwrap()
-                .api_base
-                .as_str(),
+            gateway.api_base.as_str(),
             format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/")
+        );
+        assert_eq!(
+            gateway.site_base.as_str(),
+            format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/")
         );
         let built = host.built_clients();
         assert_eq!(built.len(), 4);
@@ -721,6 +751,30 @@ mod tests {
                     .unwrap()
                     .to_string(),
                 "Confluence bearer tokens and OAuth connections require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
+            );
+        }
+    }
+
+    #[test]
+    fn clients_need_an_api_base_ending_with_the_product_api_path() {
+        let allowed = hosts(true);
+        for base in [
+            "https://example.atlassian.net/rest/api/",
+            "https://example.atlassian.net/xwiki/rest/api/",
+        ] {
+            let error = AtlassianClients::new(
+                PRODUCT,
+                &site(None, &allowed),
+                Url::parse(base).unwrap(),
+                &TestHost::default(),
+            )
+            .err()
+            .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not end with wiki/rest/api/"),
+                "{error}"
             );
         }
     }

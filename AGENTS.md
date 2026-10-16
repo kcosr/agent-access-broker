@@ -255,8 +255,9 @@ binary and needs `python3`, whose absence fails it.
   Static credentials and delegated access have no plaintext accessor, and
   providers never hold a request carrying one: they
   hand an `UpstreamAuthorization` to the send method (`UpstreamCall`,
-  `RedirectRules`), and the client adds the sensitive header to the request it
-  builds. Only the host's raw-client paths (Git gateway, Git verification) use
+  `RedirectRules`, or a per-hop `RedirectAuthorizer`), and the client adds the
+  sensitive header to the request it builds, along a redirect chain only within
+  its authorized path. Only the host's raw-client paths (Git gateway, Git verification) use
   the host-only `host::authorize_host_request` and the host-only
   `host::token_as_basic` placement, which presents a token as HTTP Basic; the
   boundary check rejects both in native, adapter, reference and helper crates.
@@ -324,7 +325,9 @@ binary and needs `python3`, whose absence fails it.
   with the OAuth connection table; `access.rs`, the credential each request
   presents: a static token, or delegated access pinned to the gateway route's
   cloud ID and `api.atlassian.com` before every request, with one 401 recovery
-  per operation, and the `mutation_verification_failed` receipt of a read-back
+  per operation, attachment downloads that present it only within the route's
+  site (`AtlassianClients::site_base`), revalidated before each redirect hop,
+  and the `mutation_verification_failed` receipt of a read-back
   the connection stopped; tenant/gateway client routes, where OAuth always
   takes the gateway, and their route fingerprint; the credential binding of
   their continuations and draft handles; and the vendor-level token profiles

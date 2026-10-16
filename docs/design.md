@@ -386,10 +386,16 @@ origin: the client refuses, before sending, any request to another origin that
 carries an `Authorization`, `Proxy-Authorization` or `Cookie` header or a header
 value marked sensitive, as proven unsent (see
 [credentials and origins](provider-sdk.md#credentials-and-origins)). The
-redirect helper presents the backend's authorization only on hops to that origin. Redirect
+redirect helper presents the backend's authorization only on hops within the
+chain's authorized path on that origin: the client's base, or a prefix the
+backend names, such as an Atlassian site's `/ex/<product>/<cloudId>/` path on the
+gateway. With an authorization, a hop on the base origin outside that path fails
+the chain before it is sent. An authorization can come from a per-hop
+authorizer, which Jira and Confluence use to revalidate delegated access
+immediately before each authorized hop. Redirect
 hops to other origins carry correlation headers only when the backend opts in
-(Jira does, for Atlassian media hosts; CloudBees CI does not, for artifact
-storage). Each request records one
+(Jira and Confluence do, for Atlassian media hosts; CloudBees CI does not, for
+artifact storage). Each request records one
 `upstream_request_completed` trace, either when the backend has classified the
 response or when the response is dropped. The trace captures the provider hook
 that sent the request, including from work moved onto other tasks with
@@ -2288,8 +2294,11 @@ admin config status reports the active `shutdownTimeoutMs`.
   normal brokered path and should be treated as a migration or break-glass
   exception by deployment policy.
 - **Redirects.** All three providers follow redirects manually, limited to
-  allowlisted hosts, and drop upstream auth on cross-origin hops. Both Atlassian
-  providers reject redirect responses on non-content (body) endpoints.
+  allowlisted hosts, and drop upstream auth on cross-origin hops. Atlassian
+  attachment downloads present it only within the route's site (the tenant host,
+  or the configured cloud ID's gateway path) and refuse a redirect to another
+  site on the same origin. Both Atlassian providers reject redirect responses on
+  non-content (body) endpoints.
 - **Atlassian gateway.** `bearer_token` Jira/Confluence credentials route through
   the Atlassian gateway and require `providers.<svc>.cloud_id` (validated UUID)
   plus `api.atlassian.com` in `allowed_upstream_hosts`.

@@ -126,11 +126,13 @@ connection = "atlassian"
   connection with `oauth` cannot use `atlassian-api-token` (see the
   [validation table](oauth.md#atlassian-registration)).
 - **Access per request.** Before every request, including the page, blog,
-  space and comment lookups before policy and at execution, list pages and
-  read-backs, Confluence revalidates the invocation's lease and pins its
-  access to the gateway route's cloud ID and the `api.atlassian.com`
-  audience. Access for another site fails as `credential_invalid` before
-  anything is sent.
+  space and comment lookups before policy and at execution, list pages,
+  read-backs and each authorized hop of an attachment download, Confluence
+  revalidates the invocation's lease and pins its access to the gateway
+  route's cloud ID and the `api.atlassian.com` audience. Access for another
+  site fails as `credential_invalid` before anything is sent, and a
+  connection lost between two download hops fails with its own reason before
+  the next hop.
 - **401.** The lookups and the execution share one recovery: when Confluence
   answers the connection's access with 401, the Broker marks it rejected,
   renews it once and repeats the request, writes and uploads included,
@@ -1127,7 +1129,14 @@ caps, allowlisted media type, 64-hex `sha256`), confirming the page→space firs
 
 **`attachment.download`** confirms page→space by lookup before authorization,
 then proves attachment→page membership, validates metadata, and streams the
-bounded content with up to 5 allowlisted redirects and same-origin-only auth.
+bounded content with up to 5 allowlisted redirects. The credential reaches only
+hops within the route's site: the tenant host for a classic API token, or the
+configured cloud ID's `https://api.atlassian.com/ex/confluence/<cloud_id>/` path
+for OAuth and bearer tokens, including `wiki/download/attachments/` there. A
+redirect on the same origin outside that site, such as another cloud ID on the
+gateway, fails the download (`upstream_protocol_failed`) before it is sent,
+whether it comes directly or back from a media host. Hops to Atlassian's media
+hosts carry the correlation headers but no credential.
 
 **`attachment.list`** is cursor-paginated. Its input accepts `{ pageId }` or
 `{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is

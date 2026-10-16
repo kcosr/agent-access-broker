@@ -42,8 +42,9 @@
 //! incompatible release of one of them is an SDK compatibility event.
 
 /// The `async-trait` 0.1 attribute macro, for implementing the SDK's async
-/// traits: [`Provider`](crate::Provider), [`OAuthDialect`](crate::OAuthDialect)
-/// and [`DelegatedLease`](crate::DelegatedLease).
+/// traits: [`Provider`](crate::Provider), [`OAuthDialect`](crate::OAuthDialect),
+/// [`DelegatedLease`](crate::DelegatedLease) and
+/// [`RedirectAuthorizer`](crate::RedirectAuthorizer).
 pub use ::async_trait::async_trait;
 
 /// `bytes` 1: the chunks of a provider result stream.

@@ -628,7 +628,8 @@ before dispatch:
   each header right after its correlation headers, before the headers the
   provider set, or in place of a provider header with the same name. For a
   redirect chain, `RedirectRules::with_authorization` presents it on every hop
-  to the service's own origin, after the hop's decoration.
+  within the chain's authorized path, after the hop's decoration (see
+  [requests, redirects and traces](#requests-redirects-and-traces)).
 - The header value is marked sensitive, so the client refuses a request to
   another origin than its base that would carry it (see
   [credentials and origins](#credentials-and-origins)). An
@@ -726,6 +727,11 @@ token serves, so the provider must check that on every use:
    the provider's own origin (see
    [credentials and origins](#credentials-and-origins)). The provider reads the
    access's target, audience, version and expiry, never its token.
+4. Follow a redirect chain with a `RedirectAuthorizer` given to
+   `RedirectRules::with_authorizer`, never with one access for the whole chain:
+   the client asks it for each authorized hop immediately before sending that
+   hop, so the authorizer calls `revalidated_access_for` per hop, as the
+   example below does.
 
 ```rust check
 use agent_access_provider::{
@@ -751,6 +757,68 @@ async fn delegated_authorization(
             ),
         })?;
     Ok((access.authorization(), access.version().to_owned()))
+}
+```
+
+A download that follows redirects revalidates the access for each authorized
+hop through a `RedirectAuthorizer`. Here one workspace's path on a notes origin
+shared by many workspaces is the authorized path, so a redirect to another
+workspace is never sent:
+
+```rust check
+use agent_access_provider::deps::async_trait;
+use agent_access_provider::deps::reqwest::Response;
+use agent_access_provider::deps::url::Url;
+use agent_access_provider::{
+    DelegatedAccessError, DelegatedCredential, ProviderError, ReasonCode, RedirectAuthorizer,
+    RedirectRules, UpstreamAuthorization, UpstreamClient, UpstreamError,
+};
+use std::time::Duration;
+
+const NOTES_TARGET: &str = "https://notes.example.com/";
+const NOTES_AUDIENCE: &str = "https://notes.example.com/api";
+
+/// Presents access revalidated immediately before each authorized hop.
+struct DelegatedHops<'a>(&'a DelegatedCredential);
+
+#[async_trait]
+impl RedirectAuthorizer for DelegatedHops<'_> {
+    async fn authorize(&self, _hop: &Url) -> Result<UpstreamAuthorization, ProviderError> {
+        let access = self
+            .0
+            .revalidated_access_for(NOTES_TARGET, NOTES_AUDIENCE)
+            .await
+            .map_err(|error| match error {
+                DelegatedAccessError::Revalidation(failure) => failure,
+                _ => ProviderError::deny(
+                    ReasonCode::CredentialInvalid,
+                    "the connected account does not grant access to the notes service",
+                ),
+            })?;
+        Ok(access.authorization())
+    }
+}
+
+/// Downloads `url`, an attachment of the workspace at `workspace`, following
+/// its storage redirects.
+async fn download_attachment(
+    client: &UpstreamClient,
+    credential: &DelegatedCredential,
+    workspace: &Url,
+    url: Url,
+) -> Result<Response, ProviderError> {
+    let hops = DelegatedHops(credential);
+    let rules = RedirectRules::new(3, Duration::from_secs(30))
+        .with_authorizer(&hops)
+        .with_authorized_prefix(workspace);
+    client
+        .get_following_redirects(url, rules, "note.attachment.download")
+        .await
+        .map_err(|error| match error {
+            // The lease's own failure, for the hop it stopped.
+            UpstreamError::Authorization(failure) => *failure,
+            other => ProviderError::error(other.reason_code(), "notes download failed"),
+        })
 }
 ```
 
@@ -927,18 +995,37 @@ local test servers; it is not a general proxy bypass.
   and the trace.
 - An `UpstreamError` means no usable response. `NotSent` proves the request
   never reached the upstream; `Timeout` and `Transport` may have been received
-  and acted on. `reason_code()` gives the standard reason to report. Keep a
+  and acted on. `Authorization` returns a redirect authorizer's own failure
+  for a hop it stopped; report that failure. `reason_code()` gives the
+  standard reason to report. Keep a
   write's proof or uncertainty in its outcome with a mutation receipt (see
   [outcomes and receipts](#outcomes-and-receipts)).
 - Clients never follow redirects. `get_following_redirects(url, rules,
   operation)` follows a GET chain by hand under
-  `RedirectRules::new(max_redirects, deadline)`. Every hop must be
-  allowlisted, carry no embedded credentials and pass any `with_vet` check.
-  The authorization given with `with_authorization` is presented only on hops
-  to the service's own origin.
-  Other origins receive correlation headers only with
-  `correlating_other_origins()`. Atlassian attachment downloads opt in for
-  media hosts; CloudBees CI artifact downloads do not.
+  `RedirectRules::new(max_redirects, deadline)`. Every hop, including the
+  first, must be allowlisted, carry no embedded credentials and pass any
+  `with_vet` check.
+- A redirect chain presents its authorization only on hops within its
+  authorized path: the client's base origin, at or below the base's path by
+  whole segments. `with_authorized_prefix(&prefix)` names another path on that
+  origin instead, wider or narrower than the base, such as one tenant's path on
+  a gateway that serves many tenants from one origin. A path a server could
+  decode into a `.` or `..` segment, such as `..%2F`, is outside every path.
+  - `with_authorization(&authorization)` presents the same static credential
+    on each authorized hop.
+  - `with_authorizer(&authorizer)` asks a `RedirectAuthorizer` for each
+    authorized hop's authorization immediately before that hop is sent, as
+    [delegated access](#delegated-access) requires. Its failure stops the
+    chain before the hop as `UpstreamError::Authorization`.
+  - With either, a hop on the base origin outside the authorized path fails the
+    chain as `UpstreamError::Redirect` before it is sent, with or without the
+    credential, because its bytes would come from outside the authority the
+    credential was lent for. A hop to another origin is sent without the
+    credential, and a credential its decoration adds outside the path fails as
+    `NotSent`.
+  - Other origins receive correlation headers only with
+    `correlating_other_origins()`. Atlassian attachment downloads opt in for
+    media hosts; CloudBees CI artifact downloads do not.
 
 Each request records one `upstream_request_completed` trace. Classify the
 response with `complete_upstream_trace(&mut response, reason)`, or detach the
@@ -1013,9 +1100,12 @@ gateway route and each OAuth destination do.
   untrusted, and check its origin first, as `same_origin(&url, client.base())`
   does, when you want to report your own reason instead of `NotSent`.
 - For a redirect chain, give the authorization to
-  `RedirectRules::with_authorization`; the client presents it only on hops to
-  the base origin, after `with_decorate`'s headers. Headers from
-  `with_decorate` go to every hop, so they must not carry credentials.
+  `RedirectRules::with_authorization`, or a `RedirectAuthorizer` to
+  `with_authorizer`; the client presents it only on hops within the chain's
+  authorized path on the base origin, after `with_decorate`'s headers. When
+  several tenants share the base origin, name the configured tenant's path with
+  `with_authorized_prefix`. Headers from `with_decorate` go to every hop, so
+  they must not carry credentials.
 
 ```rust check
 use agent_access_provider::deps::http::Method;
@@ -1051,8 +1141,11 @@ async fn authorized_get(
 The shipped providers follow this split. Confluence rejects an upstream
 pagination link on another origin before it sends the link with credentials.
 Jira and Confluence attachment downloads follow redirects to Atlassian media
-origins with correlation headers but without credentials, and CloudBees CI
-artifact downloads send neither to artifact storage.
+origins with correlation headers but without credentials, present the
+credential only within the route's site (on the gateway, the configured cloud
+ID's `/ex/<product>/<cloudId>/` path), and revalidate delegated access before
+each authorized hop. CloudBees CI artifact downloads send neither to artifact
+storage.
 
 ### Limits and throttling
 

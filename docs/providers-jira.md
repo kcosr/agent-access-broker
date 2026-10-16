@@ -116,10 +116,12 @@ connection = "atlassian"
   route and a bearer token the gateway. A connection with `oauth` cannot use
   `atlassian-api-token` (see the [validation table](oauth.md#atlassian-registration)).
 - **Access per request.** Before every request, including the project
-  lookups before policy and at execution, Jira revalidates the invocation's
-  lease and pins its access to the gateway route's cloud ID and the
-  `api.atlassian.com` audience. Access for another site fails as
-  `credential_invalid` before anything is sent.
+  lookups before policy and at execution and each authorized hop of an
+  attachment download, Jira revalidates the invocation's lease and pins its
+  access to the gateway route's cloud ID and the `api.atlassian.com` audience.
+  Access for another site fails as `credential_invalid` before anything is
+  sent, and a connection lost between two download hops fails with its own
+  reason before the next hop.
 - **401.** The lookups and the execution share one recovery: when Jira answers
   the connection's access with 401, the Broker marks it rejected, renews it
   once and repeats the request, writes and uploads included, because the 401
@@ -1187,7 +1189,13 @@ vs all-failed terminal outcomes.*
 **`attachment.download`** confirms the issue/project and the attachment's
 membership by lookup, validates the metadata size and content type, then GETs
 `attachment/content/{id}?redirect=false` with the execution credential. It follows
-up to 5 allowlisted redirects, attaching auth only on same-origin hops; every
+up to 5 allowlisted redirects, presenting the credential only on hops within the
+route's site: the tenant host for a classic API token, or the configured cloud
+ID's `https://api.atlassian.com/ex/jira/<cloud_id>/` path for OAuth and bearer
+tokens. A redirect on the same origin outside that site, such as another cloud
+ID on the gateway, fails the download (`upstream_protocol_failed`) before it is
+sent, whether it comes directly or back from a media host. Hops to other
+allowlisted origins, such as Atlassian's media hosts, carry no credential; every
 hop carries the correlation headers. The byte
 cap is `min(config.attachments.max_download_bytes, limits.max_download_bytes)`, and
 the streamed size is checked against the metadata size. Download is served as a raw

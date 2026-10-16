@@ -779,9 +779,11 @@ impl OAuthHttp {
             )
             .await
             .map_err(|error| match error {
-                UpstreamError::NotAllowed | UpstreamError::NotSent { .. } => {
-                    OAuthDialectError::NotSent
-                }
+                // A redirect authorizer's failure stops a hop before it is
+                // sent; a single send never has one.
+                UpstreamError::NotAllowed
+                | UpstreamError::NotSent { .. }
+                | UpstreamError::Authorization(_) => OAuthDialectError::NotSent,
                 UpstreamError::Timeout | UpstreamError::Transport(_) | UpstreamError::Redirect => {
                     OAuthDialectError::Failed
                 }

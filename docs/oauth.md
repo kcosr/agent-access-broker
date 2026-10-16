@@ -541,11 +541,13 @@ reconnects.
   `https://api.atlassian.com/ex/jira/<cloud_id>/` and
   `https://api.atlassian.com/ex/confluence/<cloud_id>/`; stored and service
   tokens keep routing by kind.
-- **Access per request.** Before every request, including each lookup, page
-  and read-back, the provider revalidates the invocation's lease and pins its
-  access to the gateway route's cloud ID and the `api.atlassian.com` audience.
-  Access for another site fails as `credential_invalid` before anything is
-  sent.
+- **Access per request.** Before every request, including each lookup, page,
+  read-back and attachment download redirect hop, the provider revalidates the
+  invocation's lease and pins its access to the gateway route's cloud ID and
+  the `api.atlassian.com` audience. Access for another site fails as
+  `credential_invalid` before anything is sent. Downloads present the access
+  only within that cloud ID's gateway path; a redirect to another site there
+  fails before it is sent.
 - **One recovery.** The lookups before policy and at execution and the
   execution share one lease. When Atlassian answers it with 401, the provider
   marks that access rejected and, once per invocation, renews it and repeats

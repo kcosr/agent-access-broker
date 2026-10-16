@@ -1779,6 +1779,7 @@ impl core::marker::UnsafeUnpin for agent_access_provider::StaticCredentialKind
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::StaticCredentialKind
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::StaticCredentialKind
 #[non_exhaustive] pub enum agent_access_provider::UpstreamError
+pub agent_access_provider::UpstreamError::Authorization(alloc::boxed::Box<agent_access_provider::ProviderError>)
 pub agent_access_provider::UpstreamError::NotAllowed
 pub agent_access_provider::UpstreamError::NotSent
 pub agent_access_provider::UpstreamError::NotSent::detail: alloc::string::String
@@ -3384,6 +3385,8 @@ impl<'a> agent_access_provider::RedirectRules<'a>
 pub fn agent_access_provider::RedirectRules<'a>::correlating_other_origins(self) -> Self
 pub fn agent_access_provider::RedirectRules<'a>::new(u32, core::time::Duration) -> Self
 pub fn agent_access_provider::RedirectRules<'a>::with_authorization(self, &'a agent_access_provider::UpstreamAuthorization) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::with_authorized_prefix(self, &'a url::Url) -> Self
+pub fn agent_access_provider::RedirectRules<'a>::with_authorizer(self, &'a dyn agent_access_provider::RedirectAuthorizer) -> Self
 pub fn agent_access_provider::RedirectRules<'a>::with_decorate(self, &'a (dyn core::ops::function::Fn(reqwest::async_impl::request::RequestBuilder) -> reqwest::async_impl::request::RequestBuilder + core::marker::Sync)) -> Self
 pub fn agent_access_provider::RedirectRules<'a>::with_vet(self, &'a (dyn core::ops::function::Fn(&url::Url) -> bool + core::marker::Sync)) -> Self
 impl<'a> core::marker::Freeze for agent_access_provider::RedirectRules<'a>
@@ -4108,6 +4111,8 @@ pub fn agent_access_provider::Provider::invoke<'life0, 'async_trait>(&'life0 sel
 pub fn agent_access_provider::Provider::resolve_scopes<'life0, 'life1, 'async_trait>(&'life0 self, agent_access_provider::ScopeRequest<'life1>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::ScopeResolution, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agent_access_provider::Provider::resource_roots(&self, &agent_access_provider::ResourceType) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::Provider::verify_execution_credential<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agent_access_provider::ExecutionCredential, &'life2 agent_access_provider::CorrelationContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agent_access_provider::ProviderCredentialVerification>, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait agent_access_provider::RedirectAuthorizer: core::marker::Send + core::marker::Sync
+pub fn agent_access_provider::RedirectAuthorizer::authorize<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 url::Url) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::UpstreamAuthorization, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait agent_access_provider::StableSigningKey: core::marker::Send + core::marker::Sync
 pub fn agent_access_provider::StableSigningKey::hmac_base64url(&self, &[u8], &[u8]) -> core::result::Result<alloc::string::String, agent_access_provider::SigningError>
 pub fn agent_access_provider::attachment_upload_plan(&[&str], core::option::Option<usize>) -> agent_access_provider::MultipartUploadSpec
@@ -4383,6 +4388,8 @@ trait agent_access_provider::Provider::invoke: required fn
 trait agent_access_provider::Provider::resolve_scopes: required fn
 trait agent_access_provider::Provider::resource_roots: provided fn
 trait agent_access_provider::Provider::verify_execution_credential: provided fn
+trait agent_access_provider::RedirectAuthorizer: dyn-compatible
+trait agent_access_provider::RedirectAuthorizer::authorize: required fn
 trait agent_access_provider::StableSigningKey: dyn-compatible
 trait agent_access_provider::StableSigningKey::hmac_base64url: required fn
 trait agent_access_provider::continuation::sealed::Stage: dyn-compatible

@@ -1,7 +1,8 @@
 //! The Jira backend seam, its wire types, and the HTTP implementation.
 use super::*;
 use agent_access_atlassian::{
-    AtlassianAccessError, AtlassianClients, AtlassianCredential, AtlassianProduct, AtlassianRoutes,
+    AtlassianAccessError, AtlassianClients, AtlassianCredential, AtlassianDownloadError,
+    AtlassianProduct, AtlassianRoutes,
 };
 use agent_access_provider::host::UpstreamClientFactory;
 
@@ -792,7 +793,7 @@ impl HttpJiraBackend {
 
     /// This backend with its gateway route served below `gateway`, an
     /// origin such as a stub server's: `{gateway}/ex/jira/{cloud_id}/rest/api/3/`.
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_gateway_origin(
         mut self,
         gateway: &str,
@@ -1850,42 +1851,31 @@ impl JiraBackend for HttpJiraBackend {
 }
 
 impl HttpJiraBackend {
-    /// Downloads `url`, following Atlassian's media redirects. Only the
-    /// first request carries the credential: delegated access that Jira
-    /// itself answers with 401 recovers once and the download starts over.
+    /// Downloads `url`, following up to 5 of Atlassian's media redirects.
+    /// The credential reaches only hops within the route's site, each with
+    /// freshly revalidated delegated access, and a redirect to another site
+    /// on the route's origin fails before it is sent. Delegated access that
+    /// Jira itself answers with 401 recovers once and the download starts
+    /// over ([`AtlassianCredential::download`]).
     pub(crate) async fn attachment_content_response(
         &self,
         url: Url,
         credential: &AtlassianCredential,
     ) -> Result<reqwest::Response, JiraBackendError> {
-        let client = self.stream_client(credential)?;
-        let mut attempt = 1;
-        loop {
-            let presented = credential.present().await?;
-            let mut response = client
-                .get_following_redirects(
-                    url.clone(),
-                    RedirectRules::new(5, Duration::from_millis(self.limits.request_timeout_ms))
-                        .with_authorization(presented.authorization())
-                        // Atlassian media hosts join broker logs by these headers.
-                        .correlating_other_origins(),
-                    "attachment.download",
-                )
-                .await
-                .map_err(jira_upstream_error)?;
-            if response.status().as_u16() == 401
-                && presented.is_delegated()
-                && same_origin(response.url(), &url)
-            {
-                complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
-                credential
-                    .rejected(&presented, (attempt == 1).then_some(()), "Jira")
-                    .await?;
-                attempt += 1;
-                continue;
-            }
-            return Ok(response);
-        }
+        credential
+            .download(
+                self.client_for(credential)?,
+                url,
+                5,
+                Duration::from_millis(self.limits.request_timeout_ms),
+                "attachment.download",
+                "Jira",
+            )
+            .await
+            .map_err(|error| match error {
+                AtlassianDownloadError::Upstream(error) => jira_upstream_error(error),
+                AtlassianDownloadError::Access(error) => error.into(),
+            })
     }
 }
 
