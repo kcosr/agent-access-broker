@@ -22,14 +22,30 @@ fn encrypt(
     state: &SlotState,
     key: &str,
 ) -> Result<EncryptedSecret, ManagedStoreError> {
+    let plaintext =
+        serde_json::to_vec(state).map_err(|_| ManagedStoreError::CredentialEncryptFailed)?;
+    encrypt_plaintext(
+        ring,
+        (owner, registration),
+        (&state.generation, &state.config_fingerprint),
+        &plaintext,
+        key,
+    )
+}
+
+fn encrypt_plaintext(
+    ring: &CredentialKeyRing,
+    (owner, registration): (&str, &str),
+    (generation, fingerprint): (&str, &str),
+    plaintext: &[u8],
+    key: &str,
+) -> Result<EncryptedSecret, ManagedStoreError> {
     let key_bytes = ring
         .keys
         .get(key)
         .ok_or_else(|| ManagedStoreError::EncryptionKeyMissing(key.into()))?;
     let cipher = Aes256Gcm::new_from_slice(key_bytes)
         .map_err(|_| ManagedStoreError::CredentialEncryptFailed)?;
-    let plaintext =
-        serde_json::to_vec(state).map_err(|_| ManagedStoreError::CredentialEncryptFailed)?;
     if plaintext.len() > 1024 * 1024 - 16 {
         return Err(ManagedStoreError::CredentialEncryptFailed);
     }
@@ -39,14 +55,8 @@ fn encrypt(
         .encrypt(
             Nonce::from_slice(&nonce),
             Payload {
-                msg: &plaintext,
-                aad: &aad(
-                    owner,
-                    registration,
-                    &state.generation,
-                    &state.config_fingerprint,
-                    key,
-                ),
+                msg: plaintext,
+                aad: &aad(owner, registration, generation, fingerprint, key),
             },
         )
         .map_err(|_| ManagedStoreError::CredentialEncryptFailed)?;
@@ -111,6 +121,43 @@ fn decrypt(ring: &CredentialKeyRing, row: &Row) -> Result<SlotState, ManagedStor
     }
     Ok(state)
 }
+/// Rewrites a stored slot's plaintext JSON in place, under the same
+/// generation and fingerprint, as an earlier version might have stored it.
+#[cfg(test)]
+pub(crate) fn edit_stored_slot_json(
+    store: &ManagedStore,
+    ring: &CredentialKeyRing,
+    owner: &str,
+    registration: &str,
+    edit: impl FnOnce(&mut serde_json::Value),
+) {
+    let conn = store.connection.lock().unwrap();
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT {COLUMNS} FROM oauth_slots WHERE owner_principal_id=?1 AND registration_id=?2"
+            ),
+            params![owner, registration],
+            from_row,
+        )
+        .unwrap();
+    let mut state = serde_json::to_value(decrypt(ring, &row).unwrap()).unwrap();
+    edit(&mut state);
+    let encrypted = encrypt_plaintext(
+        ring,
+        (owner, registration),
+        (&row.generation, &row.fingerprint),
+        &serde_json::to_vec(&state).unwrap(),
+        &row.key,
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE oauth_slots SET nonce=?3, ciphertext=?4 WHERE owner_principal_id=?1 AND registration_id=?2",
+        params![owner, registration, encrypted.nonce, encrypted.ciphertext],
+    )
+    .unwrap();
+}
+
 const COLUMNS: &str =
     "owner_principal_id,registration_id,generation,config_fingerprint,key_id,nonce,ciphertext";
 fn read(
@@ -154,6 +201,17 @@ pub(crate) fn check_session(
 
 /// Called only with the slot transaction held. The caller loads the currently
 /// published runtime here, never a runtime retained when consent started.
+///
+/// Consent is admitted for the registration: at least one current consumer
+/// of a credential connection that selects `binding` for the owner's
+/// current kind must admit the owner, under current runtime policy and the
+/// transaction's grants and group membership. A native consumer admits
+/// through an active `per_user` grant. An imported consumer counts only at
+/// the version recorded when the flow started (its fence), with an allowed
+/// destination, and admits through a grant or its service-keyed
+/// administrator-discovery admission. A connection rebound to another
+/// registration or profile, or a flow naming a service that no longer
+/// consumes the registration, is stale.
 pub(crate) fn check_admission(
     conn: &Connection,
     owner: &str,
@@ -161,47 +219,62 @@ pub(crate) fn check_admission(
     binding: &OAuthBinding,
     runtime: &crate::BrokerRuntime,
 ) -> Result<(), OAuthError> {
-    let connection = runtime
-        .effective_credentials()
-        .personal_connection(&admission.service)
-        .ok_or(OAuthError::Stale)?;
-    // The owner's current kind selects the connection's method.
     let owner_kind = super::principal_kind_at_conn(conn, owner).map_err(|_| OAuthError::Storage)?;
-    let crate::Selection::OAuth(oauth) = connection.select(owner_kind) else {
-        return Err(OAuthError::Stale);
-    };
-    let configured = oauth.binding();
-    if admission.credential_name != "default" || configured != *binding {
-        return Err(OAuthError::Stale);
-    }
-    if let Some(record) = runtime.imported_catalog().service(&admission.service) {
-        if admission.imported_service_version != Some(record.version)
-            || runtime
-                .require_import_destination(&record.definition)
-                .is_err()
-        {
+    let credentials = runtime.effective_credentials();
+    let mut consumers = Vec::new();
+    for (id, connection) in &credentials.connections {
+        let crate::Selection::OAuth(oauth) = crate::select(connection, owner_kind) else {
+            continue;
+        };
+        if oauth.registration != binding.registration {
+            continue;
+        }
+        if oauth.binding() != *binding {
             return Err(OAuthError::Stale);
         }
-    } else if admission.imported_service_version.is_some() {
+        consumers.extend(credentials.connection_consumers(id));
+    }
+    if consumers.is_empty() {
         return Err(OAuthError::Stale);
     }
-    if let Some(version) = admission.imported_service_version
-        && !super::imported_store::oauth_admission_version(conn, &admission.service, version)
+    if let Some(imported) = &admission.imported_service
+        && !consumers.contains(&imported.as_str())
+    {
+        return Err(OAuthError::Stale);
+    }
+    let mut fenced = false;
+    for service in consumers {
+        if let Some(record) = runtime.imported_catalog().service(service) {
+            let current = admission.imported_versions.get(service) == Some(&record.version)
+                && runtime
+                    .require_import_destination(&record.definition)
+                    .is_ok()
+                && super::imported_store::oauth_admission_version(conn, service, record.version)
+                    .map_err(|_| OAuthError::Storage)?;
+            if !current {
+                fenced = true;
+                continue;
+            }
+            if runtime
+                .has_per_user_setup_grant_at_conn(conn, owner, service)
+                .map_err(|_| OAuthError::Storage)?
+                || super::imported_store::admin_oauth_admission(conn, owner, service)
+                    .map_err(|_| OAuthError::Storage)?
+            {
+                return Ok(());
+            }
+        } else if runtime
+            .has_per_user_setup_grant_at_conn(conn, owner, service)
             .map_err(|_| OAuthError::Storage)?
-    {
-        return Err(OAuthError::Stale);
+        {
+            return Ok(());
+        }
     }
-    let allowed = runtime
-        .has_per_user_setup_grant_at_conn(conn, owner, &admission.service)
-        .map_err(|_| OAuthError::Storage)?;
-    if !allowed
-        && !(admission.imported_service_version.is_some()
-            && super::imported_store::admin_oauth_admission(conn, owner, &admission.service)
-                .map_err(|_| OAuthError::Storage)?)
-    {
-        return Err(OAuthError::SetupDenied);
-    }
-    Ok(())
+    Err(if fenced {
+        OAuthError::Stale
+    } else {
+        OAuthError::SetupDenied
+    })
 }
 fn active(conn: &Connection, owner: &str) -> Result<(), OAuthError> {
     let p = principal_by_id(conn, owner).map_err(|_| OAuthError::Principal)?;

@@ -281,35 +281,39 @@ pub(crate) async fn connect(
         Ok(entitlement) => entitlement,
         Err(failure) => return error(&context, operation, failure).await,
     };
-    let admission_service = match body.imported_service.as_deref() {
-        Some(service) => {
-            if !selected
-                .consumers
-                .iter()
-                .any(|consumer| consumer == service)
-                || context
-                    .snapshot
-                    .runtime
-                    .imported_catalog()
-                    .service(service)
-                    .is_none()
-            {
-                return error(&context, operation, OAuthError::Configuration).await;
-            }
-            if !entitled.iter().any(|consumer| consumer == service) {
-                return error(&context, operation, OAuthError::SetupDenied).await;
-            }
-            service.to_string()
-        }
-        None => {
-            if body.return_path == Some(OAuthReturnPath::Catalog) {
-                return error(&context, operation, OAuthError::Configuration).await;
-            }
-            match entitled.first() {
-                Some(service) => service.clone(),
-                None => return error(&context, operation, OAuthError::SetupDenied).await,
-            }
-        }
+    let runtime = &context.snapshot.runtime;
+    if let Some(service) = body.imported_service.as_deref()
+        && (!selected
+            .consumers
+            .iter()
+            .any(|consumer| consumer == service)
+            || runtime.imported_catalog().service(service).is_none())
+    {
+        return error(&context, operation, OAuthError::Configuration).await;
+    }
+    if body.return_path == Some(OAuthReturnPath::Catalog) && body.imported_service.is_none() {
+        return error(&context, operation, OAuthError::InvalidFlow).await;
+    }
+    // Checked again, transactionally, when the flow starts, is claimed and
+    // installs; this early denial contacts no provider.
+    if entitled.is_empty() {
+        return error(&context, operation, OAuthError::SetupDenied).await;
+    }
+    // Each imported consumer admits only at the version it has now.
+    let imported_versions = selected
+        .consumers
+        .iter()
+        .filter_map(|service| {
+            runtime
+                .imported_catalog()
+                .service(service)
+                .map(|record| (service.clone(), record.version))
+        })
+        .collect();
+    let admission = OAuthManagementAdmission {
+        imported_service: body.imported_service.clone(),
+        imported_versions,
+        return_path: body.return_path,
     };
     let Some(manager) = context.snapshot.runtime.oauth_manager() else {
         return error(&context, operation, OAuthError::Configuration).await;
@@ -327,17 +331,7 @@ pub(crate) async fn connect(
             session(&context).unwrap(),
             &selected.binding,
             body.intent,
-            OAuthManagementAdmission {
-                imported_service_version: context
-                    .snapshot
-                    .runtime
-                    .imported_catalog()
-                    .service(&admission_service)
-                    .map(|r| r.version),
-                service: admission_service,
-                credential_name: "default".into(),
-                return_path: body.return_path,
-            },
+            admission,
             {
                 let reloadable = state.reloadable.clone();
                 Arc::new(move || Arc::new(reloadable.current().runtime.clone()))
