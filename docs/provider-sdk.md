@@ -899,6 +899,22 @@ each service that consumes a credential connection using the registration, with
 that service's declared authority (`None` when it declares none). The default
 accepts every consumer.
 
+A dialect whose authorization server revokes tokens (RFC 7009) overrides
+`OAuthDialect::supports_revocation` to return `true` and implements
+`OAuthDialect::revoke(http, client, TokenRevocation)`. The host calls it for
+each access and refresh token of a family it ends (disconnect, a replacing
+consent, an uncertain refresh or the owner's disablement), from a durable
+pending record, so it may call it again for a token after a restart. Send one
+request through `OAuthHttp` with the token and its
+`token_type.hint()`, and return `RevocationOutcome::Revoked`, or
+`RevocationOutcome::AlreadyInvalid` when the server reports the token already
+invalid. Report a retryable failure as `NotSent`, `Failed`, `Throttled`,
+`RetryAfter` or `ClientRejected`; the host retries those on a bounded schedule
+and treats any other error as final for that token. Include the revocation
+endpoint in `upstream_allowlist`. The default `revoke` fails as
+`Configuration`, and a dialect that does not opt in leaves every ended family
+`not_requested`.
+
 A registration's optional `login_binding` (`OAuthLoginBinding`: the Broker
 sign-in `provider`, the upstream's `upstream_identity_provider` name and the
 attested `upstream_tenant_id`) makes the host install only upstream accounts

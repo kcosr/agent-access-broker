@@ -488,6 +488,52 @@ impl LinkedIdentity {
     }
 }
 
+/// Which kind of token a revocation names: RFC 7009's `token_type_hint`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthTokenType {
+    AccessToken,
+    RefreshToken,
+}
+
+impl OAuthTokenType {
+    /// The RFC 7009 `token_type_hint` value: `access_token` or
+    /// `refresh_token`.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            Self::AccessToken => "access_token",
+            Self::RefreshToken => "refresh_token",
+        }
+    }
+}
+
+/// One token a registration issued, for the host to revoke at the
+/// authorization server. It holds the token, so it has no Debug. The host
+/// creates it; dialect tests build one with [`Self::new`].
+#[non_exhaustive]
+#[derive(Clone, Copy)]
+pub struct TokenRevocation<'a> {
+    pub token: &'a str,
+    pub token_type: OAuthTokenType,
+}
+
+impl<'a> TokenRevocation<'a> {
+    pub fn new(token: &'a str, token_type: OAuthTokenType) -> Self {
+        Self { token, token_type }
+    }
+}
+
+/// How an authorization server answered a revocation.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevocationOutcome {
+    /// The server revoked the token.
+    Revoked,
+    /// The server reported the token already invalid: revoked earlier,
+    /// expired or unknown to it.
+    AlreadyInvalid,
+}
+
 /// How an OAuth request failed. The manager's refresh fences depend on the
 /// distinction between failures that provably left a grant unused and those
 /// that might have consumed it: a dialect must report `RetryAfter`,
@@ -592,6 +638,32 @@ pub trait OAuthDialect: Send + Sync + 'static {
     fn supports_login_binding(&self) -> bool {
         false
     }
+
+    /// Whether [`Self::revoke`] revokes tokens at the authorization server.
+    /// When the host ends a connection's token family (disconnect, a
+    /// replacing consent, an uncertain refresh or the owner's disablement),
+    /// it keeps the family's tokens for remote revocation only for a dialect
+    /// that opts in; for any other it reports that revocation was not
+    /// requested.
+    fn supports_revocation(&self) -> bool {
+        false
+    }
+
+    /// Revokes one token the registration issued (RFC 7009), sending at
+    /// most one request and never retrying. The host retries
+    /// `NotSent`, `Failed`, `Throttled`, `RetryAfter` and `ClientRejected`
+    /// within a bounded schedule; any other error is final for that token.
+    /// The host calls it only when [`Self::supports_revocation`] is `true`;
+    /// the default fails as `Configuration`.
+    async fn revoke(
+        &self,
+        _http: &OAuthHttp,
+        _client: &OAuthClient<'_>,
+        _revocation: TokenRevocation<'_>,
+    ) -> Result<RevocationOutcome, OAuthDialectError> {
+        Err(OAuthDialectError::Configuration)
+    }
+
     /// Checks the dialect adds to a registration's generic validation; the
     /// error explains, without secrets, what the registration must change.
     fn validate_registration(&self, config: &OAuthRegistrationConfig) -> Result<(), String>;
