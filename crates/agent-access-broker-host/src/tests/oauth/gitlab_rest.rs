@@ -420,12 +420,19 @@ async fn a_request_in_flight_across_a_refresh_recovers_once_with_the_successor()
 /// A refresh whose response is lost after GitLab consumed the refresh token
 /// leaves the family uncertain: the request fails as needing reconnect,
 /// later requests fail the same way without sending the old refresh token
-/// again, and reconnecting restores access.
+/// again, and reconnecting restores access. The predecessor is revoked, but
+/// the successor GitLab may have issued is unknown, so the connection
+/// reports its remote revocation `unconfirmed`.
 #[tokio::test]
 async fn a_refresh_response_lost_in_transit_requires_reconnect() {
     let gitlab = MockServer::start().await;
     let fixture = gitlab_rest_fixture(&gitlab).await;
     mount_consent(&gitlab, 1, 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&gitlab)
+        .await;
     fixture.gitlab_rest_consent("connect").await;
     let consented = gitlab.received_requests().await.unwrap().len();
     // GitLab rotated the family, but the response broke off mid-body.
@@ -469,6 +476,56 @@ async fn a_refresh_response_lost_in_transit_requires_reconnect() {
         connection.reason.as_deref(),
         Some("oauth_refresh_uncertain")
     );
+    // The serving broker's revocation worker revokes the predecessor.
+    let started = std::time::Instant::now();
+    loop {
+        let revoked = gitlab_requests(&gitlab, consented)
+            .await
+            .iter()
+            .filter(|request| request.contains("/oauth/revoke"))
+            .count();
+        if revoked == 2 {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "{revoked}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let revoked = gitlab
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/oauth/revoke")
+        .map(|request| {
+            url::form_urlencoded::parse(&request.body)
+                .into_owned()
+                .collect::<BTreeMap<String, String>>()["token"]
+                .clone()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        revoked,
+        BTreeSet::from(["gitlab-access-1".to_owned(), "gitlab-refresh-1".to_owned()])
+    );
+    let rows = response_json(
+        fixture
+            .browser(
+                Method::GET,
+                "/v1/oauth/connections",
+                "gitlab-uncertain-rows",
+                None,
+            )
+            .await,
+    )
+    .await;
+    let row = rows["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["registration"] == "gitlab")
+        .unwrap()
+        .clone();
+    assert_eq!(row["remoteRevocation"], "unconfirmed");
 
     mount_consent(&gitlab, 3, 7200).await;
     fixture.gitlab_rest_consent("reconnect").await;
@@ -478,6 +535,30 @@ async fn a_refresh_response_lost_in_transit_requires_reconnect() {
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(refreshes(&gitlab, consented).await.len(), 1);
+    // Disconnecting the new connection revokes its family, while the old
+    // one stays unconfirmed: only revoking the application in GitLab ends
+    // its unknown successor.
+    let response = fixture
+        .browser(
+            Method::DELETE,
+            "/v1/oauth/connections/gitlab",
+            "gitlab-uncertain-disconnect",
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["result"],
+        json!({"disconnected": true, "remoteRevocation": "unconfirmed"})
+    );
+    let revoked = gitlab
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/oauth/revoke")
+        .count();
+    assert_eq!(revoked, 4);
 }
 
 /// Project token issuance needs a personal access token, so it is refused

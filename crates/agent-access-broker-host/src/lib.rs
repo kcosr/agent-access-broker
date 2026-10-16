@@ -11,6 +11,7 @@ mod identity;
 mod ingress;
 mod lifecycle;
 mod mcp;
+mod oauth_revocations;
 mod observability;
 mod operations;
 mod reload;

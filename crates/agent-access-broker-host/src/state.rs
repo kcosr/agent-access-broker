@@ -60,6 +60,8 @@ pub(crate) struct ReloadableState {
     pub(crate) shutdown_timeout: Duration,
     pub(crate) audit_registry: Arc<AuditRuntimeRegistry>,
     pub(crate) last_reload_attempt: Mutex<Option<ReloadAttemptSummary>>,
+    /// The OAuth revocation worker, while serving.
+    pub(crate) oauth_revocations: crate::oauth_revocations::RevocationWorkerSlot,
     #[cfg(test)]
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
     #[cfg(test)]
@@ -647,6 +649,7 @@ impl ReloadableState {
             shutdown_timeout,
             audit_registry,
             last_reload_attempt: Mutex::new(None),
+            oauth_revocations: Default::default(),
             #[cfg(test)]
             mcp_admission_barrier: Mutex::new(None),
             #[cfg(test)]

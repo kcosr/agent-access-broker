@@ -11,7 +11,7 @@
 
 use agent_access_core::{
     BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialInputSchema, CredentialMetadata,
-    IdentityContext, PrincipalKind, Selection,
+    IdentityContext, PrincipalKind, RemoteRevocation, Selection,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -76,6 +76,9 @@ pub(super) struct ConnectionRow {
     pub(super) credential_kind: Option<String>,
     /// The OAuth registration, for the OAuth method.
     pub(super) registration: Option<String>,
+    /// What is known about revoking the principal's ended families of that
+    /// registration at the provider, for the OAuth method.
+    pub(super) remote_revocation: Option<RemoteRevocation>,
     /// The stored active token, for the token method; `null` until one is
     /// stored.
     pub(super) credential: Option<Value>,
@@ -308,6 +311,14 @@ pub(super) fn credential_list(
             Selection::OAuth(oauth) => Some(oauth.registration.clone()),
             _ => None,
         };
+        // Unknown, and so null, while OAuth is inactive or the store cannot
+        // answer.
+        let remote_revocation = registration.as_ref().and_then(|registration| {
+            runtime
+                .oauth_manager()?
+                .remote_revocation(&identity.principal, registration)
+                .ok()
+        });
         listed.push(ConnectionRow {
             display_name: display_name(runtime, &connection),
             connection,
@@ -317,6 +328,7 @@ pub(super) fn credential_list(
             profile: token.as_ref().map(|(profile, _)| profile.clone()),
             credential_kind: token.map(|(_, credential_kind)| credential_kind),
             registration,
+            remote_revocation,
             credential: credential.map(connection_credential),
         });
     }

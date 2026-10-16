@@ -1332,7 +1332,7 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
         "description":"One row per OAuth registration the caller's credential connections select: registrations available for setup, plus existing owned connections available for local disconnect. Setup requires self-service and a matching per-user grant on a consuming service or the administrator import-discovery exception; it does not authorize invocation.",
         "items":{
             "type":"object","additionalProperties":false,
-            "required":["registration","displayName","connectionDescription","consumers","otherConsumers","permissionProfile","scopeMode","requestedScopes","target","canConnect","canDisconnect","connectUnavailableReason","connection"],
+            "required":["registration","displayName","connectionDescription","consumers","otherConsumers","permissionProfile","scopeMode","requestedScopes","target","canConnect","canDisconnect","connectUnavailableReason","remoteRevocation","connection"],
             "properties":{
                 "registration":{"type":"string"},
                 "displayName":{"type":"string"},
@@ -1346,11 +1346,20 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
                 "canConnect":{"type":"boolean"},
                 "canDisconnect":{"type":"boolean","description":"An owned connection exists. Local disconnect remains available after setup entitlement is removed."},
                 "connectUnavailableReason":{"enum":[null,"no_personal_access","service_unavailable","login_binding_required"],"description":"login_binding_required: the registration binds connections to a Broker sign-in the caller has not linked."},
+                "remoteRevocation":remote_revocation_schema(),
                 "connection":connection_schema
             }
         }
     }));
     routes[1].sensitive_response_pointers = vec!["/result/authorizationUrl".into()];
+    routes[2].result_schema = Some(json!({
+        "type":"object","additionalProperties":false,
+        "required":["disconnected","remoteRevocation"],
+        "properties":{
+            "disconnected":{"const":true},
+            "remoteRevocation":remote_revocation_schema()
+        }
+    }));
     // The redirect callback is a browser protocol endpoint, like /v1/auth/*,
     // rather than an envelope-based JSON send route. See docs/oauth.md.
     routes
@@ -2889,6 +2898,15 @@ fn credential_targets_result_schema() -> Value {
     })
 }
 
+/// What the Broker knows about revoking an owner's ended OAuth token
+/// families of one registration at the provider.
+fn remote_revocation_schema() -> Value {
+    json!({
+        "enum":["not_requested","pending","revoked","failed","unconfirmed"],
+        "description":"Remote revocation of the owner's ended token families for the registration, most severe first: unconfirmed (a successor the Broker never learned may exist; revoke the application at the provider), failed (a known token could not be revoked), pending (in progress), revoked (every known token revoked and no unknown successor can exist), not_requested (nothing kept for revocation, as for dialects that do not revoke). Local access ends at disconnect whatever this reports."
+    })
+}
+
 fn personal_credentials_result_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
@@ -2899,7 +2917,7 @@ fn personal_credentials_result_schema() -> Value {
                 "description": "Credential connections the principal is entitled to through a consuming service, plus any connection whose active token the principal still owns.",
                 "items": {
                     "type": "object", "additionalProperties": false,
-                    "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "profile", "credentialKind", "registration", "credential"],
+                    "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "profile", "credentialKind", "registration", "remoteRevocation", "credential"],
                     "properties": {
                         "connection": {"type": "string"},
                         "displayName": {"type": "string"},
@@ -2909,6 +2927,7 @@ fn personal_credentials_result_schema() -> Value {
                         "profile": {"type": ["string", "null"]},
                         "credentialKind": {"type": ["string", "null"]},
                         "registration": {"type": ["string", "null"]},
+                        "remoteRevocation": {"enum": [null, "not_requested", "pending", "revoked", "failed", "unconfirmed"], "description": "For the OAuth method, the registration's remote revocation state as GET /v1/oauth/connections reports it; null for other methods or when OAuth is inactive."},
                         "credential": {"type": ["object", "null"], "description": "The active token's metadata, keyed by connection."}
                     }
                 }

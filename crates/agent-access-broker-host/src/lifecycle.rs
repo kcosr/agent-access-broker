@@ -400,6 +400,8 @@ async fn run_service(
     };
     #[cfg(not(any(test, feature = "test-support")))]
     let (public_listener, gateway_listener) = bind_listeners(listen, gateway_listen).await?;
+    // Its first pass resumes the revocations a previous process left pending.
+    state.oauth_revocations.start(&state);
 
     let coordinator = ShutdownCoordinator::new();
     let SignalSource { shutdown, reload } = signals;
@@ -605,6 +607,8 @@ async fn drain_lifecycle(
         }
     }
 
+    // No revocation pass starts once shutdown has begun.
+    state.oauth_revocations.stop();
     let operation_state = state.clone();
     let operation_budget =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or_default();
@@ -690,6 +694,18 @@ async fn drain_lifecycle(
                 .max(SHUTDOWN_DRAIN_FLOOR),
         )
         .await;
+    // A cancelled pass leaves its tokens pending for the next process.
+    if !state
+        .oauth_revocations
+        .shutdown(
+            remaining_shutdown_time(&coordinator, shutdown_timeout)
+                .unwrap_or_default()
+                .max(SHUTDOWN_DRAIN_FLOOR),
+        )
+        .await
+    {
+        tracing::warn!(event = "oauth_revocation_shutdown_unfinished");
+    }
     let remaining =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);
     let audit_error = match state.shutdown_audit(remaining).await {

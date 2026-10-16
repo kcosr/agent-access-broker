@@ -7,6 +7,7 @@ use super::connections;
 use crate::state::AppState;
 use agent_access_core::{
     OAuthBinding, OAuthConnectIntent, OAuthError, OAuthManagementAdmission, OAuthReturnPath,
+    RemoteRevocation,
 };
 use agent_access_provider::{CorrelationContext, ReasonCode, host::with_correlation_context};
 use axum::Json;
@@ -212,6 +213,11 @@ pub(crate) async fn list(
             continue;
         };
         let (consumers, other_consumers) = registration_consumer_view(runtime, selected, &entitled);
+        let remote_revocation =
+            match manager.remote_revocation(&context.identity.principal, &registration_id) {
+                Ok(state) => state,
+                Err(failure) => return error(&context, operation, failure).await,
+            };
         // An entitled consumer's backend describes the connection; the
         // caller learns nothing of consumers it is not entitled to.
         let description = entitled
@@ -231,24 +237,41 @@ pub(crate) async fn list(
             "scopeMode":profile.scope_mode,"requestedScopes":profile.requested_scopes(),
             "target":profile.target,"consumers":consumers,"otherConsumers":other_consumers,
             "canConnect":unavailable.is_none(),"connectUnavailableReason":unavailable,
-            "canDisconnect":owned,"connection":connection}));
+            "canDisconnect":owned,"remoteRevocation":remote_revocation,"connection":connection}));
     }
     // An owned connection whose registration no credential connection
     // selects for the caller any more, because its last consumer was
     // removed or rebound, stays listed for local disconnect on ownership
-    // alone. No binding names its permission profile, and the slot keeps
-    // no durable record of the consented one, so its profile fields are
-    // null.
-    for connection in owned_connections.iter().filter(|connection| {
-        connection.connection_id.is_some()
-            && !selected_registrations.contains_key(&connection.registration)
-    }) {
+    // alone; so does one whose remote revocation still needs attention
+    // after that disconnect. No binding names its permission profile, and
+    // the slot keeps no durable record of the consented one, so its profile
+    // fields are null.
+    for connection in owned_connections
+        .iter()
+        .filter(|connection| !selected_registrations.contains_key(&connection.registration))
+    {
+        let remote_revocation = match manager
+            .remote_revocation(&context.identity.principal, &connection.registration)
+        {
+            Ok(state) => state,
+            Err(failure) => return error(&context, operation, failure).await,
+        };
+        let owned = connection.connection_id.is_some();
+        if !owned
+            && matches!(
+                remote_revocation,
+                RemoteRevocation::NotRequested | RemoteRevocation::Revoked
+            )
+        {
+            continue;
+        }
         rows.push(json!({"registration":connection.registration,
             "permissionProfile":null,"displayName":connection.registration,
             "connectionDescription":null,"scopeMode":null,"requestedScopes":[],"target":null,
             "consumers":[],"otherConsumers":0,
             "canConnect":false,"connectUnavailableReason":"no_personal_access",
-            "canDisconnect":true,"connection":connection}));
+            "canDisconnect":owned,"remoteRevocation":remote_revocation,
+            "connection":connection}));
     }
     private_response(management_success_response(&context, operation, None, json!(rows)).await)
 }
@@ -401,19 +424,26 @@ pub(crate) async fn disconnect(
     {
         return *r;
     }
-    if owned
-        && let Err(failure) = manager
+    // Disconnect fences the connection locally first and keeps its family
+    // for remote revocation, then makes one revocation pass; the answer
+    // reports every revocation of the owner's families for the registration.
+    let remote_revocation = if owned {
+        manager
             .disconnect(&context.identity.principal, &registration)
             .await
-    {
-        return error(&context, operation, failure).await;
-    }
+    } else {
+        manager.remote_revocation(&context.identity.principal, &registration)
+    };
+    let remote_revocation = match remote_revocation {
+        Ok(state) => state,
+        Err(failure) => return error(&context, operation, failure).await,
+    };
     private_response(
         management_success_response(
             &context,
             operation,
             None,
-            json!({"disconnected":true,"remoteRevocation":"not_requested"}),
+            json!({"disconnected":true,"remoteRevocation":remote_revocation}),
         )
         .await,
     )
