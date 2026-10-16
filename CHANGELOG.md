@@ -192,13 +192,26 @@ All notable changes to this project are documented in this file.
   struct literals, and extendable enums are non-exhaustive (see
   `api/README.md` for the policy and the intentionally exhaustive items).
   - Static definitions have private fields and `const` builders:
-    `ResourceTypeDescriptor::new(id, label, plural_label, example, canonical)`
-    with `.with_namespace(NamespaceSelectorDescriptor::new(..))`,
-    `.with_attributes(&[ResourceAttributeDescriptor::required(..)])` and
-    `.with_action_inputs(..)`, read through `id()`, `label()`, `namespace()`,
-    `attributes()`, `action_inputs(selector)` and `is_valid`;
+    `ResourceTypeDescriptor::new(id, label, plural_label, example, canonical,
+    attributes)` with `.with_namespace(NamespaceSelectorDescriptor::new(..))`
+    and `.with_action_inputs(..)`, read through `id()`, `label()`,
+    `namespace()`, `attributes()`, `action_inputs(selector)` and `is_valid`;
     `presentation::ActionPresentation::new(bodies, whole)` and
-    `EmbeddedBody::new(owner_path, codec)`.
+    `EmbeddedBody::new(owner_path, codec)`. The private attributes are a
+    constructor argument, `&[]` for none; `with_attributes` is removed. A
+    nonempty attribute list is its own `static` array of
+    `ResourceAttributeDescriptor::required(..)` or `optional(..)` entries; an
+    inline `&[..]` array no longer compiles.
+  - Resource types can also be declared at runtime:
+    `ResourceTypeDescriptor::declared(id, label, plural_label, example,
+    pattern, attributes)` and `ResourceAttributeDescriptor::declared(name,
+    label, description, required, pattern)`, with `ResourcePattern::new(source,
+    max_length)` as the whole-value grammar, a complete `regex`-dialect
+    expression on its own. Descriptor accessors return
+    borrowed `&str` and `&[ResourceAttributeDescriptor]` instead of `'static`
+    data. `ResourceTypeRegistry` holds shared `Arc<ResourceTypeDescriptor>`
+    values: `get` and `descriptors` return them, and `from_shared` builds a
+    registry from them.
   - `UpstreamClientSpec::new(label, provider, base, egress, allowed_hosts,
     profile)` with `.with_status_reasons(..)`, and `RedirectRules::new(max,
     deadline)` with `.with_authorization(..)`, `.correlating_other_origins()`,
@@ -481,6 +494,37 @@ All notable changes to this project are documented in this file.
   `commandImports` (approved names only) and command import results
   `commandVersion`. Command invocations fail closed before any process starts
   in this build.
+- Command imports register the resource types their manifests declare under
+  Broker type IDs proposed as `<service>_<id>`. Accepted types are listed by
+  `GET /v1/resource-types`, stay registered while the import is disabled or
+  retired and across restarts, which build them from stored import metadata
+  before validating stored resources, and validate their private attributes
+  from the declaration without a configured backend. A type marked removed in
+  the accepted metadata accepts no new resources.
+- Command import refreshes change resource types in place under the safe-change
+  rules. Previews record a decision per added, changed, restored or removed
+  type in `resourceTypeChanges`, which discovery and preview results show with
+  the stored resources each decision depends on; changes that would need
+  decrypting stored attribute values make the type's actions unsupported. The
+  accept body's `resourceTypeIds` chooses Broker type IDs for added types.
+  Acceptance rechecks every resource-dependent decision under the policy
+  mutation lock and rejects, naming the resources, when one no longer holds;
+  it deletes removed attributes' values with resource version bumps, keeps
+  removed types with resources and drops unused ones, publishing the advanced
+  policy revision and reporting `resourceTypeEffects`. An import with accepted
+  actions may accept a preview with no selections to apply only its metadata
+  and type changes. Acceptances that add types, delete values or drop types
+  write a success completion audit record naming the added Broker type IDs,
+  the affected resources with deleted attribute names (never values), dropped
+  types and policy revisions; any acceptance that changes types checks every
+  stored resource against the new registry before it commits. Attribute rules
+  count only exact resources, since `all` resources hold no attribute values.
+  A command declares at most 16 types and an import keeps at most 16 removed
+  types besides them, and `unresolved_resource_type` is reserved.
+- Resource type listings (`GET /v1/resource-types` and the runtime catalog's
+  `resourceTypes`) name a command import's types' `importedService` and mark a
+  removed type `removed: true`. The SDK's `ResourceTypeMetadata` gains the
+  `removed` and `imported_service` fields.
 
 ### Changed
 

@@ -14,33 +14,15 @@ impl BrokerRuntime {
         attributes: &ResourceAttributes,
         require_all: bool,
     ) -> Result<(), ManagedStoreError> {
-        let Some(descriptor) = self.resource_types.get(resource_type) else {
-            // Leave metadata-only requests to the catalog's ordinary selector
-            // validation so it retains the resource ID in its diagnostics.
-            return if attributes.is_empty() {
-                Ok(())
-            } else {
-                Err(ManagedStoreError::InputInvalid(
-                    "unknown resource type".into(),
-                ))
-            };
-        };
-        descriptor
-            .validate_attributes(selector, attributes, require_all)
-            .map_err(ManagedStoreError::InputInvalid)?;
-        if !attributes.is_empty() {
-            let registry = self.config.providers.registry();
-            let backend = registry
-                .resource_owner(resource_type)
-                .and_then(|owner| self.config.providers.get_kind(owner))
-                .ok_or_else(|| {
-                    ManagedStoreError::InputInvalid("resource backend must be configured".into())
-                })?;
-            backend
-                .validate_resource_attributes(resource_type, attributes)
-                .map_err(ManagedStoreError::InputInvalid)?;
-        }
-        Ok(())
+        self.resource_types
+            .validate_attributes(
+                &self.config.providers,
+                resource_type,
+                selector,
+                attributes,
+                require_all,
+            )
+            .map_err(ManagedStoreError::InputInvalid)
     }
 
     pub fn create_managed_resource(
@@ -50,6 +32,9 @@ impl BrokerRuntime {
         let _guard = self.managed_policy_mutation_guard()?;
         let store = self.managed_policy_store()?.clone();
         let baseline = store.policy_validation_baseline()?;
+        self.resource_types
+            .require_new_resources(&request.resource_type)
+            .map_err(ManagedStoreError::InputInvalid)?;
         self.validate_resource_attributes(
             &request.resource_type,
             &request.selector,
@@ -74,6 +59,16 @@ impl BrokerRuntime {
         let existing = store.resource(&request.id)?;
         if existing.version != request.expected_version {
             return Err(ManagedStoreError::VersionConflict);
+        }
+        // Moving a resource into a removed type adds a resource to it.
+        if let Some(resource_type) = request
+            .resource_type
+            .as_ref()
+            .filter(|resource_type| **resource_type != existing.definition.resource_type)
+        {
+            self.resource_types
+                .require_new_resources(resource_type)
+                .map_err(ManagedStoreError::InputInvalid)?;
         }
         self.validate_resource_attributes(
             request

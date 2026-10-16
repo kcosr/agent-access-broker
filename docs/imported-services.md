@@ -5,10 +5,11 @@ Base administrators can connect a generic upstream MCP HTTP server or import an
 its own credentials, invocation limit, and accepted action catalog. Nothing in the
 importer depends on Grafana, Prometheus, or a particular vendor.
 
-This model grants whole actions. A grant still names subjects, execution contexts,
-actions, and a configured credential mode; imported actions have no broker resource
-scopes. Use context-specific grants when the entire action is appropriate for that
-context. An upstream search or generic API tool may reach everything its backend
+MCP and OpenAPI imports grant whole actions. A grant still names subjects, execution
+contexts, actions, and a configured credential mode; their actions have no broker
+resource scopes. Use context-specific grants when the entire action is appropriate for
+that context. Command imports may also declare resource types, which the Broker
+checks before the command runs or passes to the command with the caller's grants. An upstream search or generic API tool may reach everything its backend
 credential can access. Importing it does not create folder, project, namespace, or
 query-level containment. Use a compiled provider when that containment is needed.
 
@@ -80,6 +81,10 @@ credential rewrap. See [database operations](database.md).
    or behaviorally changed accepted tools are quarantined immediately after a complete
    discovery. Existing grants are retained. Reviewing changed schemas/annotations or
    restoring such actions requires acceptance; affected grants require confirmation.
+   A change that would leave a retained grant invalid, for example by removing a
+   credential mode it uses, is refused and names the grants to update or remove
+   first; the error's `target.affectedGrants` lists each as `{id, reasonCode,
+   reason}`, with the policy validation code and message.
 
 The service's **Actions** tab lists each saved action identifier, optional display
 label and description without another discovery request. Long descriptions have
@@ -249,12 +254,78 @@ mark token input sensitive. List results include `commandImports`, the
 operator-approved command names (never paths) a `command` import may name as
 `command:<name>`; command import results include `commandVersion`, the version
 its accepted manifest reported, and the record's `acceptedMetadata`. A command
-import's preview manifest carries the proposed `serviceMetadata` that acceptance
-stores. List, inspect, and saved-preview reads permit
+import's preview manifest carries the `serviceMetadata` that acceptance stores
+and `resourceTypeChanges`, the decision for each resource type the command
+adds, changes, restores or removes; see
+[Imported resource types](#imported-resource-types). Discovery and preview
+results add `resourceTypeChanges` with the stored resources each decision
+currently depends on. List, inspect, and saved-preview reads permit
 administrators and auditors. Discovery and all changes require administrator
 write authority and normal browser CSRF protection. They are not agent-facing MCP tools. Service-policy
 managers may manage grants for approved actions but cannot import tools or change
 credentials/endpoints through these admin routes.
+
+## Imported resource types
+
+A command's manifest may declare resource types. Each accepted type is
+registered under a Broker type ID, proposed as `<service>_<id>` (hyphens become
+underscores; a proposal that would collide within the import gets a stable
+suffix). Before a type's first
+acceptance the administrator may choose another ID with the accept body's
+`resourceTypeIds`, keyed by the manifest type id; an ID must match
+`^[a-z][a-z0-9_]{0,63}$`, be distinct within the import and not be registered by
+the broker, a native backend or another import; the broker also reserves
+`unresolved_resource_type`. Once accepted it is fixed. Accepted types appear in
+`GET /v1/resource-types` and the runtime catalog's `resourceTypes` with their
+`importedService`, keep their registration while the import is disabled or
+retired and across restarts, and validate their private attributes from the
+accepted declaration alone: known names, required attributes, the attribute
+pattern and the 8 KiB bound. All their attributes are private and encrypted,
+shown to administrators by name only. A command declares at most 16 types, and
+an import keeps at most 16 removed types besides them; the declared types'
+metadata is limited to 128 KiB and the accepted metadata to 256 KiB.
+
+A refresh compares each declared type with the accepted one. The preview's
+`resourceTypeChanges` records one decision per added, changed, restored or
+removed type, with `details` naming what changed; preview results add
+`resourceCount`, `blockingResources` and `affectedResources` (each at most 100
+resource IDs), `editable` for an added type's ID and `blocked` when accepting
+now would be rejected because of the type.
+
+| Change | Outcome |
+| --- | --- |
+| Any change to a type with no stored resources, or a new type | `applied` |
+| Label, plural label, example, attribute label or description, attribute order | `applied` |
+| New optional attribute, or a required attribute made optional | `applied` |
+| Removed attribute | `applied`; acceptance deletes its stored values and advances each affected resource's version (`affectedResources`) |
+| Pattern or `maxLength` change | `applied` when every stored exact value still matches; otherwise `blocked`, listing the values to edit or delete in `blockingResources` |
+| New required attribute, optional attribute made required, or changed attribute pattern, on a type with exact resources | `needs_new_id`: the accepted declaration stays and the actions using the type are unsupported, so a refresh quarantines them; declare the type under a new id. Resources with an `all` selector hold no attribute values and do not count |
+| Type no longer declared, with resources of any selector | `retained`: the type stays registered (`removed: true` in the accepted metadata and in resource type listings) and accepts no new resources until its resources are deleted |
+| Type no longer declared, without resources | `dropped` |
+
+Acceptance rechecks every decision that depends on stored resources inside its
+transaction, under the managed policy mutation lock that resource writes also
+take. If a resource created or edited after the preview now prevents a change,
+for example a resource of a type gaining a required attribute or of a type being
+dropped, acceptance is rejected and names the resources; edit or delete them,
+or refresh. The error's `target.resources` lists them as `{type, id}`, at most
+100 per type. Any acceptance that changes the import's types also checks every
+stored resource and its attribute bindings against the new registry before it
+commits. An acceptance that deletes attribute values or drops a type advances
+the managed policy revision and publishes the resulting policy with the new
+registry and catalog; its result includes `resourceTypeEffects` with the
+affected resources, dropped types and the previous and new policy revisions.
+An acceptance that adds types, deletes values or drops types also writes a
+success completion audit record with the Broker type IDs it added, the affected
+resources with the deleted attribute names (never values; at most 100
+resources, with their total), the dropped types and the policy revisions. Type
+changes never quarantine actions on their own.
+
+An import that already has accepted actions may accept a preview with no
+selections. That acceptance stores the preview's service metadata and applies
+its resource type changes, for example to drop a removed type after its last
+resources are deleted when the command no longer declares any action that used
+it. Action statuses are unchanged. A draft still needs at least one selection.
 
 ## Upstream MCP compatibility
 

@@ -54,6 +54,7 @@ pub static CONFORMANCE_ITEM_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
     "Conformance items",
     "shelf-one/item-one",
     |value| is_item_path(value, 2..=4),
+    &[],
 )
 .with_namespace(NamespaceSelectorDescriptor::new(
     |value| is_item_path(value, 1..=3),
@@ -73,13 +74,16 @@ pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeD
     "Conformance endpoints",
     "alerts",
     is_endpoint_name,
-)
-.with_attributes(&[ResourceAttributeDescriptor::required(
-    "signingKey",
-    "Signing key",
-    "Key the conformance upstream requires for pings to this endpoint",
-    |value| (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic()),
-)]);
+    &CONFORMANCE_ENDPOINT_ATTRIBUTES,
+);
+
+static CONFORMANCE_ENDPOINT_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
+    [ResourceAttributeDescriptor::required(
+        "signingKey",
+        "Signing key",
+        "Key the conformance upstream requires for pings to this endpoint",
+        |value| (16..=256).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_graphic()),
+    )];
 
 /// An exact item is addressed by its whole path.
 fn item_inputs(selector: &ResourceSelector) -> Option<Map<String, Value>> {

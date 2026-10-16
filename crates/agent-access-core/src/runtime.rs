@@ -9,6 +9,11 @@ mod audit_sqlite;
 mod availability;
 #[cfg(test)]
 mod client_category_tests;
+mod command_authority;
+pub(crate) use command_authority::command_enforced_action;
+pub use command_authority::{
+    CommandAuthorization, CommandGrantAuthority, CommandResourceType, ResourcesCheckedBy,
+};
 mod discovery;
 mod import_control;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
@@ -34,6 +39,7 @@ pub use availability::{
 pub use owned::InvocationControl;
 mod resource_access;
 mod resource_management;
+mod resource_types;
 use crate::fs_permissions;
 use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
@@ -76,6 +82,7 @@ use http::HeaderMap;
 pub use resource_access::{
     EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, ResourceGroupOption,
 };
+pub(crate) use resource_types::EffectiveResourceTypes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1421,6 +1428,7 @@ static UNRESOLVED_RESOURCE_TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor
     "Unresolved resource types",
     "",
     |_| false,
+    &[],
 );
 
 #[derive(Debug, Clone)]
@@ -1631,7 +1639,8 @@ pub struct BrokerRuntime {
     services: Arc<BTreeMap<String, Arc<ServiceDescriptor>>>,
     /// `[limits.invocations]` resolved for this generation.
     invocation_limits: Arc<crate::ConfiguredInvocationLimits>,
-    resource_types: Arc<ResourceTypeRegistry>,
+    /// This generation's resource types and their owners.
+    resource_types: Arc<EffectiveResourceTypes>,
     policy_snapshot: Arc<ArcSwap<PolicySnapshot>>,
     policy_mutation_lock: Arc<Mutex<()>>,
     identity_sources: Arc<Vec<IdentitySourceResolver>>,
@@ -1739,6 +1748,13 @@ pub struct PreparedInvocation {
     state: Option<ProviderState>,
     response_options: agent_access_provider::presentation::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
+    /// The admitted authority of a command import's call, for its request
+    /// `authorization` block and audit; `None` for every other service.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the command request builder consumes it")
+    )]
+    command_authorization: Option<CommandAuthorization>,
     finalize_context: FinalizeContext,
 }
 
@@ -2067,14 +2083,21 @@ impl BrokerRuntime {
             previous.is_none(),
         )?;
         validate_managed_policy_subjects(&config, managed_store.as_ref())?;
-        let resource_types = config.providers.registry().resource_types().clone();
-        let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         let imported_catalog = managed_store
             .as_ref()
             .map(ManagedStore::imported_catalog)
             .transpose()
             .map_err(runtime_managed_store_error)?
             .unwrap_or_default();
+        // Stored imported types join the registry before anything validates
+        // the stored resources and descriptors that use them.
+        let resource_types = EffectiveResourceTypes::composition(config.providers.registry())
+            .with_imported(
+                &imported_catalog,
+                previous.map(|previous| &*previous.resource_types),
+            )
+            .map_err(|message| RuntimeError::ManagedStore { message })?;
+        let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         for record in &imported_catalog.services {
             let name = &record.definition.service;
             if let Some(owner) = imported_service_collision(&config, &services, name) {
@@ -2082,7 +2105,7 @@ impl BrokerRuntime {
                     message: format!("retained imported service {name} collides with {owner}"),
                 });
             }
-            let descriptor = imports::descriptor(record, &config);
+            let descriptor = imports::descriptor(record, &config, resource_types.registry());
             // Retained metadata survives an adapter becoming unavailable. The
             // provider builder fails that service closed on semantic validation.
             services.insert(name.clone(), Arc::new(descriptor));
@@ -2097,6 +2120,7 @@ impl BrokerRuntime {
         let imported_providers = imports::build_providers(
             &config,
             &imported_catalog,
+            resource_types.registry(),
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
             &network,
@@ -2120,7 +2144,8 @@ impl BrokerRuntime {
             &imports::retention_config(&config, &imported_catalog),
             managed_store.as_ref(),
             &services,
-            &resource_types,
+            &imported_catalog,
+            resource_types.registry(),
         )?));
         let audit = AuditSink::new(
             config.audit.as_ref(),
@@ -2669,18 +2694,21 @@ impl BrokerRuntime {
         }
         // Type-specific selector checks mirror the store's structural catalog
         // checks, so an invalid resource is an input error, not a policy issue.
-        let resource_errors =
-            crate::validate_resource_definition_types(&self.resource_types, &catalog.resources);
+        let resource_errors = crate::validate_resource_definition_types(
+            self.resource_types.registry(),
+            &catalog.resources,
+        );
         if !resource_errors.is_empty() {
             return Err(ManagedStoreError::InputInvalid(resource_errors.join("; ")));
         }
-        resource_management::validate_attribute_bindings(&self.resource_types, catalog)?;
+        resource_management::validate_attribute_bindings(self.resource_types.registry(), catalog)?;
         self.validate_new_imported_grants(grants, &baseline.1)?;
         let issues = managed_policy_validation_issues(
             &imports::retention_config(&self.config, &self.imported_catalog),
             subjects,
             &self.services,
-            &self.resource_types,
+            &self.imported_catalog,
+            self.resource_types.registry(),
             grants,
             catalog,
         );
@@ -3224,15 +3252,7 @@ impl BrokerRuntime {
                 self.token_resource_boundary(snapshot, context, c, service, action)
                     .is_none()
             }) && self
-                .select_policy(
-                    snapshot,
-                    identity,
-                    context,
-                    service,
-                    action,
-                    &ResourceScopes::new(),
-                )
-                .is_ok();
+                .scope_free_action_admitted(snapshot, identity, context, service, action);
         }
         !self
             .effective_resource_clauses(snapshot, identity, context, service, action, caveats)
@@ -3369,16 +3389,13 @@ impl BrokerRuntime {
             });
             if authored
                 && (resource_type.is_some()
-                    || self
-                        .select_policy(
-                            policy_snapshot,
-                            identity,
-                            execution_context,
-                            &service.service,
-                            &action.action,
-                            &ResourceScopes::new(),
-                        )
-                        .is_ok())
+                    || self.scope_free_action_admitted(
+                        policy_snapshot,
+                        identity,
+                        execution_context,
+                        &service.service,
+                        &action.action,
+                    ))
             {
                 let clauses = self.effective_resource_clauses(
                     policy_snapshot,
@@ -3444,8 +3461,9 @@ impl BrokerRuntime {
         self.resource_types.metadata()
     }
 
+    /// This generation's resource type registry.
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
-        &self.resource_types
+        self.resource_types.registry()
     }
 
     pub fn service_descriptors(&self) -> impl Iterator<Item = &Arc<ServiceDescriptor>> {
@@ -4658,8 +4676,57 @@ impl BrokerRuntime {
         };
 
         let mut audit_search_authorization = None;
+        let mut command_authorization = None;
         let (scopes, policy, provider_state, search_authorization) =
-            if action_descriptor.search_contained {
+            if self.command_enforced(&service, &action) {
+                let admission = self
+                    .admit_command_enforced(command_authority::CommandAdmissionRequest {
+                        snapshot: &policy_snapshot,
+                        identity: &identity,
+                        context: &execution_context,
+                        service: &service,
+                        action: &action,
+                        token: token_caveats.as_ref(),
+                        inputs: &request.inputs,
+                        correlation: &correlation,
+                        provider: &provider,
+                        domain_reasons,
+                    })
+                    .await;
+                match admission {
+                    Ok(admission) => {
+                        command_authorization = Some(admission.authorization);
+                        (
+                            admission.scopes,
+                            admission.policy,
+                            admission.state,
+                            admission.search,
+                        )
+                    }
+                    Err(error) => {
+                        return Err(Box::new(owned::PreparationFailure::new(
+                            FinalizeContext {
+                                search_authorization: None,
+                                agent_request_id,
+                                broker_request_id,
+                                policy_generation,
+                                identity,
+                                service,
+                                action,
+                                upstream_resource_ownership: None,
+                                resource_scopes: ResourceScopes::new(),
+                                credential_mode: None,
+                                matched_grant: None,
+                                source,
+                                execution_context: Some(execution_context.clone()),
+                                redact_error_resource_scopes: false,
+                                started,
+                            },
+                            Err(error),
+                        )));
+                    }
+                }
+            } else if action_descriptor.search_contained {
                 let mut search_authorization = match self.plan_search_authorization(
                     &policy_snapshot,
                     &identity,
@@ -4865,11 +4932,27 @@ impl BrokerRuntime {
                         )));
                     }
                 };
+                command_authorization =
+                    self.broker_command_authorization(&service, &action, &scopes, &policy);
                 (scopes, policy, provider_state, None)
             };
+        // A command-enforced call may pass several grants' credentials and
+        // reports one mode only when its grants share it.
+        let command_enforced = matches!(
+            command_authorization,
+            Some(CommandAuthorization::Command { .. })
+        );
+        let audit_credential_mode = match &command_authorization {
+            Some(plan) if command_enforced => plan.credential_mode(),
+            _ => Some(policy.credential_mode.clone()),
+        };
 
-        let credentials = match self
-            .resolve_execution_credential_after_policy(
+        // The command request builder resolves command-enforced credentials
+        // after the concurrency permit; the plan checked their availability.
+        let credentials = if command_enforced {
+            Ok(ExecutionAccess::None)
+        } else {
+            self.resolve_execution_credential_after_policy(
                 service_descriptor
                     .as_ref()
                     .map(|descriptor| &descriptor.credentials),
@@ -4881,7 +4964,8 @@ impl BrokerRuntime {
                 &pre_scope_lookup,
             )
             .await
-        {
+        };
+        let credentials = match credentials {
             Ok(credentials) => credentials,
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
@@ -4895,7 +4979,7 @@ impl BrokerRuntime {
                         action,
                         upstream_resource_ownership: None,
                         resource_scopes: scopes,
-                        credential_mode: Some(policy.credential_mode),
+                        credential_mode: audit_credential_mode,
                         matched_grant: Some(policy.matched_grant),
                         source,
                         execution_context: Some(execution_context.clone()),
@@ -4936,7 +5020,7 @@ impl BrokerRuntime {
                         action,
                         upstream_resource_ownership: None,
                         resource_scopes: scopes,
-                        credential_mode: Some(policy.credential_mode),
+                        credential_mode: audit_credential_mode,
                         matched_grant: Some(policy.matched_grant),
                         source,
                         execution_context: Some(execution_context.clone()),
@@ -4999,6 +5083,7 @@ impl BrokerRuntime {
             state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
+            command_authorization,
             finalize_context: FinalizeContext {
                 search_authorization: audit_search_authorization,
                 agent_request_id,
@@ -5009,7 +5094,7 @@ impl BrokerRuntime {
                 action,
                 upstream_resource_ownership,
                 resource_scopes: scopes,
-                credential_mode: Some(policy.credential_mode),
+                credential_mode: audit_credential_mode,
                 matched_grant: Some(policy.matched_grant),
                 source,
                 execution_context: Some(execution_context),
@@ -5098,6 +5183,7 @@ impl BrokerRuntime {
             state,
             response_options,
             body_part_specs: _,
+            command_authorization: _,
             finalize_context,
         } = prepared;
         let correlation = request.correlation().clone();
@@ -5256,6 +5342,12 @@ impl BrokerRuntime {
         }
         let top_band = top_policy_band(candidates);
         let credential_mode = single_policy_credential_mode(&top_band)?;
+        if !self.action_supports_mode(service, action, &credential_mode) {
+            return Err(ProviderError::deny(
+                ReasonCode::CredentialNotProvisioned,
+                "selected credential mode is not supported by this action",
+            ));
+        }
         if !credential_mode_available(
             &self.effective_credentials,
             service,
@@ -5360,7 +5452,8 @@ impl BrokerRuntime {
             resource_type: self
                 .resource_types
                 .get(&binding.resource_type)
-                .unwrap_or(&UNRESOLVED_RESOURCE_TYPE),
+                .cloned()
+                .unwrap_or_else(|| Arc::new(UNRESOLVED_RESOURCE_TYPE.clone())),
         })
     }
 
@@ -6679,7 +6772,7 @@ pub(crate) fn imported_service_collision(
 fn build_service_descriptors(
     config: &BrokerConfig,
     providers: &BTreeMap<String, ServiceProvider>,
-    resource_types: &ResourceTypeRegistry,
+    resource_types: &EffectiveResourceTypes,
 ) -> Result<BTreeMap<String, Arc<ServiceDescriptor>>, RuntimeError> {
     let mut services = BTreeMap::new();
     let mut errors = Vec::new();
@@ -6698,9 +6791,9 @@ fn build_service_descriptors(
         }
     }
     for descriptor in services.values() {
-        errors.extend(descriptor.validate_resource_types(resource_types));
+        errors.extend(descriptor.validate_resource_types(resource_types.registry()));
     }
-    crate::validate_private_resource_consumers(config, &services, &mut errors);
+    crate::validate_private_resource_consumers(config, &services, resource_types, &mut errors);
     if errors.is_empty() {
         Ok(services)
     } else {
@@ -6981,6 +7074,7 @@ fn load_policy_snapshot(
     config: &BrokerConfig,
     store: Option<&ManagedStore>,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &crate::ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
 ) -> Result<PolicySnapshot, RuntimeError> {
     if config.policy.authority == "toml" {
@@ -7004,6 +7098,7 @@ fn load_policy_snapshot(
         config,
         &subjects,
         services,
+        imported,
         resource_types,
         &state.active_grants,
         &state.catalog,
@@ -7019,6 +7114,7 @@ fn validate_managed_policy_grants(
     config: &BrokerConfig,
     subjects: &ManagedPolicySubjectCatalog,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &crate::ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
     grants: &[ManagedPolicyGrantRecord],
     resources: &ManagedResourceCatalog,
@@ -7027,6 +7123,7 @@ fn validate_managed_policy_grants(
         config,
         subjects,
         services,
+        imported,
         resource_types,
         grants,
         resources,
@@ -7044,6 +7141,7 @@ fn managed_policy_validation_issues(
     config: &BrokerConfig,
     subjects: &ManagedPolicySubjectCatalog,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    imported: &crate::ImportedCatalog,
     resource_types: &ResourceTypeRegistry,
     grants: &[ManagedPolicyGrantRecord],
     resources: &ManagedResourceCatalog,
@@ -7122,6 +7220,7 @@ fn managed_policy_validation_issues(
     let normalized_errors = normalized_policy_grant_validation_issues(
         config,
         catalog,
+        imported,
         resource_types,
         &normalized_grants,
     );
@@ -7655,7 +7754,7 @@ struct PolicyCandidate {
 #[derive(Debug, Clone)]
 struct ActionResourceScope {
     scope: String,
-    resource_type: &'static ResourceTypeDescriptor,
+    resource_type: Arc<ResourceTypeDescriptor>,
 }
 
 #[derive(Debug, Clone)]
@@ -8176,6 +8275,7 @@ fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
             "managed store schema is incompatible; a fresh database is required"
         }
         ManagedStoreError::InputInvalid(_) => "managed credential input is invalid",
+        ManagedStoreError::ImportChangeBlocked(_) => "imported service change is blocked",
         ManagedStoreError::CredentialInvalid(_) => "managed per_user credential is invalid",
         ManagedStoreError::CredentialEncryptFailed => {
             "managed per_user credential encryption failed"

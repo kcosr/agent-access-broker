@@ -11,13 +11,14 @@ static TYPE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     "Fixture destinations",
     "one",
     |value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
-)
-.with_attributes(&[ResourceAttributeDescriptor::required(
+    &ATTRIBUTES,
+);
+static ATTRIBUTES: [ResourceAttributeDescriptor; 1] = [ResourceAttributeDescriptor::required(
     "endpoint",
     "Endpoint",
     "Private test endpoint",
     |value| value.starts_with("secret-"),
-)]);
+)];
 static BACKEND: BackendRegistration = BackendRegistration::new(
     agent_access_provider::module_metadata!(),
     "attribute_fixture",
@@ -436,6 +437,7 @@ fn private_attribute_type_metadata_is_generic_and_consumers_must_own_the_type() 
     crate::validate_private_resource_consumers(
         runtime.config(),
         &BTreeMap::from([("other".into(), Arc::new(foreign))]),
+        &runtime.resource_types,
         &mut errors,
     );
     assert!(

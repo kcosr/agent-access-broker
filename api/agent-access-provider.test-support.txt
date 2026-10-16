@@ -2650,6 +2650,8 @@ pub fn agent_access_provider::NamespaceSelectorDescriptor::is_valid(&self, &str)
 pub const fn agent_access_provider::NamespaceSelectorDescriptor::label(&self) -> &'static str
 pub const fn agent_access_provider::NamespaceSelectorDescriptor::members_label(&self) -> &'static str
 pub const fn agent_access_provider::NamespaceSelectorDescriptor::new(fn(&str) -> bool, &'static str, &'static str, &'static str) -> Self
+impl core::clone::Clone for agent_access_provider::NamespaceSelectorDescriptor
+pub fn agent_access_provider::NamespaceSelectorDescriptor::clone(&self) -> agent_access_provider::NamespaceSelectorDescriptor
 impl core::fmt::Debug for agent_access_provider::NamespaceSelectorDescriptor
 pub fn agent_access_provider::NamespaceSelectorDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::NamespaceSelectorDescriptor
@@ -3303,13 +3305,17 @@ impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Red
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::RedirectRules<'a>
 #[non_exhaustive] pub struct agent_access_provider::ResourceAttributeDescriptor
 impl agent_access_provider::ResourceAttributeDescriptor
-pub const fn agent_access_provider::ResourceAttributeDescriptor::description(&self) -> &'static str
+pub fn agent_access_provider::ResourceAttributeDescriptor::declared(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, bool, core::option::Option<agent_access_provider::ResourcePattern>) -> Self
+pub const fn agent_access_provider::ResourceAttributeDescriptor::description(&self) -> &str
 pub const fn agent_access_provider::ResourceAttributeDescriptor::is_required(&self) -> bool
 pub fn agent_access_provider::ResourceAttributeDescriptor::is_valid(&self, &str) -> bool
-pub const fn agent_access_provider::ResourceAttributeDescriptor::label(&self) -> &'static str
-pub const fn agent_access_provider::ResourceAttributeDescriptor::name(&self) -> &'static str
+pub const fn agent_access_provider::ResourceAttributeDescriptor::label(&self) -> &str
+pub const fn agent_access_provider::ResourceAttributeDescriptor::name(&self) -> &str
 pub const fn agent_access_provider::ResourceAttributeDescriptor::optional(&'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
+pub fn agent_access_provider::ResourceAttributeDescriptor::pattern(&self) -> core::option::Option<&agent_access_provider::ResourcePattern>
 pub const fn agent_access_provider::ResourceAttributeDescriptor::required(&'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
+impl core::clone::Clone for agent_access_provider::ResourceAttributeDescriptor
+pub fn agent_access_provider::ResourceAttributeDescriptor::clone(&self) -> agent_access_provider::ResourceAttributeDescriptor
 impl core::fmt::Debug for agent_access_provider::ResourceAttributeDescriptor
 pub fn agent_access_provider::ResourceAttributeDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::ResourceAttributeDescriptor
@@ -3370,6 +3376,26 @@ impl core::marker::Unpin for agent_access_provider::ResourceAttributes
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceAttributes
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceAttributes
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceAttributes
+pub struct agent_access_provider::ResourcePattern
+impl agent_access_provider::ResourcePattern
+pub fn agent_access_provider::ResourcePattern::is_match(&self, &str) -> bool
+pub const fn agent_access_provider::ResourcePattern::max_length(&self) -> usize
+pub fn agent_access_provider::ResourcePattern::new(impl core::convert::Into<alloc::string::String>, usize) -> core::result::Result<Self, alloc::string::String>
+pub fn agent_access_provider::ResourcePattern::source(&self) -> &str
+impl core::clone::Clone for agent_access_provider::ResourcePattern
+pub fn agent_access_provider::ResourcePattern::clone(&self) -> agent_access_provider::ResourcePattern
+impl core::cmp::Eq for agent_access_provider::ResourcePattern
+impl core::cmp::PartialEq for agent_access_provider::ResourcePattern
+pub fn agent_access_provider::ResourcePattern::eq(&self, &Self) -> bool
+impl core::fmt::Debug for agent_access_provider::ResourcePattern
+pub fn agent_access_provider::ResourcePattern::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::ResourcePattern
+impl core::marker::Send for agent_access_provider::ResourcePattern
+impl core::marker::Sync for agent_access_provider::ResourcePattern
+impl core::marker::Unpin for agent_access_provider::ResourcePattern
+impl core::marker::UnsafeUnpin for agent_access_provider::ResourcePattern
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourcePattern
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourcePattern
 #[non_exhaustive] pub struct agent_access_provider::ResourceScopeCapabilities
 pub agent_access_provider::ResourceScopeCapabilities::resource_type: agent_access_provider::ResourceType
 pub agent_access_provider::ResourceScopeCapabilities::selectors: alloc::vec::Vec<alloc::string::String>
@@ -3429,20 +3455,23 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceTyp
 impl agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::accepts(&self, &agent_access_provider::ResourceSelector) -> bool
 pub fn agent_access_provider::ResourceTypeDescriptor::action_inputs(&self, &agent_access_provider::ResourceSelector) -> core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
-pub const fn agent_access_provider::ResourceTypeDescriptor::attributes(&self) -> &'static [agent_access_provider::ResourceAttributeDescriptor]
-pub const fn agent_access_provider::ResourceTypeDescriptor::example(&self) -> &'static str
+pub const fn agent_access_provider::ResourceTypeDescriptor::attributes(&self) -> &[agent_access_provider::ResourceAttributeDescriptor]
+pub fn agent_access_provider::ResourceTypeDescriptor::declared(agent_access_provider::ResourceType, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::ResourcePattern, alloc::vec::Vec<agent_access_provider::ResourceAttributeDescriptor>) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::example(&self) -> &str
 pub const fn agent_access_provider::ResourceTypeDescriptor::id(&self) -> &agent_access_provider::ResourceType
 pub fn agent_access_provider::ResourceTypeDescriptor::is_canonical_target(&self, &str) -> bool
-pub const fn agent_access_provider::ResourceTypeDescriptor::label(&self) -> &'static str
+pub const fn agent_access_provider::ResourceTypeDescriptor::label(&self) -> &str
 pub fn agent_access_provider::ResourceTypeDescriptor::metadata(&self) -> agent_access_provider::ResourceTypeMetadata
 pub const fn agent_access_provider::ResourceTypeDescriptor::namespace(&self) -> core::option::Option<&agent_access_provider::NamespaceSelectorDescriptor>
-pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_provider::ResourceType, &'static str, &'static str, &'static str, fn(&str) -> bool) -> Self
-pub const fn agent_access_provider::ResourceTypeDescriptor::plural_label(&self) -> &'static str
+pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_provider::ResourceType, &'static str, &'static str, &'static str, fn(&str) -> bool, &'static [agent_access_provider::ResourceAttributeDescriptor]) -> Self
+pub fn agent_access_provider::ResourceTypeDescriptor::pattern(&self) -> core::option::Option<&agent_access_provider::ResourcePattern>
+pub const fn agent_access_provider::ResourceTypeDescriptor::plural_label(&self) -> &str
 pub fn agent_access_provider::ResourceTypeDescriptor::selector_kinds(&self) -> alloc::vec::Vec<&'static str>
 pub fn agent_access_provider::ResourceTypeDescriptor::validate_attributes(&self, &agent_access_provider::ResourceSelector, &agent_access_provider::ResourceAttributes, bool) -> core::result::Result<(), alloc::string::String>
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_action_inputs(self, agent_access_provider::ResourceActionInputs) -> Self
-pub const fn agent_access_provider::ResourceTypeDescriptor::with_attributes(self, &'static [agent_access_provider::ResourceAttributeDescriptor]) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_namespace(self, agent_access_provider::NamespaceSelectorDescriptor) -> Self
+impl core::clone::Clone for agent_access_provider::ResourceTypeDescriptor
+pub fn agent_access_provider::ResourceTypeDescriptor::clone(&self) -> agent_access_provider::ResourceTypeDescriptor
 impl core::fmt::Debug for agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::ResourceTypeDescriptor
@@ -3456,9 +3485,11 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceTyp
 pub agent_access_provider::ResourceTypeMetadata::attributes: alloc::vec::Vec<agent_access_provider::ResourceAttributeMetadata>
 pub agent_access_provider::ResourceTypeMetadata::example: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::id: agent_access_provider::ResourceType
+pub agent_access_provider::ResourceTypeMetadata::imported_service: core::option::Option<alloc::string::String>
 pub agent_access_provider::ResourceTypeMetadata::label: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::namespace: core::option::Option<agent_access_provider::NamespaceSelectorMetadata>
 pub agent_access_provider::ResourceTypeMetadata::plural_label: alloc::string::String
+pub agent_access_provider::ResourceTypeMetadata::removed: bool
 pub agent_access_provider::ResourceTypeMetadata::selectors: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for agent_access_provider::ResourceTypeMetadata
 pub fn agent_access_provider::ResourceTypeMetadata::clone(&self) -> agent_access_provider::ResourceTypeMetadata
@@ -3481,8 +3512,9 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Resource
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceTypeMetadata
 pub struct agent_access_provider::ResourceTypeRegistry
 impl agent_access_provider::ResourceTypeRegistry
-pub fn agent_access_provider::ResourceTypeRegistry::descriptors(&self) -> impl core::iter::traits::iterator::Iterator<Item = &'static agent_access_provider::ResourceTypeDescriptor> + '_
-pub fn agent_access_provider::ResourceTypeRegistry::get(&self, &agent_access_provider::ResourceType) -> core::option::Option<&'static agent_access_provider::ResourceTypeDescriptor>
+pub fn agent_access_provider::ResourceTypeRegistry::descriptors(&self) -> impl core::iter::traits::iterator::Iterator<Item = &alloc::sync::Arc<agent_access_provider::ResourceTypeDescriptor>> + '_
+pub fn agent_access_provider::ResourceTypeRegistry::from_shared(impl core::iter::traits::collect::IntoIterator<Item = alloc::sync::Arc<agent_access_provider::ResourceTypeDescriptor>>) -> core::result::Result<Self, alloc::vec::Vec<alloc::string::String>>
+pub fn agent_access_provider::ResourceTypeRegistry::get(&self, &agent_access_provider::ResourceType) -> core::option::Option<&alloc::sync::Arc<agent_access_provider::ResourceTypeDescriptor>>
 pub fn agent_access_provider::ResourceTypeRegistry::ids(&self) -> impl core::iter::traits::iterator::Iterator<Item = &agent_access_provider::ResourceType> + '_
 pub fn agent_access_provider::ResourceTypeRegistry::metadata(&self) -> alloc::vec::Vec<agent_access_provider::ResourceTypeMetadata>
 pub fn agent_access_provider::ResourceTypeRegistry::new(impl core::iter::traits::collect::IntoIterator<Item = &'static agent_access_provider::ResourceTypeDescriptor>) -> core::result::Result<Self, alloc::vec::Vec<alloc::string::String>>
@@ -4140,6 +4172,7 @@ struct agent_access_provider::RedirectRules: named fields, private fields, non-e
 struct agent_access_provider::ResourceAttributeDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::ResourceAttributeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributes: tuple fields, private fields
+struct agent_access_provider::ResourcePattern: named fields, private fields
 struct agent_access_provider::ResourceScopeCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ResourceType: tuple fields, private fields
 struct agent_access_provider::ResourceTypeDescriptor: named fields, private fields, non-exhaustive

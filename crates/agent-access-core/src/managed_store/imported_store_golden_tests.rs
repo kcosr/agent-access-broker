@@ -223,6 +223,7 @@ fn golden_discovery() -> crate::imports::ImportedDiscovery {
             },
         ],
         service_metadata: None,
+        resource_type_changes: Vec::new(),
     }
 }
 

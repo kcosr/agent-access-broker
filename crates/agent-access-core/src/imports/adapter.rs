@@ -1,7 +1,7 @@
 //! Protocol-specific implementation seam for managed imported services.
 use super::{
-    CommandProvider, ImportEndpointForm, ImportedActionDefinition, ImportedDiscoveryCredential,
-    ImportedServiceDefinition, ImportedServiceMetadata,
+    CommandProvider, ImportEndpointForm, ImportedActionAuthority, ImportedActionDefinition,
+    ImportedDiscoveryCredential, ImportedServiceDefinition, ImportedServiceMetadata,
 };
 use crate::CommandImportConfig;
 use agent_access_provider::{
@@ -38,6 +38,12 @@ pub struct ImportedDiscovery {
     /// hashes are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_metadata: Option<ImportedServiceMetadata>,
+    /// The host's decision for every resource type the source adds,
+    /// changes, restores or removes, recorded when the preview is written;
+    /// `service_metadata` then holds what acceptance stores. Adapters leave
+    /// it empty, and an empty list is omitted from the encoding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_type_changes: Vec<super::ImportedResourceTypeChange>,
 }
 
 /// Core's inputs to [`ImportedAdapter::build`] and
@@ -152,6 +158,17 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         &["/result"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String>;
+    /// The resources an accepted action names and the credential modes it
+    /// supports, read offline from its definition; core maps them onto the
+    /// action's descriptor. The default declares neither: the action is
+    /// action-only and uses every bound mode. An error makes the action
+    /// authorize nothing.
+    fn action_authority(
+        &self,
+        _action: &ImportedActionDefinition,
+    ) -> Result<ImportedActionAuthority, String> {
+        Ok(ImportedActionAuthority::default())
+    }
     /// Exact accepted source name, derived offline without applying the narrower
     /// scoped MCP profile. Must succeed for every action accepted by validation.
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String>;

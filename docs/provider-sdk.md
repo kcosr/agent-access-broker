@@ -275,12 +275,12 @@ are accepted.
 ### Typed resources
 
 A `ResourceTypeDescriptor` static defines one resource type.
-`ResourceTypeDescriptor::new(id, label, plural_label, example, canonical)`
-takes an identifier (`^[a-z][a-z0-9_]{0,63}$`), labels, an example and a
-canonical-target grammar, and supports exact and all selectors.
-`with_namespace(NamespaceSelectorDescriptor::new(..))` adds namespace selectors,
-`with_attributes` adds private string attributes, and `with_action_inputs` adds
-an action-input projection. Exact selectors and every resolved target must
+`ResourceTypeDescriptor::new(id, label, plural_label, example, canonical,
+attributes)` takes an identifier (`^[a-z][a-z0-9_]{0,63}$`), labels, an
+example, a canonical-target grammar and the type's private string attributes
+(`&[]` for none), and supports exact and all selectors.
+`with_namespace(NamespaceSelectorDescriptor::new(..))` adds namespace selectors
+and `with_action_inputs` adds an action-input projection. Exact selectors and every resolved target must
 satisfy the canonical grammar, which keeps namespace prefix matching sound.
 Policy validation, resource management, discovery and the portal read the
 published metadata.
@@ -289,11 +289,48 @@ Private attributes (`ResourceAttributeDescriptor::required` or `optional`)
 are secret values on exact managed resource entries, such as a Teams Workflow
 URL. The host encrypts them, reveals them only through an audited administrator
 action, and decrypts only the admitted resource's attributes immediately before
-dispatch.
+dispatch. Declare a nonempty attribute list as its own `static` and pass a
+reference to it: attribute descriptors own their data, so an inline array is not
+promoted to a `'static` borrow.
+
+```rust check
+use agent_access_provider::{ResourceAttributeDescriptor, ResourceType, ResourceTypeDescriptor};
+
+pub static DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+    ResourceType::from_static("example_destination"),
+    "Destination",
+    "Destinations",
+    "release-alerts",
+    is_destination_name,
+    &DESTINATION_ATTRIBUTES,
+);
+
+static DESTINATION_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
+    [ResourceAttributeDescriptor::required(
+        "webhookUrl",
+        "Webhook URL",
+        "Signed endpoint that receives notifications",
+        |value| value.starts_with("https://"),
+    )];
+
+fn is_destination_name(value: &str) -> bool {
+    (1..=64).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+}
+```
 
 The host always registers the `git_repository` type. A provider may scope
 actions to it, as GitLab REST does, instead of defining its own. The registry
 rejects duplicate type identifiers across selected providers.
+
+A `ResourceTypeRegistry` holds shared descriptors (`Arc<ResourceTypeDescriptor>`):
+`new` registers a build's statics and `from_shared` any shared descriptors in
+order. The host also registers types declared at runtime, such as those an
+imported service describes. `ResourceTypeDescriptor::declared` and
+`ResourceAttributeDescriptor::declared` build them, attributes included, from
+owned labels and a `ResourcePattern`: a regular expression in the `regex`
+crate's linear-time dialect that must match the whole value within a
+byte-length bound, and must be a complete expression on its own. Providers
+define static types; the host owns declared ones.
 
 `Provider::resource_roots` may return configuration-derived roots of a type,
 such as CloudBees CI controller aliases, which discovery filters by each
@@ -1469,6 +1506,7 @@ pub static NOTEBOOK_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::n
     "Notebooks",
     "team-handbook",
     is_notebook_name,
+    &[],
 );
 
 fn is_notebook_name(value: &str) -> bool {

@@ -3,13 +3,16 @@
 //! assembly selects. This is Broker implementation, not a supported
 //! extension interface; only the shipped import adapters implement it.
 mod adapter;
+mod authority;
 mod command;
 mod definition;
 mod metadata;
 mod registration;
 mod schema;
+mod type_changes;
 
 pub use adapter::*;
+pub use authority::*;
 pub use command::*;
 pub use definition::*;
 pub use metadata::*;
@@ -17,6 +20,7 @@ pub use registration::{
     ImportOAuthCompanion, ImportedAdapterRegistration, imported_adapter_registration,
 };
 pub use schema::*;
+pub use type_changes::*;
 
 /// The implementation an imported protocol client names itself as, such as
 /// an imported MCP connection's `clientInfo`: the Broker host package and

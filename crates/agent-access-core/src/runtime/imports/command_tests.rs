@@ -135,7 +135,11 @@ fn credential_free_command_imports_use_service_mode_without_a_slot() {
     let config = config();
     let record = command_record(&[], None);
     assert!(credential_free(&record.definition));
-    let descriptor = descriptor(&record, &config);
+    let descriptor = descriptor(
+        &record,
+        &config,
+        config.providers.registry().resource_types(),
+    );
     descriptor.validate().unwrap();
     assert_eq!(
         descriptor.actions[0].sensitive_output_pointers,
@@ -188,7 +192,11 @@ fn credentialed_command_imports_need_their_slot_and_declare_their_profile() {
     ] {
         let mut record = command_record(&modes, Some(kind));
         assert!(!credential_free(&record.definition));
-        let descriptor = descriptor(&record, &config);
+        let descriptor = descriptor(
+            &record,
+            &config,
+            config.providers.registry().resource_types(),
+        );
         descriptor.validate().unwrap();
         assert!(descriptor.credentials.execution_required);
         assert_eq!(descriptor.credentials.profiles.len(), 1);

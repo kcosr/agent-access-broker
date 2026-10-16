@@ -8,6 +8,11 @@
 //! unsupported reasons of invalid actions. Building never runs the command,
 //! so startup and reload stay offline.
 //!
+//! Each accepted action declares how its resources are checked: through
+//! input pointers the Broker resolves and checks before dispatch, or by the
+//! command from the grants it is passed (see
+//! [`ImportedActionAuthority`]).
+//!
 //! The adapter builds a [`CommandProvider`]: core calls its command hook
 //! instead of `Provider::invoke` with a request it assembles after the
 //! budget permit and final checks. Until the process supervisor lands, the
@@ -15,14 +20,16 @@
 mod describe;
 mod manifest;
 mod mapping;
+mod scopes;
 
 use agent_access_core::CommandImportConfig;
 use agent_access_core::imports::{
     AdapterDiscoveryError, CommandInvocation, CommandProvider, CommandVerification,
-    ImportEndpointForm, ImportedActionDefinition, ImportedAdapter, ImportedAdapterContext,
-    ImportedAdapterRegistration, ImportedAuthMechanism, ImportedBindingStatus, ImportedDiscovery,
-    ImportedDiscoveryAuthentication, ImportedDiscoveryCredential, ImportedProvider,
-    ImportedServiceDefinition, ImportedServiceMetadata, imported_adapter_registration,
+    ImportEndpointForm, ImportedActionAuthority, ImportedActionDefinition, ImportedAdapter,
+    ImportedAdapterContext, ImportedAdapterRegistration, ImportedAuthMechanism,
+    ImportedBindingStatus, ImportedDiscovery, ImportedDiscoveryAuthentication,
+    ImportedDiscoveryCredential, ImportedProvider, ImportedServiceDefinition,
+    ImportedServiceMetadata, imported_adapter_registration,
 };
 use agent_access_provider::{
     BuildContext, ExecutionCredential, MutationReceipt, Provider, ProviderBuildError,
@@ -89,6 +96,12 @@ impl ImportedAdapter for CommandAdapter {
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String> {
         CompiledAction::new(action).map(|_| ())
+    }
+    fn action_authority(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<ImportedActionAuthority, String> {
+        CompiledAction::new(action).map(|compiled| compiled.authority)
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         mapping::source_name(action).map(str::to_owned)
@@ -216,8 +229,9 @@ impl ImportedAdapter for CommandAdapter {
     }
 }
 
-/// One enabled command import. It resolves no resources yet and fails every
-/// call closed before a process starts.
+/// One enabled command import. It resolves a Broker-enforced action's
+/// resources at admission and fails every call closed before a process
+/// starts.
 struct CommandImportProvider {
     actions: BTreeMap<String, CompiledAction>,
     #[expect(dead_code, reason = "the process supervisor spawns from it")]
@@ -253,8 +267,8 @@ impl Provider for CommandImportProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
-        self.action(request.action())?;
-        Ok(ScopeResolution::no_resources())
+        scopes::resolve(self.action(request.action())?, request.inputs())
+            .map(ScopeResolution::resources)
     }
 
     /// Core runs command imports through the command hook; a direct call

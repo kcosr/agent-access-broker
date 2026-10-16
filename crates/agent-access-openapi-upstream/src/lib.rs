@@ -245,6 +245,7 @@ impl ImportedAdapter for OpenApiAdapter {
                 metadata: document.metadata.clone(),
                 tools,
                 service_metadata: None,
+                resource_type_changes: Vec::new(),
             })
         };
         Ok(tokio::time::timeout(Duration::from_secs(60), operation)

@@ -297,7 +297,10 @@ is not counted as an invocation.
 `GET /v1/resource-types` requires an authenticated caller (anonymous callers
 receive `identity_required`, as on the spec routes) and a valid
 `X-Agent-Access-Request-Id`, but no admin right, provider grant, or execution
-context. It returns `{"resourceTypes":[...]}` in registration order.
+context. It returns `{"resourceTypes":[...]}` in registration order. A type a
+command import declares carries its `importedService`; one that import no
+longer declares, kept for its remaining resources, is marked `removed: true`
+and accepts no new resources.
 
 `GET /v1/broker/status` requires normal Broker identity and a valid
 `X-Agent-Access-Request-Id`, but no admin right, provider grant, or execution
@@ -1142,6 +1145,10 @@ writability, config generation, policy generation, grant counts, and managed
 policy revision metadata when available. `GET /v1/admin/policy/catalog` returns
 configured service/action/scope metadata plus known policy subjects so UIs can
 build grant forms without hardcoding provider- or gateway-specific fields.
+A command import's actions also carry `resourcesCheckedBy`: `broker` when the
+Broker checks the resources an action names before it runs, `command` when the
+command enforces the caller's grants itself, including for an action without a
+resource type. Other actions omit it.
 Resource forms take type choices from `GET /v1/resource-types`.
 It also returns configured execution-context choices and default/required
 metadata. Every grant create requires a non-empty unique `executionContexts`

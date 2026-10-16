@@ -334,7 +334,13 @@ it is a development fixture. OAuth dialect and import adapter registrations
 carry the same package metadata. Parsing a configuration routes each provider table
 to its backend's parser and rejects unregistered kinds; the registry also
 supplies the resource type registry (the broker's own `git_repository` type
-plus every backend's types, in registration order). Development fixtures are
+plus every backend's types, in registration order). Each runtime generation
+builds its effective registry from it and from the resource types its imports
+accepted, recording which backend, import, or the broker owns each type; the
+generation publishes that registry together with its imported catalog, service
+descriptors and policy snapshot, and a type's owner validates the private
+attribute values of its resources. Startup builds the registry from stored
+import metadata before it validates stored resources. Development fixtures are
 ordinary registrations: the binary selects the `oauth_stub` records backend
 last, so its `oauth_collection` type lists last, and selects the `stub` OAuth
 dialect alongside the production dialects. An empty registry has neither.
@@ -879,7 +885,21 @@ sequenceDiagram
    merges it. A provider whose own required state is missing or of another type
    fails closed with a `broker_provider_contract_failed` error.
 9. **Deny-by-default policy selection.** The resolved scope set is authorized;
-   the credential mode is selected from the surviving grant.
+   the credential mode is selected from the surviving grant. A command import's
+   action that names its resources in typed inputs is Broker-enforced and uses
+   this selection. Its other actions are command-enforced: after the adapter's
+   scope hook checks their inputs, the command authority planner passes the
+   caller's top precedence band, each grant with its own credential mode and
+   finite or all-except boundary, intersected with the agent token's resource
+   restriction. It omits grants that end up empty, then grants whose
+   credential mode the action does not support or whose credential is not
+   locally available, never consults a lower band, and resolves no credential
+   at admission. As for native selection, a grant whose selection reaches no
+   enabled, context-eligible resource is not a candidate, so it never hides a
+   lower band. Caller discovery uses the same planner. A Broker-enforced
+   action names at most 1,000 distinct resources per call; more are invalid
+   input. An import change that would leave a retained grant invalid at the
+   next start is refused and names the grants to fix first.
 10. **Execution-credential resolution.** The credential for the selected mode is
    loaded.
 11. **Lookup-credential resolution.** If final policy selects `per_user`, any
@@ -1100,7 +1120,9 @@ overrides a user grant.
 "ambiguous credential mode precedence". Static config validation independently
 rejects duplicate same-subject grants and overlapping containment-scope grants
 with differing modes, except lookup-backed wildcard-vs-finite overlaps that can
-be resolved after authoritative metadata lookup.
+be resolved after authoritative metadata lookup. A command import's
+command-enforced actions are exempt from both: every grant of their top band is
+passed with its own credential mode, so mixed modes are not ambiguous.
 
 Lookup-backed actions still resolve authoritative scope before this final
 ambiguity check. For example, a same-precedence Jira band with a `per_user`

@@ -274,7 +274,75 @@ async fn built_providers_expose_the_command_hook_and_fail_closed() {
         "issue.view",
         json!({"project": "OPS", "issue": 42}),
     );
-    provider.resolve_scopes(scope.request()).await.unwrap();
+    // A Broker-enforced action names its resources for core to check; the
+    // command-enforced search names none; both check their input schema.
+    assert_eq!(
+        provider
+            .resolve_scopes(scope.request())
+            .await
+            .unwrap()
+            .into_scopes(),
+        BTreeMap::from([("project".to_owned(), vec!["OPS".to_owned()])])
+    );
+    let search = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "ticketing",
+        "issue.search",
+        json!({"query": "status = open"}),
+    );
+    assert!(
+        provider
+            .resolve_scopes(search.request())
+            .await
+            .unwrap()
+            .scopes()
+            .is_empty()
+    );
+    let invalid = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "ticketing",
+        "issue.view",
+        json!({"project": "OPS"}),
+    );
+    assert_eq!(
+        provider
+            .resolve_scopes(invalid.request())
+            .await
+            .unwrap_err()
+            .reason_code(),
+        ReasonCode::InputInvalid
+    );
+    for (action, authority) in actions.iter().map(|action| {
+        (
+            action.action.as_str(),
+            CommandAdapter.action_authority(action).unwrap(),
+        )
+    }) {
+        let resources = authority.resources.unwrap();
+        assert_eq!(resources.resource_type, "project");
+        // Core's reader of the declared type, which resource type changes
+        // use, agrees with the adapter's declaration.
+        let named = actions.iter().find(|candidate| candidate.action == action);
+        assert_eq!(
+            agent_access_core::imports::command_action_resource_type(named.unwrap()),
+            Some(resources.resource_type.as_str())
+        );
+        assert_eq!(resources.broker_enforced(), action == "issue.view");
+        assert_eq!(
+            authority.credential_modes,
+            Some(vec![
+                ImportedCredentialMode::Service,
+                ImportedCredentialMode::PerUser
+            ])
+        );
+    }
+    let mut corrupt = actions[0].clone();
+    corrupt.annotations = json!({"command": {"resources": {"type": "project", "inputs": []}}});
+    assert!(CommandAdapter.action_authority(&corrupt).is_err());
+    corrupt.annotations = json!({"command": {}});
+    assert_eq!(
+        CommandAdapter.action_authority(&corrupt).unwrap(),
+        ImportedActionAuthority::default(),
+        "an action without a type or modes is action-only with every bound mode"
+    );
     let unknown = agent_access_provider::test_support::ScopeRequestFixture::new(
         "ticketing",
         "other",

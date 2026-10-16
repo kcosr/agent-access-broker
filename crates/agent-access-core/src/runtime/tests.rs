@@ -7311,7 +7311,7 @@ fn repository_candidate(included: Vec<ResourceSelector>) -> PolicyCandidate {
         execution_contexts: vec![default_execution_context()],
         resource_scope: Some(ActionResourceScope {
             scope: "repository".to_string(),
-            resource_type: &agent_access_provider::GIT_REPOSITORY_RESOURCE,
+            resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
         }),
         boundary: ResourceBoundary {
             included,

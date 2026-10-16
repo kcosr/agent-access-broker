@@ -1,9 +1,10 @@
 //! Base-administrator management of database-owned imported services.
 use super::common::{
-    ManagementAccess, ManagementContext, management_context, management_host_error_response,
-    management_pre_audited_success_response, management_provider_error_response,
-    management_store_call, management_store_error_response, management_success_response,
-    management_write_audit_completion, management_write_audit_preflight,
+    ManagementAccess, ManagementContext, management_committed_write_audit_completion,
+    management_context, management_host_error_response, management_pre_audited_success_response,
+    management_provider_error_response, management_store_call, management_store_error_response,
+    management_success_response, management_write_audit_completion,
+    management_write_audit_preflight,
 };
 use crate::state::AppState;
 use agent_access_core::imports::{
@@ -59,6 +60,10 @@ struct AcceptBody {
     selections: Vec<Selection>,
     #[serde(default)]
     confirm_affected_grants: bool,
+    /// Broker type IDs chosen for resource types this acceptance adds, by
+    /// the source's type id.
+    #[serde(default)]
+    resource_type_ids: BTreeMap<String, String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -224,6 +229,30 @@ fn scoped_mcp_warnings(
                 codes: codes.into_iter().collect(),
             })
         })
+        .collect()
+}
+
+/// The accepted actions a complete discovery quarantines: missing,
+/// unsupported or behaviorally changed ones.
+fn quarantined_actions(
+    record: &ImportedServiceRecord,
+    discovery: &ImportedDiscovery,
+) -> Vec<String> {
+    record
+        .actions
+        .iter()
+        .filter(|action| {
+            action.status != ImportedActionStatus::Retired
+                && discovery
+                    .tools
+                    .iter()
+                    .find(|tool| tool.definition.source == action.definition.source)
+                    .is_none_or(|tool| {
+                        tool.unsupported_reason.is_some()
+                            || source_changed(&action.definition, &tool.definition)
+                    })
+        })
+        .map(|action| action.definition.action.clone())
         .collect()
 }
 
@@ -407,7 +436,8 @@ async fn preview_response(
         let by_action = grants_by_action(&store, &service_owned)?;
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
-        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
+        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
         }
@@ -655,146 +685,197 @@ async fn change(
         "{}:{}",
         context.snapshot.generation, context.snapshot.config_hash
     );
-    let result = state
-        .reloadable
-        .imported_service_mutation(context.snapshot.clone(), move |runtime| {
-            let store = runtime
-                .managed_store()
-                .ok_or_else(|| invalid("imported services require managed storage"))?;
-            match change {
-                Change::Create => {
-                    let definition: ImportedServiceDefinition = parse(body)?;
-                    runtime.require_import_destination(&definition)?;
-                    runtime.require_import_bindings(&definition, None)?;
-                    validate_discovery_owner(&definition, &actor)?;
-                    let service = definition.service.clone();
-                    let record = ImportedServiceRecord {
-                        definition: definition.clone(),
-                        status: ImportedServiceStatus::Draft,
-                        version: 1,
-                        actions: vec![],
-                        slot_versions: Default::default(),
-                        accepted_metadata: None,
-                        created_at: String::new(),
-                        created_by: actor.clone(),
-                        updated_at: String::new(),
-                        updated_by: actor.clone(),
-                    };
-                    let providers = runtime.prepare_imported_service_change(&record, None)?;
-                    let mutation =
-                        store.create_imported_service(definition, &actor, |catalog| {
+    let context = Arc::new(context);
+    let owner_context = context.clone();
+    let owner_target = target.clone();
+    let owner_state = state.clone();
+    let operation = operation.to_owned();
+    let owner_operation = operation.clone();
+    // Own publication and any completion audit together even if the HTTP
+    // response waiter is canceled.
+    let owner = tokio::spawn(async move {
+        let context = owner_context;
+        let operation = owner_operation.as_str();
+        let target = owner_target;
+        let result = owner_state
+            .reloadable
+            .imported_service_mutation(context.snapshot.clone(), move |runtime| {
+                let store = runtime
+                    .managed_store()
+                    .ok_or_else(|| invalid("imported services require managed storage"))?;
+                match change {
+                    Change::Create => {
+                        let definition: ImportedServiceDefinition = parse(body)?;
+                        runtime.require_import_destination(&definition)?;
+                        runtime.require_import_bindings(&definition, None)?;
+                        validate_discovery_owner(&definition, &actor)?;
+                        let service = definition.service.clone();
+                        let record = ImportedServiceRecord {
+                            definition: definition.clone(),
+                            status: ImportedServiceStatus::Draft,
+                            version: 1,
+                            actions: vec![],
+                            slot_versions: Default::default(),
+                            accepted_metadata: None,
+                            created_at: String::new(),
+                            created_by: actor.clone(),
+                            updated_at: String::new(),
+                            updated_by: actor.clone(),
+                        };
+                        let providers = runtime.prepare_imported_service_change(&record, None)?;
+                        let mutation =
+                            store.create_imported_service(definition, &actor, |catalog| {
+                                runtime.with_imported_catalog(catalog.clone(), providers)
+                            })?;
+                        let response = record_result(&mutation.value, &mutation.catalog, &service);
+                        Ok((mutation.value, (response, None)))
+                    }
+                    Change::SecretPut(purpose) => {
+                        let service = service.ok_or_else(|| invalid("service is required"))?;
+                        let body: SecretBody = parse(body)?;
+                        let mut record = checked_record(&runtime, &service, &body.versions)?;
+                        runtime.require_import_destination(&record.definition)?;
+                        if record.status == ImportedServiceStatus::Retired {
+                            return Err(invalid("retired imports cannot receive credentials"));
+                        }
+                        // The placeholder only signals presence; the store assigns the material version.
+                        record.slot_versions.insert(purpose, "pending".into());
+                        let override_token = (purpose == ImportedCredentialPurpose::Transport)
+                            .then(|| Some(body.token.clone()));
+                        let providers =
+                            runtime.prepare_imported_service_change(&record, override_token)?;
+                        let request = ImportedSecretWriteRequest {
+                            service: service.clone(),
+                            purpose,
+                            expected_version: body.versions.expected_version,
+                            expected_catalog_revision: body.versions.expected_catalog_revision,
+                            token: body.token,
+                            username: body.username,
+                            actor,
+                        };
+                        let mutation = store.write_imported_secret(
+                            request,
+                            runtime
+                                .credential_key_ring()
+                                .ok_or_else(|| invalid("import encryption is unavailable"))?,
+                            |catalog, proof| {
+                                runtime.with_imported_catalog(
+                                    catalog.clone(),
+                                    providers.bind_secret_write(proof)?,
+                                )
+                            },
+                        )?;
+                        let response = record_result(&mutation.value, &mutation.catalog, &service);
+                        Ok((mutation.value, (response, None)))
+                    }
+                    Change::SecretDelete(purpose) => {
+                        let service = service.ok_or_else(|| invalid("service is required"))?;
+                        let versions = parse_versions(body)?;
+                        let mut record = checked_record(&runtime, &service, &versions)?;
+                        record.slot_versions.remove(&purpose);
+                        let providers = runtime.prepare_imported_service_change(
+                            &record,
+                            (purpose == ImportedCredentialPurpose::Transport).then_some(None),
+                        )?;
+                        let request = ImportedSecretDeleteRequest {
+                            service: service.clone(),
+                            purpose,
+                            expected_version: versions.expected_version,
+                            expected_catalog_revision: versions.expected_catalog_revision,
+                            actor,
+                        };
+                        let mutation = store.delete_imported_secret(request, |catalog| {
                             runtime.with_imported_catalog(catalog.clone(), providers)
                         })?;
-                    let response = record_result(&mutation.value, &mutation.catalog, &service);
-                    Ok((mutation.value, response))
-                }
-                Change::SecretPut(purpose) => {
-                    let service = service.ok_or_else(|| invalid("service is required"))?;
-                    let body: SecretBody = parse(body)?;
-                    let mut record = checked_record(&runtime, &service, &body.versions)?;
-                    runtime.require_import_destination(&record.definition)?;
-                    if record.status == ImportedServiceStatus::Retired {
-                        return Err(invalid("retired imports cannot receive credentials"));
+                        let response = record_result(&mutation.value, &mutation.catalog, &service);
+                        Ok((mutation.value, (response, None)))
                     }
-                    // The placeholder only signals presence; the store assigns the material version.
-                    record.slot_versions.insert(purpose, "pending".into());
-                    let override_token = (purpose == ImportedCredentialPurpose::Transport)
-                        .then(|| Some(body.token.clone()));
-                    let providers =
-                        runtime.prepare_imported_service_change(&record, override_token)?;
-                    let request = ImportedSecretWriteRequest {
-                        service: service.clone(),
-                        purpose,
-                        expected_version: body.versions.expected_version,
-                        expected_catalog_revision: body.versions.expected_catalog_revision,
-                        token: body.token,
-                        username: body.username,
-                        actor,
-                    };
-                    let mutation = store.write_imported_secret(
-                        request,
-                        runtime
-                            .credential_key_ring()
-                            .ok_or_else(|| invalid("import encryption is unavailable"))?,
-                        |catalog, proof| {
-                            runtime.with_imported_catalog(
-                                catalog.clone(),
-                                providers.bind_secret_write(proof)?,
-                            )
-                        },
-                    )?;
-                    let response = record_result(&mutation.value, &mutation.catalog, &service);
-                    Ok((mutation.value, response))
-                }
-                Change::SecretDelete(purpose) => {
-                    let service = service.ok_or_else(|| invalid("service is required"))?;
-                    let versions = parse_versions(body)?;
-                    let mut record = checked_record(&runtime, &service, &versions)?;
-                    record.slot_versions.remove(&purpose);
-                    let providers = runtime.prepare_imported_service_change(
-                        &record,
-                        (purpose == ImportedCredentialPurpose::Transport).then_some(None),
-                    )?;
-                    let request = ImportedSecretDeleteRequest {
-                        service: service.clone(),
-                        purpose,
-                        expected_version: versions.expected_version,
-                        expected_catalog_revision: versions.expected_catalog_revision,
-                        actor,
-                    };
-                    let mutation = store.delete_imported_secret(request, |catalog| {
-                        runtime.with_imported_catalog(catalog.clone(), providers)
-                    })?;
-                    let response = record_result(&mutation.value, &mutation.catalog, &service);
-                    Ok((mutation.value, response))
-                }
-                kind => {
-                    let service = service.ok_or_else(|| invalid("service is required"))?;
-                    let record = runtime
-                        .imported_catalog()
-                        .service(&service)
-                        .cloned()
-                        .ok_or_else(|| invalid("imported service was not found"))?;
-                    let request = prepare_update(
-                        &runtime,
-                        store,
-                        &record,
-                        actor,
-                        &config_revision,
-                        body,
-                        kind,
-                    )?;
-                    let mut candidate = record.clone();
-                    candidate.definition = request.definition.clone();
-                    candidate.status = request.status;
-                    candidate.actions = request
-                        .actions
-                        .iter()
-                        .map(|a| ImportedActionRecord {
-                            definition: a.definition.clone(),
-                            status: a.status,
-                            version: 0,
-                            definition_hash: String::new(),
-                        })
-                        .collect();
-                    // An acceptance stores the preview's metadata; build the
-                    // provider from what will be committed, never the old one.
-                    if let Some(acceptance) = &request.accepted_preview {
-                        candidate.accepted_metadata = acceptance.accepted_metadata.clone();
+                    kind => {
+                        let service = service.ok_or_else(|| invalid("service is required"))?;
+                        let record = runtime
+                            .imported_catalog()
+                            .service(&service)
+                            .cloned()
+                            .ok_or_else(|| invalid("imported service was not found"))?;
+                        let request = prepare_update(
+                            &runtime,
+                            store,
+                            &record,
+                            actor,
+                            &config_revision,
+                            body,
+                            kind,
+                        )?;
+                        let mut candidate = record.clone();
+                        candidate.definition = request.definition.clone();
+                        candidate.status = request.status;
+                        candidate.actions = request
+                            .actions
+                            .iter()
+                            .map(|a| ImportedActionRecord {
+                                definition: a.definition.clone(),
+                                status: a.status,
+                                version: 0,
+                                definition_hash: String::new(),
+                            })
+                            .collect();
+                        // An acceptance stores the preview's metadata; build the
+                        // provider from what will be committed, never the old one.
+                        if let Some(acceptance) = &request.accepted_preview {
+                            candidate.accepted_metadata = acceptance.accepted_metadata.clone();
+                        }
+                        let providers =
+                            runtime.prepare_imported_service_change(&candidate, None)?;
+                        let accepted_metadata = request
+                            .accepted_preview
+                            .as_ref()
+                            .and_then(|acceptance| acceptance.accepted_metadata.clone());
+                        let (mutation, effects) =
+                            runtime.commit_imported_service_update(request, providers)?;
+                        let mut response =
+                            record_result(&mutation.value, &mutation.catalog, &service);
+                        if !effects.is_empty() {
+                            response["resourceTypeEffects"] = json!(effects);
+                        }
+                        let completion = super::import_types::acceptance_audit(
+                            &service,
+                            record.accepted_metadata.as_ref(),
+                            accepted_metadata.as_ref(),
+                            &effects,
+                        );
+                        Ok((mutation.value, (response, completion)))
                     }
-                    let providers = runtime.prepare_imported_service_change(&candidate, None)?;
-                    let mutation = store.update_imported_service(request, |catalog| {
-                        runtime.with_imported_catalog(catalog.clone(), providers)
-                    })?;
-                    let response = record_result(&mutation.value, &mutation.catalog, &service);
-                    Ok((mutation.value, response))
                 }
+            })
+            .await;
+        match result {
+            Ok((result, completion)) => {
+                // A committed acceptance keeps its success response if the
+                // supplemental completion audit is unavailable.
+                if let Some(completion) = completion {
+                    management_committed_write_audit_completion(
+                        &context,
+                        operation,
+                        Some(completion),
+                    )
+                    .await;
+                }
+                management_pre_audited_success_response(&context, operation, target, result)
             }
-        })
-        .await;
-    match result {
-        Ok(result) => management_pre_audited_success_response(&context, operation, target, result),
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
+            Err(error) => management_store_error_response(&context, operation, target, error).await,
+        }
+    });
+    match owner.await {
+        Ok(response) => response,
+        Err(_) => {
+            management_store_error_response(
+                &context,
+                &operation,
+                target,
+                ManagedStoreError::Unavailable("import change completion failed".into()),
+            )
+            .await
+        }
     }
 }
 
@@ -987,15 +1068,32 @@ fn prepare_update(
             let manifest: ImportedDiscovery = serde_json::from_value(preview.manifest.clone())
                 .map_err(|_| invalid("stored discovery preview is invalid"))?;
             // Service-level metadata is accepted from the persisted preview,
-            // never from the request.
-            let accepted_metadata = manifest.service_metadata.clone();
+            // never from the request; only the Broker type IDs of added
+            // resource types are chosen here.
+            let mut accepted_metadata = manifest.service_metadata.clone();
             // Only command imports record service metadata, and they always do.
             if accepted_metadata.is_some()
                 != runtime.import_records_service_metadata(&record.definition)
             {
                 return Err(invalid("stored discovery preview is invalid"));
             }
-            if body.selections.is_empty() {
+            match &mut accepted_metadata {
+                Some(metadata) => super::import_types::choose_type_ids(
+                    runtime,
+                    record,
+                    metadata,
+                    &body.resource_type_ids,
+                )?,
+                None if !body.resource_type_ids.is_empty() => {
+                    return Err(invalid("this import declares no resource types"));
+                }
+                None => {}
+            }
+            // An import with accepted actions may accept only the preview's
+            // service metadata and resource type changes.
+            if body.selections.is_empty()
+                && (record.actions.is_empty() || accepted_metadata.is_none())
+            {
                 return Err(invalid("select at least one discovered tool"));
             }
             let mut request = mutation_request(record, body.versions, actor);
@@ -1153,22 +1251,6 @@ pub(crate) async fn discover(
             return management_provider_error_response(&context, operation, target, error).await;
         }
     };
-    let quarantine = record
-        .actions
-        .iter()
-        .filter(|action| {
-            action.status != ImportedActionStatus::Retired
-                && discovery
-                    .tools
-                    .iter()
-                    .find(|tool| tool.definition.source == action.definition.source)
-                    .is_none_or(|tool| {
-                        tool.unsupported_reason.is_some()
-                            || source_changed(&action.definition, &tool.definition)
-                    })
-        })
-        .map(|action| action.definition.action.clone())
-        .collect::<Vec<_>>();
     let actor = context.identity.principal.clone();
     let config_revision = format!(
         "{}:{}",
@@ -1186,6 +1268,14 @@ pub(crate) async fn discover(
         let result = state
             .reloadable
             .imported_service_mutation(context.snapshot.clone(), move |runtime| {
+                let store = runtime
+                    .managed_store()
+                    .ok_or_else(|| invalid("import storage unavailable"))?;
+                let mut discovery = discovery;
+                // Type changes can make actions unsupported, so they are
+                // planned before the quarantine is computed.
+                super::import_types::plan_discovery(store, &record, &mut discovery)?;
+                let quarantine = quarantined_actions(&record, &discovery);
                 let mut candidate = record;
                 for action in &mut candidate.actions {
                     if quarantine.contains(&action.definition.action) {
@@ -1193,9 +1283,6 @@ pub(crate) async fn discover(
                     }
                 }
                 let providers = runtime.prepare_imported_service_change(&candidate, None)?;
-                let store = runtime
-                    .managed_store()
-                    .ok_or_else(|| invalid("import storage unavailable"))?;
                 let manifest = serde_json::to_value(discovery)
                     .map_err(|_| invalid("invalid discovery response"))?;
                 let manifest_bytes = serde_json::to_vec(&manifest)
@@ -1232,6 +1319,12 @@ pub(crate) async fn discover(
                         record,
                         preview.as_ref(),
                     )?);
+                    response["resourceTypeChanges"] = super::import_types::type_changes(
+                        store,
+                        &mutation.value,
+                        record,
+                        preview.as_ref(),
+                    )?;
                     response["preview"] = json!(preview);
                     response["affectedGrants"] = json!(affected);
                     response["affectedGrantsByAction"] = json!(by_action);
@@ -1346,6 +1439,7 @@ mod tests {
             })
             .collect(),
             service_metadata: None,
+            resource_type_changes: Vec::new(),
         };
         let before = serde_json::to_value(&manifest).unwrap();
         let warnings = scoped_mcp_warnings(&record, &manifest, |definition| {

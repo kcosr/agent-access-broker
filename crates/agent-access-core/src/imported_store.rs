@@ -217,11 +217,42 @@ impl ManagedStore {
         tx.execute("INSERT INTO imported_services(service,definition_json,status,version,created_at,created_by,updated_at,updated_by) VALUES(?1,?2,'draft',1,?3,?4,?3,?4)", params![definition.service,json,now,actor]).map_err(sql_unavailable)?;
         finish(tx, validate)
     }
+    /// Updates an imported service. An acceptance whose resource type
+    /// changes delete attribute values or drop types must also publish the
+    /// managed policy, so it is rejected here; use
+    /// [`Self::update_imported_service_with_policy`].
     pub fn update_imported_service<T>(
         &self,
         request: ImportedServiceUpdateRequest,
         validate: impl FnOnce(&ImportedCatalog) -> Result<T, ManagedStoreError>,
     ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
+        self.update_imported_service_with_policy(request, |catalog, transaction| match transaction
+            .and_then(|transaction| transaction.policy)
+        {
+            None => validate(catalog),
+            Some(_) => Err(input_invalid(
+                "this acceptance changes stored resources and must publish the managed policy",
+            )),
+        })
+        .map(|(result, _)| result)
+    }
+    /// Updates an imported service. An acceptance applies its resource type
+    /// changes in the same transaction: it rechecks every change that depends
+    /// on stored resources and rejects the update, naming the resources, when
+    /// one no longer applies; deletes removed attributes' values; and drops
+    /// unused removed types. When it deletes values or drops a type it also
+    /// advances the managed policy revision. Whenever an acceptance changes
+    /// the import's resource types, `validate` receives the transaction's
+    /// resource catalog, and any advanced policy state, to check against the
+    /// new registry and publish with the catalog.
+    pub fn update_imported_service_with_policy<T>(
+        &self,
+        request: ImportedServiceUpdateRequest,
+        validate: impl FnOnce(
+            &ImportedCatalog,
+            Option<super::ImportedTypeTransaction<'_>>,
+        ) -> Result<T, ManagedStoreError>,
+    ) -> Result<(ImportedMutationResult<T>, super::ImportedTypeEffects), ManagedStoreError> {
         validate_actor(&request.actor)?;
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
@@ -368,6 +399,46 @@ impl ManagedStore {
         }
         let json = bounded_json(&request.definition, 32768)?;
         tx.execute("UPDATE imported_services SET definition_json=?2,status=?3,version=version+1,updated_at=?4,updated_by=?5 WHERE service=?1",params![request.definition.service,json,request.status.as_str(),normalized_now_string(),request.actor]).map_err(sql_unavailable)?;
+        let accepted_metadata = request
+            .accepted_preview
+            .as_ref()
+            .and_then(|acceptance| acceptance.accepted_metadata.as_ref());
+        let (effects, policy) = match accepted_metadata {
+            Some(metadata) => {
+                let plan = crate::imports::ImportedTypeAcceptance::plan(
+                    old.accepted_metadata.as_ref(),
+                    metadata,
+                )
+                .map_err(input_invalid)?;
+                super::imported_resource_types::apply_type_acceptance(&tx, &plan, &request.actor)?
+            }
+            None => Default::default(),
+        };
+        // Any change to the resource types is checked against every stored
+        // resource, effects or not, so a mismatch fails here rather than at
+        // the next startup.
+        let old_types = old
+            .accepted_metadata
+            .as_ref()
+            .map_or(&[][..], |old| &old.resource_types[..]);
+        let types_changed =
+            accepted_metadata.is_some_and(|metadata| metadata.resource_types != old_types);
+        let loaded;
+        let transaction = if types_changed {
+            let catalog = match &policy {
+                Some(policy) => &policy.catalog,
+                None => {
+                    loaded = super::resources::resource_catalog(&tx)?;
+                    &loaded
+                }
+            };
+            Some(super::ImportedTypeTransaction {
+                catalog,
+                policy: policy.as_ref(),
+            })
+        } else {
+            None
+        };
         if let Some(acceptance) = &request.accepted_preview {
             write_accepted_metadata(
                 &tx,
@@ -380,7 +451,8 @@ impl ManagedStore {
             [&request.definition.service],
         )
         .map_err(sql_unavailable)?;
-        finish(tx, validate)
+        let result = finish(tx, |catalog| validate(catalog, transaction))?;
+        Ok((result, effects))
     }
     pub fn write_imported_preview<T>(
         &self,

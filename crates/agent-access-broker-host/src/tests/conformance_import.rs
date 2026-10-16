@@ -143,6 +143,7 @@ impl ImportedAdapter for ConformanceImportAdapter {
                 read_only_hint: Some(true),
             }],
             service_metadata: None,
+            resource_type_changes: Vec::new(),
         })
     }
 }

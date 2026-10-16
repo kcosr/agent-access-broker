@@ -559,6 +559,7 @@ pub static CLOUDBEES_CI_JOB_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
     "CloudBees CI jobs",
     "team-ci/payments/build-api",
     |value| is_cloudbees_ci_resource_path(value, false),
+    &[],
 )
 .with_namespace(NamespaceSelectorDescriptor::new(
     |value| is_cloudbees_ci_resource_path(value, true),

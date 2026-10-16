@@ -37,7 +37,7 @@ pub struct EffectiveAccessClause {
 }
 
 impl EffectiveAccessClause {
-    fn from_boundary(boundary: ResourceBoundary) -> Self {
+    pub(super) fn from_boundary(boundary: ResourceBoundary) -> Self {
         Self {
             included: boundary.included,
             excluded: boundary.excluded,
@@ -412,6 +412,17 @@ impl BrokerRuntime {
         if token.is_some_and(|caveats| !caveats_permit_action(caveats, context, service, action)) {
             return Vec::new();
         }
+        if self.command_enforced(service, action) {
+            return deduplicate_clauses(self.command_effective_clauses(
+                snapshot,
+                identity,
+                context,
+                service,
+                action,
+                token,
+                mode_available,
+            ));
+        }
         let search_contained = self
             .action_descriptor(service, action)
             .is_some_and(|descriptor| descriptor.search_contained);
@@ -429,6 +440,7 @@ impl BrokerRuntime {
                 self.policy_candidates_for_action(snapshot, identity, context, service, action);
             candidate_clauses_for_modes(&candidates, |mode| {
                 mode_available(mode)
+                    && self.action_supports_mode(service, action, mode)
                     && credential_mode_available(
                         &self.effective_credentials,
                         service,
@@ -774,7 +786,7 @@ mod tests {
             execution_contexts: vec![ExecutionContext::new("default").unwrap()],
             resource_scope: Some(ActionResourceScope {
                 scope: "repository".to_string(),
-                resource_type: &agent_access_provider::GIT_REPOSITORY_RESOURCE,
+                resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
             }),
             boundary,
         }
@@ -926,7 +938,7 @@ mod tests {
             for (index, candidate) in candidates.iter_mut().enumerate() {
                 candidate.resource_scope = Some(ActionResourceScope {
                     scope: scope.into(),
-                    resource_type,
+                    resource_type: Arc::new(resource_type.clone()),
                 });
                 candidate.subject = format!("group:group-{index}");
             }

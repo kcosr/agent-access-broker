@@ -11,6 +11,10 @@ use principal_access::{
 #[path = "imported_store.rs"]
 mod imported_store;
 pub use imported_store::*;
+mod imported_resource_types;
+pub use imported_resource_types::{
+    DeletedResourceAttributes, ImportedTypeEffects, ImportedTypeTransaction,
+};
 mod local_password_failures;
 pub(crate) mod oauth;
 mod principal_service_limits;
@@ -283,6 +287,41 @@ pub struct PolicyValidationIssue {
     pub message: String,
 }
 
+/// An import change refused because stored resources or retained grants
+/// would not stay valid under it. The message names them for people; the
+/// lists name them for clients, which management reports as
+/// `target.affectedGrants` and `target.resources`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportChangeBlocked {
+    pub message: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub affected_grants: Vec<ImportBlockingGrant>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<ImportBlockingResource>,
+}
+
+/// A retained grant the change would leave invalid, with the policy
+/// validation issue's code and message.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBlockingGrant {
+    pub id: String,
+    pub reason_code: String,
+    pub reason: String,
+}
+
+/// A stored resource that prevents the change, by Broker type and ID.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ImportBlockingResource {
+    #[serde(rename = "type")]
+    pub resource_type: String,
+    pub id: String,
+}
+
 #[derive(Debug, Error)]
 pub enum ManagedStoreError {
     #[error("managed store is unavailable: {0}")]
@@ -389,6 +428,8 @@ pub enum ManagedStoreError {
     CredentialExpired,
     #[error("input is invalid: {0}")]
     InputInvalid(String),
+    #[error("input is invalid: {}", .0.message)]
+    ImportChangeBlocked(Box<ImportChangeBlocked>),
     #[error("credential is invalid: {0}")]
     CredentialInvalid(String),
     #[error("right is missing")]
@@ -447,7 +488,9 @@ impl ManagedStoreError {
             Self::OidcAdmissionDenied => ReasonCode::OidcAdmissionDenied,
             Self::CredentialNotFound => ReasonCode::CredentialNotFound,
             Self::CredentialExpired => ReasonCode::CredentialExpired,
-            Self::InputInvalid(_) | Self::ResourceConflict(_) => ReasonCode::InputInvalid,
+            Self::InputInvalid(_) | Self::ResourceConflict(_) | Self::ImportChangeBlocked(_) => {
+                ReasonCode::InputInvalid
+            }
             Self::CredentialInvalid(_) => ReasonCode::CredentialInvalid,
             Self::RightMissing => ReasonCode::RightMissing,
         }

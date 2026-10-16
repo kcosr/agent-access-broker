@@ -101,7 +101,7 @@ impl ServiceDiscovery<'_> {
     fn resource_type(
         &self,
         requested: Option<&ResourceType>,
-    ) -> Result<Option<&'static ResourceTypeDescriptor>, &'static str> {
+    ) -> Result<Option<&ResourceTypeDescriptor>, &'static str> {
         if self.capabilities.actions.is_empty() {
             return Ok(None);
         }
@@ -124,6 +124,7 @@ impl ServiceDiscovery<'_> {
                 self.runtime
                     .resource_types
                     .get(&resource_type)
+                    .map(Arc::as_ref)
                     .ok_or("resource type is not registered")
             })
             .transpose()

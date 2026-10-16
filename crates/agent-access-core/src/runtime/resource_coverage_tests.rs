@@ -39,6 +39,7 @@ static JOB: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     "Coverage jobs",
     "team-ci/payments/build-api",
     |value| is_path(value, 2..=4),
+    &[],
 )
 .with_namespace(NamespaceSelectorDescriptor::new(
     |value| is_path(value, 1..=3),

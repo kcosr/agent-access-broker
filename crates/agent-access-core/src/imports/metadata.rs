@@ -12,10 +12,17 @@ use super::{ImportedCredentialMode, ImportedServiceDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Upper bound of the encoded metadata, well below the manifest budget.
+/// Upper bound of the encoded metadata, well below the manifest budget: the
+/// bound of `imported_services.accepted_metadata_json`.
 pub const IMPORT_MAX_METADATA_BYTES: usize = 256 * 1024;
+/// Upper bound of the encoded metadata without its removed resource types,
+/// so that types a source declares always leave room for those it removed.
+pub const IMPORT_MAX_DECLARED_METADATA_BYTES: usize = IMPORT_MAX_METADATA_BYTES / 2;
 /// Most resource types one import declares.
 pub const IMPORT_MAX_RESOURCE_TYPES: usize = 16;
+/// Most removed resource types an import keeps for their remaining
+/// resources, in addition to the types it declares.
+pub const IMPORT_MAX_REMOVED_RESOURCE_TYPES: usize = 16;
 /// Most attributes one imported resource type declares.
 pub const IMPORT_MAX_RESOURCE_ATTRIBUTES: usize = 16;
 
@@ -89,6 +96,8 @@ impl ImportedCredentialKind {
 }
 
 /// A declared resource type and the Broker type ID it is registered under.
+/// Every accepted type stays registered, also while its import is disabled
+/// or retired, so stored resources of it stay valid.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedResourceTypeDeclaration {
@@ -96,8 +105,13 @@ pub struct ImportedResourceTypeDeclaration {
     /// `resourceType` names.
     pub id: String,
     /// The Broker resource type ID, `^[a-z][a-z0-9_]{0,63}$`; proposed as
-    /// `<service>_<id>` and fixed after first acceptance.
+    /// `<service>_<id>`, editable before first acceptance and fixed after it.
     pub broker_type: String,
+    /// The source no longer declares the type but resources of it remain:
+    /// it stays registered for them and accepts no new resources until a
+    /// later acceptance drops it once they are deleted. Always `false` in a
+    /// source's own declaration.
+    pub removed: bool,
     pub label: String,
     pub plural_label: String,
     /// Matched against the whole exact selector value.
@@ -125,7 +139,8 @@ fn bounded_text(value: &str, max: usize) -> bool {
 }
 
 /// The source bound of declared patterns: nonempty and at most 8 KiB. The
-/// grammar is the SDK resource pattern's; adapters compile it.
+/// grammar is the SDK resource pattern's, compiled where adapters parse
+/// manifests and where the registry builds the type, never on reads.
 fn pattern_source(value: &str) -> bool {
     !value.is_empty() && value.len() <= 8 * 1024
 }
@@ -194,8 +209,19 @@ impl ImportedServiceMetadata {
                 return Err("import credential modes must be a nonempty set".into());
             }
         }
-        if self.resource_types.len() > IMPORT_MAX_RESOURCE_TYPES {
+        let removed = self
+            .resource_types
+            .iter()
+            .filter(|declared| declared.removed)
+            .count();
+        if self.resource_types.len() - removed > IMPORT_MAX_RESOURCE_TYPES {
             return Err("import declares too many resource types".into());
+        }
+        if removed > IMPORT_MAX_REMOVED_RESOURCE_TYPES {
+            return Err(
+                "import keeps too many removed resource types; delete the resources of removed types first"
+                    .into(),
+            );
         }
         let mut ids = BTreeSet::new();
         let mut broker_types = BTreeSet::new();
@@ -236,11 +262,26 @@ impl ImportedServiceMetadata {
                 }
             }
         }
-        if serde_json::to_vec(self)
-            .map_err(|_| "import metadata cannot be encoded")?
-            .len()
-            > IMPORT_MAX_METADATA_BYTES
-        {
+        let encoded_len = |metadata: &Self| {
+            serde_json::to_vec(metadata)
+                .map(|encoded| encoded.len())
+                .map_err(|_| "import metadata cannot be encoded")
+        };
+        let total = encoded_len(self)?;
+        let declared = if removed == 0 {
+            total
+        } else {
+            encoded_len(&Self {
+                resource_types: self
+                    .resource_types
+                    .iter()
+                    .filter(|declared| !declared.removed)
+                    .cloned()
+                    .collect(),
+                ..self.clone()
+            })?
+        };
+        if total > IMPORT_MAX_METADATA_BYTES || declared > IMPORT_MAX_DECLARED_METADATA_BYTES {
             return Err("import metadata exceeds size limit".into());
         }
         Ok(())
@@ -267,6 +308,7 @@ mod tests {
             resource_types: vec![ImportedResourceTypeDeclaration {
                 id: "project".into(),
                 broker_type: "ticketing_project".into(),
+                removed: false,
                 label: "Project".into(),
                 plural_label: "Projects".into(),
                 pattern: "[A-Z][A-Z0-9]{1,9}".into(),
@@ -293,7 +335,7 @@ mod tests {
             json!({"format":"agent-access-command/1","version":"1.4.0",
                 "credential":{"kind":"username_token","modes":["service","per_user"]},
                 "verify":true,
-                "resourceTypes":[{"id":"project","brokerType":"ticketing_project","label":"Project",
+                "resourceTypes":[{"id":"project","brokerType":"ticketing_project","removed":false,"label":"Project",
                     "pluralLabel":"Projects","pattern":"[A-Z][A-Z0-9]{1,9}","maxLength":256,
                     "example":"OPS","attributes":[{"name":"region","label":"Region",
                     "description":"Hosting region.","required":false,"pattern":"[a-z0-9-]{1,32}"}]}]})
@@ -321,6 +363,23 @@ mod tests {
         let mut invalid = sample();
         invalid.version = String::new();
         assert!(invalid.validate().is_err());
+        // Sixteen declared types and up to sixteen retained removed ones.
+        let types = |declared: usize, removed: usize| {
+            let mut metadata = sample();
+            metadata.resource_types = (0..declared + removed)
+                .map(|n| ImportedResourceTypeDeclaration {
+                    id: format!("t{n:02}"),
+                    broker_type: format!("ticketing_t{n:02}"),
+                    removed: n >= declared,
+                    ..sample().resource_types[0].clone()
+                })
+                .collect();
+            metadata
+        };
+        types(16, 0).validate().unwrap();
+        types(16, 16).validate().unwrap();
+        assert!(types(17, 0).validate().unwrap_err().contains("too many"));
+        assert!(types(16, 17).validate().unwrap_err().contains("removed"));
         assert!(
             serde_json::from_value::<ImportedServiceMetadata>(json!({
                 "format":"agent-access-command/1","version":"1","credential":null,
@@ -336,6 +395,7 @@ mod tests {
             metadata: json!({"title": "Inventory"}),
             tools: Vec::new(),
             service_metadata: None,
+            resource_type_changes: Vec::new(),
         };
         // Previews of adapters that record none keep their exact encoding.
         assert_eq!(

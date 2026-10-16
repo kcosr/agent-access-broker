@@ -36,6 +36,7 @@ pub static OAUTH_COLLECTION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
     "OAuth test collections",
     "alpha",
     is_oauth_collection,
+    &[],
 );
 
 fn is_oauth_collection(value: &str) -> bool {

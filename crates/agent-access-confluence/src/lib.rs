@@ -340,6 +340,7 @@ pub static CONFLUENCE_SPACE_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
     "Confluence spaces",
     "ENG",
     is_space_key,
+    &[],
 );
 
 /// Confluence's authoritative service descriptor, derived from its typed

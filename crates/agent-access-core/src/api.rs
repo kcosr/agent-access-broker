@@ -971,7 +971,14 @@ fn route_response_schema(route: &HttpRouteSpec, resource_type_ids: &[String]) ->
                     "selectors":{"type":"array","items":{"enum":["exact","namespace","all"]}},
                     "namespace":{"type":"object","additionalProperties":false,
                         "required":["label","membersLabel","example"],
-                        "properties":{"label":{"type":"string"},"membersLabel":{"type":"string"},"example":{"type":"string"}}}
+                        "properties":{"label":{"type":"string"},"membersLabel":{"type":"string"},"example":{"type":"string"}}},
+                    "attributes":{"type":"array","items":{"type":"object","additionalProperties":false,
+                        "required":["name","label","description","required","secret"],
+                        "properties":{"name":{"type":"string"},"label":{"type":"string"},"description":{"type":"string"},
+                            "required":{"type":"boolean"},"secret":{"type":"boolean"}}}},
+                    "removed":{"type":"boolean","const":true,
+                        "description":"Present when the imported service that declared the type no longer does: it accepts no new resources."},
+                    "importedService":{"type":"string","description":"The imported service that declares the type."}
                 }
             }}}
         }),

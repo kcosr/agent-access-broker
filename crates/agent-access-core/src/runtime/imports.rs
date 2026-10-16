@@ -7,9 +7,11 @@ use crate::imports::{
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
 mod authentication_tests;
+mod authority;
 #[cfg(test)]
 mod command_tests;
 mod mcp_names;
+mod retained_grants;
 
 /// Opaque provider preparation. Its provenance must match the committed catalog;
 /// callers cannot substitute arbitrary providers or attest their own token writes.
@@ -200,9 +202,12 @@ fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
         .collect()
 }
 
+/// The service descriptor of `record`, whose scopes bind the Broker types
+/// the generation's `resource_types` registers.
 pub(super) fn descriptor(
     record: &ImportedServiceRecord,
     config: &BrokerConfig,
+    resource_types: &ResourceTypeRegistry,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
     // Arbitrary upstream content may contain private data or credentials.
@@ -215,24 +220,33 @@ pub(super) fn descriptor(
         .iter()
         .map(|pointer| (*pointer).to_owned())
         .collect();
-    let adapter_kind = &record.definition.adapter_kind;
+    let adapter = config
+        .providers
+        .registry()
+        .imported_adapter(&record.definition.adapter_kind);
+    let mut resource_scopes = BTreeMap::new();
     let actions = record
         .actions
         .iter()
-        .map(|record| {
-            let definition = &record.definition;
+        .map(|action_record| {
+            let definition = &action_record.definition;
+            let shape =
+                authority::action_shape(record, adapter, definition, &modes, resource_types);
             let mut action = ActionDescriptor::new(
                 &definition.action,
                 &definition.description,
                 definition.input_schema.clone(),
             )
-            .credential_modes(modes.iter().copied());
+            .credential_modes(shape.credential_modes);
+            if let Some(scope) = shape.scope {
+                action = action.scope(scope.name.clone());
+                if scope.search_contained {
+                    action = action.search_contained();
+                }
+                resource_scopes.insert(scope.name.clone(), authority::scope_binding(&scope));
+            }
             action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
-                name: config
-                    .providers
-                    .registry()
-                    .imported_adapter(adapter_kind)
-                    .and_then(|adapter| adapter.scoped_mcp_name(definition).ok()),
+                name: adapter.and_then(|adapter| adapter.scoped_mcp_name(definition).ok()),
             };
             action.read_only = definition.read_only;
             action.sensitive_output_pointers = sensitive_output_pointers.clone();
@@ -243,6 +257,7 @@ pub(super) fn descriptor(
         record.definition.service.clone(),
         record.definition.display_name.clone(),
     )
+    .with_resource_scopes(resource_scopes)
     .with_actions(actions)
     .with_credentials(if credential_free(&record.definition) {
         CredentialDescriptor::without_execution_credential()
@@ -668,6 +683,8 @@ impl BrokerRuntime {
         self.validate_import_mcp_names(&catalog)?;
         let changed_service = prepared.service.clone();
         let imported_providers = prepared.validate(self, &catalog)?;
+        // The registry publishes with the catalog that declares its types.
+        let resource_types = Arc::new(self.imported_resource_types(&catalog)?);
         let mut next = self.clone();
         let mut config = (*self.config).clone();
         let mut services = (*self.services).clone();
@@ -710,7 +727,7 @@ impl BrokerRuntime {
                     .validate()
                     .map_err(ManagedStoreError::InputInvalid)?;
             }
-            let definition = descriptor(record, &config);
+            let definition = descriptor(record, &config, resource_types.registry());
             if imported_providers.contains_key(name) {
                 definition
                     .validate()
@@ -753,6 +770,7 @@ impl BrokerRuntime {
         effective_credentials(&mut config, &catalog);
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
+        next.resource_types = resource_types;
         next.services = Arc::new(services);
         next.providers = Arc::new(providers);
         next.command_providers = Arc::new(command_providers);
@@ -761,6 +779,7 @@ impl BrokerRuntime {
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
         next.policy_snapshot = Arc::new(ArcSwap::from(self.policy_snapshot()));
         next.check_import_catalog_budgets()?;
+        next.check_retained_import_grants(&changed_service)?;
         Ok(next)
     }
 
@@ -876,6 +895,7 @@ impl BrokerRuntime {
 pub(super) fn build_providers(
     config: &BrokerConfig,
     catalog: &ImportedCatalog,
+    resource_types: &ResourceTypeRegistry,
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
@@ -892,7 +912,11 @@ pub(super) fn build_providers(
         {
             continue;
         }
-        if definition.validate().is_err() || descriptor(record, config).validate().is_err() {
+        if definition.validate().is_err()
+            || descriptor(record, config, resource_types)
+                .validate()
+                .is_err()
+        {
             continue;
         }
         let Some(adapter) = config
