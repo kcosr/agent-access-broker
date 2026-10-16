@@ -361,7 +361,13 @@ batch keeps its partial result: verified uploads stay in `attachments`, the
 unverified upload is a `failures` entry with `status: "unverified"` and its
 `attachmentId`, later files are `skipped`, and `safeLocators.attachmentIds`
 lists every created attachment. Inspect those objects instead of repeating the
-mutation.
+mutation. A person's [OAuth connection](#oauth-connections) failing during such
+a readback or verification, or Confluence rejecting its access again, reports
+`mutation_verification_failed` with the same receipt, and a draft attachment
+batch then reports the uploaded attachments in `safeLocators.attachmentIds`.
+Before the mutation, such a failure keeps its own reason without a receipt, and
+an attachment batch whose first upload could not present the connection fails
+with the connection's own reason.
 
 A Confluence write action sends its mutation request after its reads. When the
 Broker proves that request never reached Confluence, because no connection was

@@ -331,7 +331,10 @@ verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
 `retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
 `post_create_readback`), and `safeLocators` holding the created or changed issue
 IDs and keys. It carries no retry wait: inspect those issues instead of repeating
-the mutation.
+the mutation. A person's [OAuth connection](#oauth-connections) failing during
+that readback, or Jira rejecting its access again, reports the same
+`mutation_verification_failed` receipt; before the mutation, such a failure
+keeps its own reason without a receipt.
 
 A Jira write action sends its mutation request after its reads. When the Broker
 proves that request never reached Jira, because no connection was established
@@ -1152,7 +1155,10 @@ waiting and repeating the batch would upload them again, so the reason code is
 Upload only the failed and skipped files, later, instead of the whole batch.
 When the first upload was proven never sent, nothing was created: the
 `upstream_failed` error carries `mutationStatus: "not_applied"` and
-`retrySafe: true`, and the whole batch can be repeated. When an upload may have
+`retrySafe: true`, and the whole batch can be repeated. When the first upload
+could not present a person's OAuth connection, or Jira rejected its access
+again, nothing was created and the batch fails with the connection's own
+reason. When an upload may have
 created its attachment before the batch failed (an earlier upload succeeded, or
 the failed upload got no response, a redirect, a 5xx, or a success status with an
 unreadable response), the error keeps its result and adds
