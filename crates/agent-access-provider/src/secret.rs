@@ -462,7 +462,7 @@ mod tests {
             result
                 .clone()
                 .with_stream(crate::ProviderResultStream::from_bytes(
-                    "application/octet-stream".into(),
+                    "application/octet-stream",
                     vec![1],
                 ))
         );
