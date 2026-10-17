@@ -1278,6 +1278,14 @@ All notable changes to this project are documented in this file.
   `upstream_protocol_failed`; it is now `scope_unresolved`, keeping its
   `applied_unverified` receipt. Issues are still authorized by their current
   project, never by the alias prefix, and results report the current key.
+- Jira comment, comment-property, attachment (`attachment.add`,
+  `attachment.download`, `attachment.list`) and `verify` actions confirmed the
+  issue again at invocation but did not check its project against the admitted
+  scopes. An issue moved to an ungranted project after authorization was still
+  read or written. Invocation now denies such an issue with `scope_unresolved`
+  before any execution request, as issue reads and mutations already did.
+  `attachment.add` confirms the issue immediately before its first upload
+  instead of reusing the lookup from body admission, which no longer calls Jira.
 
 ### Removed
 

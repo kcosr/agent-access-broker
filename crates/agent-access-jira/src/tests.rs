@@ -20,6 +20,9 @@ mod underscore_key_tests;
 #[path = "renamed_project_key_tests.rs"]
 mod renamed_project_key_tests;
 
+#[path = "moved_issue_tests.rs"]
+mod moved_issue_tests;
+
 #[path = "search_continuation_tests.rs"]
 mod search_continuation_tests;
 

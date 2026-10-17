@@ -456,13 +456,15 @@ and `attachment.list`. Jira REST responses do not provide a browser URL, so the
 broker derives this field only from confirmed issue keys.
 
 The key prefix is never treated as authoritative project scope on its own. For
-parent changes, dependency links, comment actions, comment-property actions,
-mutations, `verify`, `attachment.download`, and `attachment.list`, the broker
-confirms the issue's project through pre-authorization metadata lookup before
-authorization.
-`issue.view` denies with `scope_unresolved` if the confirmed project is not
-authorized, or if the full read's id, key, or project disagree with the
-confirmed metadata.
+every action that names an issue, the broker confirms the issue's project
+through pre-authorization metadata lookup before authorization. Invocation
+then confirms each named issue again, before any execution read or write, and
+denies with `scope_unresolved` if its current project is no longer within the
+admitted scopes. This covers an issue moved, or a project key changed, after
+authorization. Nothing is read from or written to an issue that left the
+admitted projects, so such a denial carries no mutation receipt.
+`issue.view` also denies with `scope_unresolved` if the full read's id, key, or
+project disagree with the confirmed metadata.
 
 ### Renamed project keys
 
@@ -1193,7 +1195,9 @@ Each declared part is validated: the `field` and `filename` must be non-empty, a
 the `filename` must contain no `/` or `\`; `size` must be in `1..=max_bytes`; the
 `contentType` must be in the `media_types` allowlist; and `sha256` must be exactly
 64 hex characters matching the uploaded part. The running total is enforced against
-`max_total_bytes`. Uploads run one at a time. On a failure, every remaining file is
+`max_total_bytes`. Body admission validates the declared parts; invocation
+confirms the issue's project immediately before the first upload. Uploads run
+one at a time. On a failure, every remaining file is
 recorded as `skipped`. A run where all files fail, or any file fails (partial),
 returns `upstream_failed` (the partial result still carries `status: "partial"`);
 a full success returns `status: "complete"`. When Jira throttled the failed
