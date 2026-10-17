@@ -2,6 +2,8 @@ use super::*;
 use crate::{CreateResourceRequest, GroupWriteRequest, PrincipalRole, PrincipalWriteRequest};
 use base64::Engine;
 
+mod complete_scopes;
+
 type BeforeCommit = Arc<dyn Fn(&BrokerRuntime) + Send + Sync>;
 
 struct LocalHost {
@@ -40,9 +42,14 @@ impl crate::LocalOperationHost for LocalHost {
             if command.is_write() {
                 assert!(control.begin_local_commit());
             }
-            tokio::task::spawn_blocking(move || runtime.execute_management_command(command))
-                .await
-                .unwrap()
+            let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+            tokio::task::spawn_blocking(move || {
+                tracing::dispatcher::with_default(&dispatcher, || {
+                    runtime.execute_management_command(command)
+                })
+            })
+            .await
+            .unwrap()
         })
     }
 }
@@ -50,6 +57,7 @@ struct Fixture {
     directory: tempfile::TempDir,
     runtime: BrokerRuntime,
     identity: IdentityContext,
+    identity_proof: Option<crate::AttestedIdentityProof>,
 }
 fn fixture(group_actor: bool) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
@@ -215,6 +223,7 @@ fn fixture(group_actor: bool) -> Fixture {
             actions: vec![
                 "principal.create",
                 "principal.view",
+                "group.view",
                 "group.member.add",
                 "group.member.remove",
                 "group.member.view",
@@ -260,6 +269,7 @@ fn fixture(group_actor: bool) -> Fixture {
         directory,
         runtime,
         identity,
+        identity_proof: None,
     }
 }
 async fn invoke(
@@ -278,7 +288,7 @@ async fn invoke_with_commit_control(
     before_commit: Option<BeforeCommit>,
     commit_barrier: Option<Arc<tokio::sync::Barrier>>,
 ) -> BrokerResponse<Value> {
-    let control = InvocationControl::default();
+    let control = InvocationControl::default().with_identity_proof(fixture.identity_proof.clone());
     let control = control
         .clone()
         .with_local_operation_host(Arc::new(LocalHost {
@@ -373,7 +383,7 @@ fn capture_reference(fixture: &Fixture, private_token: &str) -> String {
         .secret_reference_origin(
             &fixture.identity,
             &ExecutionContext::new("default").unwrap(),
-            None,
+            fixture.identity_proof.as_ref(),
         )
         .unwrap();
     let store = fixture.runtime.managed_store().unwrap();
@@ -1312,7 +1322,27 @@ fn spawn_paused_token_creation(
     Arc<tokio::sync::Semaphore>,
     tokio::task::JoinHandle<BrokerResponse<Value>>,
 ) {
-    let control = InvocationControl::new(Some(Duration::from_secs(60)));
+    spawn_paused_management(
+        fixture,
+        "token.create",
+        token_create_input(fixture, token_id),
+        pause_at,
+    )
+}
+
+fn spawn_paused_management(
+    fixture: &Fixture,
+    action: &str,
+    inputs: Value,
+    pause_at: PauseLocalAt,
+) -> (
+    InvocationControl,
+    Arc<tokio::sync::Semaphore>,
+    Arc<tokio::sync::Semaphore>,
+    tokio::task::JoinHandle<BrokerResponse<Value>>,
+) {
+    let control = InvocationControl::new(Some(Duration::from_secs(60)))
+        .with_identity_proof(fixture.identity_proof.clone());
     let entered = Arc::new(tokio::sync::Semaphore::new(0));
     let resume = Arc::new(tokio::sync::Semaphore::new(0));
     let owned_control = control
@@ -1326,7 +1356,7 @@ fn spawn_paused_token_creation(
         }));
     let runtime = fixture.runtime.clone();
     let identity = fixture.identity.clone();
-    let inputs = token_create_input(fixture, token_id);
+    let action = action.to_owned();
     let owner = tokio::spawn(async move {
         runtime
             .invoke_owned_json(
@@ -1336,7 +1366,7 @@ fn spawn_paused_token_creation(
                         broker_request_id: Uuid::new_v4().to_string(),
                         identity,
                         service: SERVICE_ID.into(),
-                        action: "token.create".into(),
+                        action,
                         source: SourceContext::unknown(),
                     },
                     execution_context: ExecutionContext::new("default").unwrap(),
@@ -1626,4 +1656,634 @@ async fn raw_output_mode_preserves_held_reference_install_and_reference_only_met
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn auditor_without_self_service_invokes_only_with_an_explicit_broker_grant() {
+    let fixture = fixture(false);
+    let store = fixture.runtime.managed_store().unwrap();
+    store
+        .patch_principal_access(crate::PrincipalAccessPatchRequest {
+            principal_id: "operator".into(),
+            role: Some(PrincipalRole::Auditor),
+            self_service_enabled: Some(false),
+            actor: "admin".into(),
+        })
+        .unwrap();
+    let input = json!({"principalId":"worker","groupId":"workers"});
+    let allowed = invoke(&fixture, "group.member.add", input.clone(), false).await;
+    assert_eq!(allowed.status, 200, "{:?}", allowed.envelope);
+    assert!(store.groups("worker").unwrap().contains(&"workers".into()));
+    fixture
+        .runtime
+        .disable_managed_policy_grant(crate::ManagedPolicyGrantStatusRequest {
+            grant_id: "provision".into(),
+            expected_version: 1,
+            updated_by: "admin".into(),
+        })
+        .unwrap();
+    let denied = invoke(&fixture, "group.member.remove", input, false).await;
+    assert_eq!(denied.status, 403, "{:?}", denied.envelope);
+    assert!(store.groups("worker").unwrap().contains(&"workers".into()));
+    let principal = store.principal("operator").unwrap();
+    assert_eq!(principal.role, PrincipalRole::Auditor);
+    assert!(!principal.self_service_enabled);
+}
+
+fn create_test_account(fixture: &Fixture, principal: &str, kind: &str) {
+    fixture
+        .runtime
+        .managed_store()
+        .unwrap()
+        .create_principal(PrincipalWriteRequest {
+            principal_id: principal.into(),
+            kind: kind.into(),
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "admin".into(),
+            role: PrincipalRole::User,
+            self_service_enabled: Some(false),
+        })
+        .unwrap();
+}
+
+fn test_agent_identity(
+    fixture: &Fixture,
+    principal: &str,
+    name: &str,
+) -> (IdentityContext, crate::BrokerTokenRecord) {
+    let issued = fixture
+        .runtime
+        .managed_store()
+        .unwrap()
+        .issue_broker_token(
+            fixture.runtime.broker_token_hasher().unwrap(),
+            crate::BrokerTokenIssueRequest {
+                principal_id: principal.into(),
+                name: name.into(),
+                token_class: BrokerTokenClass::AgentInvoke,
+                scopes: json!({"allowedServices":["fake"],"allowedExecutionContexts":["default"]}),
+                expires_at: None,
+                created_by: "admin".into(),
+            },
+        )
+        .unwrap();
+    let identity = fixture
+        .runtime
+        .resolve_identity(&HeaderMap::from_iter([(
+            http::header::AUTHORIZATION,
+            format!("Bearer {}", issued.token).parse().unwrap(),
+        )]))
+        .unwrap();
+    (identity, issued.record)
+}
+
+async fn invoke_fake_as(fixture: &Fixture, identity: &IdentityContext) -> BrokerResponse<Value> {
+    fixture
+        .runtime
+        .invoke_owned_json(
+            GovernedOperationContext {
+                operation: OperationContext {
+                    agent_request_id: "recipient-publication-test".into(),
+                    broker_request_id: Uuid::new_v4().to_string(),
+                    identity: identity.clone(),
+                    service: "fake".into(),
+                    action: "echo".into(),
+                    source: SourceContext::unknown(),
+                },
+                execution_context: ExecutionContext::new("default").unwrap(),
+            },
+            InvokeRequest::new(json!({"project":"TEST","message":"recipient-policy-check"})),
+            InvocationControl::default(),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn subject_writes_publish_after_gate_interruptions_and_stale_versions_preserve_state() {
+    for interruption in ["cancel", "force_stop", "deadline"] {
+        let fixture = fixture(false);
+        create_test_account(&fixture, "new-worker", "service_account");
+        let (recipient, _) = test_agent_identity(&fixture, "new-worker", "recipient");
+        assert_eq!(invoke_fake_as(&fixture, &recipient).await.status, 403);
+        for (action, expected_version, expected_allowed) in [
+            ("grant.subject.add", 1, true),
+            ("grant.subject.remove", 2, false),
+        ] {
+            let (control, entered, resume, owner) = spawn_paused_management(
+                &fixture,
+                action,
+                json!({"principalId":"new-worker","grantId":"service-access","expectedVersion":expected_version}),
+                PauseLocalAt::AfterGate,
+            );
+            entered.acquire().await.unwrap().forget();
+            assert!(control.dispatched());
+            match interruption {
+                "cancel" => control.cancel(),
+                "force_stop" => control.force_stop(),
+                "deadline" => {
+                    tokio::time::pause();
+                    tokio::time::advance(Duration::from_secs(61)).await;
+                    tokio::time::resume();
+                }
+                _ => unreachable!(),
+            }
+            resume.add_permits(1);
+            let response = owner.await.unwrap();
+            assert_eq!(
+                response.status, 200,
+                "{interruption} {action}: {:?}",
+                response.envelope
+            );
+            assert_eq!(
+                response.envelope.result.as_ref().unwrap()["executionState"],
+                "completed"
+            );
+            assert!(control.completed());
+            let store = fixture.runtime.managed_store().unwrap();
+            let grant = store.policy_grant("service-access").unwrap();
+            assert_eq!(grant.version, expected_version + 1);
+            assert_eq!(grant.status, "active");
+            assert_eq!(
+                grant.subjects.contains(&"user:new-worker".into()),
+                expected_allowed
+            );
+            assert_eq!(
+                fixture.runtime.policy_generation(),
+                store.policy_revision().unwrap().generation
+            );
+            let recipient_result = invoke_fake_as(&fixture, &recipient).await;
+            assert_eq!(
+                recipient_result.status,
+                if expected_allowed { 200 } else { 403 },
+                "{:?}",
+                recipient_result.envelope
+            );
+            let audits = fs::read_to_string(fixture.directory.path().join("audit.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|record| {
+                    record["service"] == SERVICE_ID
+                        && record["action"] == action
+                        && record["providerAudit"]["phase"] != "preflight"
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(audits.len(), 1, "{interruption} {action}");
+            assert_eq!(audits[0]["providerAudit"]["executionState"], "completed");
+        }
+        let before = fixture
+            .runtime
+            .managed_store()
+            .unwrap()
+            .policy_grant("service-access")
+            .unwrap();
+        let generation = fixture.runtime.policy_generation();
+        for action in ["grant.subject.add", "grant.subject.remove", "token.create"] {
+            let input = if action == "token.create" {
+                token_create_input(&fixture, &Uuid::new_v4().to_string())
+            } else {
+                json!({"principalId":"new-worker","grantId":"service-access","expectedVersion":1})
+            };
+            let response = invoke(&fixture, action, input, false).await;
+            assert_eq!(response.status, 409, "{action}: {:?}", response.envelope);
+            assert_eq!(
+                response.envelope.reason_code,
+                Some(ReasonCode::VersionConflict.into())
+            );
+            assert_eq!(
+                response.envelope.result.as_ref().unwrap()["executionState"],
+                "not_committed"
+            );
+        }
+        assert_eq!(
+            fixture
+                .runtime
+                .managed_store()
+                .unwrap()
+                .policy_grant("service-access")
+                .unwrap(),
+            before
+        );
+        assert_eq!(fixture.runtime.policy_generation(), generation);
+    }
+}
+
+fn attested_fixture() -> (Fixture, PathBuf, String) {
+    let mut fixture = fixture(false);
+    let caller_path = fixture.directory.path().join("trusted-caller.token");
+    fs::write(&caller_path, "synthetic-management-caller-original").unwrap();
+    let mut config = (*fixture.runtime.config).clone();
+    config.identity.trusted_callers.insert(
+        "direct".into(),
+        crate::TrustedCallerConfig {
+            credential_ref: format!("file:{}", caller_path.display()),
+            credential_transport: crate::TrustedCallerCredentialTransport::AuthorizationUser,
+            username_namespace: Some("workspace".into()),
+            context_mode: crate::TrustedCallerContextMode::Fixed,
+            execution_context: Some("default".into()),
+            allowed_execution_contexts: None,
+            allow_forwarded_identity: false,
+        },
+    );
+    let mut runtime = BrokerRuntime::new_for_reload(config, &fixture.runtime).unwrap();
+    runtime.activate_runtime_authority().unwrap();
+    let binding = runtime
+        .managed_store()
+        .unwrap()
+        .create_username_binding("operator", "workspace", "provisioner", "admin")
+        .unwrap();
+    let headers = HeaderMap::from_iter([
+        (
+            http::header::AUTHORIZATION,
+            "Bearer synthetic-management-caller-original"
+                .parse()
+                .unwrap(),
+        ),
+        (
+            http::header::HeaderName::from_static("x-agent-access-user"),
+            "provisioner".parse().unwrap(),
+        ),
+    ]);
+    let admission = runtime.admit_mcp_ingress(&headers).unwrap();
+    let admitted = runtime
+        .resolve_admitted_identity_with_proof(&headers, &admission)
+        .unwrap();
+    assert!(admitted.proof.is_some());
+    fixture.runtime = runtime;
+    fixture.identity = admitted.identity;
+    fixture.identity_proof = admitted.proof;
+    (fixture, caller_path, binding.binding_id)
+}
+
+struct TransitionLocalHost {
+    runtime: BrokerRuntime,
+    control: InvocationControl,
+    transition: Arc<dyn Fn(BrokerRuntime) -> BrokerRuntime + Send + Sync>,
+}
+impl crate::LocalOperationHost for TransitionLocalHost {
+    fn execute(
+        &self,
+        command: AdmittedManagementCommand,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::LocalOperationOutcome> + Send + 'static>,
+    > {
+        let runtime = self.runtime.clone();
+        let control = self.control.clone();
+        let transition = self.transition.clone();
+        Box::pin(async move {
+            // The capability has already pinned the original identity proof,
+            // reference origin and runtime; mutate authority at this exact edge.
+            let runtime = transition(runtime);
+            assert!(control.begin_local_commit());
+            tokio::task::spawn_blocking(move || runtime.execute_management_command(command))
+                .await
+                .unwrap()
+        })
+    }
+}
+
+#[tokio::test]
+async fn attested_local_actions_recheck_caller_remap_restore_and_runtime_generation() {
+    for action in ["credential.install", "token.create"] {
+        for change in [
+            "unchanged",
+            "caller_rotation",
+            "caller_restore",
+            "identity_remap_restore",
+            "runtime_reload",
+        ] {
+            let (fixture, caller_path, binding_id) = attested_fixture();
+            create_test_account(&fixture, "other-operator", "user");
+            let reference = capture_reference(&fixture, "attested-private-gitlab-value");
+            let token_id = Uuid::new_v4().to_string();
+            let inputs = if action == "credential.install" {
+                json!({"principalId":"worker","connectionId":"gitlab-main","token":{"secretRef":reference}})
+            } else {
+                token_create_input(&fixture, &token_id)
+            };
+            let transition = Arc::new(move |runtime: BrokerRuntime| {
+                match change {
+                    "caller_rotation" | "caller_restore" => {
+                        fs::write(&caller_path, "synthetic-management-caller-rotated").unwrap();
+                        let config = (*runtime.config).clone();
+                        let mut changed =
+                            BrokerRuntime::new_for_reload(config.clone(), &runtime).unwrap();
+                        changed.activate_runtime_authority().unwrap();
+                        if change == "caller_restore" {
+                            fs::write(&caller_path, "synthetic-management-caller-original")
+                                .unwrap();
+                            let mut restored =
+                                BrokerRuntime::new_for_reload(config, &changed).unwrap();
+                            restored.activate_runtime_authority().unwrap();
+                        }
+                    }
+                    "identity_remap_restore" => {
+                        let store = runtime.managed_store().unwrap();
+                        store
+                            .delete_username_binding("operator", &binding_id, 1)
+                            .unwrap();
+                        let other = store
+                            .create_username_binding(
+                                "other-operator",
+                                "workspace",
+                                "provisioner",
+                                "admin",
+                            )
+                            .unwrap();
+                        store
+                            .delete_username_binding("other-operator", &other.binding_id, 1)
+                            .unwrap();
+                        store
+                            .create_username_binding(
+                                "operator",
+                                "workspace",
+                                "provisioner",
+                                "admin",
+                            )
+                            .unwrap();
+                    }
+                    "runtime_reload" => {
+                        let mut reloaded =
+                            BrokerRuntime::new_for_reload((*runtime.config).clone(), &runtime)
+                                .unwrap();
+                        reloaded.activate_runtime_authority().unwrap();
+                        return reloaded;
+                    }
+                    "unchanged" => {}
+                    _ => unreachable!(),
+                }
+                runtime
+            });
+            let control =
+                InvocationControl::default().with_identity_proof(fixture.identity_proof.clone());
+            let owned_control =
+                control
+                    .clone()
+                    .with_local_operation_host(Arc::new(TransitionLocalHost {
+                        runtime: fixture.runtime.clone(),
+                        control,
+                        transition,
+                    }));
+            let response = fixture
+                .runtime
+                .invoke_owned_json(
+                    GovernedOperationContext {
+                        operation: OperationContext {
+                            agent_request_id: "attested-local-race".into(),
+                            broker_request_id: Uuid::new_v4().to_string(),
+                            identity: fixture.identity.clone(),
+                            service: SERVICE_ID.into(),
+                            action: action.into(),
+                            source: SourceContext::unknown(),
+                        },
+                        execution_context: ExecutionContext::new("default").unwrap(),
+                    },
+                    InvokeRequest::new(inputs),
+                    owned_control,
+                )
+                .await;
+            let store = fixture.runtime.managed_store().unwrap();
+            let credentials = store.list_credentials(Some("worker")).unwrap();
+            let tokens = store.list_broker_tokens_for_principal("worker").unwrap();
+            if change == "unchanged" {
+                assert_eq!(response.status, 200, "{action}: {:?}", response.envelope);
+                assert_eq!(
+                    credentials.len(),
+                    usize::from(action == "credential.install")
+                );
+                assert_eq!(tokens.len(), usize::from(action == "token.create"));
+            } else {
+                assert_eq!(
+                    response.status,
+                    if change == "runtime_reload" { 409 } else { 403 },
+                    "{change} {action}: {:?}",
+                    response.envelope
+                );
+                assert_eq!(
+                    response.envelope.result.as_ref().unwrap()["executionState"],
+                    "not_committed"
+                );
+                assert!(credentials.is_empty(), "{change} {action}");
+                assert!(tokens.is_empty(), "{change} {action}");
+                let db = rusqlite::Connection::open(fixture.directory.path().join("store.sqlite"))
+                    .unwrap();
+                let captured:i64=db.query_row("SELECT COUNT(*) FROM secret_reference_material m JOIN secret_reference_receipts r ON r.receipt_id=m.receipt_id WHERE r.action='token.create' AND m.state='captured'",[],|r|r.get(0)).unwrap();
+                assert_eq!(captured, 0, "{change} {action}");
+            }
+            let audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
+            assert!(!audit.contains("attested-private-gitlab-value"));
+            assert!(!audit.contains(&reference));
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_narrow_read_and_discovery_omits_unrelated_inventory_and_private_canaries() {
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::prelude::*;
+    let fixture = fixture(false);
+    let store = fixture.runtime.managed_store().unwrap();
+    create_test_account(&fixture, "canary-unrelated-person", "user");
+    store
+        .patch_principal(crate::PrincipalPatchRequest {
+            principal_id: "worker".into(),
+            display_name: None,
+            email: Some(Some("canary-private-email@example.test".into())),
+            status: None,
+        })
+        .unwrap();
+    store
+        .add_group("canary-unrelated-person", "workers", "admin")
+        .unwrap();
+    fixture
+        .runtime
+        .add_managed_policy_grant_subject(crate::ManagedPolicyGrantSubjectAddRequest {
+            grant_id: "service-access".into(),
+            expected_version: 1,
+            subject: "user:canary-unrelated-person".into(),
+            updated_by: "admin".into(),
+        })
+        .unwrap();
+    fixture
+        .runtime
+        .create_managed_resource(CreateResourceRequest {
+            id: Some("canary-unrelated-resource".into()),
+            display_name: Some("canary-unrelated-resource-label".into()),
+            resource_type: ResourceType::from_static("broker_principal"),
+            selector: ResourceSelector::Exact {
+                value: "canary-unrelated-person".into(),
+            },
+            allowed_execution_contexts: vec!["default".into()],
+            enabled: true,
+            attributes: Default::default(),
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    for owner in ["worker", "canary-unrelated-person"] {
+        store
+            .upsert_user_credential(
+                fixture.runtime.credential_key_ring().unwrap(),
+                crate::CredentialWriteRequest {
+                    owner_principal_id: owner.into(),
+                    service: "gitlab-main".into(),
+                    name: crate::CONNECTION_CREDENTIAL_NAME.into(),
+                    profile: "gitlab-access-token".into(),
+                    credential_kind: "bearer_token".into(),
+                    secret: json!({"token":"canary-private-credential-value"}),
+                    metadata: json!({"description":"canary-private-credential-metadata"}),
+                    actor: "admin".into(),
+                },
+                crate::CredentialManagementPurpose::Administrative,
+            )
+            .unwrap();
+    }
+    let child = store
+        .issue_broker_token(
+            fixture.runtime.broker_token_hasher().unwrap(),
+            crate::BrokerTokenIssueRequest {
+                principal_id: "worker".into(),
+                name: "visible child".into(),
+                token_class: BrokerTokenClass::AgentInvoke,
+                scopes: json!({"allowedServices":["fake"],"allowedExecutionContexts":["default"]}),
+                expires_at: None,
+                created_by: "canary-private-token-creator".into(),
+            },
+        )
+        .unwrap();
+    let (_, other_token) = test_agent_identity(
+        &fixture,
+        "canary-unrelated-person",
+        "canary-unrelated-token-name",
+    );
+    let reference = capture_reference(&fixture, "canary-held-reference-value");
+    let db = rusqlite::Connection::open(fixture.directory.path().join("store.sqlite")).unwrap();
+    let hash: String = db
+        .query_row(
+            "SELECT token_hash FROM broker_tokens WHERE token_id=?1",
+            [&child.record.token_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(db);
+    let canaries = vec![
+        "canary-unrelated-person".to_owned(),
+        "canary-private-email@example.test".into(),
+        "canary-unrelated-resource".into(),
+        "canary-unrelated-resource-label".into(),
+        "canary-private-credential-value".into(),
+        "canary-private-credential-metadata".into(),
+        "canary-private-token-creator".into(),
+        "canary-unrelated-token-name".into(),
+        "canary-held-reference-value".into(),
+        other_token.token_id,
+        child.token,
+        reference,
+        hash,
+    ];
+    let reads = [
+        ("principal.view", json!({"principalId":"worker"})),
+        ("group.view", json!({"groupId":"workers"})),
+        (
+            "group.member.view",
+            json!({"principalId":"worker","groupId":"workers"}),
+        ),
+        ("grant.view", json!({"grantId":"service-access"})),
+        (
+            "grant.subject.view",
+            json!({"principalId":"worker","grantId":"service-access"}),
+        ),
+        (
+            "credential.view",
+            json!({"principalId":"worker","connectionId":"gitlab-main"}),
+        ),
+        (
+            "token.view",
+            json!({"principalId":"worker","tokenId":child.record.token_id}),
+        ),
+    ];
+    let captured = super::super::tests::CapturedEvents::default();
+    let subscriber = tracing_subscriber::registry().with(super::super::tests::EventCaptureLayer {
+        events: captured.clone(),
+    });
+    let outputs = async {
+        let mut outputs = Vec::new();
+        tracing::info!(test_phase = "narrow_management_reads");
+        for (action, inputs) in &reads {
+            let current = store.policy_grant("provision").unwrap();
+            fixture
+                .runtime
+                .patch_managed_policy_grant(crate::ManagedPolicyGrantPatchRequest {
+                    grant_id: "provision".into(),
+                    expected_version: current.version,
+                    subjects: None,
+                    execution_contexts: None,
+                    service: None,
+                    actions: Some(vec![(*action).into()]),
+                    resources: None,
+                    credential_mode: None,
+                    priority: None,
+                    status: None,
+                    description: None,
+                    updated_by: "admin".into(),
+                })
+                .unwrap();
+            for (requested, input) in &reads {
+                let response = invoke(&fixture, requested, input.clone(), false).await;
+                assert_eq!(
+                    response.status,
+                    if action == requested { 200 } else { 403 },
+                    "allowed {action}, requested {requested}: {:?}",
+                    response.envelope
+                );
+                outputs.push(serde_json::to_string(&response.envelope).unwrap());
+                outputs.push(format!("{:?}", response.envelope));
+            }
+            let context = ExecutionContext::new("default").unwrap();
+            let discovery = fixture
+                .runtime
+                .service_discovery(&fixture.identity, &context, SERVICE_ID)
+                .unwrap();
+            let targets = ManagementCommand::parse(action, inputs)
+                .unwrap()
+                .scopes()
+                .unwrap();
+            let actions = discovery.actions(None, None, None, Some(&targets)).unwrap();
+            assert_eq!(actions.actions, vec![(*action).to_owned()]);
+            outputs.push(serde_json::to_string(&actions).unwrap());
+            for kind in [
+                "broker_principal",
+                "broker_group",
+                "broker_grant",
+                "broker_connection",
+            ] {
+                if let Ok(resources) = discovery.resources(&crate::ResourceListQuery {
+                    resource_type: Some(ResourceType::from_static(kind)),
+                    ..Default::default()
+                }) {
+                    outputs.push(serde_json::to_string(&resources).unwrap());
+                }
+            }
+        }
+        outputs
+    }
+    .with_subscriber(subscriber)
+    .await;
+    let events = captured.take();
+    assert!(
+        !events.is_empty(),
+        "capture must observe the invocation task"
+    );
+    let mut observed = outputs;
+    observed.push(serde_json::to_string(&events).unwrap());
+    observed.push(fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap());
+    for output in observed {
+        for canary in &canaries {
+            assert!(
+                !output.contains(canary),
+                "private canary appeared in a narrow public surface: {canary}"
+            );
+        }
+    }
 }
