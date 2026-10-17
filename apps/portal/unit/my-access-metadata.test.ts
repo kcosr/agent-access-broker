@@ -47,6 +47,7 @@ const connection = (id: string, consumers: ConnectionConsumer[], otherConsumers 
   profile: "token",
   credentialKind: "bearer_token",
   registration: null,
+  remoteRevocation: null,
   credential: null
 });
 

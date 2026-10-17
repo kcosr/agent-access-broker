@@ -1,6 +1,6 @@
 use super::*;
-use agent_access_provider::OAuthAdapter;
 use agent_access_provider::test_support::TestHost;
+use agent_access_provider::{OAuthAdapter, OAuthTokenType};
 use serde_json::json;
 use std::collections::BTreeMap;
 use wiremock::matchers::{body_string_contains, method, path};
@@ -254,6 +254,7 @@ fn targets_are_the_normalized_instance_base() {
             [
                 format!("{target}/oauth/token"),
                 format!("{target}/oauth/token/info"),
+                format!("{target}/oauth/revoke"),
                 format!("{target}/api/v4/user"),
             ]
         );
@@ -864,4 +865,153 @@ async fn the_one_target_is_the_instance_with_the_grants_scopes() {
     assert_eq!(targets[0].scopes, granted);
     assert_eq!(targets[0].name, "GitLab instance");
     assert!(instance.routes().await.is_empty());
+}
+
+/// Revocation posts the token with its type hint and the application's
+/// `client_secret_post` credentials, once.
+#[tokio::test]
+async fn revocation_posts_the_token_with_its_hint_and_client_credentials() {
+    assert!(dialect().supports_revocation());
+    for (token_type, hint) in [
+        (OAuthTokenType::RefreshToken, "refresh_token"),
+        (OAuthTokenType::AccessToken, "access_token"),
+    ] {
+        let instance = Instance::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(ok(json!({})))
+            .expect(1)
+            .mount(&instance.server)
+            .await;
+        assert_eq!(
+            dialect()
+                .revoke(
+                    &instance.http,
+                    &instance.client(),
+                    TokenRevocation::new("token-1", token_type),
+                )
+                .await
+                .unwrap(),
+            RevocationOutcome::Revoked
+        );
+        let request = instance.request(0).await;
+        assert_eq!(header(&request, "accept"), Some("application/json"));
+        assert_eq!(
+            form(&request),
+            BTreeMap::from([
+                ("token".to_owned(), "token-1".to_owned()),
+                ("token_type_hint".to_owned(), hint.to_owned()),
+                ("client_id".to_owned(), "broker-app".to_owned()),
+                ("client_secret".to_owned(), CLIENT_SECRET.to_owned()),
+            ])
+        );
+    }
+}
+
+/// 200 revokes, `invalid_token` reports an already invalid token, throttling
+/// and server or transport failures are retryable, and other rejections are
+/// final. Every revocation is sent once.
+#[tokio::test]
+async fn revocation_outcomes_classify_retryable_and_final_failures() {
+    for (response, expected) in [
+        (ok(json!({})), Ok(RevocationOutcome::Revoked)),
+        (ResponseTemplate::new(204), Ok(RevocationOutcome::Revoked)),
+        (
+            ResponseTemplate::new(400).set_body_json(json!({"error": "invalid_token"})),
+            Ok(RevocationOutcome::AlreadyInvalid),
+        ),
+        (
+            ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_token"})),
+            Ok(RevocationOutcome::AlreadyInvalid),
+        ),
+        (
+            ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_client"})),
+            Err(OAuthDialectError::ClientRejected),
+        ),
+        (
+            ResponseTemplate::new(403).set_body_json(json!({"error": "unauthorized_client"})),
+            Err(OAuthDialectError::ClientRejected),
+        ),
+        (
+            ResponseTemplate::new(400).set_body_json(json!({"error": "unsupported_token_type"})),
+            Err(OAuthDialectError::RequestRejected),
+        ),
+        (
+            ResponseTemplate::new(404).set_body_string("<html>missing</html>"),
+            Err(OAuthDialectError::RequestRejected),
+        ),
+        (
+            ResponseTemplate::new(429).insert_header("Retry-After", "30"),
+            Err(OAuthDialectError::RetryAfter(30)),
+        ),
+        (
+            ResponseTemplate::new(500).set_body_json(json!({"error": "invalid_token"})),
+            Err(OAuthDialectError::Failed),
+        ),
+        (ResponseTemplate::new(503), Err(OAuthDialectError::Failed)),
+    ] {
+        let instance = Instance::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(response)
+            .mount(&instance.server)
+            .await;
+        let outcome = dialect()
+            .revoke(
+                &instance.http,
+                &instance.client(),
+                TokenRevocation::new("refresh-1", OAuthTokenType::RefreshToken),
+            )
+            .await;
+        assert_eq!(outcome, expected);
+        assert_eq!(
+            instance.routes().await,
+            ["POST /oauth/revoke"],
+            "{expected:?}"
+        );
+    }
+}
+
+/// An unreachable instance fails retryably; a registration without a
+/// client secret cannot revoke and sends nothing.
+#[tokio::test]
+async fn revocation_transport_failure_is_retryable_and_needs_the_secret() {
+    let instance = Instance::start().await;
+    let client = OAuthClient::new("gitlab", &instance.config, "");
+    assert_eq!(
+        dialect()
+            .revoke(
+                &instance.http,
+                &client,
+                TokenRevocation::new("refresh-1", OAuthTokenType::RefreshToken),
+            )
+            .await,
+        Err(OAuthDialectError::Configuration)
+    );
+    assert!(instance.routes().await.is_empty());
+    // A loopback port nothing listens on.
+    let uri = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let config = registration(&uri, &uri);
+    let http = OAuthHttp::build(
+        "oauth.registrations.gitlab",
+        "oauth",
+        &Url::parse(&config.base_url).unwrap(),
+        &dialect().upstream_allowlist(&config),
+        &TestHost::default(),
+    )
+    .unwrap();
+    let outcome = dialect()
+        .revoke(
+            &http,
+            &OAuthClient::new("gitlab", &config, CLIENT_SECRET),
+            TokenRevocation::new("refresh-1", OAuthTokenType::RefreshToken),
+        )
+        .await;
+    assert!(matches!(
+        outcome,
+        Err(OAuthDialectError::Failed | OAuthDialectError::NotSent)
+    ));
 }

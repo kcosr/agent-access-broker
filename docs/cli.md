@@ -536,7 +536,14 @@ literal or alternate token sources").
   `credentials delete <connection>` instead.
 
 OAuth connections are connected and disconnected only in the portal, with a
-signed-in browser session; `credentials list` shows their method as `oauth`.
+signed-in browser session; `credentials list` shows their method as `oauth`,
+their `registration`, and its `remoteRevocation`: `revoked`, `pending`, `failed`
+or `unconfirmed` once the Broker ended a family it revokes at the provider
+(GitLab), otherwise `not_requested`. `failed` and `unconfirmed` mean you should
+revoke the Broker application at the provider, in the account the ended
+connection used; such a connection stays listed while its revocation is
+`pending`, `failed` or `unconfirmed`, even after you lost its grants. See
+[remote revocation](oauth.md#remote-revocation).
 
 There is no `agent-access git ...` command. Git fetch and push use the
 normal `git` executable against the broker gateway listener; the CLI only manages
@@ -794,7 +801,9 @@ the same effective group.
   Verification probes as the principal, so an administrator needs no invocation
   grants of its own. `list <principal>` uses
   `GET /v1/admin/principals/{principal}/credentials`, the principal's
-  connections and retained rows in the shape of its own `credentials list`; an
+  connections and retained rows in the shape of its own `credentials list`,
+  including each OAuth connection's `remoteRevocation`, which shows whether
+  disabling the principal revoked its GitLab tokens; an
   active token whose owner lost every grant stays listed with no entitled
   consumers. `list-stored` uses `GET /v1/admin/credentials`, every stored row,
   active and retained, with its stored `service` and `name`; `inspect-by-id`

@@ -11,7 +11,7 @@
 
 use agent_access_core::{
     BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialInputSchema, CredentialMetadata,
-    IdentityContext, PrincipalKind, Selection,
+    IdentityContext, PrincipalKind, RemoteRevocation, Selection,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -76,6 +76,9 @@ pub(super) struct ConnectionRow {
     pub(super) credential_kind: Option<String>,
     /// The OAuth registration, for the OAuth method.
     pub(super) registration: Option<String>,
+    /// What is known about revoking the principal's ended families of that
+    /// registration at the provider, for the OAuth method.
+    pub(super) remote_revocation: Option<RemoteRevocation>,
     /// The stored active token, for the token method; `null` until one is
     /// stored.
     pub(super) credential: Option<Value>,
@@ -267,8 +270,9 @@ pub(super) struct CredentialList {
 }
 
 /// `identity`'s credential list from its stored `rows`: every connection
-/// it is entitled to through a consumer, whatever the method, and every
-/// connection whose active token it still owns, then its retained rows.
+/// it is entitled to through a consumer, whatever the method, every
+/// connection whose active token it still owns, and every OAuth connection
+/// whose remote revocation still needs attention, then its retained rows.
 /// `readable` restricts a classless caller to the token connections its
 /// rights cover.
 pub(super) fn credential_list(
@@ -293,9 +297,28 @@ pub(super) fn credential_list(
             .iter()
             .find(|row| row.service == connection)
             .cloned();
+        let registration = match selection {
+            Selection::OAuth(oauth) => Some(oauth.registration.clone()),
+            _ => None,
+        };
+        // Unknown, and so null, while OAuth is inactive or the store cannot
+        // answer.
+        let remote_revocation = registration.as_ref().and_then(|registration| {
+            runtime
+                .oauth_manager()?
+                .remote_revocation(&identity.principal, registration)
+                .ok()
+        });
+        // An OAuth connection whose remote revocation is unfinished or needs
+        // provider-side cleanup stays listed after its owner lost every
+        // grant on it.
         let include = match readable {
             Some(readable) => readable.contains(&connection),
-            None => !entitled.is_empty() || credential.is_some(),
+            None => {
+                !entitled.is_empty()
+                    || credential.is_some()
+                    || remote_revocation.is_some_and(RemoteRevocation::needs_attention)
+            }
         };
         if !include {
             continue;
@@ -304,10 +327,6 @@ pub(super) fn credential_list(
         let token = (method == ConnectionMethod::Token)
             .then(|| token_selection(runtime, &connection, kind))
             .flatten();
-        let registration = match selection {
-            Selection::OAuth(oauth) => Some(oauth.registration.clone()),
-            _ => None,
-        };
         listed.push(ConnectionRow {
             display_name: display_name(runtime, &connection),
             connection,
@@ -317,6 +336,7 @@ pub(super) fn credential_list(
             profile: token.as_ref().map(|(profile, _)| profile.clone()),
             credential_kind: token.map(|(_, credential_kind)| credential_kind),
             registration,
+            remote_revocation,
             credential: credential.map(connection_credential),
         });
     }

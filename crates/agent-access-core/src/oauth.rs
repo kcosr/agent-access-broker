@@ -4,9 +4,12 @@
 //! Provider material never crosses the Broker credential boundary.
 mod lease;
 mod login_binding;
+pub(crate) mod revocation;
 
 pub(crate) use lease::ManagedOAuthLease;
 pub(crate) use login_binding::validate_config as validate_login_binding;
+use revocation::{FencedRefresh, RevocationCause};
+pub use revocation::{RemoteRevocation, oauth_revocation_signal};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
@@ -729,7 +732,11 @@ impl OAuthManager {
                 .map(|(id, r)| {
                     (
                         id.clone(),
-                        (r.fingerprint.clone(), r.credential_revision.clone()),
+                        crate::managed_store::oauth::ReconciledRegistration {
+                            fingerprint: r.fingerprint.clone(),
+                            credential_revision: r.credential_revision.clone(),
+                            revokes: r.dialect.supports_revocation(),
+                        },
                     )
                 })
                 .collect(),
@@ -1224,6 +1231,14 @@ impl OAuthManager {
             {
                 return Err(OAuthError::IdentityMismatch);
             }
+            // The new consent supersedes the old family, which stays valid at
+            // the provider until it is revoked.
+            let superseded = match &slot.connection {
+                Some(previous) => {
+                    self.keep_family(conn, owner, r, previous, RevocationCause::Superseded)?
+                }
+                None => None,
+            };
             slot.generation = Uuid::new_v4().to_string();
             slot.flows.clear();
             slot.connection = Some(ConnectionState {
@@ -1247,7 +1262,14 @@ impl OAuthManager {
                 },
             });
             let public = public_connection(registration, &slot);
-            Ok((slot, public))
+            Ok((slot, (public, superseded)))
+        })
+        .map(|(public, superseded)| {
+            if let Some(id) = superseded {
+                tracing::info!(target:"agent_access_core::oauth",event="remote_revocation_requested",owner,registration,revocation_id=%id,cause=RevocationCause::Superseded.as_str());
+                revocation::wake();
+            }
+            public
         })
     }
     /// Whether `owner` has the Broker sign-in `registration` binds
@@ -1290,12 +1312,36 @@ impl OAuthManager {
             .unwrap_or_else(|| SlotState::empty(&r.fingerprint, &r.credential_revision));
         Ok(public_connection(registration, &slot))
     }
-    pub async fn disconnect(&self, owner: &str, registration: &str) -> Result<(), OAuthError> {
+    /// Ends `owner`'s `registration` connection locally at once, keeping
+    /// its family for remote revocation in the same transaction when the
+    /// dialect revokes, then makes a first revocation pass. A failed pass
+    /// leaves the revocation to the background passes and never restores
+    /// access. Returns what is known about revoking the owner's ended
+    /// families for the registration.
+    pub async fn disconnect(
+        &self,
+        owner: &str,
+        registration: &str,
+    ) -> Result<RemoteRevocation, OAuthError> {
         self.active()?;
         let r = self.registration(registration)?;
-        self.update(owner, registration, |_, _| {
-            Ok((SlotState::empty(&r.fingerprint, &r.credential_revision), ()))
-        })
+        let kept = self.update(owner, registration, |conn, current| {
+            let kept = match current.as_ref().and_then(|slot| slot.connection.as_ref()) {
+                Some(connection) => {
+                    self.keep_family(conn, owner, r, connection, RevocationCause::Disconnect)?
+                }
+                None => None,
+            };
+            Ok((
+                SlotState::empty(&r.fingerprint, &r.credential_revision),
+                kept,
+            ))
+        })?;
+        if let Some(id) = kept {
+            tracing::info!(target:"agent_access_core::oauth",event="remote_revocation_requested",owner,registration,revocation_id=%id,cause=RevocationCause::Disconnect.as_str());
+            self.revoke_records(&[id]).await;
+        }
+        self.remote_revocation(owner, registration)
     }
     /// Local discovery only: inspect the exact binding without acquiring,
     /// refreshing, validating targets upstream, or changing durable state.
@@ -1536,6 +1582,9 @@ impl OAuthManager {
             c.family.attempt = Some(attempt.clone());
             Ok((current, ()))
         })?;
+        // A fence that ends the family while this attempt is in flight names
+        // it in the family's revocation, which learns what it did.
+        let fenced = (connection.family.id.as_str(), attempt.id.as_str());
         // The persisted attempt means possibly sent, even if the process dies immediately before this call.
         let started = Instant::now();
         let result = r
@@ -1552,7 +1601,10 @@ impl OAuthManager {
         let response = match result {
             Ok(value) => value,
             Err(error) => {
-                self.fail_attempt(owner, &binding.registration, &attempt.id, error.clone())?;
+                self.fail_attempt(owner, &binding.registration, &attempt.id, error.clone())
+                    .inspect_err(|_| {
+                        self.settle_fenced(owner, binding, r, fenced, Err(error.clone()))
+                    })?;
                 let current = self.read(owner, &binding.registration)?;
                 let c = current.connection.as_ref().ok_or(OAuthError::Stale)?;
                 if c.status != OAuthConnectionStatus::Ready {
@@ -1573,7 +1625,10 @@ impl OAuthManager {
                     &binding.registration,
                     &attempt.id,
                     OAuthError::InvalidResponse,
-                )?;
+                )
+                .inspect_err(|_| {
+                    self.settle_fenced(owner, binding, r, fenced, Err(OAuthError::InvalidResponse))
+                })?;
                 return Err(refresh_error(
                     OAuthError::InvalidResponse,
                     r.dialect.refresh_replay(&r.config),
@@ -1589,13 +1644,19 @@ impl OAuthManager {
                     &binding.registration,
                     &attempt.id,
                     OAuthError::InvalidResponse,
-                )?;
+                )
+                .inspect_err(|_| {
+                    self.settle_fenced(owner, binding, r, fenced, Err(OAuthError::InvalidResponse))
+                })?;
                 return Err(refresh_error(
                     OAuthError::InvalidResponse,
                     r.dialect.refresh_replay(&r.config),
                 ));
             }
         };
+        // A fence that ended the family while this refresh was in flight
+        // keeps the successor for revocation; it is never installed.
+        let successor = (next_refresh.clone(), entry.token.clone());
         // Once rotation succeeds, persist the successor before any fallible target API call. Never repeat refresh to retry discovery.
         self.update(owner, &binding.registration, |_, current| {
             let mut current = current.ok_or(OAuthError::Stale)?;
@@ -1628,7 +1689,8 @@ impl OAuthManager {
                 .access
                 .insert(binding.permission_profile.clone(), entry.clone());
             Ok((current, ()))
-        })?;
+        })
+        .inspect_err(|_| self.settle_fenced(owner, binding, r, fenced, Ok(successor)))?;
         tracing::info!(target:"agent_access_core::oauth",event="refresh_result",owner,registration=%binding.registration,connection_id=%connection.id,attempt_id=%attempt.id,outcome="committed",duration_ms=started.elapsed().as_millis() as u64);
         self.validate_entry_targets(owner, binding, &slot, &entry, profile, r)
             .await
@@ -1713,6 +1775,33 @@ impl OAuthManager {
         eligibility?;
         Ok(make_lease(owner, binding, &current, c, entry, profile))
     }
+    /// After `attempt` could not record its result because a fence ended
+    /// its family, tells the family's revocation what the refresh did: `Ok`
+    /// holds the successor it issued; `Err` the refresh's failure, which
+    /// either proves nothing was consumed or leaves the outcome unknown.
+    fn settle_fenced(
+        &self,
+        owner: &str,
+        binding: &OAuthBinding,
+        r: &ResolvedRegistration,
+        (family, attempt): (&str, &str),
+        result: Result<(Option<String>, String), OAuthError>,
+    ) {
+        if !r.dialect.supports_revocation() {
+            return;
+        }
+        let outcome = match result {
+            Ok((refresh, access)) => FencedRefresh::Succeeded { refresh, access },
+            Err(error)
+                if refresh_error(error.clone(), r.dialect.refresh_replay(&r.config))
+                    == OAuthError::RefreshUncertain =>
+            {
+                FencedRefresh::Uncertain
+            }
+            Err(_) => FencedRefresh::NotConsumed,
+        };
+        self.settle_fenced_refresh((owner, &binding.registration, family), attempt, outcome);
+    }
     fn fail_attempt(
         &self,
         owner: &str,
@@ -1737,8 +1826,8 @@ impl OAuthManager {
             }
             _ => None,
         };
-        let (connection_id, delay, status, material_preserved) =
-            self.update(owner, registration, |_, current| {
+        let (connection_id, delay, status, material_preserved, kept) =
+            self.update(owner, registration, |conn, current| {
                 let mut slot = current.ok_or(OAuthError::Stale)?;
                 let c = slot.connection.as_mut().ok_or(OAuthError::Stale)?;
                 if !c.family.attempt.as_ref().is_some_and(|a| a.id == id) {
@@ -1784,7 +1873,10 @@ impl OAuthManager {
                     }
                     let material_preserved = c.family.refresh_token.is_some();
                     let status = c.status.clone();
-                    return Ok((slot, (connection_id, delay, status, material_preserved)));
+                    return Ok((
+                        slot,
+                        (connection_id, delay, status, material_preserved, None),
+                    ));
                 }
                 if error == OAuthError::ApplicationCredential
                     && slot.credential_revision
@@ -1793,7 +1885,7 @@ impl OAuthManager {
                     c.family.attempt = None;
                     let material_preserved = c.family.refresh_token.is_some();
                     let status = c.status.clone();
-                    return Ok((slot, (connection_id, 0, status, material_preserved)));
+                    return Ok((slot, (connection_id, 0, status, material_preserved, None)));
                 }
                 c.status = if error == OAuthError::ApplicationCredential {
                     OAuthConnectionStatus::OperatorActionRequired
@@ -1801,6 +1893,21 @@ impl OAuthManager {
                     OAuthConnectionStatus::ReconnectRequired
                 };
                 c.reason = Some(error.code().into());
+                // A consuming refresh with a lost outcome may have issued a
+                // successor the Broker will never learn. Keep the predecessor
+                // for revocation before it is cleared; the family can then
+                // only be reported unconfirmed.
+                let kept = if error == OAuthError::RefreshUncertain {
+                    self.keep_family(
+                        conn,
+                        owner,
+                        registration_config,
+                        c,
+                        RevocationCause::RefreshUncertain,
+                    )?
+                } else {
+                    None
+                };
                 c.family.access.clear();
                 c.family.attempt = None;
                 if error != OAuthError::ApplicationCredential {
@@ -1808,9 +1915,13 @@ impl OAuthManager {
                 }
                 let material_preserved = c.family.refresh_token.is_some();
                 let status = c.status.clone();
-                Ok((slot, (connection_id, 0, status, material_preserved)))
+                Ok((slot, (connection_id, 0, status, material_preserved, kept)))
             })?;
         tracing::info!(target:"agent_access_core::oauth",event="refresh_result",owner,registration,connection_id,attempt_id=id,outcome=error.code(),retry_after_seconds=delay,status=?status,material_preserved);
+        if let Some(revocation_id) = kept {
+            tracing::info!(target:"agent_access_core::oauth",event="remote_revocation_requested",owner,registration,revocation_id=%revocation_id,cause=RevocationCause::RefreshUncertain.as_str());
+            revocation::wake();
+        }
         Ok(())
     }
 }
@@ -2042,6 +2153,7 @@ fn make_lease(
 pub(crate) mod tests {
     use super::*;
     mod login_binding_lifecycle;
+    mod revocation_lifecycle;
     use crate::managed_store::oauth::{test_fixture, test_sql};
     use crate::network::EgressProxyEnvironment;
     use crate::{OutboundTlsConfig, PreparedOutboundTls};
@@ -2168,8 +2280,8 @@ pub(crate) mod tests {
     }
 
     /// The selections these tests configure: the development records
-    /// backend, its `stub` dialect and the default-scope and
-    /// linked-identity fixture dialects.
+    /// backend, its `stub` dialect and the default-scope, linked-identity
+    /// and revoking fixture dialects.
     fn test_registry() -> BackendRegistry {
         BackendRegistry::new([&OAUTH_STUB_BACKEND])
             .unwrap()
@@ -2177,6 +2289,7 @@ pub(crate) mod tests {
                 &STUB_OAUTH_DIALECT,
                 &DEFAULT_SCOPE_DIALECT,
                 &login_binding_lifecycle::LINKED_IDENTITY_DIALECT,
+                &revocation_lifecycle::REVOKING_DIALECT,
             ])
             .unwrap()
     }

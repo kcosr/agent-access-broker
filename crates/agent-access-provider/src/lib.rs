@@ -280,8 +280,8 @@ pub use oauth_dialect::{
     OAUTH_MAX_RESPONSE_BYTES, OAuthAdapter, OAuthCallbackIssuer, OAuthClient, OAuthClientAuth,
     OAuthDialect, OAuthDialectError, OAuthDialectRegistration, OAuthHttp, OAuthLoginBinding,
     OAuthLoginProvider, OAuthPermissionProfile, OAuthRegistrationConfig, OAuthResponse,
-    OAuthRotation, OAuthScopeMode, OAuthTarget, OAuthTokenEncoding, PreparedAuthorization,
-    RefreshReplay, TokenGrant,
+    OAuthRotation, OAuthScopeMode, OAuthTarget, OAuthTokenEncoding, OAuthTokenType,
+    PreparedAuthorization, RefreshReplay, RevocationOutcome, TokenGrant, TokenRevocation,
 };
 pub use provider::{Provider, ServiceProvider};
 pub use reason::{Decision, HookPhase, InvalidReasonCodeId, ReasonCode, ReasonCodeId};

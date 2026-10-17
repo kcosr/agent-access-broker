@@ -52,6 +52,7 @@ import {
   oauthConnected,
   oauthConnectionStatus,
   oauthConnectUnavailableMessage,
+  oauthRemoteRevocation,
   oauthScopeEvidence,
   useOAuthConnectionActions
 } from "../../components/oauth-connections";
@@ -118,12 +119,17 @@ function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boole
   }
 }
 
-function needsAttention(row: CredentialRow) {
+export function needsAttention(row: CredentialRow) {
   if (row.kind === "token") {
     const status = credentialStatus(row.connection.credential);
     return Boolean(row.connection.credential) && (status === "Not verified" || status === "Verification failed");
   }
-  if (row.kind === "oauth") return row.oauth.connection?.status === "reconnect_required" || row.oauth.connection?.status === "operator_action_required";
+  if (row.kind === "oauth") {
+    // An ended connection whose upstream revocation failed or is unconfirmed
+    // needs provider-side cleanup, whatever the current connection's status.
+    if (row.oauth.remoteRevocation === "failed" || row.oauth.remoteRevocation === "unconfirmed") return true;
+    return row.oauth.connection?.status === "reconnect_required" || row.oauth.connection?.status === "operator_action_required";
+  }
   return false;
 }
 
@@ -279,10 +285,11 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
           const target = row.oauth;
           const evidence = target.scopeMode === "server_default" ? oauthScopeEvidence(target) : null;
           const unavailable = oauthConnectUnavailableMessage(target);
+          const revocation = oauthRemoteRevocation(target);
           // A cleanup-only row's profile is unknown: no permission text.
           const permissions =
             target.scopeMode === null ? null : target.scopeMode === "explicit" ? target.connectionDescription ?? "Shown during connection" : "Server-default permissions";
-          const notes = [evidence, unavailable].filter((note): note is string => Boolean(note));
+          const notes = [evidence, unavailable, revocation ? `${revocation.label}: ${revocation.message}` : null].filter((note): note is string => Boolean(note));
           return (
             <span>
               {permissions ? <span>{permissions}</span> : null}
@@ -522,7 +529,8 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
         <UsedBy consumers={target.consumers} otherConsumers={target.otherConsumers} administered={subject.administered} />
         <DrawerSection title="How this works">
           <p className="wb-small wb-fg-2">
-            Connecting authorizes the broker for every service using this connection. Disconnecting removes the broker’s copy for all of them; consent at the provider is not removed.
+            Connecting authorizes the broker for every service using this connection. Disconnecting removes the broker’s copy for all of them. Where the provider supports it, the broker
+            also revokes the disconnected tokens there; otherwise consent at the provider is not removed.
           </p>
         </DrawerSection>
       </>

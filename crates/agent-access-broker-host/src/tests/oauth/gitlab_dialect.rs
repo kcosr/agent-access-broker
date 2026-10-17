@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 #[path = "gitlab_login_binding.rs"]
 mod login_binding;
+#[path = "gitlab_revocation.rs"]
+mod revocation;
 
 const CALLBACK: &str = "http://127.0.0.1/v1/oauth/callback/gitlab";
 

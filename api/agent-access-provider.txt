@@ -1225,6 +1225,27 @@ impl core::marker::Unpin for agent_access_provider::OAuthTokenEncoding
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthTokenEncoding
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthTokenEncoding
+#[non_exhaustive] pub enum agent_access_provider::OAuthTokenType
+pub agent_access_provider::OAuthTokenType::AccessToken
+pub agent_access_provider::OAuthTokenType::RefreshToken
+impl agent_access_provider::OAuthTokenType
+pub fn agent_access_provider::OAuthTokenType::hint(&self) -> &'static str
+impl core::clone::Clone for agent_access_provider::OAuthTokenType
+pub fn agent_access_provider::OAuthTokenType::clone(&self) -> agent_access_provider::OAuthTokenType
+impl core::cmp::Eq for agent_access_provider::OAuthTokenType
+impl core::cmp::PartialEq for agent_access_provider::OAuthTokenType
+pub fn agent_access_provider::OAuthTokenType::eq(&self, &agent_access_provider::OAuthTokenType) -> bool
+impl core::fmt::Debug for agent_access_provider::OAuthTokenType
+pub fn agent_access_provider::OAuthTokenType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::OAuthTokenType
+impl core::marker::StructuralPartialEq for agent_access_provider::OAuthTokenType
+impl core::marker::Freeze for agent_access_provider::OAuthTokenType
+impl core::marker::Send for agent_access_provider::OAuthTokenType
+impl core::marker::Sync for agent_access_provider::OAuthTokenType
+impl core::marker::Unpin for agent_access_provider::OAuthTokenType
+impl core::marker::UnsafeUnpin for agent_access_provider::OAuthTokenType
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthTokenType
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthTokenType
 pub enum agent_access_provider::ProviderFailureStatus
 pub agent_access_provider::ProviderFailureStatus::BadGateway
 pub agent_access_provider::ProviderFailureStatus::BadRequest
@@ -1526,6 +1547,25 @@ impl core::marker::Unpin for agent_access_provider::ResourceSelector
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceSelector
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceSelector
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceSelector
+#[non_exhaustive] pub enum agent_access_provider::RevocationOutcome
+pub agent_access_provider::RevocationOutcome::AlreadyInvalid
+pub agent_access_provider::RevocationOutcome::Revoked
+impl core::clone::Clone for agent_access_provider::RevocationOutcome
+pub fn agent_access_provider::RevocationOutcome::clone(&self) -> agent_access_provider::RevocationOutcome
+impl core::cmp::Eq for agent_access_provider::RevocationOutcome
+impl core::cmp::PartialEq for agent_access_provider::RevocationOutcome
+pub fn agent_access_provider::RevocationOutcome::eq(&self, &agent_access_provider::RevocationOutcome) -> bool
+impl core::fmt::Debug for agent_access_provider::RevocationOutcome
+pub fn agent_access_provider::RevocationOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::RevocationOutcome
+impl core::marker::StructuralPartialEq for agent_access_provider::RevocationOutcome
+impl core::marker::Freeze for agent_access_provider::RevocationOutcome
+impl core::marker::Send for agent_access_provider::RevocationOutcome
+impl core::marker::Sync for agent_access_provider::RevocationOutcome
+impl core::marker::Unpin for agent_access_provider::RevocationOutcome
+impl core::marker::UnsafeUnpin for agent_access_provider::RevocationOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RevocationOutcome
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RevocationOutcome
 #[non_exhaustive] pub enum agent_access_provider::ScopedMcpNameSource
 pub agent_access_provider::ScopedMcpNameSource::CanonicalAction
 pub agent_access_provider::ScopedMcpNameSource::Imported
@@ -3704,6 +3744,21 @@ impl core::marker::Unpin for agent_access_provider::TokenGrant
 impl core::marker::UnsafeUnpin for agent_access_provider::TokenGrant
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::TokenGrant
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::TokenGrant
+#[non_exhaustive] pub struct agent_access_provider::TokenRevocation<'a>
+pub agent_access_provider::TokenRevocation::token: &'a str
+pub agent_access_provider::TokenRevocation::token_type: agent_access_provider::OAuthTokenType
+impl<'a> agent_access_provider::TokenRevocation<'a>
+pub fn agent_access_provider::TokenRevocation<'a>::new(&'a str, agent_access_provider::OAuthTokenType) -> Self
+impl<'a> core::clone::Clone for agent_access_provider::TokenRevocation<'a>
+pub fn agent_access_provider::TokenRevocation<'a>::clone(&self) -> agent_access_provider::TokenRevocation<'a>
+impl<'a> core::marker::Copy for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::marker::Freeze for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::marker::Send for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::marker::Sync for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::marker::Unpin for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::marker::UnsafeUnpin for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::TokenRevocation<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::TokenRevocation<'a>
 pub struct agent_access_provider::UnsupportedCredentialMode
 impl core::clone::Clone for agent_access_provider::UnsupportedCredentialMode
 pub fn agent_access_provider::UnsupportedCredentialMode::clone(&self) -> agent_access_provider::UnsupportedCredentialMode
@@ -3945,7 +4000,9 @@ pub fn agent_access_provider::OAuthDialect::identity<'life0, 'life1, 'life2, 'li
 pub fn agent_access_provider::OAuthDialect::prepare_authorization<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, &'life4 agent_access_provider::OAuthPermissionProfile, agent_access_provider::AuthorizationRequest<'life5>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::PreparedAuthorization, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
 pub fn agent_access_provider::OAuthDialect::refresh<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, &'life4 agent_access_provider::OAuthPermissionProfile, &'life5 str, &'life6 alloc::collections::btree::set::BTreeSet<alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::TokenGrant, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
 pub fn agent_access_provider::OAuthDialect::refresh_replay(&self, &agent_access_provider::OAuthRegistrationConfig) -> agent_access_provider::RefreshReplay
+pub fn agent_access_provider::OAuthDialect::revoke<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, agent_access_provider::TokenRevocation<'life4>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::RevocationOutcome, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
 pub fn agent_access_provider::OAuthDialect::supports_login_binding(&self) -> bool
+pub fn agent_access_provider::OAuthDialect::supports_revocation(&self) -> bool
 pub fn agent_access_provider::OAuthDialect::supports_server_default_scopes(&self) -> bool
 pub fn agent_access_provider::OAuthDialect::upstream_allowlist(&self, &agent_access_provider::OAuthRegistrationConfig) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::OAuthDialect::validate_registration(&self, &agent_access_provider::OAuthRegistrationConfig) -> core::result::Result<(), alloc::string::String>
@@ -4056,12 +4113,14 @@ enum agent_access_provider::OAuthLoginProvider: non-exhaustive
 enum agent_access_provider::OAuthRotation: non-exhaustive
 enum agent_access_provider::OAuthScopeMode: non-exhaustive
 enum agent_access_provider::OAuthTokenEncoding: non-exhaustive
+enum agent_access_provider::OAuthTokenType: non-exhaustive
 enum agent_access_provider::ProviderFailureStatus: exhaustive
 enum agent_access_provider::ProviderResultStreamSource: exhaustive
 enum agent_access_provider::ProviderStateError: non-exhaustive
 enum agent_access_provider::ReasonCode: non-exhaustive
 enum agent_access_provider::RefreshReplay: exhaustive
 enum agent_access_provider::ResourceSelector: non-exhaustive
+enum agent_access_provider::RevocationOutcome: non-exhaustive
 enum agent_access_provider::ScopedMcpNameSource: non-exhaustive
 enum agent_access_provider::SearchAuthorizationScope: exhaustive
 enum agent_access_provider::ServiceSurface: non-exhaustive
@@ -4165,6 +4224,7 @@ struct agent_access_provider::ServiceDescriptor: named fields, non-exhaustive
 struct agent_access_provider::ServiceProvider: named fields, non-exhaustive
 struct agent_access_provider::SigningError: unit
 struct agent_access_provider::TokenGrant: named fields, non-exhaustive
+struct agent_access_provider::TokenRevocation: named fields, non-exhaustive
 struct agent_access_provider::UnsupportedCredentialMode: unit
 struct agent_access_provider::UpstreamAuthority: named fields, private fields
 struct agent_access_provider::UpstreamAuthorization: named fields, private fields
@@ -4216,7 +4276,9 @@ trait agent_access_provider::OAuthDialect::identity: required fn
 trait agent_access_provider::OAuthDialect::prepare_authorization: provided fn
 trait agent_access_provider::OAuthDialect::refresh: required fn
 trait agent_access_provider::OAuthDialect::refresh_replay: required fn
+trait agent_access_provider::OAuthDialect::revoke: provided fn
 trait agent_access_provider::OAuthDialect::supports_login_binding: provided fn
+trait agent_access_provider::OAuthDialect::supports_revocation: provided fn
 trait agent_access_provider::OAuthDialect::supports_server_default_scopes: provided fn
 trait agent_access_provider::OAuthDialect::upstream_allowlist: required fn
 trait agent_access_provider::OAuthDialect::validate_registration: required fn

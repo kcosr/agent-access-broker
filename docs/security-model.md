@@ -1029,7 +1029,13 @@ membership changes are ordered within admission transactions. No credential
 right bypasses these checks. Owners retain local disconnect after grant loss;
 connecting never expands invocation policy.
 Ambiguous consuming-token refresh outcomes require reconnect;
-dialects declaring reusable refresh material use bounded, persisted recovery. Disconnect is local invalidation, not provider revocation.
+dialects declaring reusable refresh material use bounded, persisted recovery. Disconnect is local invalidation first. For a dialect that revokes (GitLab),
+the same transaction keeps the ended family's tokens, encrypted, for bounded
+remote revocation that resumes after restart; a remote failure never restores
+access. A consuming refresh whose outcome was lost may have issued a successor
+the Broker never learned, so such a family is reported `unconfirmed`, never
+`revoked`, and needs the application revoked at the provider. Other dialects,
+a changed registration and disabled OAuth leave provider consent in place.
 Providers never hold the OAuth manager or refresh material: the runtime lends
 each admitted invocation the caller's current access and rechecks it just
 before dispatch. OAuth requests pass through the same upstream client boundary

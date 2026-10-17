@@ -1262,6 +1262,18 @@ credential slots to `basic_api_token`, copying every existing slot row unchanged
 Stored import credentials keep working without reentry; no operator action is
 needed beyond the usual forward-migration steps.
 
+Migration `028_oauth_revocations` follows `027_command_imports`. It adds the
+`oauth_revocations` table, which keeps the encrypted tokens of OAuth families
+the Broker ends until they are revoked at the provider (see
+[remote revocation](oauth.md#remote-revocation)), and changes no existing row.
+No operator action is needed beyond the usual forward-migration steps. Pending
+revocations join key readiness, the used-key inventory and rewrap, so keep an
+encryption key until `admin credentials rewrap` has moved them and readiness
+passes without it. Rolling back across `028` needs the backup taken before it:
+the previous binary refuses the migrated store. Revocations that were pending at
+rollback are lost with the restored backup, and their tokens stay valid at the
+provider; revoke the application there for the affected people.
+
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
 fresh store at a new path, then reconstruct principals, credentials, resources,
@@ -1341,9 +1353,10 @@ To upgrade:
    deleted.
 
 Rolling back follows the store-version rule above. The previous binary must
-already run schema `027_command_imports`: the store refuses a binary whose
-schema predates the database's, so rolling back across `027` or any later
-migration needs the backup taken before that migration.
+already run the store's schema, `027_command_imports` or, once GitLab remote
+revocation is deployed, `028_oauth_revocations`: the store refuses a binary
+whose schema predates the database's, so rolling back across `027`, `028` or
+any later migration needs the backup taken before that migration.
 
 - **Immediate rollback**, before anything is written under the new version, is
   the previous binary with its previous configuration. Tokens the new
@@ -1357,6 +1370,32 @@ migration needs the backup taken before that migration.
 - When a connection needs a different token profile than the tokens stored
   under its service, introduce it under a new connection ID. The old tokens then
   stay untouched until you delete them, which keeps rollback cheap.
+
+### GitLab remote revocation
+
+GitLab OAuth connections revoke their tokens at GitLab when the Broker ends
+them: disconnect, a replacing consent, an uncertain refresh and principal
+disablement, which makes offboarding revoke automatically. A background worker
+in each serving process retries what GitLab could not answer and, at startup,
+resumes revocations a stopped process left pending; shutdown stops it, and the
+next start revokes the cancelled pass's tokens again. Connection rows report
+`remoteRevocation`; see [remote revocation](oauth.md#remote-revocation) for the
+states and service log events.
+
+- `failed` or `unconfirmed` rows need provider-side cleanup: the person revokes
+  the Broker application in GitLab, or a GitLab administrator ends the
+  application's tokens.
+- Changing a GitLab registration's fingerprint (any field except the client
+  secret), removing it or disabling OAuth ends its connections without
+  revocation and fails pending revocations, because no configured client may
+  be the one that issued the tokens. Have people disconnect first, or arrange
+  the GitLab-side revocation.
+- Revocation needs the GitLab `oauth/revoke` endpoint reachable through the
+  registration's egress route, like the token endpoint.
+- GitLab rejecting the application's client credentials (`invalid_client`,
+  `unauthorized_client`) keeps each token pending on its retry schedule, up to
+  its fifth try about 73 minutes after the first: correct the registration's
+  client secret and reload within that time to let the revocations complete.
 
 ## Common failures
 

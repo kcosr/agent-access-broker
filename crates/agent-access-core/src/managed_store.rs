@@ -18,6 +18,7 @@ pub use imported_resource_types::{
 };
 mod local_password_failures;
 pub(crate) mod oauth;
+pub(crate) mod oauth_revocation;
 mod principal_service_limits;
 mod resource_attributes;
 pub(crate) use resource_attributes::{AdmittedResourceEntry, CommandResourceAttributes};
@@ -67,7 +68,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_COMMAND_IMPORTS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_OAUTH_REVOCATIONS_VERSION;
+const MANAGED_STORE_OAUTH_REVOCATIONS_VERSION: &str = "028_oauth_revocations";
 const MANAGED_STORE_COMMAND_IMPORTS_VERSION: &str = "027_command_imports";
 const MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION: &str = "026_trusted_user_identity";
 const MANAGED_STORE_PRINCIPAL_ACCESS_VERSION: &str = "025_principal_access";
@@ -219,6 +221,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/command_imports.sql"),
         seed: None,
         structural_validation: imported_store::validate_command_imports_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_OAUTH_REVOCATIONS_VERSION,
+        checksum: "54ad925a25730925cd410d948b0691cdaecc2ba791681023f639be89fd1bf986",
+        sql: include_str!("managed_store/oauth_revocations.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_oauth_revocations_structure,
     },
 ];
 
@@ -532,6 +541,9 @@ pub struct ManagedStore {
     path: PathBuf,
     connection: Arc<Mutex<Connection>>,
     identity_key_ring: Arc<Mutex<Option<CredentialKeyRing>>>,
+    /// How principal disablement keeps revoking registrations' OAuth
+    /// families: set by the active OAuth configuration.
+    oauth_revocation: Arc<Mutex<Option<oauth_revocation::RevocationCapture>>>,
     local_password_work: Arc<LocalPasswordWork>,
     schema_version: String,
     schema_checksum: String,
@@ -624,6 +636,7 @@ impl ManagedStore {
             path,
             connection,
             identity_key_ring: Arc::new(Mutex::new(None)),
+            oauth_revocation: Arc::new(Mutex::new(None)),
             schema_version,
             schema_checksum,
             latest_migration_checksum,
@@ -687,6 +700,7 @@ impl ManagedStore {
         check_secret_material_ready(&conn, key_ring)?;
         identity_tokens::check_ready(&conn, key_ring)?;
         oauth::check_ready(&conn, key_ring)?;
+        oauth_revocation::check_ready(&conn, key_ring)?;
         resource_attributes::check_ready(&conn, key_ring)?;
         imported_store::check_ready(&conn, key_ring)?;
         let key_ids = active_credential_key_ids(&conn)?;
@@ -1767,15 +1781,22 @@ impl ManagedStore {
         if changed == 0 {
             return Err(ManagedStoreError::PrincipalNotFound);
         }
-        if !enabled {
-            tx.execute(
-                "DELETE FROM oauth_slots WHERE owner_principal_id=?1",
-                [principal_id],
-            )
-            .map_err(sql_unavailable)?;
-        }
+        // Disablement ends the owner's OAuth connections and keeps their
+        // families for remote revocation in this transaction.
+        let kept = if enabled {
+            0
+        } else {
+            oauth_revocation::end_owner_slots(
+                &tx,
+                self.oauth_revocation_capture().as_ref(),
+                principal_id,
+            )?
+        };
         let principal = principal_by_id(&tx, principal_id)?;
         tx.commit().map_err(sql_unavailable)?;
+        if kept > 0 {
+            crate::oauth::revocation::wake();
+        }
         Ok(principal)
     }
 
@@ -1831,15 +1852,22 @@ impl ManagedStore {
             }
             .map_err(sql_unavailable)?;
         }
-        if request.status.as_deref() == Some("disabled") {
-            tx.execute(
-                "DELETE FROM oauth_slots WHERE owner_principal_id=?1",
-                [&request.principal_id],
-            )
-            .map_err(sql_unavailable)?;
-        }
+        // Disablement ends the owner's OAuth connections and keeps their
+        // families for remote revocation in this transaction.
+        let kept = if request.status.as_deref() == Some("disabled") {
+            oauth_revocation::end_owner_slots(
+                &tx,
+                self.oauth_revocation_capture().as_ref(),
+                &request.principal_id,
+            )?
+        } else {
+            0
+        };
         let principal = principal_by_id(&tx, &request.principal_id)?;
         tx.commit().map_err(sql_unavailable)?;
+        if kept > 0 {
+            crate::oauth::revocation::wake();
+        }
         Ok(principal)
     }
 
@@ -4433,6 +4461,7 @@ impl ManagedStore {
         }
         rewrapped += identity_tokens::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += oauth::rewrap(&mut conn, key_ring, from_key, to_key)?;
+        rewrapped += oauth_revocation::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += resource_attributes::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += imported_store::rewrap(&mut conn, key_ring, from_key, to_key)?;
         Ok(RewrapSummary {
@@ -4715,6 +4744,7 @@ fn active_credential_key_ids(conn: &Connection) -> Result<Vec<String>, ManagedSt
              WHERE c.status = 'active'
              UNION SELECT key_id FROM principal_identity_tokens WHERE key_id IS NOT NULL
              UNION SELECT key_id FROM oauth_slots
+             UNION SELECT key_id FROM oauth_revocations WHERE key_id IS NOT NULL
              UNION SELECT key_id FROM resource_secret_material
              UNION SELECT key_id FROM imported_secret_material
              ORDER BY key_id",
@@ -9713,7 +9743,9 @@ mod tests {
         assert_eq!(rows[10].0, MANAGED_STORE_OAUTH_DISCOVERY_REVISION_VERSION);
         assert_eq!(rows[11].0, MANAGED_STORE_PRINCIPAL_ACCESS_VERSION);
         assert_eq!(rows[12].0, MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION);
-        assert_eq!(rows[13].0, MANAGED_STORE_SCHEMA_VERSION);
+        assert_eq!(rows[13].0, MANAGED_STORE_COMMAND_IMPORTS_VERSION);
+        assert_eq!(rows[14].0, MANAGED_STORE_SCHEMA_VERSION);
+        assert_eq!(rows[14].0, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

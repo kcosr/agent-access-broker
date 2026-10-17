@@ -317,7 +317,7 @@ fn respond(state: &Mutex<GitlabState>, request: Incoming) -> Reply {
         });
         match (request.method.as_str(), path.as_str()) {
             ("POST", "/oauth/token") if grant == Some("refresh_token") => state.hold_refresh.take(),
-            ("POST", "/oauth/token") | ("GET", "/api/v4/user") => None,
+            ("POST", "/oauth/token" | "/oauth/revoke") | ("GET", "/api/v4/user") => None,
             _ => state.hold_git.take(),
         }
     };
@@ -350,6 +350,7 @@ fn respond(state: &Mutex<GitlabState>, request: Incoming) -> Reply {
         ("GET", "/api/v4/user") => {
             return json_reply("200 OK", json!({"id": 42, "username": "alice"}));
         }
+        ("POST", "/oauth/revoke") => return json_reply("200 OK", json!({})),
         _ => {}
     }
     let token = request
@@ -1026,7 +1027,8 @@ async fn refresh_invalidation_during_in_flight_git_requests() {
 
 /// A refresh whose outcome is unknown leaves the connection needing
 /// reconnect, as an unconnected account does: the gateway answers 403
-/// naming the portal reconnect, and contacts GitLab no further.
+/// naming the portal reconnect, and contacts GitLab no further for Git.
+/// The revocation worker revokes the predecessor's tokens.
 #[tokio::test]
 async fn refresh_uncertain_and_unconnected_accounts_answer_403_naming_the_portal() {
     let gitlab = FakeGitlab::start();
@@ -1049,9 +1051,20 @@ async fn refresh_uncertain_and_unconnected_accounts_answer_403_naming_the_portal
         .await
         .assert_reconnect(&reconnect);
     assert_eq!(
-        gitlab.routes_since(before),
+        gitlab.routes_since(before)[..2],
         [git_route(Git::Discovery), REFRESH]
     );
+    let started = std::time::Instant::now();
+    while gitlab
+        .routes_since(before)
+        .iter()
+        .filter(|route| *route == "POST /oauth/revoke")
+        .count()
+        < 2
+    {
+        assert!(started.elapsed() < Duration::from_secs(20));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let before = gitlab.requests().len();
     for (git, request_id) in [
         (Git::Discovery, "gitlab-git-uncertain-again"),

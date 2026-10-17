@@ -1079,7 +1079,7 @@
         </div>
       </div>
       <h3 id="backend-oauth">Connecting an upstream account with OAuth</h3>
-      <p>Personal OAuth setup requires enabled self-service, a credential connection with OAuth and an active <code>per_user</code> action grant on a service that uses it, for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal.</p>
+      <p>Personal OAuth setup requires enabled self-service, a credential connection with OAuth and an active <code>per_user</code> action grant on a service that uses it, for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal. Ending a GitLab connection, by disconnect, reconnect or disabling its owner, also revokes its tokens in GitLab, and the connection reports whether that succeeded.</p>
       <p>Authentication adapters implement the provider's OAuth behavior. The generic <code>mcp_oauth</code> adapter supports compatible MCP servers without new provider code. It requires an operator-approved client registration, the exact MCP endpoint/resource and a permission profile. Profiles use explicit scopes by default, or operator-selected <code>server_default</code> permissions with configured scopes absent. Importing tools alone does not establish a connection. Unusual provider flows still need a compiled adapter.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="oauth-flow-title">

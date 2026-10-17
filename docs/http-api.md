@@ -676,6 +676,7 @@ entitled to, which the connection serves too.
       "profile": "gitlab-access-token",
       "credentialKind": "bearer_token",
       "registration": null,
+      "remoteRevocation": null,
       "credential": {
         "credentialId": "6f1c…",
         "connection": "gitlab",
@@ -698,6 +699,7 @@ entitled to, which the connection serves too.
       "profile": null,
       "credentialKind": null,
       "registration": "google",
+      "remoteRevocation": "not_requested",
       "credential": null
     }
   ],
@@ -721,7 +723,11 @@ consumer, whatever its method and whether or not a token is stored, plus any
 connection whose active token the caller still owns after losing its grants, so
 the owner can delete it. `credential` is the active token's metadata, keyed by
 `connection` instead of a stored service and name, or `null` until a token is
-stored. `retained` lists the caller's stored rows the current configuration does
+stored. An OAuth-method row's `remoteRevocation` is its registration's
+[remote revocation](oauth.md#remote-revocation) state, as
+`GET /v1/oauth/connections` reports it; it is `null` for other methods and while
+OAuth is inactive. An OAuth connection whose `remoteRevocation` is `pending`,
+`failed` or `unconfirmed` stays listed after its owner lost every grant on it. `retained` lists the caller's stored rows the current configuration does
 not select, read-only, with their stored `service` value, `name` and `profile`:
 for example a row with a non-default name, a retired profile, a row of a service
 that no longer has its own connection, or a token row of a connection that now
@@ -1005,7 +1011,8 @@ Admin management (also on the public listener):
 credential list in the shape of its own `GET /v1/credentials`, evaluated for
 the principal's kind, `per_user` grants and stored rows. An active token whose
 owner lost every grant on its connection stays listed as the connection's
-`credential`, with empty `consumers`:
+`credential`, with empty `consumers`, and so does an OAuth connection whose
+`remoteRevocation` still needs attention:
 
 ```json
 {
@@ -1019,6 +1026,7 @@ owner lost every grant on its connection stays listed as the connection's
       "profile": "atlassian-api-token",
       "credentialKind": "basic_api_token",
       "registration": null,
+      "remoteRevocation": null,
       "credential": {
         "credentialId": "5d0e…",
         "connection": "atlassian",
@@ -3200,11 +3208,25 @@ resource/context or change invocation authorization. Audit targets name
 
 `DELETE /v1/oauth/connections/{registration}` is idempotent for a configured
 registration: it returns HTTP 200 with `disconnected: true` and
-`remoteRevocation: "not_requested"` even when the owner has no remaining
-connection. Without an owned connection, the request is a no-op and leaves
-pending consent unchanged. Browser, self-service and CSRF gates still apply; no
-setup grant is required for local cleanup. Disconnecting affects every service
-whose connection uses the registration.
+`remoteRevocation` even when the owner has no remaining connection. Without an
+owned connection, the request is a no-op and leaves pending consent unchanged.
+Browser, self-service and CSRF gates still apply; no setup grant is required for
+local cleanup. Disconnecting affects every service whose connection uses the
+registration. It ends the connection locally first; for a dialect that revokes,
+such as GitLab, it then makes one [remote revocation](oauth.md#remote-revocation)
+pass before responding:
+
+```json
+{"disconnected": true, "remoteRevocation": "revoked"}
+```
+
+`remoteRevocation` reports every revocation of the owner's ended families for
+the registration, the most severe first: `unconfirmed` (a successor the Broker
+never learned may exist; revoke the application at the provider), `failed` (a
+known token could not be revoked), `pending` (in progress; the revocation worker
+retries), `revoked` (every known token revoked and no unknown successor can
+exist) or `not_requested` (nothing was kept for revocation, as for every dialect
+that does not revoke). Local access has ended whatever it reports.
 
 `GET /v1/oauth/connections` returns one row per registration the caller's
 connections select:
@@ -3227,6 +3249,7 @@ connections select:
     "canConnect": true,
     "connectUnavailableReason": null,
     "canDisconnect": false,
+    "remoteRevocation": "not_requested",
     "connection": null
   }
 ]
@@ -3236,7 +3259,12 @@ connections select:
 active `per_user` grant, or administrator discovery of an imported service);
 `otherConsumers` counts the rest, which the connection serves too. A row appears
 when the caller may set up at least one consumer, and an owned connection stays
-listed after grant loss for local disconnect, with `consumers: []`.
+listed after grant loss for local disconnect, with `consumers: []`. A
+registration whose `remoteRevocation` is `pending`, `failed` or `unconfirmed`
+also stays listed whatever the caller's entitlement or ownership, as a
+cleanup-only row with `consumers: []`, `canConnect: false` and
+`canDisconnect: false`, so provider-side cleanup stays visible after the owner
+lost the last grant and disconnected.
 `displayName` is the first selecting connection's configured `display_name`, or
 its ID, and `connectionDescription` comes from an entitled consumer's backend.
 An owned connection whose registration no credential connection selects for the
@@ -3247,7 +3275,14 @@ registration ID, and it has `permissionProfile: null`, `scopeMode: null`,
 the Broker keeps no durable record of the consented one, as well as
 `consumers: []`, `otherConsumers: 0`, `connectionDescription: null`,
 `canConnect: false`, `connectUnavailableReason: "no_personal_access"` and
-`canDisconnect: true`.
+`canDisconnect: true`. Such a registration, and one no longer configured at
+all, also stays listed with `canDisconnect: false` while its `remoteRevocation`
+is `pending`, `failed` or `unconfirmed`; a registration no longer configured
+then has a disconnected `connection`. Every row carries the registration's
+`remoteRevocation`, as the disconnect response reports it: it concerns the
+owner's ended families (disconnected, superseded by a reconnect or account
+replacement, ended by an uncertain refresh or by disablement), never the
+current connection, which can be a different account.
 `canConnect`, `canDisconnect` and required nullable `connectUnavailableReason`
 are as follows: `connectUnavailableReason` is `null` when setup is available,
 `no_personal_access` for missing grant authority, `service_unavailable` for an

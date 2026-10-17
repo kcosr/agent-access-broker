@@ -148,10 +148,12 @@ and refresh responses. It is idempotent: for a configured registration, an autho
 owner's repeated DELETE succeeds even when no connection remains. Browser,
 self-service and CSRF requirements still apply; a setup grant is not required
 for local disconnect. Without an owned connection, DELETE is a no-op and leaves
-pending consent unchanged. It does **not** claim to revoke provider-side consent. Remove
-that separately at the provider if desired. Disabling/removing a Broker principal
-also removes its OAuth state. Existing provider requests already dispatched
-cannot be recalled.
+pending consent unchanged. For a dialect that revokes, such as
+[GitLab](#gitlab), disconnect also revokes the connection's tokens at the
+provider; see [remote revocation](#remote-revocation). Other dialects do not
+revoke provider-side consent: remove it separately at the provider if desired.
+Disabling a Broker principal also removes its OAuth state, and revokes the
+same way. Existing provider requests already dispatched cannot be recalled.
 
 ## GitLab
 
@@ -288,10 +290,26 @@ every person reconnects.
   `invalid_grant` also requires reconnect, and HTTP 429 holds refresh until its
   `Retry-After` wait.
 
-GitLab refresh tokens do not expire. Disconnecting removes the Broker's copy
-but does not revoke the grant in GitLab: the person revokes the application
-under their GitLab **Applications** settings, or a GitLab administrator revokes
-the application's tokens.
+GitLab refresh tokens do not expire, so the Broker revokes the tokens of every
+GitLab family it ends through GitLab's `POST /oauth/revoke`, with
+`client_secret_post` and a `token_type_hint`: the refresh token and, where it
+holds one, the access token. See [remote revocation](#remote-revocation).
+GitLab answers 200 for a revoked token, and an `invalid_token` error means the
+token is already invalid; both count as revoked. HTTP 429, 5xx and network
+failures are retried, and so is an `invalid_client` or `unauthorized_client`
+rejection of the application's client credentials, because correcting the
+registration's client secret within the retry schedule lets the revocation
+complete. Any other rejection fails that token.
+
+A changed registration fingerprint (any registration field except the client
+secret), a removed registration or disabled OAuth ends its connections without
+revocation, because no configured client may be the one that issued the
+tokens. Their tokens stay valid in GitLab until revoked there: each person
+revokes the application under **Preferences**, then **Applications**, then
+**Authorized applications**, and a GitLab administrator can end every token the
+application issued by deleting the instance-wide application in the Admin area
+(**Applications**) and registering a new one. Plan such a change with them, or
+have people disconnect first, which revokes.
 
 ### GitLab Git through the gateway
 
@@ -778,10 +796,10 @@ connected mailbox. The test records provider does not define mail actions; see
 | `GET /v1/oauth/connections` | One row per registration the owner's credential connections select: its `displayName`, the `connectionDescription` a consuming backend declares, the entitled `consumers` and the count of `otherConsumers` |
 | `POST /v1/oauth/connect` | `{ "registration": "stub", "intent": "connect" }`; returns an authorization URL and expiry |
 | `GET /v1/oauth/callback/{registration}` | One-use browser callback; successful or canceled consent returns HTTP 200 HTML with a small completion page |
-| `DELETE /v1/oauth/connections/{registration}` | Idempotent local disconnect, including when no owned connection remains; reports `remoteRevocation: "not_requested"` |
+| `DELETE /v1/oauth/connections/{registration}` | Idempotent local disconnect, including when no owned connection remains, then one [remote revocation](#remote-revocation) pass for a dialect that revokes; reports `remoteRevocation` |
 
-Each row includes `canConnect`, `canDisconnect` and the required nullable
-`connectUnavailableReason`. The reason is `null` when setup is available,
+Each row includes `canConnect`, `canDisconnect`, `remoteRevocation` and the
+required nullable `connectUnavailableReason`. The reason is `null` when setup is available,
 `no_personal_access` when the owner lacks a matching `per_user` grant on every
 consumer, `service_unavailable` when an imported consumer cannot currently
 accept setup, or `login_binding_required` when the registration's
@@ -797,7 +815,9 @@ no credential connection selects its registration any more, because its last
 consumer was removed or rebound: that row has `null` profile fields
 (`permissionProfile`, `scopeMode`, `target`), since the consented profile is not
 recorded durably, and the portal shows it with Disconnect and no permission
-text. Disconnect affects every
+text. A registration the owner no longer owns a connection for also stays
+listed while its `remoteRevocation` is `pending`, `failed` or `unconfirmed`.
+Disconnect affects every
 service whose credential connection uses the registration; those services do
 not have independent token families. The portal's disconnect confirmation names
 the entitled services and counts the others.
@@ -903,6 +923,11 @@ registration, generation, configuration fingerprint and encryption key ID.
 Key readiness and rewrap include these rows. Back up the database and encryption
 key ring together using the existing managed-store procedures.
 
+Pending [remote revocations](#remote-revocation) are encrypted the same way,
+with associated data binding the revocation ID, owner, registration,
+fingerprint, cause and key ID, and join key readiness, the used-key
+inventory and rewrap until every token has a final outcome.
+
 Removing every credential connection that uses a registration does not remove
 that owner's registration slot. An unused retained slot is not invocable or
 listed by the connection routes, but still participates in startup decryption,
@@ -1003,6 +1028,85 @@ connection/attempt identifiers and sanitized outcome codes, without tokens,
 authorization codes, state values or provider response bodies. Ordinary action
 and management audit entries retain the existing Broker audit boundary.
 
+## Remote revocation
+
+A dialect declares whether it revokes tokens at its authorization server
+(`OAuthDialect::supports_revocation`). GitLab does; Google, imported MCP OAuth
+and the development stub do not, and their connections always report
+`remoteRevocation: "not_requested"`.
+
+When the Broker ends a family of a revoking registration, it fences it locally
+first, so no new lease is issued, and in the same managed-store transaction
+keeps the family's latest tokens in an encrypted pending revocation. This
+happens when:
+
+- the owner disconnects, including the cleanup disconnect of a connection that
+  no entitled consumer uses any more;
+- a new consent replaces the family: a reconnect or an account replacement;
+- an administrator disables the owner (offboarding);
+- a consuming refresh's outcome is lost (see below).
+
+Losing a grant on one consuming service revokes nothing: the connection stays
+usable for the registration's other entitled consumers, and its owner can
+disconnect it once none remains. A registration fingerprint change, removing a
+registration and disabling OAuth end connections without revocation; see
+[GitLab](#gitlab) for the administrator action.
+
+A revocation pass sends one request for each pending token whose next try is
+due. Each token keeps its own schedule: one the provider throttles, cannot
+answer for, or rejects the client authentication of (see the dialect, such as
+[GitLab](#gitlab)) is tried again after 30 seconds, 2 minutes, 10 minutes and
+one hour, or after the provider's longer `Retry-After`, and fails after its
+fifth try. A token added later, such as a late refresh's successor, is tried at
+once without trying another token before its wait ends. Disconnect makes the
+first pass before it responds. A background worker in each serving Broker
+process makes the others: once at startup, which resumes revocations a stopped
+or crashed process left pending, then whenever a family is kept and whenever a
+token or an awaited refresh falls due. Shutdown stops the worker and cancels a
+pass in progress; its tokens stay pending and the next process revokes them
+again, which is harmless. A remote failure never restores local access.
+
+A consuming refresh in flight when a fence ends its family is recorded with the
+pending revocation, which waits for it until the attempt expires and keeps
+naming it until the process that sent it reports what it did. Its successful
+response is never installed: the successor tokens join the revocation instead.
+That holds even when the response arrives after another process presumed the
+attempt lost or every other token of the family already has its outcome; the
+revocation then reopens for the successor and stays `unconfirmed`. If its
+outcome is lost, or the attempt expires without a result, for example after a
+process loss, the provider may have issued a successor the Broker never
+learned. The same holds when a refresh response is lost while the connection
+stays active: the Broker keeps the predecessor before clearing it and the
+connection needs reconnect; when another process presumed the refresh lost at
+its expiry, the process that sent it still reports a late successor. Revoking
+the known tokens then cannot prove the family is revoked.
+
+`remoteRevocation` reports what the Broker knows about the owner's ended families
+for the registration, the most severe state first when there are several. It
+concerns families a disconnect, a reconnect or account replacement, an
+uncertain refresh or disablement ended, never the current connection, which
+can be a different account:
+
+| State | Meaning |
+| --- | --- |
+| `unconfirmed` | A successor the Broker never learned may exist. The known tokens are revoked where possible, but only revoking the application at the provider ends the family: in GitLab, signed in to the account the ended connection used, under **Preferences**, **Applications**, **Authorized applications**, or by a GitLab administrator. That also ends a current connection of the same account, which then needs reconnect. |
+| `failed` | A known token could not be revoked: the provider rejected it, its tries ran out, or the registration that issued it changed or was removed. Revoke the application at the provider, as for `unconfirmed`. |
+| `pending` | Revocation is in progress, or waits for a refresh that was in flight. |
+| `revoked` | Every known token was revoked, and no unknown successor can exist. |
+| `not_requested` | Nothing was kept for revocation. |
+
+Pending revocations hold their tokens only until each has a final outcome; a
+finished revocation keeps its state for 30 days and is then pruned.
+`GET /v1/oauth/connections`, the owner's `GET /v1/credentials` and an
+administrator's principal credential list keep a registration whose state is
+`pending`, `failed` or `unconfirmed` listed, as a cleanup-only row when its owner
+no longer has an entitled consumer or a connection, so the provider-side
+cleanup it may need stays visible.
+Service logs record `remote_revocation_requested`, `remote_revocation` (one per
+pass, with the revocation ID, cause, request count and resulting state) and
+`remote_revocation_refresh_settled` events under `agent_access_core::oauth`,
+without tokens.
+
 ## Supported boundaries
 
 The persistence and execution contracts separate owner, registration, stable
@@ -1011,7 +1115,7 @@ version. The Broker supports **one connection and refresh family
 per owner/registration**. Separate independent grant families under one
 registration, adding permission profiles without reconnecting existing grants,
 interactive target selection, delegated OIDC ID-token/claims validation, client assertions,
-provider revocation orchestration and Microsoft delegated adapters are
+revocation by dialects other than GitLab's and Microsoft delegated adapters are
 not supported. Changing the stub base URL does not provide a production adapter.
 
 The stub's identity endpoint and fault controls are test protocols, not a
