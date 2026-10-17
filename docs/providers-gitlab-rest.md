@@ -1365,7 +1365,10 @@ may have done:
   such as 401, 403, 404, 409 or 422 (provisioning reports 400 and 422 as
   `input_invalid`), or throttling (`upstream_rate_limited`), the action keeps
   its ordinary error without a receipt. So does a failure of the person's
-  OAuth connection that stops the request, which applies nothing.
+  OAuth connection that stops the request, which applies nothing, and a
+  request the Broker could not prepare, such as one the upstream allowlist
+  refuses, which is never sent: it keeps the reason of its cause, such as
+  `upstream_protocol_failed`, and the action does not probe its target.
 
 Once GitLab has accepted the mutation request, every failure of a later
 readback or verification request also returns the `applied_unverified`

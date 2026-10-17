@@ -1222,6 +1222,17 @@ All notable changes to this project are documented in this file.
   write, and GitLab rejecting the write itself, keep their own reason without
   a receipt. The other GitLab writes with a readback already reported every
   readback failure this way.
+- GitLab writes with a verification contract (inline discussions, discussion
+  replies, draft notes, draft publication, review submission, approvals,
+  suggestion application, webhook and provisioning mutations) reported a write
+  the Broker could not prepare, such as one the upstream allowlist refuses, as
+  `mutation_verification_failed` with `applied_unverified` and
+  `retrySafe: false`, although nothing was sent. Approvals, draft publication,
+  review submission and suggestion application could also report it so when
+  their probe of the target failed. Such a write now keeps the reason of its
+  cause, such as `upstream_protocol_failed`, without a receipt or a probe. A
+  readback the Broker could not prepare after an accepted write still reports
+  the write as `applied_unverified`.
 
 ### Removed
 

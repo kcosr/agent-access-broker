@@ -5301,7 +5301,8 @@ fn credential_failures_reject_the_write_but_leave_a_readback_unverified() {
 /// Whatever stops the readback of a write GitLab accepted, a rejection of
 /// the readback included, leaves the write unverified. The same rejection
 /// of the write itself applied nothing and keeps its own reason, without a
-/// receipt.
+/// receipt, as does a write the Broker could not prepare, whatever its
+/// cause would earn once sent.
 #[test]
 fn every_readback_failure_leaves_the_accepted_write_unverified() {
     let locators = || MutationSafeLocators::new().with_webhook_ids(vec![5]);
@@ -5341,6 +5342,17 @@ fn every_readback_failure_leaves_the_accepted_write_unverified() {
         (
             GitlabBackendError::Unauthorized.unbuilt(),
             ReasonCode::UpstreamUnauthorized,
+        ),
+        // Sent, these would leave the write unverified.
+        (
+            GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
+                .unbuilt(),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            GitlabBackendError::Transport("GitLab upload file could not be opened".to_string())
+                .unbuilt(),
+            ReasonCode::UpstreamConnectionFailed,
         ),
     ];
     for (error, reason) in &rejections {
@@ -5489,10 +5501,23 @@ fn webhook_readback_writes() -> [WebhookReadbackWrite; 4] {
 /// GitLab REST at `server`, accepting the test webhook destination, with
 /// `max_body_bytes` as the content bound.
 fn webhook_server_provider(server: &MockServer, max_body_bytes: u64) -> GitlabProvider {
+    allowlisted_server_provider(server, &["/api/v4/**"], max_body_bytes)
+}
+
+/// GitLab REST at `server`, as [`webhook_server_provider`], whose upstream
+/// allowlist admits only the `allowed` path patterns.
+fn allowlisted_server_provider(
+    server: &MockServer,
+    allowed: &[&str],
+    max_body_bytes: u64,
+) -> GitlabProvider {
     let mut config = config();
     config.api_base_url = format!("{}/api/v4", server.uri());
     config.web_base_url = server.uri();
-    config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
+    config.allowed_upstream_hosts = allowed
+        .iter()
+        .map(|pattern| format!("{}{pattern}", server.uri()))
+        .collect();
     config.webhooks.allowed_destinations = vec!["https://hooks.example.com/gitlab/**".into()];
     config.content.max_body_bytes = max_body_bytes;
     GitlabProvider::new(
@@ -5744,6 +5769,186 @@ async fn static_token_failures_before_or_rejecting_a_webhook_write_keep_their_re
                 "{case}: {sent:?}"
             );
         }
+    }
+}
+
+/// The upstream allowlist admits the project lookup but not the webhook
+/// create: the Broker never sends the POST, so the create keeps its own
+/// reason without a receipt. Admitting the create but not its readback
+/// leaves the accepted create unverified, with the ID GitLab returned.
+#[tokio::test]
+async fn webhook_writes_the_allowlist_refuses_are_never_reported_applied() {
+    let create = webhook_readback_writes()[0].clone();
+    let project = "/api/v4/projects/sip%2Fservice";
+
+    let server = MockServer::start().await;
+    serve_accepted_webhook_write(&server, &create).await;
+    let error = allowlisted_server_provider(&server, &[project], 1024 * 1024)
+        .invoke(test_invocation(create.action, create.inputs.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(
+        error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed,
+        "{error:?}"
+    );
+    assert!(error.result.is_none(), "{error:?}");
+    assert!(!format!("{error:?}").contains(WEBHOOK_SECRET));
+    assert_eq!(
+        received_requests(&server).await,
+        [format!("GET {project}"), format!("GET {project}")]
+    );
+
+    let server = MockServer::start().await;
+    serve_accepted_webhook_write(&server, &create).await;
+    let error = allowlisted_server_provider(&server, &[project, create.route], 1024 * 1024)
+        .invoke(test_invocation(create.action, create.inputs.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.reason_code(),
+        ReasonCode::MutationVerificationFailed,
+        "{error:?}"
+    );
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "mutation_readback",
+            "safeLocators": { "webhookIds": [31] },
+        }))
+    );
+    assert!(!format!("{error:?}").contains(WEBHOOK_SECRET));
+    assert_eq!(
+        received_requests(&server).await,
+        [
+            format!("GET {project}"),
+            format!("GET {project}"),
+            format!("POST {}", create.route),
+        ]
+    );
+}
+
+/// Approval, draft publication and suggestion application probe their
+/// target after a failed write. A write the upstream allowlist refuses was
+/// never sent: it keeps its own reason without a receipt and without the
+/// probe, even when repeating the probe's read would fail.
+#[tokio::test]
+async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+    let project = "/api/v4/projects/sip%2Fservice";
+    let merge_request = "/api/v4/projects/42/merge_requests/5";
+    let approvals = "/api/v4/projects/42/merge_requests/5/approvals";
+    let drafts = "/api/v4/projects/42/merge_requests/5/draft_notes";
+    let discussion = "/api/v4/projects/42/merge_requests/5/discussions/discussion-1";
+    let cases = [
+        (
+            "merge_request.unapprove",
+            json!({ "project": "sip/service", "iid": 5 }),
+            approvals,
+            json!({ "approved_by": [{ "user": { "id": 77, "username": "alice" } }] }),
+        ),
+        (
+            "merge_request.draft_note.publish_all",
+            json!({ "project": "sip/service", "iid": 5 }),
+            drafts,
+            json!([{ "id": 3, "author_id": 77, "merge_request_id": 500 }]),
+        ),
+        (
+            "merge_request.suggestion.apply",
+            json!({
+                "project": "sip/service", "iid": 5, "expectedHeadSha": SHA,
+                "discussionId": "discussion-1", "noteId": 900, "suggestionId": 456,
+            }),
+            discussion,
+            json!({
+                "id": "discussion-1",
+                "notes": [{
+                    "id": 900,
+                    "position": {
+                        "position_type": "text", "base_sha": SHA, "start_sha": SHA,
+                        "head_sha": SHA, "old_path": "src/lib.rs", "new_path": "src/lib.rs",
+                        "new_line": 3,
+                    },
+                    "suggestions": [{
+                        "id": 456, "from_line": 3, "to_line": 3, "applicable": true,
+                        "applied": false, "from_content": "old", "to_content": "new",
+                    }],
+                }],
+            }),
+        ),
+    ];
+    for (action, inputs, probe, body) in cases {
+        let server = MockServer::start().await;
+        for (route, body) in [
+            (
+                project,
+                json!({ "id": 42, "path_with_namespace": "sip/service" }),
+            ),
+            (
+                merge_request,
+                json!({
+                    "id": 500, "iid": 5, "project_id": 42, "source_project_id": 42,
+                    "target_project_id": 42, "sha": SHA,
+                }),
+            ),
+            ("/api/v4/user", json!({ "id": 77, "username": "alice" })),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        // The read before the write succeeds; repeating it would fail.
+        Mock::given(method("GET"))
+            .and(path(probe))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(probe))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let mut request = InvocationBuilder::from(test_invocation(action, inputs));
+        if action == "merge_request.suggestion.apply" {
+            request = request.state(ProviderState::new(GitlabSuggestionScopePreflight {
+                target_project_id: 42,
+                source_project_id: 42,
+            }));
+        }
+
+        let error = allowlisted_server_provider(
+            &server,
+            &[project, merge_request, "/api/v4/user", probe],
+            1024 * 1024,
+        )
+        .invoke(request.build())
+        .await
+        .unwrap_err();
+        assert_eq!(error.decision(), Decision::Error, "{action}");
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::UpstreamProtocolFailed,
+            "{action}: {error:?}"
+        );
+        assert!(error.result.is_none(), "{action}: {error:?}");
+        let sent = received_requests(&server).await;
+        assert!(
+            sent.iter().all(|line| line.starts_with("GET ")),
+            "{action}: {sent:?}"
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|line| **line == format!("GET {probe}"))
+                .count(),
+            1,
+            "{action}: {sent:?}"
+        );
     }
 }
 

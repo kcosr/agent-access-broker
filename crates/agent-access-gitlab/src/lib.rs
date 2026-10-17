@@ -3060,6 +3060,11 @@ impl GitlabProvider {
             // rather than reading as unverified when the probe below fails
             // the same way.
             Err(GitlabBackendError::Credential(error)) => return Err(error),
+            // A write the Broker could not prepare was never sent: it keeps
+            // its cause's reason whatever the probe below would find.
+            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
+                return Err(gitlab_backend_error(error));
+            }
             Err(error) => {
                 let remaining = self
                     .all_current_drafts(project.id, inputs.iid, credential)
@@ -3537,6 +3542,11 @@ impl GitlabProvider {
             // rather than reading as unverified when the probe below fails
             // the same way.
             Err(GitlabBackendError::Credential(error)) => return Err(error),
+            // A write the Broker could not prepare was never sent: it keeps
+            // its cause's reason whatever the probe below would find.
+            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
+                return Err(gitlab_backend_error(error));
+            }
             Err(error) => {
                 let unchanged = self
                     .backend
@@ -3726,6 +3736,11 @@ impl GitlabProvider {
             // rather than reading as unverified when the probe below fails
             // the same way.
             Err(GitlabBackendError::Credential(error)) => return Err(error),
+            // A write the Broker could not prepare was never sent: it keeps
+            // its cause's reason whatever the probe below would find.
+            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
+                return Err(gitlab_backend_error(error));
+            }
             Err(error) => {
                 let unchanged = self
                     .ensure_suggestions_state(&project, &merge_request, &inputs, credential, false)
@@ -12656,24 +12671,25 @@ fn mutation_backend_error(
     locators: MutationSafeLocators,
 ) -> ProviderError {
     match error {
-        // A request that was never prepared keeps the mapping of its cause.
-        GitlabBackendError::RequestUnbuilt(error) => {
-            mutation_backend_error(*error, stage, locators)
-        }
         GitlabBackendError::DraftPositionShapeInvalid => mutation_verification_failed(
             stage, locators,
         )
         .with_internal_diagnostic_code(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str()),
         // Every later request, such as the readback, follows a write GitLab
         // accepted. Whatever stops it leaves that write unverified: a 401,
-        // 403 or 404 rejects only the readback, an unsent readback proves
-        // nothing about the write, and neither throttling nor delegated
-        // access that cannot be presented (an OAuth refresh throttled, busy or
-        // uncertain, or a reconnect required) may invite a retry that would
-        // repeat the write.
+        // 403 or 404 rejects only the readback, an unsent or unprepared
+        // readback proves nothing about the write, and neither throttling
+        // nor delegated access that cannot be presented (an OAuth refresh
+        // throttled, busy or uncertain, or a reconnect required) may invite a
+        // retry that would repeat the write.
         _ if stage != MutationVerificationStage::MutationResponse => {
             mutation_verification_failed(stage, locators)
         }
+        // A write the Broker could not prepare, such as one the upstream
+        // allowlist refuses, was never sent: it keeps the reason of its cause
+        // without a receipt, never the receipt that cause would earn after
+        // sending.
+        GitlabBackendError::RequestUnbuilt(_) => gitlab_backend_error(error),
         // Only the write itself can be proven unsent.
         GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
         GitlabBackendError::NoResponse { .. }
