@@ -1281,16 +1281,10 @@ impl ConfluenceProvider {
     fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
             "page.view" => {
+                // A URL's space segment may be the space's URL alias: only the
+                // page's looked-up space key is a scope.
                 let locator = page_locator_from_inputs(inputs, &self.config)?;
-                let Some(space) = locator.candidate_space else {
-                    return Err(ProviderError::deny(
-                        ReasonCode::ScopeUnresolved,
-                        "Confluence page scope requires lookup confirmation",
-                    ));
-                };
-                let mut scopes = ResourceScopes::new();
-                scopes.insert("space".to_string(), vec![space]);
-                Ok(scopes)
+                Err(page_scope_requires_lookup(locator.page_id))
             }
             "search" => {
                 let inputs = parse_search_inputs(inputs)?;
@@ -1534,11 +1528,7 @@ impl ConfluenceProvider {
                 let credential = required_lookup_credential(lookup_credential)?;
                 let locator = page_locator_from_inputs(inputs, &self.config)?;
                 let page = self
-                    .confirmed_page(
-                        &locator.page_id,
-                        locator.candidate_space.as_deref(),
-                        credential,
-                    )
+                    .confirmed_page(&locator.page_id, locator.url_space.as_deref(), credential)
                     .await?;
                 let mut scopes = ResourceScopes::new();
                 scopes.insert("space".to_string(), vec![page.space]);
@@ -1563,13 +1553,9 @@ impl ConfluenceProvider {
                 scopes.insert("space".to_string(), vec![space.key]);
                 if let Some(parent) = inputs.parent {
                     let page = self
-                        .confirmed_page(
-                            &parent.page_id,
-                            parent.candidate_space.as_deref(),
-                            credential,
-                        )
+                        .confirmed_page(&parent.page_id, parent.url_space.as_deref(), credential)
                         .await?;
-                    validate_page_locator_space(&parent, &page.space)?;
+                    validate_page_locator_space(&parent, &page, &self.config)?;
                     if page.space != inputs.space {
                         return Err(ProviderError::deny(
                             ReasonCode::ScopeUnresolved,
@@ -1595,19 +1581,19 @@ impl ConfluenceProvider {
                 let page = self
                     .confirmed_page(
                         &inputs.page.page_id,
-                        inputs.page.candidate_space.as_deref(),
+                        inputs.page.url_space.as_deref(),
                         credential,
                     )
                     .await?;
                 let target = self
                     .confirmed_page(
                         &inputs.target.page_id,
-                        inputs.target.candidate_space.as_deref(),
+                        inputs.target.url_space.as_deref(),
                         credential,
                     )
                     .await?;
-                validate_page_locator_space(&inputs.page, &page.space)?;
-                validate_page_locator_space(&inputs.target, &target.space)?;
+                validate_page_locator_space(&inputs.page, &page, &self.config)?;
+                validate_page_locator_space(&inputs.target, &target, &self.config)?;
                 if page.id == target.id {
                     return Err(ProviderError::deny(
                         ReasonCode::InputInvalid,
@@ -1677,13 +1663,9 @@ impl ConfluenceProvider {
                 scopes.insert("space".to_string(), vec![space.key]);
                 if let Some(parent) = inputs.parent {
                     let page = self
-                        .confirmed_page(
-                            &parent.page_id,
-                            parent.candidate_space.as_deref(),
-                            credential,
-                        )
+                        .confirmed_page(&parent.page_id, parent.url_space.as_deref(), credential)
                         .await?;
-                    validate_page_locator_space(&parent, &page.space)?;
+                    validate_page_locator_space(&parent, &page, &self.config)?;
                     if page.space != inputs.space {
                         return Err(ProviderError::deny(
                             ReasonCode::ScopeUnresolved,
@@ -1729,7 +1711,7 @@ impl ConfluenceProvider {
                 let page = self
                     .confirmed_page(
                         &inputs.locator.page_id,
-                        inputs.locator.candidate_space.as_deref(),
+                        inputs.locator.url_space.as_deref(),
                         credential,
                     )
                     .await?;
@@ -1770,7 +1752,10 @@ impl ConfluenceProvider {
                 let blog = self
                     .blog_scope_evidence(&inputs.locator.blog_id, credential)
                     .await?;
-                validate_blog_locator_space(&inputs.locator, &blog.space)?;
+                validate_blog_locator_space(
+                    &inputs.locator,
+                    &ConfluenceSpaceUrlNames::of_blog_evidence(&blog, &self.config),
+                )?;
                 let mut scopes = ResourceScopes::new();
                 scopes.insert("space".to_string(), vec![blog.space]);
                 Ok(scopes)
@@ -1821,7 +1806,10 @@ impl ConfluenceProvider {
                 let blog = self
                     .blog_scope_evidence(&inputs.locator.blog_id, credential)
                     .await?;
-                validate_blog_locator_space(&inputs.locator, &blog.space)?;
+                validate_blog_locator_space(
+                    &inputs.locator,
+                    &ConfluenceSpaceUrlNames::of_blog_evidence(&blog, &self.config),
+                )?;
                 let mut scopes = ResourceScopes::new();
                 scopes.insert("space".to_string(), vec![blog.space]);
                 Ok(scopes)
@@ -3116,10 +3104,16 @@ impl ConfluenceProvider {
             &self.config.content.page_formats,
             self.config.content.max_body_bytes,
         )?;
-        let result = page_view_result(&page, &self.config.content.page_formats, &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
+        let result = page_view_result(
+            &page,
+            &self.config.content.page_formats,
+            &self.config,
+            &mut url_fallbacks,
+        )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
-            .with_audit(json!({
+            .with_audit(url_fallbacks.into_audit(json!({
                 "provider": "confluence",
                 "operation": "page.view",
                 "pageId": page.id,
@@ -3127,7 +3121,7 @@ impl ConfluenceProvider {
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
+            })))
             .with_upstream(Some(response.status), Some(response.duration_ms))
             .with_object_ids(json!({
                 "pageId": page.id,
@@ -3204,10 +3198,16 @@ impl ConfluenceProvider {
             .as_deref()
             .map(|upstream| self.continuations.seal_search_page(&pages, upstream))
             .transpose()?;
-        let result = search_result(&response.value, next_page_token.as_deref(), &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
+        let result = search_result(
+            &response.value,
+            next_page_token.as_deref(),
+            &self.config,
+            &mut url_fallbacks,
+        )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
-            .with_audit(json!({
+            .with_audit(url_fallbacks.into_audit(json!({
                 "provider": "confluence",
                 "operation": "search",
                 "requestedSpaces": requested,
@@ -3226,7 +3226,7 @@ impl ConfluenceProvider {
                 "resultCount": response.value.pages.len(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
+            })))
             .with_upstream(Some(response.status), Some(response.duration_ms))
             .with_object_ids(json!({
                 "pageIds": response
@@ -3275,11 +3275,11 @@ impl ConfluenceProvider {
             let parent = self
                 .confirmed_page(
                     &parent_locator.page_id,
-                    parent_locator.candidate_space.as_deref(),
+                    parent_locator.url_space.as_deref(),
                     lookup_credential,
                 )
                 .await?;
-            validate_page_locator_space(parent_locator, &parent.space)?;
+            validate_page_locator_space(parent_locator, &parent, &self.config)?;
             if parent.space != space.key {
                 return Err(ProviderError::deny(
                     ReasonCode::ScopeUnresolved,
@@ -3406,7 +3406,8 @@ impl ConfluenceProvider {
                     "parentPageId": effective_parent_page_id,
                 })));
         }
-        let (web_url, space_url) = page_browser_urls(&page, &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
+        let (web_url, space_url) = page_browser_urls(&page, &self.config, &mut url_fallbacks)?;
         let result = json!({
             "pageId": page.id,
             "space": page.space,
@@ -3440,7 +3441,7 @@ impl ConfluenceProvider {
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
         Ok(ProviderResult::new(result)
-            .with_audit(audit)
+            .with_audit(url_fallbacks.into_audit(audit))
             .with_upstream(
                 Some(response.status),
                 Some(
@@ -3467,21 +3468,21 @@ impl ConfluenceProvider {
         let page_response = self
             .confirmed_page_response(
                 &inputs.page.page_id,
-                inputs.page.candidate_space.as_deref(),
+                inputs.page.url_space.as_deref(),
                 lookup_credential,
             )
             .await?;
         let target_response = self
             .confirmed_page_response(
                 &inputs.target.page_id,
-                inputs.target.candidate_space.as_deref(),
+                inputs.target.url_space.as_deref(),
                 lookup_credential,
             )
             .await?;
         let page = page_response.value;
         let target = target_response.value;
-        validate_page_locator_space(&inputs.page, &page.space)?;
-        validate_page_locator_space(&inputs.target, &target.space)?;
+        validate_page_locator_space(&inputs.page, &page, &self.config)?;
+        validate_page_locator_space(&inputs.target, &target, &self.config)?;
         if page.id == target.id {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
@@ -3912,7 +3913,8 @@ impl ConfluenceProvider {
                     "Confluence updated page version did not match the requested base version",
                 ));
             }
-            let (web_url, space_url) = page_browser_urls(&page, &self.config)?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
+            let (web_url, space_url) = page_browser_urls(&page, &self.config, &mut url_fallbacks)?;
             let result = json!({
                 "pageId": page.id,
                 "space": page.space,
@@ -3941,7 +3943,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(metadata_response.duration_ms + response.duration_ms),
@@ -3989,11 +3991,11 @@ impl ConfluenceProvider {
             let parent = self
                 .confirmed_page(
                     &parent_locator.page_id,
-                    parent_locator.candidate_space.as_deref(),
+                    parent_locator.url_space.as_deref(),
                     lookup_credential,
                 )
                 .await?;
-            validate_page_locator_space(parent_locator, &parent.space)?;
+            validate_page_locator_space(parent_locator, &parent, &self.config)?;
             if parent.space != space_response.value.key {
                 return Err(ProviderError::deny(
                     ReasonCode::ScopeUnresolved,
@@ -4058,6 +4060,7 @@ impl ConfluenceProvider {
             let mut draft = response.value;
             draft.space = space_response.value.key;
             draft.space_web_url = space_response.value.web_url;
+            draft.space_alias = space_response.value.alias;
             require_draft_content(&draft, ConfluenceDraftContentType::Page)?;
             if draft.space != authorized_space || draft.space_id != space_response.value.id {
                 return Err(ProviderError::deny(
@@ -4170,6 +4173,7 @@ impl ConfluenceProvider {
                 None,
                 &request,
             )?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let result = draft_content_result(
                 "page.draft.create",
                 &draft,
@@ -4177,6 +4181,7 @@ impl ConfluenceProvider {
                 Some(draft_handle),
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
             let mut audit = draft_audit(
@@ -4191,7 +4196,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(
@@ -4280,6 +4285,7 @@ impl ConfluenceProvider {
             let mut draft = response.value;
             draft.space = current.space;
             draft.space_web_url = space_response.value.web_url;
+            draft.space_alias = space_response.value.alias;
             require_draft_content(&draft, ConfluenceDraftContentType::Page)?;
             require_draft_version_one(&draft)?;
             let draft_handle = self.mint_draft_handle(
@@ -4289,6 +4295,7 @@ impl ConfluenceProvider {
                 Some(inputs.base_version),
                 &request,
             )?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let mut result = draft_content_result(
                 "page.draft.stage",
                 &draft,
@@ -4296,6 +4303,7 @@ impl ConfluenceProvider {
                 Some(draft_handle),
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             result["expectedBaseVersion"] = json!(inputs.base_version);
             enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
@@ -4312,7 +4320,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(
@@ -4349,6 +4357,7 @@ impl ConfluenceProvider {
             .await?;
         ensure_draft_content_matches_handle(&response.value, &handle)?;
         enforce_draft_body_size(&response.value, &inputs.body_format, &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
         let result = draft_content_result(
             "page.draft.view",
             &response.value,
@@ -4356,10 +4365,11 @@ impl ConfluenceProvider {
             Some(inputs.draft_handle),
             Some(inputs.body_format.as_str()),
             &self.config,
+            &mut url_fallbacks,
         )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
-            .with_audit(draft_audit(
+            .with_audit(url_fallbacks.into_audit(draft_audit(
                 &request,
                 "page.draft.view",
                 &response.value,
@@ -4367,7 +4377,7 @@ impl ConfluenceProvider {
                 Some(inputs.body_format.as_str()),
                 false,
                 self.backend.egress_proxy_audit(credential),
-            ))
+            )))
             .with_upstream(Some(response.status), Some(response.duration_ms))
             .with_object_ids(json!({ "pageId": response.value.id })))
     }
@@ -4418,8 +4428,10 @@ impl ConfluenceProvider {
             let mut draft = response.value;
             draft.space = current.value.space;
             draft.space_web_url = current.value.space_web_url;
+            draft.space_alias = current.value.space_alias;
             ensure_draft_content_matches_handle(&draft, &handle)?;
             require_draft_version_one(&draft)?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let result = draft_content_result(
                 "page.draft.update",
                 &draft,
@@ -4427,6 +4439,7 @@ impl ConfluenceProvider {
                 Some(inputs.draft_handle),
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
             let mut audit = draft_audit(
@@ -4441,7 +4454,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(current.duration_ms + response.duration_ms),
@@ -4511,6 +4524,7 @@ impl ConfluenceProvider {
             let mut published = response.value;
             published.space = draft.space.clone();
             published.space_web_url = draft.space_web_url.clone();
+            published.space_alias = draft.space_alias.clone();
             require_current_draft_content(&published, ConfluenceDraftContentType::Page)?;
             if published.id != draft.id
                 || published.space_id != draft.space_id
@@ -4555,6 +4569,7 @@ impl ConfluenceProvider {
                 }
                 draft_ids
             };
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let mut result = draft_content_result(
                 "page.draft.publish",
                 &published,
@@ -4562,6 +4577,7 @@ impl ConfluenceProvider {
                 None,
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             result["draftVersion"] = json!(draft.version);
             result["publishedAttachmentIds"] = json!(published_attachment_ids);
@@ -4579,7 +4595,7 @@ impl ConfluenceProvider {
             audit["draftVersion"] = json!(draft.version);
             audit["attachmentIds"] = json!(published_attachment_ids);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(draft_response.duration_ms + response.duration_ms),
@@ -5535,7 +5551,7 @@ impl ConfluenceProvider {
         let page = self
             .confirmed_page(
                 &inputs.locator.page_id,
-                inputs.locator.candidate_space.as_deref(),
+                inputs.locator.url_space.as_deref(),
                 lookup_credential,
             )
             .await?;
@@ -5762,7 +5778,10 @@ impl ConfluenceProvider {
                 "Confluence blog response no longer matches the authorized scope",
             ));
         }
-        validate_blog_locator_space(&inputs.locator, &blog.space)?;
+        validate_blog_locator_space(
+            &inputs.locator,
+            &ConfluenceSpaceUrlNames::of_blog(&blog, &self.config),
+        )?;
         if blog.status.as_deref() != Some("current") {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
@@ -5774,10 +5793,11 @@ impl ConfluenceProvider {
             &self.config.content.blog_formats,
             self.config.content.max_body_bytes,
         )?;
-        let result = blog_view_result(&blog, &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
+        let result = blog_view_result(&blog, &self.config, &mut url_fallbacks)?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
-            .with_audit(json!({
+            .with_audit(url_fallbacks.into_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.view",
                 "blogId": blog.id,
@@ -5786,7 +5806,7 @@ impl ConfluenceProvider {
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
+            })))
             .with_upstream(Some(response.status), Some(response.duration_ms))
             .with_object_ids(json!({
                 "blogId": blog.id,
@@ -5864,9 +5884,15 @@ impl ConfluenceProvider {
             .as_deref()
             .map(|upstream| self.continuations.seal_search_page(&pages, upstream))
             .transpose()?;
-        let result = blog_search_result(&response.value, next_page_token.as_deref(), &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
+        let result = blog_search_result(
+            &response.value,
+            next_page_token.as_deref(),
+            &self.config,
+            &mut url_fallbacks,
+        )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
-        Ok(ProviderResult::new(result).with_audit(json!({
+        Ok(ProviderResult::new(result).with_audit(url_fallbacks.into_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.search",
                 "requestedSpaces": requested,
@@ -5885,7 +5911,7 @@ impl ConfluenceProvider {
                 "resultCount": response.value.blogs.len(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
-            })).with_upstream(Some(response.status), Some(response.duration_ms)).with_object_ids(json!({
+            }))).with_upstream(Some(response.status), Some(response.duration_ms)).with_object_ids(json!({
                 "blogIds": response.value.blogs.iter().map(|blog| blog.id.clone()).collect::<Vec<_>>(),
             })))
     }
@@ -5940,6 +5966,7 @@ impl ConfluenceProvider {
         after_accepted_write("mutation_response", write.locators(), async {
             let mut blog = response.value;
             blog.space = space.key;
+            blog.space_alias = space.alias;
             blog.space_web_url = space.web_url;
             if blog.space_id != space.id || blog.status.as_deref() != Some("current") {
                 return Err(ProviderError::deny(
@@ -5947,7 +5974,8 @@ impl ConfluenceProvider {
                     "Confluence created blog did not match the authorized space",
                 ));
             }
-            let (web_url, space_url) = blog_browser_urls(&blog, &self.config)?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
+            let (web_url, space_url) = blog_browser_urls(&blog, &self.config, &mut url_fallbacks)?;
             let result = json!({
                 "operation": "blog.create",
                 "blogId": blog.id,
@@ -5979,7 +6007,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(space_response.duration_ms + response.duration_ms),
@@ -6048,6 +6076,7 @@ impl ConfluenceProvider {
         after_accepted_write("mutation_response", write.locators(), async {
             let mut blog = response.value;
             blog.space = metadata.space.clone();
+            blog.space_alias = metadata.space_alias.clone();
             blog.space_web_url = metadata.space_web_url.clone();
             if blog.id != metadata.id || blog.space_id != metadata.space_id {
                 return Err(ProviderError::deny(
@@ -6067,7 +6096,8 @@ impl ConfluenceProvider {
                     "Confluence updated blog version did not match the requested base version",
                 ));
             }
-            let (web_url, space_url) = blog_browser_urls(&blog, &self.config)?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
+            let (web_url, space_url) = blog_browser_urls(&blog, &self.config, &mut url_fallbacks)?;
             let result = json!({
                 "operation": "blog.update",
                 "blogId": blog.id,
@@ -6101,7 +6131,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(metadata_response.duration_ms + response.duration_ms),
@@ -6159,6 +6189,7 @@ impl ConfluenceProvider {
             let mut draft = response.value;
             draft.space = space_response.value.key;
             draft.space_web_url = space_response.value.web_url;
+            draft.space_alias = space_response.value.alias;
             require_draft_content(&draft, ConfluenceDraftContentType::Blog)?;
             if draft.space != authorized_space || draft.space_id != space_response.value.id {
                 return Err(ProviderError::deny(
@@ -6173,6 +6204,7 @@ impl ConfluenceProvider {
                 None,
                 &request,
             )?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let result = draft_content_result(
                 "blog.draft.create",
                 &draft,
@@ -6180,6 +6212,7 @@ impl ConfluenceProvider {
                 Some(draft_handle),
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
             let mut audit = draft_audit(
@@ -6194,7 +6227,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(space_response.duration_ms + response.duration_ms),
@@ -6271,6 +6304,7 @@ impl ConfluenceProvider {
             let mut draft = response.value;
             draft.space = current.space;
             draft.space_web_url = current.space_web_url;
+            draft.space_alias = current.space_alias;
             require_draft_content(&draft, ConfluenceDraftContentType::Blog)?;
             require_draft_version_one(&draft)?;
             let draft_handle = self.mint_draft_handle(
@@ -6280,6 +6314,7 @@ impl ConfluenceProvider {
                 Some(inputs.base_version),
                 &request,
             )?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let mut result = draft_content_result(
                 "blog.draft.stage",
                 &draft,
@@ -6287,6 +6322,7 @@ impl ConfluenceProvider {
                 Some(draft_handle),
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             result["expectedBaseVersion"] = json!(inputs.base_version);
             enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
@@ -6303,7 +6339,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(current_response.duration_ms + response.duration_ms),
@@ -6335,6 +6371,7 @@ impl ConfluenceProvider {
             .await?;
         ensure_draft_content_matches_handle(&response.value, &handle)?;
         enforce_draft_body_size(&response.value, &inputs.body_format, &self.config)?;
+        let mut url_fallbacks = BrowserUrlFallbacks::default();
         let result = draft_content_result(
             "blog.draft.view",
             &response.value,
@@ -6342,10 +6379,11 @@ impl ConfluenceProvider {
             Some(inputs.draft_handle),
             Some(inputs.body_format.as_str()),
             &self.config,
+            &mut url_fallbacks,
         )?;
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
-            .with_audit(draft_audit(
+            .with_audit(url_fallbacks.into_audit(draft_audit(
                 &request,
                 "blog.draft.view",
                 &response.value,
@@ -6353,7 +6391,7 @@ impl ConfluenceProvider {
                 Some(inputs.body_format.as_str()),
                 false,
                 self.backend.egress_proxy_audit(credential),
-            ))
+            )))
             .with_upstream(Some(response.status), Some(response.duration_ms))
             .with_object_ids(json!({ "blogId": response.value.id })))
     }
@@ -6404,8 +6442,10 @@ impl ConfluenceProvider {
             let mut draft = response.value;
             draft.space = current.value.space;
             draft.space_web_url = current.value.space_web_url;
+            draft.space_alias = current.value.space_alias;
             ensure_draft_content_matches_handle(&draft, &handle)?;
             require_draft_version_one(&draft)?;
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let result = draft_content_result(
                 "blog.draft.update",
                 &draft,
@@ -6413,6 +6453,7 @@ impl ConfluenceProvider {
                 Some(inputs.draft_handle),
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
             let mut audit = draft_audit(
@@ -6427,7 +6468,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(current.duration_ms + response.duration_ms),
@@ -6497,6 +6538,7 @@ impl ConfluenceProvider {
             let mut published = response.value;
             published.space = draft.space.clone();
             published.space_web_url = draft.space_web_url.clone();
+            published.space_alias = draft.space_alias.clone();
             require_current_draft_content(&published, ConfluenceDraftContentType::Blog)?;
             if published.id != draft.id || published.space_id != draft.space_id {
                 return Err(ProviderError::error(
@@ -6538,6 +6580,7 @@ impl ConfluenceProvider {
                 }
                 draft_ids
             };
+            let mut url_fallbacks = BrowserUrlFallbacks::default();
             let mut result = draft_content_result(
                 "blog.draft.publish",
                 &published,
@@ -6545,6 +6588,7 @@ impl ConfluenceProvider {
                 None,
                 None,
                 &self.config,
+                &mut url_fallbacks,
             )?;
             result["draftVersion"] = json!(draft.version);
             result["publishedAttachmentIds"] = json!(published_attachment_ids);
@@ -6562,7 +6606,7 @@ impl ConfluenceProvider {
             audit["draftVersion"] = json!(draft.version);
             audit["attachmentIds"] = json!(published_attachment_ids);
             Ok(ProviderResult::new(result)
-                .with_audit(audit)
+                .with_audit(url_fallbacks.into_audit(audit))
                 .with_upstream(
                     Some(response.status),
                     Some(draft_response.duration_ms + response.duration_ms),
@@ -7530,7 +7574,10 @@ impl ConfluenceProvider {
         let blog = self
             .confirmed_blog(&inputs.locator.blog_id, lookup_credential)
             .await?;
-        validate_blog_locator_space(&inputs.locator, &blog.space)?;
+        validate_blog_locator_space(
+            &inputs.locator,
+            &ConfluenceSpaceUrlNames::of_blog(&blog, &self.config),
+        )?;
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let next_position = inputs
             .next_page_token
@@ -7826,6 +7873,7 @@ impl ConfluenceProvider {
         }
         response.value.space = space_response.value.key;
         response.value.space_web_url = space_response.value.web_url;
+        response.value.space_alias = space_response.value.alias;
         response.duration_ms = response
             .duration_ms
             .saturating_add(space_response.duration_ms);
@@ -7959,11 +8007,11 @@ impl ConfluenceProvider {
     async fn confirmed_page(
         &self,
         page_id: &str,
-        candidate_space: Option<&str>,
+        url_space: Option<&str>,
         credential: &AtlassianCredential,
     ) -> Result<ConfluencePage, ProviderError> {
         Ok(self
-            .confirmed_page_response(page_id, candidate_space, credential)
+            .confirmed_page_response(page_id, url_space, credential)
             .await?
             .value)
     }
@@ -7971,7 +8019,7 @@ impl ConfluenceProvider {
     async fn confirmed_page_response(
         &self,
         page_id: &str,
-        candidate_space: Option<&str>,
+        url_space: Option<&str>,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ProviderError> {
         let response = self
@@ -7985,12 +8033,12 @@ impl ConfluenceProvider {
                 "Confluence page metadata did not match requested page",
             ));
         }
-        if let Some(candidate) = candidate_space
-            && candidate != response.value.space
+        if let Some(url_space) = url_space
+            && !ConfluenceSpaceUrlNames::of_page(&response.value, &self.config).names(url_space)
         {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
-                "Confluence page space did not match the requested scope",
+                "Confluence page URL space is neither the page's space key nor its URL alias",
             ));
         }
         require_current_page(&response.value)?;
@@ -8063,6 +8111,8 @@ impl ConfluenceProvider {
         if space_response.value.id != response.value.space_id {
             return Err(blog_scope_requires_lookup(blog_id.to_string()));
         }
+        response.value.space_alias =
+            ConfluenceSpaceUrlNames::of_space(&space_response.value, &self.config).alias;
         response.value.space = space_response.value.key;
         response.duration_ms = response
             .duration_ms
@@ -8116,6 +8166,7 @@ impl ConfluenceProvider {
         }
         response.value.space = space_response.value.key;
         response.value.space_web_url = space_response.value.web_url;
+        response.value.space_alias = space_response.value.alias;
         response.duration_ms = response
             .duration_ms
             .saturating_add(space_response.duration_ms);
@@ -8483,7 +8534,9 @@ struct BlogViewInputs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlogLocator {
     blog_id: String,
-    candidate_space: Option<String>,
+    /// A URL locator's space segment: a space key or a space's URL alias. It
+    /// only has to name the resolved blog's space; it is never a scope.
+    url_space: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -8979,7 +9032,7 @@ fn parse_attachment_list_inputs(
             let page_id = validate_page_id(&page_id)?;
             PageLocator {
                 page_id,
-                candidate_space: None,
+                url_space: None,
             }
         }
         (None, Some(url)) => page_locator_from_url(&url, config)?,
@@ -9039,7 +9092,7 @@ fn parse_blog_view_inputs(
     let locator = match (parsed.blog_id, parsed.url) {
         (Some(blog_id), None) => BlogLocator {
             blog_id: validate_blog_id(&blog_id)?,
-            candidate_space: None,
+            url_space: None,
         },
         (None, Some(url)) => blog_locator_from_url(&url, config)?,
         _ => {
@@ -9132,7 +9185,7 @@ fn parse_blog_attachment_list_inputs(
     let locator = match (parsed.blog_id, parsed.url) {
         (Some(blog_id), None) => BlogLocator {
             blog_id: validate_blog_id(&blog_id)?,
-            candidate_space: None,
+            url_space: None,
         },
         (None, Some(url)) => blog_locator_from_url(&url, config)?,
         _ => {
@@ -9699,7 +9752,9 @@ fn parse_comment_delete_inputs(inputs: &Value) -> Result<CommentDeleteInputs, Pr
 #[derive(Debug, Clone)]
 struct PageLocator {
     page_id: String,
-    candidate_space: Option<String>,
+    /// A URL locator's space segment: a space key or a space's URL alias. It
+    /// only has to name the resolved page's space; it is never a scope.
+    url_space: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -9733,7 +9788,7 @@ fn required_page_locator(
             let page_id = validate_page_id(&page_id)?;
             Ok(PageLocator {
                 page_id,
-                candidate_space: None,
+                url_space: None,
             })
         }
         (None, Some(url)) => page_locator_from_url(&url, config),
@@ -9807,7 +9862,7 @@ fn page_locator_from_url(
             ));
         }
         return Ok(PageLocator {
-            candidate_space: Some(validate_space_key(segments[2])?),
+            url_space: Some(validate_locator_space_segment(segments[2])?),
             page_id: validate_page_id(segments[4])?,
         });
     }
@@ -9821,7 +9876,7 @@ fn page_locator_from_url(
         }
         return Ok(PageLocator {
             page_id: validate_page_id(&pairs[0].1)?,
-            candidate_space: None,
+            url_space: None,
         });
     }
     Err(ProviderError::deny(
@@ -9882,7 +9937,7 @@ fn blog_locator_from_url(
         }
         return Ok(BlogLocator {
             blog_id: blog_id.to_string(),
-            candidate_space: None,
+            url_space: None,
         });
     }
     if segments.len() >= 5
@@ -9896,11 +9951,11 @@ fn blog_locator_from_url(
                 "Confluence blog URL must not include query parameters",
             ));
         }
-        let space = validate_space_key(segments[2])?;
+        let space = validate_locator_space_segment(segments[2])?;
         let blog_id = blog_id_from_modern_blog_segments(&segments[4..])?;
         return Ok(BlogLocator {
             blog_id,
-            candidate_space: Some(space),
+            url_space: Some(space),
         });
     }
     Err(ProviderError::deny(
@@ -9933,14 +9988,14 @@ fn blog_id_from_modern_blog_segments(tail: &[&str]) -> Result<String, ProviderEr
 
 fn validate_blog_locator_space(
     locator: &BlogLocator,
-    authoritative_space: &str,
+    space: &ConfluenceSpaceUrlNames<'_>,
 ) -> Result<(), ProviderError> {
-    if let Some(candidate_space) = &locator.candidate_space
-        && candidate_space != authoritative_space
+    if let Some(url_space) = &locator.url_space
+        && !space.names(url_space)
     {
         return Err(ProviderError::deny(
             ReasonCode::LocatorInvalid,
-            "Confluence blog URL space does not match the resolved blog",
+            "Confluence blog URL space is neither the resolved blog's space key nor its URL alias",
         ));
     }
     Ok(())
@@ -9948,23 +10003,37 @@ fn validate_blog_locator_space(
 
 fn validate_page_locator_space(
     locator: &PageLocator,
-    authoritative_space: &str,
+    page: &ConfluencePage,
+    config: &ConfluenceProviderConfig,
 ) -> Result<(), ProviderError> {
-    if let Some(candidate_space) = &locator.candidate_space
-        && candidate_space != authoritative_space
+    if let Some(url_space) = &locator.url_space
+        && !ConfluenceSpaceUrlNames::of_page(page, config).names(url_space)
     {
         return Err(ProviderError::deny(
             ReasonCode::LocatorInvalid,
-            "Confluence page URL space does not match the resolved page",
+            "Confluence page URL space is neither the resolved page's space key nor its URL alias",
         ));
     }
     Ok(())
+}
+
+/// A URL locator's space segment, which may be a space key or a space's URL
+/// alias.
+fn validate_locator_space_segment(segment: &str) -> Result<String, ProviderError> {
+    if !is_space_key(segment) && !is_space_alias(segment) {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "Confluence URL space segment is not a space key or URL alias",
+        ));
+    }
+    Ok(segment.to_string())
 }
 
 fn page_view_result(
     page: &ConfluencePage,
     allowed_formats: &[String],
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<Value, ProviderError> {
     let mut body = serde_json::Map::new();
     for format in allowed_formats {
@@ -9978,7 +10047,7 @@ fn page_view_result(
             );
         }
     }
-    let (web_url, space_url) = page_browser_urls(page, config)?;
+    let (web_url, space_url) = page_browser_urls(page, config, fallbacks)?;
     Ok(json!({
         "id": page.id,
         "title": page.title,
@@ -10771,10 +10840,17 @@ fn reject_staged_draft_attachment_read(
 fn draft_browser_urls(
     content: &ConfluenceDraftContent,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<(String, String), ProviderError> {
+    let space = ConfluenceSpaceUrlNames::new(
+        &content.space,
+        content.space_alias.as_deref(),
+        content.space_web_url.as_deref(),
+        config,
+    );
     Ok((
         constructed_content_browser_url(&content.id, &config.tenant_host)?,
-        space_browser_url(content.space_web_url.as_deref(), &content.space, config)?,
+        space_browser_url(content.space_web_url.as_deref(), &space, config, fallbacks)?,
     ))
 }
 
@@ -10785,8 +10861,9 @@ fn draft_content_result(
     draft_handle: Option<String>,
     body_format: Option<&str>,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<Value, ProviderError> {
-    let (web_url, space_url) = draft_browser_urls(content, config)?;
+    let (web_url, space_url) = draft_browser_urls(content, config, fallbacks)?;
     let mut result = json!({
         "operation": operation,
         "contentType": content_type.as_str(),
@@ -11041,87 +11118,328 @@ enum ConfluenceBrowserContentKind {
     Blog,
 }
 
+/// The names a space's browser links may use: its key and, when an
+/// administrator changed the space's URL, its URL alias. Confluence keeps the
+/// key in its API and serves the space's links under the alias. The alias only
+/// matches browser link and URL locator segments; scopes, grants and
+/// exclusions always use the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfluenceSpaceUrlNames<'a> {
+    key: &'a str,
+    alias: Option<String>,
+}
+
+impl<'a> ConfluenceSpaceUrlNames<'a> {
+    /// `key`'s names: the alias its v2 space object reported, otherwise the
+    /// one the space object's own `_links.webui` names.
+    fn new(
+        key: &'a str,
+        reported_alias: Option<&str>,
+        space_web_url: Option<&str>,
+        config: &ConfluenceProviderConfig,
+    ) -> Self {
+        let alias = reported_alias
+            .filter(|alias| is_space_alias(alias) && *alias != key)
+            .map(ToString::to_string)
+            .or_else(|| space_web_url.and_then(|raw| space_link_alias(raw, key, config)));
+        Self { key, alias }
+    }
+
+    fn of_space(space: &'a ConfluenceSpace, config: &ConfluenceProviderConfig) -> Self {
+        Self::new(
+            &space.key,
+            space.alias.as_deref(),
+            space.web_url.as_deref(),
+            config,
+        )
+    }
+
+    fn of_page(page: &'a ConfluencePage, config: &ConfluenceProviderConfig) -> Self {
+        Self::new(&page.space, None, page.space_web_url.as_deref(), config)
+    }
+
+    fn of_blog(blog: &'a ConfluenceBlog, config: &ConfluenceProviderConfig) -> Self {
+        Self::new(
+            &blog.space,
+            blog.space_alias.as_deref(),
+            blog.space_web_url.as_deref(),
+            config,
+        )
+    }
+
+    /// A blog's scope evidence, whose alias was resolved from its v2 space.
+    fn of_blog_evidence(
+        evidence: &'a ConfluenceBlogScopeEvidence,
+        config: &ConfluenceProviderConfig,
+    ) -> Self {
+        Self::new(
+            &evidence.space,
+            evidence.space_alias.as_deref(),
+            None,
+            config,
+        )
+    }
+
+    /// Whether a browser path's space segment names this space.
+    fn names(&self, segment: &str) -> bool {
+        segment == self.key || self.alias.as_deref() == Some(segment)
+    }
+}
+
+/// The alias a space's own browser link names: the `<alias>` of a
+/// `/spaces/<alias>` or `/spaces/<alias>/overview` link on the configured site,
+/// when it is well formed and differs from `key`.
+fn space_link_alias(raw: &str, key: &str, config: &ConfluenceProviderConfig) -> Option<String> {
+    let url = parse_confluence_browser_url(raw, config).ok()?;
+    if url.query().is_some() {
+        return None;
+    }
+    let segments = url.path_segments()?.collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["wiki", "spaces", alias] | ["wiki", "spaces", alias, "overview"]
+            if *alias != key && is_space_alias(alias) =>
+        {
+            Some((*alias).to_string())
+        }
+        _ => None,
+    }
+}
+
+/// The rule an upstream browser link failed. A failed link is presentation
+/// metadata: the Broker returns a link it constructs instead, and records the
+/// rule in the operation's audit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserUrlRule {
+    Unparseable,
+    Authority,
+    Fragment,
+    ForbiddenPath,
+    Query,
+    Shape,
+    Space,
+    ContentId,
+    BlogDate,
+}
+
+impl BrowserUrlRule {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unparseable => "unparseable",
+            Self::Authority => "authority_mismatch",
+            Self::Fragment => "fragment",
+            Self::ForbiddenPath => "forbidden_path",
+            Self::Query => "query_not_allowed",
+            Self::Shape => "unrecognized_shape",
+            Self::Space => "space_mismatch",
+            Self::ContentId => "content_id_mismatch",
+            Self::BlogDate => "invalid_blog_date",
+        }
+    }
+}
+
+const MAX_BROWSER_URL_FALLBACK_ENTRIES: usize = 10;
+
+/// The upstream browser links an operation replaced with links the Broker
+/// constructed, for its audit: the field, the rule the link failed and the
+/// link's masked shape, never the link itself.
+#[derive(Debug, Default)]
+struct BrowserUrlFallbacks {
+    count: usize,
+    entries: Vec<Value>,
+}
+
+impl BrowserUrlFallbacks {
+    fn record(
+        &mut self,
+        field: &'static str,
+        rule: BrowserUrlRule,
+        raw: &str,
+        config: &ConfluenceProviderConfig,
+    ) {
+        self.count += 1;
+        if self.entries.len() < MAX_BROWSER_URL_FALLBACK_ENTRIES {
+            self.entries.push(json!({
+                "field": field,
+                "rule": rule.as_str(),
+                "linkShape": browser_link_shape(raw, config),
+            }));
+        }
+    }
+
+    /// `audit`, with any replacements under `browserUrlFallbacks`.
+    fn into_audit(self, mut audit: Value) -> Value {
+        if self.count > 0 {
+            audit["browserUrlFallbacks"] = json!({
+                "count": self.count,
+                "entries": self.entries,
+            });
+        }
+        audit
+    }
+}
+
+/// A link's shape for diagnostics: its origin as the configured site or a
+/// masked origin, and its path with structural segments kept, digit runs
+/// shown as `{n}`, and every other segment, such as a space key or a title
+/// slug, as `{s}`. Query and fragment contents are omitted.
+fn browser_link_shape(raw: &str, config: &ConfluenceProviderConfig) -> String {
+    const MAX_SEGMENTS: usize = 16;
+    let raw = raw.trim();
+    let (raw, fragment) = raw
+        .split_once('#')
+        .map_or((raw, false), |(head, _)| (head, true));
+    let (raw, query) = raw
+        .split_once('?')
+        .map_or((raw, false), |(head, _)| (head, true));
+    let authority_and_path = |rest: &'_ str| -> (String, String) {
+        let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+        (authority.to_string(), path.to_string())
+    };
+    let (origin, path) = match raw.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = authority_and_path(rest);
+            let origin = if authority == config.tenant_host && matches!(scheme, "https" | "http") {
+                format!("{scheme}://{{site}}")
+            } else {
+                "{origin}".to_string()
+            };
+            (origin, path)
+        }
+        None => match raw.strip_prefix("//") {
+            Some(rest) => ("{origin}".to_string(), authority_and_path(rest).1),
+            None => (String::new(), raw.to_string()),
+        },
+    };
+    let mut segments = path
+        .split('/')
+        .map(browser_link_shape_segment)
+        .collect::<Vec<_>>();
+    if segments.len() > MAX_SEGMENTS {
+        segments.truncate(MAX_SEGMENTS);
+        segments.push("...");
+    }
+    let mut shape = origin + &segments.join("/");
+    if query {
+        shape.push_str("?{query}");
+    }
+    if fragment {
+        shape.push_str("#{fragment}");
+    }
+    shape
+}
+
+fn browser_link_shape_segment(segment: &str) -> &str {
+    match segment {
+        "" | "wiki" | "spaces" | "pages" | "blog" | "overview" | "display" | "viewpage.action"
+        | "editpage.action" | "edit-v2" | "rest" | "api" | "download" | "attachments" | "child"
+        | "attachment" | "x" => segment,
+        _ if segment.bytes().all(|byte| byte.is_ascii_digit()) => "{n}",
+        _ => "{s}",
+    }
+}
+
 fn page_browser_urls(
     page: &ConfluencePage,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<(String, String), ProviderError> {
+    let space = ConfluenceSpaceUrlNames::of_page(page, config);
     Ok((
         content_browser_url(
             page.web_url.as_deref(),
             ConfluenceBrowserContentKind::Page,
             &page.id,
-            &page.space,
+            &space,
             config,
+            fallbacks,
         )?,
-        space_browser_url(page.space_web_url.as_deref(), &page.space, config)?,
+        space_browser_url(page.space_web_url.as_deref(), &space, config, fallbacks)?,
     ))
 }
 
 fn blog_browser_urls(
     blog: &ConfluenceBlog,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<(String, String), ProviderError> {
+    let space = ConfluenceSpaceUrlNames::of_blog(blog, config);
     Ok((
         content_browser_url(
             blog.web_url.as_deref(),
             ConfluenceBrowserContentKind::Blog,
             &blog.id,
-            &blog.space,
+            &space,
             config,
+            fallbacks,
         )?,
-        space_browser_url(blog.space_web_url.as_deref(), &blog.space, config)?,
+        space_browser_url(blog.space_web_url.as_deref(), &space, config, fallbacks)?,
     ))
 }
 
 fn blog_summary_browser_urls(
     blog: &ConfluenceBlogSummary,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<(String, String), ProviderError> {
+    let space =
+        ConfluenceSpaceUrlNames::new(&blog.space, None, blog.space_web_url.as_deref(), config);
     Ok((
         content_browser_url(
             blog.web_url.as_deref(),
             ConfluenceBrowserContentKind::Blog,
             &blog.id,
-            &blog.space,
+            &space,
             config,
+            fallbacks,
         )?,
-        space_browser_url(blog.space_web_url.as_deref(), &blog.space, config)?,
+        space_browser_url(blog.space_web_url.as_deref(), &space, config, fallbacks)?,
     ))
 }
 
+/// The upstream content link when it is a safe browser link to
+/// `expected_id` in `space`; otherwise one the Broker constructs from the
+/// content ID, recording a failed link in `fallbacks`.
 fn content_browser_url(
     raw: Option<&str>,
     kind: ConfluenceBrowserContentKind,
     expected_id: &str,
-    expected_space: &str,
+    space: &ConfluenceSpaceUrlNames<'_>,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<String, ProviderError> {
-    if !is_page_id(expected_id) || !is_space_key(expected_space) {
+    if !is_page_id(expected_id) || !is_space_key(space.key) {
         return Err(confluence_browser_url_protocol_error());
     }
-    if let Some(raw) = raw
-        && let Some(url) =
-            normalize_content_browser_url(raw, kind, expected_id, expected_space, config)?
-    {
-        return Ok(url);
+    if let Some(raw) = raw {
+        match normalize_content_browser_url(raw, kind, expected_id, space, config) {
+            Ok(Some(url)) => return Ok(url),
+            Ok(None) => {}
+            Err(rule) => fallbacks.record("webUrl", rule, raw, config),
+        }
     }
     constructed_content_browser_url(expected_id, &config.tenant_host)
 }
 
+/// The upstream space link when it is a safe browser link to `space`;
+/// otherwise one the Broker constructs from the space key, recording a
+/// failed link in `fallbacks`.
 fn space_browser_url(
     raw: Option<&str>,
-    expected_space: &str,
+    space: &ConfluenceSpaceUrlNames<'_>,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<String, ProviderError> {
-    if !is_space_key(expected_space) {
+    if !is_space_key(space.key) {
         return Err(confluence_browser_url_protocol_error());
     }
-    if let Some(raw) = raw
-        && let Some(url) = normalize_space_browser_url(raw, expected_space, config)?
-    {
-        return Ok(url);
+    if let Some(raw) = raw {
+        match normalize_space_browser_url(raw, space, config) {
+            Ok(Some(url)) => return Ok(url),
+            Ok(None) => {}
+            Err(rule) => fallbacks.record("spaceUrl", rule, raw, config),
+        }
     }
-    constructed_space_browser_url(expected_space, &config.tenant_host)
+    constructed_space_browser_url(space.key, &config.tenant_host)
 }
 
 fn constructed_content_browser_url(
@@ -11150,43 +11468,47 @@ fn normalize_content_browser_url(
     raw: &str,
     _kind: ConfluenceBrowserContentKind,
     expected_id: &str,
-    expected_space: &str,
+    space: &ConfluenceSpaceUrlNames<'_>,
     config: &ConfluenceProviderConfig,
-) -> Result<Option<String>, ProviderError> {
+) -> Result<Option<String>, BrowserUrlRule> {
     let url = parse_confluence_browser_url(raw, config)?;
     let segments = url
         .path_segments()
         .map(|segments| segments.collect::<Vec<_>>())
-        .ok_or_else(confluence_browser_url_protocol_error)?;
+        .ok_or(BrowserUrlRule::Shape)?;
     if forbidden_confluence_browser_path(&segments) {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::ForbiddenPath);
     }
     if segments.as_slice() == ["wiki", "pages", "viewpage.action"] {
         let pairs = url.query_pairs().collect::<Vec<_>>();
         if pairs.len() != 1 || pairs[0].0 != "pageId" {
-            return Err(confluence_browser_url_protocol_error());
+            return Err(BrowserUrlRule::Query);
         }
         if pairs[0].1 != expected_id {
-            return Err(confluence_browser_url_protocol_error());
+            return Err(BrowserUrlRule::ContentId);
         }
         return Ok(Some(url.to_string()));
     }
     if url.query().is_some() {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::Query);
+    }
+    if segments.len() >= 3
+        && segments[0] == "wiki"
+        && segments[1] == "spaces"
+        && !space.names(segments[2])
+    {
+        return Err(BrowserUrlRule::Space);
     }
     if segments.len() >= 5
         && segments[0] == "wiki"
         && segments[1] == "spaces"
         && segments[3] == "pages"
     {
-        if segments[2] != expected_space {
-            return Err(confluence_browser_url_protocol_error());
-        }
         if !is_page_id(segments[4]) {
             return Ok(None);
         }
         if segments[4] != expected_id {
-            return Err(confluence_browser_url_protocol_error());
+            return Err(BrowserUrlRule::ContentId);
         }
         return Ok(Some(url.to_string()));
     }
@@ -11195,93 +11517,78 @@ fn normalize_content_browser_url(
         && segments[1] == "spaces"
         && segments[3] == "blog"
     {
-        if segments[2] != expected_space {
-            return Err(confluence_browser_url_protocol_error());
-        }
         if blog_tail_has_matching_content_id(&segments[4..], expected_id)? {
             return Ok(Some(url.to_string()));
         }
         return Ok(None);
     }
-    if segments.len() >= 3
-        && segments[0] == "wiki"
-        && segments[1] == "spaces"
-        && segments[2] != expected_space
-    {
-        return Err(confluence_browser_url_protocol_error());
+    if segments.first() != Some(&"wiki") {
+        return Err(BrowserUrlRule::Shape);
     }
-    if segments.first() == Some(&"wiki")
-        && !has_probable_content_id_mismatch(&segments, expected_id)
-    {
-        return Ok(None);
+    if has_probable_content_id_mismatch(&segments, expected_id) {
+        return Err(BrowserUrlRule::ContentId);
     }
-    Err(confluence_browser_url_protocol_error())
+    Ok(None)
 }
 
 fn normalize_space_browser_url(
     raw: &str,
-    expected_space: &str,
+    space: &ConfluenceSpaceUrlNames<'_>,
     config: &ConfluenceProviderConfig,
-) -> Result<Option<String>, ProviderError> {
+) -> Result<Option<String>, BrowserUrlRule> {
     let url = parse_confluence_browser_url(raw, config)?;
     let segments = url
         .path_segments()
         .map(|segments| segments.collect::<Vec<_>>())
-        .ok_or_else(confluence_browser_url_protocol_error)?;
-    if forbidden_confluence_browser_path(&segments) || url.query().is_some() {
-        return Err(confluence_browser_url_protocol_error());
+        .ok_or(BrowserUrlRule::Shape)?;
+    if forbidden_confluence_browser_path(&segments) {
+        return Err(BrowserUrlRule::ForbiddenPath);
+    }
+    if url.query().is_some() {
+        return Err(BrowserUrlRule::Query);
     }
     match segments.as_slice() {
-        ["wiki", "spaces", space] | ["wiki", "spaces", space, "overview"]
-            if *space == expected_space =>
-        {
-            Ok(Some(url.to_string()))
-        }
-        ["wiki", "spaces", space, ..] if *space != expected_space => {
-            Err(confluence_browser_url_protocol_error())
-        }
-        _ if segments.first() == Some(&"wiki") => Ok(None),
-        _ => Err(confluence_browser_url_protocol_error()),
+        ["wiki", "spaces", segment, ..] if !space.names(segment) => Err(BrowserUrlRule::Space),
+        ["wiki", "spaces", _] | ["wiki", "spaces", _, "overview"] => Ok(Some(url.to_string())),
+        ["wiki", ..] => Ok(None),
+        _ => Err(BrowserUrlRule::Shape),
     }
 }
 
 fn parse_confluence_browser_url(
     raw: &str,
     config: &ConfluenceProviderConfig,
-) -> Result<Url, ProviderError> {
+) -> Result<Url, BrowserUrlRule> {
     let raw = raw.trim();
     if raw.is_empty() {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::Unparseable);
     }
-    if raw_url_has_explicit_authority_port(raw) {
-        return Err(confluence_browser_url_protocol_error());
-    }
-    if raw.starts_with("//") {
-        return Err(confluence_browser_url_protocol_error());
+    if raw_url_has_explicit_authority_port(raw) || raw.starts_with("//") {
+        return Err(BrowserUrlRule::Authority);
     }
     let tenant_base = Url::parse(&format!("https://{}", config.tenant_host))
-        .map_err(|_| confluence_browser_url_protocol_error())?;
+        .map_err(|_| BrowserUrlRule::Unparseable)?;
     let url = match Url::parse(raw) {
         Ok(url) => url,
         Err(_) => relative_confluence_browser_url(raw, &tenant_base)?,
     };
     if !confluence_url_has_exact_authority(&url, &config.tenant_host) {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::Authority);
     }
     if url.fragment().is_some() {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::Fragment);
     }
     Ok(url)
 }
 
-fn relative_confluence_browser_url(raw: &str, tenant_base: &Url) -> Result<Url, ProviderError> {
+fn relative_confluence_browser_url(raw: &str, tenant_base: &Url) -> Result<Url, BrowserUrlRule> {
     let relative = raw.trim_start_matches('/');
     let allowed_browser_family = relative.starts_with("wiki/spaces/")
         || relative.starts_with("wiki/pages/viewpage.action")
         || relative.starts_with("spaces/")
         || relative.starts_with("pages/viewpage.action");
     if !allowed_browser_family {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::Shape);
     }
     let path = if relative == "wiki" || relative.starts_with("wiki/") {
         format!("/{relative}")
@@ -11290,7 +11597,7 @@ fn relative_confluence_browser_url(raw: &str, tenant_base: &Url) -> Result<Url, 
     };
     tenant_base
         .join(&path)
-        .map_err(|_| confluence_browser_url_protocol_error())
+        .map_err(|_| BrowserUrlRule::Unparseable)
 }
 
 fn confluence_url_has_exact_authority(url: &Url, tenant_host: &str) -> bool {
@@ -11338,9 +11645,8 @@ fn forbidden_confluence_browser_path(segments: &[&str]) -> bool {
 fn blog_tail_has_matching_content_id(
     tail: &[&str],
     expected_id: &str,
-) -> Result<bool, ProviderError> {
-    let tail =
-        modern_blog_tail_after_date(tail).map_err(|_| confluence_browser_url_protocol_error())?;
+) -> Result<bool, BrowserUrlRule> {
+    let tail = modern_blog_tail_after_date(tail).map_err(|_| BrowserUrlRule::BlogDate)?;
     let Some(blog_id) = tail.first() else {
         return Ok(false);
     };
@@ -11348,7 +11654,7 @@ fn blog_tail_has_matching_content_id(
         return Ok(false);
     }
     if *blog_id != expected_id {
-        return Err(confluence_browser_url_protocol_error());
+        return Err(BrowserUrlRule::ContentId);
     }
     Ok(true)
 }
@@ -11408,17 +11714,19 @@ fn confluence_browser_url_protocol_error() -> ProviderError {
 }
 
 /// A search page's result, carrying the sealed continuation for its
-/// upstream cursor.
+/// upstream cursor. A result's failed browser link is replaced, never
+/// failing the page.
 fn search_result(
     page: &ConfluenceSearchPage,
     next_page_token: Option<&str>,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<Value, ProviderError> {
     let pages = page
         .pages
         .iter()
         .map(|page| {
-            let (web_url, space_url) = page_browser_urls(page, config)?;
+            let (web_url, space_url) = page_browser_urls(page, config, fallbacks)?;
             Ok(json!({
                 "id": page.id,
                 "title": page.title,
@@ -11444,12 +11752,13 @@ fn blog_search_result(
     page: &ConfluenceSearchBlog,
     next_page_token: Option<&str>,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<Value, ProviderError> {
     let blogs = page
         .blogs
         .iter()
         .map(|blog| {
-            let (web_url, space_url) = blog_summary_browser_urls(blog, config)?;
+            let (web_url, space_url) = blog_summary_browser_urls(blog, config, fallbacks)?;
             Ok(json!({
                 "blogId": blog.id,
                 "title": blog.title,
@@ -11477,12 +11786,13 @@ fn blog_search_result(
 fn blog_view_result(
     blog: &ConfluenceBlog,
     config: &ConfluenceProviderConfig,
+    fallbacks: &mut BrowserUrlFallbacks,
 ) -> Result<Value, ProviderError> {
     let mut body = serde_json::Map::new();
     if let Some(value) = blog.bodies.get("storage") {
         body.insert("storage".to_string(), json!(value));
     }
-    let (web_url, space_url) = blog_browser_urls(blog, config)?;
+    let (web_url, space_url) = blog_browser_urls(blog, config, fallbacks)?;
     Ok(json!({
         "operation": "blog.view",
         "blogId": blog.id,
@@ -12603,6 +12913,12 @@ fn is_space_key(value: &str) -> bool {
     space_key_re().is_match(value)
 }
 
+/// A space URL alias: one ASCII letter or digit, then letters, digits, `_` or
+/// `-`, bounded like a key and safe as one URL segment.
+fn is_space_alias(value: &str) -> bool {
+    space_alias_re().is_match(value)
+}
+
 fn is_attachment_id(value: &str) -> bool {
     attachment_id_re().is_match(value)
 }
@@ -12638,6 +12954,11 @@ fn space_key_re() -> &'static Regex {
         Regex::new(r"^(?:[A-Z][A-Z0-9_-]{1,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$")
             .expect("space key regex")
     })
+}
+
+fn space_alias_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$").expect("space alias regex"))
 }
 
 fn cql_date_re() -> &'static Regex {

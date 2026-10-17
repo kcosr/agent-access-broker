@@ -37,6 +37,7 @@ fn personal_backend(include_bob_in_search: bool) -> Arc<WriteStubConfluenceBacke
                             id: id.into(),
                             key: key.into(),
                             web_url: None,
+                            alias: None,
                             status: Some("current".into()),
                             homepage_id: Some(homepage.into()),
                         },

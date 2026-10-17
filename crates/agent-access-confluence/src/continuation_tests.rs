@@ -67,6 +67,7 @@ fn blog() -> ConfluenceBlog {
         title: "Weekly".to_string(),
         space: "ENG".to_string(),
         space_id: "98765".to_string(),
+        space_alias: None,
         web_url: None,
         space_web_url: None,
         status: Some("current".to_string()),

@@ -11,6 +11,7 @@ use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod personal_spaces;
+mod space_aliases;
 
 #[test]
 fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
@@ -1691,6 +1692,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
             title: "Blog".to_string(),
             space: "ENG".to_string(),
             space_id: "98765".to_string(),
+            space_alias: None,
             web_url: None,
             space_web_url: None,
             status: Some("current".to_string()),
@@ -3384,7 +3386,13 @@ fn confluence_content_parsers_and_results_expose_metadata_without_search_bodies(
     );
 
     let config = confluence_config();
-    let view = page_view_result(&page, &config.content.page_formats, &config).unwrap();
+    let view = page_view_result(
+        &page,
+        &config.content.page_formats,
+        &config,
+        &mut BrowserUrlFallbacks::default(),
+    )
+    .unwrap();
     assert_eq!(view["createdBy"]["displayName"], "Creator One");
     assert_eq!(view["updatedBy"]["accountId"], "editor-1");
 
@@ -3396,6 +3404,7 @@ fn confluence_content_parsers_and_results_expose_metadata_without_search_bodies(
         },
         None,
         &config,
+        &mut BrowserUrlFallbacks::default(),
     )
     .unwrap();
     assert_eq!(search["pages"][0]["createdAt"], "2026-06-01T10:00:00.000Z");
@@ -3588,178 +3597,254 @@ fn blog_parsers_require_current_blog_shape_and_explicit_attachment_parent() {
 #[test]
 fn confluence_browser_url_normalization_accepts_safe_links_and_fallbacks() {
     let config = confluence_config();
-    let page_url = content_browser_url(
-        Some("/spaces/ENG/pages/123456/Runbook"),
-        ConfluenceBrowserContentKind::Page,
-        "123456",
-        "ENG",
-        &config,
-    )
-    .unwrap();
+    let eng = key_only("ENG");
+    let mut fallbacks = BrowserUrlFallbacks::default();
+    let mut content_url = |raw: &str, kind, id: &str| {
+        content_browser_url(Some(raw), kind, id, &eng, &config, &mut fallbacks).unwrap()
+    };
     assert_eq!(
-        page_url,
+        content_url(
+            "/spaces/ENG/pages/123456/Runbook",
+            ConfluenceBrowserContentKind::Page,
+            "123456"
+        ),
         "https://example.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook"
     );
-
-    let relative_page_url = content_browser_url(
-        Some("spaces/ENG/pages/123456/Runbook"),
-        ConfluenceBrowserContentKind::Page,
-        "123456",
-        "ENG",
-        &config,
-    )
-    .unwrap();
     assert_eq!(
-        relative_page_url,
+        content_url(
+            "spaces/ENG/pages/123456/Runbook",
+            ConfluenceBrowserContentKind::Page,
+            "123456"
+        ),
         "https://example.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook"
     );
-    let relative_wiki_page_url = content_browser_url(
-        Some("wiki/spaces/ENG/pages/123456/Runbook"),
-        ConfluenceBrowserContentKind::Page,
-        "123456",
-        "ENG",
-        &config,
-    )
-    .unwrap();
     assert_eq!(
-        relative_wiki_page_url,
+        content_url(
+            "wiki/spaces/ENG/pages/123456/Runbook",
+            ConfluenceBrowserContentKind::Page,
+            "123456"
+        ),
         "https://example.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook"
     );
-
-    let blog_url = content_browser_url(
-        Some("https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222"),
-        ConfluenceBrowserContentKind::Blog,
-        "222222",
-        "ENG",
-        &config,
-    )
-    .unwrap();
     assert_eq!(
-        blog_url,
+        content_url(
+            "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222",
+            ConfluenceBrowserContentKind::Blog,
+            "222222"
+        ),
         "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222"
     );
-
-    let date_only_blog_url = content_browser_url(
-        Some("/spaces/ENG/blog/2026/06/27/weekly-update"),
-        ConfluenceBrowserContentKind::Blog,
-        "222222",
-        "ENG",
-        &config,
-    )
-    .unwrap();
+    // A date/title-only blog link proves no content ID: the constructed link
+    // replaces it without recording a failure.
     assert_eq!(
-        date_only_blog_url,
+        content_url(
+            "/spaces/ENG/blog/2026/06/27/weekly-update",
+            ConfluenceBrowserContentKind::Blog,
+            "222222"
+        ),
         "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222"
     );
-
-    let numeric_title_blog_url = content_browser_url(
-        Some("/spaces/ENG/blog/2026/06/27/222222/1234"),
-        ConfluenceBrowserContentKind::Blog,
-        "222222",
-        "ENG",
-        &config,
-    )
-    .unwrap();
     assert_eq!(
-        numeric_title_blog_url,
+        content_url(
+            "/spaces/ENG/blog/2026/06/27/222222/1234",
+            ConfluenceBrowserContentKind::Blog,
+            "222222"
+        ),
         "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/06/27/222222/1234"
     );
 
-    let invalid_date_blog_url = content_browser_url(
-        Some("/spaces/ENG/blog/2026/13/27/222222/Weekly"),
-        ConfluenceBrowserContentKind::Blog,
-        "222222",
-        "ENG",
-        &config,
-    )
-    .unwrap_err();
+    let mut space_url = |raw: Option<&str>| {
+        space_browser_url(raw, &key_only("ENG"), &config, &mut fallbacks).unwrap()
+    };
     assert_eq!(
-        invalid_date_blog_url.reason_code(),
-        ReasonCode::UpstreamProtocolFailed
-    );
-
-    let space_url = space_browser_url(Some("/spaces/ENG/overview"), "ENG", &config).unwrap();
-    assert_eq!(
-        space_url,
+        space_url(Some("/spaces/ENG/overview")),
         "https://example.atlassian.net/wiki/spaces/ENG/overview"
     );
-    let unrecognized_space_url =
-        space_browser_url(Some("/spaces/ENG/home"), "ENG", &config).unwrap();
     assert_eq!(
-        unrecognized_space_url,
+        space_url(Some("/spaces/ENG/home")),
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
-    let fallback_space_url = space_browser_url(None, "ENG", &config).unwrap();
     assert_eq!(
-        fallback_space_url,
+        space_url(None),
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
+    assert_eq!(fallbacks.count, 0);
+    assert_eq!(fallbacks.into_audit(json!({})), json!({}));
 }
 
+/// A failed upstream link is replaced by the constructed one, with the rule
+/// it failed and its masked shape recorded for the audit.
 #[test]
-fn confluence_browser_url_normalization_rejects_unsafe_links() {
+fn confluence_browser_url_normalization_replaces_unsafe_links() {
     let config = confluence_config();
-    for raw in [
-        "http://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
-        "https://user@example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
-        "https://example.atlassian.net:443/wiki/pages/viewpage.action?pageId=123456",
-        "https://example.atlassian.net:444/wiki/pages/viewpage.action?pageId=123456",
-        "https://other.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
-        "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456#frag",
-        "https://example.atlassian.net/wiki/rest/api/content/123456",
-        "https://example.atlassian.net/wiki/api/v2/pages/123456",
-        "https://example.atlassian.net/wiki/download/attachments/123456/file.txt",
-        "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456&foo=bar",
-        "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=999999",
-        "https://example.atlassian.net/wiki/spaces/ENG/pages/999999/Other",
-        "https://example.atlassian.net/spaces/ENG/pages/123456/Runbook",
-        "//example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
-        "not a url",
-        "https:whatever",
-        "/spaces/OPS/home",
+    let page_fallback = "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456";
+    for (raw, rule, shape) in [
+        (
+            "http://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
+            "authority_mismatch",
+            "http://{site}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://user@example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
+            "authority_mismatch",
+            "{origin}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://example.atlassian.net:443/wiki/pages/viewpage.action?pageId=123456",
+            "authority_mismatch",
+            "{origin}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://example.atlassian.net:444/wiki/pages/viewpage.action?pageId=123456",
+            "authority_mismatch",
+            "{origin}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://other.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
+            "authority_mismatch",
+            "{origin}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456#frag",
+            "fragment",
+            "https://{site}/wiki/pages/viewpage.action?{query}#{fragment}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/rest/api/content/123456",
+            "forbidden_path",
+            "https://{site}/wiki/rest/api/{s}/{n}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/api/v2/pages/123456",
+            "forbidden_path",
+            "https://{site}/wiki/api/{s}/pages/{n}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/download/attachments/123456/file.txt",
+            "forbidden_path",
+            "https://{site}/wiki/download/attachments/{n}/{s}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456&foo=bar",
+            "query_not_allowed",
+            "https://{site}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=999999",
+            "content_id_mismatch",
+            "https://{site}/wiki/pages/viewpage.action?{query}",
+        ),
+        (
+            "https://example.atlassian.net/wiki/spaces/ENG/pages/999999/Other",
+            "content_id_mismatch",
+            "https://{site}/wiki/spaces/{s}/pages/{n}/{s}",
+        ),
+        (
+            "https://example.atlassian.net/spaces/ENG/pages/123456/Runbook",
+            "unrecognized_shape",
+            "https://{site}/spaces/{s}/pages/{n}/{s}",
+        ),
+        (
+            "//example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
+            "authority_mismatch",
+            "{origin}/wiki/pages/viewpage.action?{query}",
+        ),
+        ("not a url", "unrecognized_shape", "{s}"),
+        ("https:whatever", "authority_mismatch", "{s}"),
+        ("/spaces/OPS/home", "space_mismatch", "/spaces/{s}/{s}"),
     ] {
-        let error = content_browser_url(
+        let mut fallbacks = BrowserUrlFallbacks::default();
+        let url = content_browser_url(
             Some(raw),
             ConfluenceBrowserContentKind::Page,
             "123456",
-            "ENG",
+            &key_only("ENG"),
             &config,
+            &mut fallbacks,
         )
-        .unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        .unwrap();
+        assert_eq!(url, page_fallback, "{raw}");
+        assert_eq!(
+            fallbacks.into_audit(json!({}))["browserUrlFallbacks"],
+            json!({
+                "count": 1,
+                "entries": [{ "field": "webUrl", "rule": rule, "linkShape": shape }],
+            }),
+            "{raw}"
+        );
     }
 
-    let error = content_browser_url(
-        Some("/wiki/spaces/ENG/blog/2026/06/27/1234/Weekly"),
-        ConfluenceBrowserContentKind::Blog,
-        "222222",
-        "ENG",
-        &config,
-    )
-    .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
-
-    let error = content_browser_url(
-        Some("/wiki/spaces/ENG/blog/2026/06/27/1234/222222/Weekly"),
-        ConfluenceBrowserContentKind::Blog,
-        "222222",
-        "ENG",
-        &config,
-    )
-    .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
-
-    for raw in [
-        "https://example.atlassian.net/wiki/spaces/OPS",
-        "/spaces/OPS/home",
-        "https://example.atlassian.net/wiki/spaces/ENG?homepageId=123456",
-        "https://example.atlassian.net/spaces/ENG",
-        "//example.atlassian.net/wiki/spaces/ENG",
-        "not a url",
-        "https:whatever",
+    let blog_fallback = "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222";
+    for (raw, rule) in [
+        (
+            "/wiki/spaces/ENG/blog/2026/06/27/1234/Weekly",
+            "content_id_mismatch",
+        ),
+        (
+            "/wiki/spaces/ENG/blog/2026/06/27/1234/222222/Weekly",
+            "content_id_mismatch",
+        ),
+        (
+            "/spaces/ENG/blog/2026/13/27/222222/Weekly",
+            "invalid_blog_date",
+        ),
     ] {
-        let error = space_browser_url(Some(raw), "ENG", &config).unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        let mut fallbacks = BrowserUrlFallbacks::default();
+        let url = content_browser_url(
+            Some(raw),
+            ConfluenceBrowserContentKind::Blog,
+            "222222",
+            &key_only("ENG"),
+            &config,
+            &mut fallbacks,
+        )
+        .unwrap();
+        assert_eq!(url, blog_fallback, "{raw}");
+        let audit = fallbacks.into_audit(json!({}));
+        assert_eq!(audit["browserUrlFallbacks"]["count"], 1, "{raw}");
+        assert_eq!(
+            audit["browserUrlFallbacks"]["entries"][0]["rule"], rule,
+            "{raw}"
+        );
+    }
+
+    for (raw, rule) in [
+        (
+            "https://example.atlassian.net/wiki/spaces/OPS",
+            "space_mismatch",
+        ),
+        ("/spaces/OPS/home", "space_mismatch"),
+        (
+            "https://example.atlassian.net/wiki/spaces/ENG?homepageId=123456",
+            "query_not_allowed",
+        ),
+        (
+            "https://example.atlassian.net/spaces/ENG",
+            "unrecognized_shape",
+        ),
+        (
+            "//example.atlassian.net/wiki/spaces/ENG",
+            "authority_mismatch",
+        ),
+        ("not a url", "unrecognized_shape"),
+        ("https:whatever", "authority_mismatch"),
+    ] {
+        let mut fallbacks = BrowserUrlFallbacks::default();
+        let url = space_browser_url(Some(raw), &key_only("ENG"), &config, &mut fallbacks).unwrap();
+        assert_eq!(
+            url, "https://example.atlassian.net/wiki/spaces/ENG",
+            "{raw}"
+        );
+        let audit = fallbacks.into_audit(json!({}));
+        assert_eq!(
+            audit["browserUrlFallbacks"]["entries"][0],
+            json!({
+                "field": "spaceUrl",
+                "rule": rule,
+                "linkShape": browser_link_shape(raw, &config),
+            }),
+            "{raw}"
+        );
     }
 }
 
@@ -3780,7 +3865,13 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
         updated_by: None,
         bodies: BTreeMap::from([("storage".to_string(), "<p>body</p>".to_string())]),
     };
-    let view = page_view_result(&page, &config.content.page_formats, &config).unwrap();
+    let view = page_view_result(
+        &page,
+        &config.content.page_formats,
+        &config,
+        &mut BrowserUrlFallbacks::default(),
+    )
+    .unwrap();
     assert_eq!(
         view["webUrl"],
         "https://example.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook"
@@ -3800,6 +3891,7 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
         },
         None,
         &config,
+        &mut BrowserUrlFallbacks::default(),
     )
     .unwrap();
     assert_eq!(
@@ -3812,6 +3904,7 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
         title: "Weekly Update".to_string(),
         space: "ENG".to_string(),
         space_id: "98765".to_string(),
+        space_alias: None,
         web_url: None,
         space_web_url: None,
         status: Some("current".to_string()),
@@ -3822,7 +3915,7 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
         updated_by: None,
         bodies: BTreeMap::from([("storage".to_string(), "<p>body</p>".to_string())]),
     };
-    let blog_view = blog_view_result(&blog, &config).unwrap();
+    let blog_view = blog_view_result(&blog, &config, &mut BrowserUrlFallbacks::default()).unwrap();
     assert_eq!(
         blog_view["webUrl"],
         "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222"
@@ -3854,6 +3947,7 @@ fn confluence_page_and_blog_results_include_non_null_browser_urls() {
         },
         None,
         &config,
+        &mut BrowserUrlFallbacks::default(),
     )
     .unwrap();
     assert_eq!(
@@ -3881,6 +3975,7 @@ fn confluence_draft_results_construct_canonical_content_urls() {
             content_type: content_type.as_str().to_string(),
             space: "ENG".to_string(),
             space_id: "98765".to_string(),
+            space_alias: None,
             parent_page_id: (content_type == ConfluenceDraftContentType::Page)
                 .then(|| "55555".to_string()),
             web_url: Some(raw_web_url.to_string()),
@@ -3893,6 +3988,7 @@ fn confluence_draft_results_construct_canonical_content_urls() {
             updated_by: None,
             bodies: BTreeMap::from([("storage".to_string(), "<p>body</p>".to_string())]),
         };
+        let mut fallbacks = BrowserUrlFallbacks::default();
         let result = draft_content_result(
             "draft.test",
             &draft,
@@ -3900,8 +3996,10 @@ fn confluence_draft_results_construct_canonical_content_urls() {
             Some("handle".to_string()),
             Some("storage"),
             &config,
+            &mut fallbacks,
         )
         .unwrap();
+        assert_eq!(fallbacks.count, 0);
         assert_eq!(
             result["webUrl"],
             "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"
@@ -3915,31 +4013,47 @@ fn confluence_draft_results_construct_canonical_content_urls() {
     }
 }
 
+/// A hostile upstream link is replaced by the constructed one rather than
+/// failing the search, and the other results keep their links.
 #[test]
-fn confluence_result_urls_fail_closed_on_hostile_upstream_links() {
+fn confluence_result_urls_replace_hostile_upstream_links() {
     let config = confluence_config();
+    let mut hostile = test_current_page("123456", "Runbook", "ENG");
+    hostile.web_url =
+        Some("https://evil.example/wiki/pages/viewpage.action?pageId=123456".to_string());
+    let mut sibling = test_current_page("123457", "Sibling", "ENG");
+    sibling.web_url = Some("/spaces/ENG/pages/123457/Sibling".to_string());
     let page = ConfluenceSearchPage {
-        pages: vec![ConfluencePage {
-            id: "123456".to_string(),
-            title: "Runbook".to_string(),
-            space: "ENG".to_string(),
-            web_url: Some(
-                "https://evil.example/wiki/pages/viewpage.action?pageId=123456".to_string(),
-            ),
-            space_web_url: None,
-            status: Some("current".to_string()),
-            version: 7,
-            created_at: None,
-            updated_at: None,
-            created_by: None,
-            updated_by: None,
-            bodies: BTreeMap::new(),
-        }],
+        pages: vec![hostile, sibling],
         max_results: 2,
         next_page_token: None,
     };
-    let error = search_result(&page, None, &config).unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    let mut fallbacks = BrowserUrlFallbacks::default();
+    let result = search_result(&page, None, &config, &mut fallbacks).unwrap();
+    assert_eq!(
+        result["pages"][0]["webUrl"],
+        "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"
+    );
+    assert_eq!(
+        result["pages"][1]["webUrl"],
+        "https://example.atlassian.net/wiki/spaces/ENG/pages/123457/Sibling"
+    );
+    let audit = fallbacks.into_audit(json!({ "operation": "search" }));
+    assert_eq!(
+        audit,
+        json!({
+            "operation": "search",
+            "browserUrlFallbacks": {
+                "count": 1,
+                "entries": [{
+                    "field": "webUrl",
+                    "rule": "authority_mismatch",
+                    "linkShape": "{origin}/wiki/pages/viewpage.action?{query}",
+                }],
+            },
+        })
+    );
+    assert!(!audit.to_string().contains("evil.example"));
 }
 
 #[test]
@@ -3953,7 +4067,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
     )
     .unwrap();
     assert_eq!(parsed.locator.blog_id, "222222");
-    assert_eq!(parsed.locator.candidate_space, None);
+    assert_eq!(parsed.locator.url_space, None);
 
     let modern = parse_blog_view_inputs(
         &json!({
@@ -3963,9 +4077,9 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
     )
     .unwrap();
     assert_eq!(modern.locator.blog_id, "333333");
-    assert_eq!(modern.locator.candidate_space.as_deref(), Some("ENG"));
-    assert!(validate_blog_locator_space(&modern.locator, "ENG").is_ok());
-    let mismatch = validate_blog_locator_space(&modern.locator, "OPS").unwrap_err();
+    assert_eq!(modern.locator.url_space.as_deref(), Some("ENG"));
+    assert!(validate_blog_locator_space(&modern.locator, &key_only("ENG")).is_ok());
+    let mismatch = validate_blog_locator_space(&modern.locator, &key_only("OPS")).unwrap_err();
     assert_eq!(mismatch.reason_code(), ReasonCode::LocatorInvalid);
 
     let numeric_title_slug = parse_blog_view_inputs(
@@ -3976,10 +4090,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
     )
     .unwrap();
     assert_eq!(numeric_title_slug.locator.blog_id, "333333");
-    assert_eq!(
-        numeric_title_slug.locator.candidate_space.as_deref(),
-        Some("ENG")
-    );
+    assert_eq!(numeric_title_slug.locator.url_space.as_deref(), Some("ENG"));
 
     let invalid_date_slug = parse_blog_view_inputs(
         &json!({
@@ -4000,7 +4111,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
     )
     .unwrap();
     assert_eq!(list.locator.blog_id, "222222");
-    assert_eq!(list.locator.candidate_space.as_deref(), Some("ENG"));
+    assert_eq!(list.locator.url_space.as_deref(), Some("ENG"));
     assert_eq!(list.max_results, Some(1));
 
     let error = parse_blog_view_inputs(
@@ -4063,6 +4174,7 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
                 title: "Runbook Blog".to_string(),
                 space: String::new(),
                 space_id: "98765".to_string(),
+                space_alias: None,
                 web_url: None,
                 space_web_url: None,
                 status,
@@ -4077,6 +4189,7 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
                 id: "98765".to_string(),
                 key: "ENG".to_string(),
                 web_url: None,
+                alias: None,
                 status: Some("current".to_string()),
                 homepage_id: Some("55555".to_string()),
             },
@@ -4133,6 +4246,7 @@ async fn blog_attachment_download_scope_lookup_defers_membership_checks() {
             title: "Runbook Blog".to_string(),
             space: String::new(),
             space_id: "98765".to_string(),
+            space_alias: None,
             web_url: None,
             space_web_url: None,
             status: Some("current".to_string()),
@@ -4147,6 +4261,7 @@ async fn blog_attachment_download_scope_lookup_defers_membership_checks() {
             id: "98765".to_string(),
             key: "ENG".to_string(),
             web_url: None,
+            alias: None,
             status: Some("current".to_string()),
             homepage_id: Some("55555".to_string()),
         },
@@ -4806,6 +4921,7 @@ async fn blog_view_rejects_non_current_execution_response() {
             title: "Runbook Blog".to_string(),
             space: String::new(),
             space_id: "98765".to_string(),
+            space_alias: None,
             web_url: None,
             space_web_url: None,
             status: Some("draft".to_string()),
@@ -4820,6 +4936,7 @@ async fn blog_view_rejects_non_current_execution_response() {
             id: "98765".to_string(),
             key: "ENG".to_string(),
             web_url: None,
+            alias: None,
             status: Some("current".to_string()),
             homepage_id: Some("55555".to_string()),
         },
@@ -6234,6 +6351,7 @@ impl PageMoveTestBackend {
                 id: "98765".to_string(),
                 key: "ENG".to_string(),
                 web_url: None,
+                alias: None,
                 status: Some("current".to_string()),
                 homepage_id: Some("55555".to_string()),
             },
@@ -6432,6 +6550,7 @@ impl AttributionStubConfluenceBackend {
             id: "98765".to_string(),
             key: "ENG".to_string(),
             web_url: None,
+            alias: None,
             status: Some("current".to_string()),
             homepage_id: Some("55555".to_string()),
         };
@@ -6440,6 +6559,7 @@ impl AttributionStubConfluenceBackend {
             title: "Current Blog".to_string(),
             space: "ENG".to_string(),
             space_id: space.id.clone(),
+            space_alias: None,
             web_url: None,
             space_web_url: None,
             status: Some("current".to_string()),
@@ -6882,6 +7002,7 @@ impl ConfluenceBackend for BlogViewBackend {
                 id: self.blog.id.clone(),
                 space: String::new(),
                 space_id: self.blog.space_id.clone(),
+                space_alias: None,
             },
             status: 200,
             duration_ms: 2,
@@ -7397,6 +7518,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
                 title: request.title,
                 space: request.space,
                 space_id: request.space_id,
+                space_alias: None,
                 web_url: None,
                 space_web_url: None,
                 status: Some("current".to_string()),
@@ -7430,6 +7552,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
                 title: request.title,
                 space: self.blog.space.clone(),
                 space_id: self.blog.space_id.clone(),
+                space_alias: None,
                 web_url: None,
                 space_web_url: None,
                 status: Some("current".to_string()),
@@ -7806,6 +7929,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
                 content_type: "page".to_string(),
                 space: request.space,
                 space_id: request.space_id,
+                space_alias: None,
                 parent_page_id,
                 web_url: None,
                 space_web_url: None,
@@ -8277,6 +8401,7 @@ fn draft_content(id: &str, content_type: ConfluenceDraftContentType) -> Confluen
         content_type: content_type.as_str().to_string(),
         space: "ENG".to_string(),
         space_id: "98765".to_string(),
+        space_alias: None,
         parent_page_id: (content_type == ConfluenceDraftContentType::Page)
             .then(|| "55555".to_string()),
         web_url: None,
@@ -8398,6 +8523,11 @@ fn attachment_list_backend() -> AttachmentListBackend {
 fn assert_invalid_draft_handle<T: std::fmt::Debug>(result: Result<T, ProviderError>) {
     let error = result.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InvalidDraftHandle);
+}
+
+/// A space's browser link names when it has no URL alias.
+fn key_only(key: &str) -> ConfluenceSpaceUrlNames<'_> {
+    ConfluenceSpaceUrlNames { key, alias: None }
 }
 
 fn confluence_config() -> ConfluenceProviderConfig {
@@ -9162,6 +9292,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
             id: space_id.to_string(),
             key: "ENG".to_string(),
             web_url: None,
+            alias: None,
             status: Some("current".to_string()),
             homepage_id: Some("55555".to_string()),
         })

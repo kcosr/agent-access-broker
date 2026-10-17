@@ -69,6 +69,7 @@ pub trait ConfluenceBackend: Send + Sync {
                 id: response.value.id,
                 space: response.value.space,
                 space_id: response.value.space_id,
+                space_alias: response.value.space_alias,
             },
             status: response.status,
             duration_ms: response.duration_ms,
@@ -512,6 +513,10 @@ pub struct ConfluenceSpace {
     pub id: String,
     pub key: String,
     pub web_url: Option<String>,
+    /// The space's URL alias (v2 `currentActiveAlias`) when an administrator
+    /// changed the space's URL so that it differs from the key. It names
+    /// browser links only, never a resource.
+    pub alias: Option<String>,
     pub status: Option<String>,
     pub homepage_id: Option<String>,
 }
@@ -550,6 +555,9 @@ pub struct ConfluenceBlog {
     pub title: String,
     pub space: String,
     pub space_id: String,
+    /// The URL alias its v2 space object reports for `space`; see
+    /// [`ConfluenceSpace::alias`].
+    pub space_alias: Option<String>,
     pub web_url: Option<String>,
     pub space_web_url: Option<String>,
     pub status: Option<String>,
@@ -582,6 +590,9 @@ pub struct ConfluenceBlogScopeEvidence {
     pub id: String,
     pub space: String,
     pub space_id: String,
+    /// The URL alias of `space`, which only checks a URL locator's space
+    /// segment; see [`ConfluenceSpace::alias`].
+    pub space_alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -631,6 +642,9 @@ pub struct ConfluenceDraftContent {
     pub content_type: String,
     pub space: String,
     pub space_id: String,
+    /// The URL alias its v2 space object reports for `space`; see
+    /// [`ConfluenceSpace::alias`].
+    pub space_alias: Option<String>,
     pub parent_page_id: Option<String>,
     pub web_url: Option<String>,
     pub space_web_url: Option<String>,
@@ -4542,6 +4556,12 @@ pub(crate) fn space_from_value(value: Value) -> Result<ConfluenceSpace, Confluen
         .and_then(Value::as_str)
         .map(ToString::to_string);
     let web_url = confluence_webui_link(&value);
+    // An unusable alias only loses the alias: links naming it are replaced.
+    let alias = value
+        .get("currentActiveAlias")
+        .and_then(Value::as_str)
+        .filter(|alias| is_space_alias(alias) && *alias != key)
+        .map(ToString::to_string);
     let homepage_id = value
         .get("homepageId")
         .and_then(Value::as_str)
@@ -4560,6 +4580,7 @@ pub(crate) fn space_from_value(value: Value) -> Result<ConfluenceSpace, Confluen
         id,
         key,
         web_url,
+        alias,
         status,
         homepage_id,
     })
@@ -4644,6 +4665,7 @@ pub(crate) fn blog_from_value(value: Value) -> Result<ConfluenceBlog, Confluence
         title,
         space: String::new(),
         space_id,
+        space_alias: None,
         web_url,
         space_web_url: None,
         status,
@@ -4736,6 +4758,7 @@ pub(crate) fn draft_content_from_value(
         content_type: content_type.as_str().to_string(),
         space: String::new(),
         space_id,
+        space_alias: None,
         parent_page_id,
         web_url,
         space_web_url: None,
@@ -4777,6 +4800,7 @@ pub(crate) fn blog_scope_evidence_from_value(
         id,
         space: String::new(),
         space_id,
+        space_alias: None,
     })
 }
 
