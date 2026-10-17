@@ -549,9 +549,13 @@ Create, update, delete, and custom-header mutations use readback where GitLab
 exposes observable state. Test and resend cause outbound delivery and are
 non-retry-safe. The Broker never automatically retries an ambiguous mutation.
 `mutation_verification_failed` reports `applied_unverified`,
-`retrySafe = false`, and only bounded hook/event IDs in safe locators. Inspect
+`retrySafe = false`, and only bounded hook/event IDs in safe locators. A
+mutation GitLab accepted whose readback then fails for any reason, including a
+401, 403 or 404, is reported this way with the hook's ID: for a create, the ID
+GitLab returned, so a retry does not add a second hook unnoticed. Inspect
 current state before deciding on a manual retry. An ambiguous custom-header
-mutation exposes only the safe hook ID, never the header key.
+mutation exposes only the safe hook ID, never the header key or value, and no
+receipt carries a token or signing token.
 
 ### Error behavior
 
@@ -561,13 +565,15 @@ mutation exposes only the safe hook ID, never the header key.
   `webhook_destination_denied`/403 without the URL or allowlist;
 - an unconfirmed destination reset returns `input_invalid`/400 plus bounded
   affected key names and performs no PUT;
-- hidden/missing projects, hooks, or events retain `scope_unresolved`; GitLab
-  permission failures remain sanitized `upstream_forbidden`;
+- until GitLab accepts a mutation, hidden/missing projects, hooks, or events
+  retain `scope_unresolved` and GitLab permission failures remain sanitized
+  `upstream_forbidden`, without a receipt;
 - malformed/oversized upstream structures use `upstream_protocol_failed`;
 - a mutation or delivery request proven never sent returns
   `upstream_connection_failed` (or `upstream_timeout` for a connect timeout)
   with `mutationStatus = "not_applied"` and `retrySafe = true`; and
-- ambiguous mutations or deliveries use `mutation_verification_failed`/409,
+- ambiguous mutations or deliveries, including an accepted mutation whose
+  readback fails with any status, use `mutation_verification_failed`/409,
   `applied_unverified`, and `retrySafe = false`.
 
 ## Locators and inputs
@@ -1361,10 +1367,15 @@ may have done:
   its ordinary error without a receipt. So does a failure of the person's
   OAuth connection that stops the request, which applies nothing.
 
-A readback after the mutation that was never sent, timed out, failed, was
-throttled, answered 5xx, returned an unusable response, or that the person's
-OAuth connection could not authorize (refresh throttled, busy or uncertain, or
-a reconnect required) also returns the `applied_unverified` contract.
+Once GitLab has accepted the mutation request, every failure of a later
+readback or verification request also returns the `applied_unverified`
+contract, whatever its cause and with a static token or an OAuth connection
+alike. That includes a readback GitLab rejects with any status, such as 401,
+403 or 404, or throttles, one answered 5xx, never sent, timed out or failed,
+one whose response is unusable or exceeds the configured content bounds, and
+one the person's OAuth connection could not authorize (refresh throttled, busy
+or uncertain, or a reconnect required). Its `safeLocators` name what the
+accepted write established, such as the webhook ID `webhook.create` received.
 
 Other writes (issue, note, merge-request and merge, general discussion,
 discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline and

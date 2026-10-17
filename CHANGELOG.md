@@ -1210,6 +1210,18 @@ All notable changes to this project are documented in this file.
   Previously each open session kept the broker state, including its state
   locks, until the process exited. Closing a session still never cancels an
   admitted operation.
+- GitLab `webhook.create`, `webhook.update`, `webhook.custom_header.set` and
+  `webhook.custom_header.delete` returned a plain error when GitLab accepted
+  the write but rejected its readback with a 4xx status such as 401, 403 or
+  404, or when the readback exceeded the configured content bounds. The error
+  had no `applied_unverified` receipt, no `retrySafe: false` and no webhook
+  ID, so a caller who retried could create a duplicate webhook. Every failure
+  of a readback after an accepted write, with a static token or an OAuth
+  connection, now reports `mutation_verification_failed` with that receipt and
+  the webhook's ID, the one GitLab returned for a create. Failures before the
+  write, and GitLab rejecting the write itself, keep their own reason without
+  a receipt. The other GitLab writes with a readback already reported every
+  readback failure this way.
 
 ### Removed
 
