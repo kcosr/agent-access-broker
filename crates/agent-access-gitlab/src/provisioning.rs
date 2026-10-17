@@ -267,9 +267,11 @@ fn provisioning_unverified(locators: &Value) -> ProviderError {
     )
 }
 fn provisioning_failure(error: GitlabBackendError, mutation: Option<&Value>) -> ProviderError {
-    // A request that was never prepared keeps the mapping of its cause.
+    // A request that was never prepared, such as one the upstream allowlist
+    // refuses, was never sent: it keeps the mapping of its cause, but even a
+    // write carries no receipt.
     if let GitlabBackendError::RequestUnbuilt(error) = error {
-        return provisioning_failure(*error, mutation);
+        return provisioning_failure(*error, None);
     }
     // Every provisioning action performs at most one write, after its reads.
     if let (GitlabBackendError::NotSent { timed_out }, Some(_)) = (&error, mutation) {
@@ -1046,6 +1048,34 @@ mod tests {
             let read = provisioning_failure(GitlabBackendError::NotSent { timed_out }, None);
             assert_eq!(read.reason_code(), reason);
             assert!(read.result.is_none());
+        }
+    }
+
+    /// A write the Broker could not prepare, such as one the upstream
+    /// allowlist refuses, was never sent: it keeps its cause's reason
+    /// without the receipt that cause would earn once sent.
+    #[test]
+    fn provisioning_writes_never_prepared_carry_no_receipt() {
+        let locators = json!({"userId":70,"previousTokenId":10});
+        for (error, reason) in [
+            (
+                GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".into()),
+                ReasonCode::UpstreamProtocolFailed,
+            ),
+            (
+                GitlabBackendError::Transport("request body could not be built".into()),
+                ReasonCode::UpstreamConnectionFailed,
+            ),
+        ] {
+            // Sent, the cause leaves the write unverified.
+            assert_eq!(
+                provisioning_failure(error.clone(), Some(&locators)).reason_code(),
+                ReasonCode::MutationVerificationFailed
+            );
+            let failure = provisioning_failure(error.unbuilt(), Some(&locators));
+            assert_eq!(failure.decision(), Decision::Error);
+            assert_eq!(failure.reason_code(), reason);
+            assert!(failure.result.is_none(), "{failure:?}");
         }
     }
 

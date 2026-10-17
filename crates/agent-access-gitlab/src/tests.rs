@@ -5298,6 +5298,660 @@ fn credential_failures_reject_the_write_but_leave_a_readback_unverified() {
     }
 }
 
+/// Whatever stops the readback of a write GitLab accepted, a rejection of
+/// the readback included, leaves the write unverified. The same rejection
+/// of the write itself applied nothing and keeps its own reason, without a
+/// receipt, as does a write the Broker could not prepare, whatever its
+/// cause would earn once sent.
+#[test]
+fn every_readback_failure_leaves_the_accepted_write_unverified() {
+    let locators = || MutationSafeLocators::new().with_webhook_ids(vec![5]);
+    let rejections = [
+        (
+            GitlabBackendError::Unauthorized,
+            ReasonCode::UpstreamUnauthorized,
+        ),
+        (GitlabBackendError::Forbidden, ReasonCode::UpstreamForbidden),
+        (GitlabBackendError::NotFound, ReasonCode::ScopeUnresolved),
+        (
+            GitlabBackendError::HttpStatus(409),
+            ReasonCode::UpstreamFailed,
+        ),
+        (
+            GitlabBackendError::HttpStatus(422),
+            ReasonCode::UpstreamFailed,
+        ),
+        (
+            GitlabBackendError::Validation {
+                status: 400,
+                message: "url is blocked: upstream-detail".to_string(),
+            },
+            ReasonCode::InputInvalid,
+        ),
+        (
+            GitlabBackendError::RateLimited(None),
+            ReasonCode::UpstreamRateLimited,
+        ),
+        (
+            GitlabBackendError::Credential(ProviderError::deny(
+                ReasonCode::CredentialInvalid,
+                "oauth_reconnect_required",
+            )),
+            ReasonCode::CredentialInvalid,
+        ),
+        (
+            GitlabBackendError::Unauthorized.unbuilt(),
+            ReasonCode::UpstreamUnauthorized,
+        ),
+        // Sent, these would leave the write unverified.
+        (
+            GitlabBackendError::Protocol("GitLab upstream URL is not allowlisted".to_string())
+                .unbuilt(),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            GitlabBackendError::Transport("GitLab upload file could not be opened".to_string())
+                .unbuilt(),
+            ReasonCode::UpstreamConnectionFailed,
+        ),
+    ];
+    for (error, reason) in &rejections {
+        let rejected = mutation_backend_error(
+            error.clone(),
+            MutationVerificationStage::MutationResponse,
+            locators(),
+        );
+        assert_eq!(rejected.reason_code(), *reason, "{error:?}");
+        assert!(
+            rejected
+                .result
+                .as_deref()
+                .is_none_or(|result| result.get("mutationStatus").is_none()),
+            "{error:?}: {rejected:?}"
+        );
+    }
+    let uncertain = [
+        GitlabBackendError::NotSent { timed_out: false },
+        GitlabBackendError::NotSent { timed_out: true },
+        GitlabBackendError::NoResponse { timed_out: false },
+        GitlabBackendError::NoResponse { timed_out: true },
+        GitlabBackendError::Transport("reset".to_string()),
+        GitlabBackendError::Timeout,
+        GitlabBackendError::Protocol("not an object".to_string()),
+        GitlabBackendError::ResponseTooLarge,
+        GitlabBackendError::HttpStatus(500),
+        GitlabBackendError::HttpStatus(503),
+        GitlabBackendError::NotFound.unbuilt(),
+    ];
+    for error in rejections
+        .into_iter()
+        .map(|(error, _)| error)
+        .chain(uncertain)
+    {
+        let unverified = mutation_backend_error(
+            error.clone(),
+            MutationVerificationStage::MutationReadback,
+            locators(),
+        );
+        assert_eq!(unverified.decision(), Decision::Error, "{error:?}");
+        assert_eq!(
+            unverified.reason_code(),
+            ReasonCode::MutationVerificationFailed,
+            "{error:?}"
+        );
+        assert_eq!(
+            unverified.message, "upstream mutation could not be fully verified",
+            "{error:?}"
+        );
+        assert_eq!(
+            unverified.result.as_deref(),
+            Some(&json!({
+                "mutationStatus": "applied_unverified",
+                "retrySafe": false,
+                "verificationStage": "mutation_readback",
+                "safeLocators": { "webhookIds": [5] },
+            })),
+            "{error:?}"
+        );
+    }
+}
+
+const WEBHOOK_SECRET: &str = "gitlab-webhook-secret-sentinel-4e9b02";
+
+/// A webhook write that reads the webhook back, presented with the static
+/// [`test_credential`].
+#[derive(Clone)]
+struct WebhookReadbackWrite {
+    action: &'static str,
+    /// Carries the action's catalog-marked secret, if it has one.
+    inputs: Value,
+    verb: &'static str,
+    route: &'static str,
+    accepted: ResponseTemplate,
+    /// The webhook the write targets, read back after it.
+    hook: &'static str,
+    webhook_id: u64,
+    /// The write first reads the current webhook from `hook`.
+    reads_first: bool,
+}
+
+fn webhook_readback_json(id: u64) -> Value {
+    json!({
+        "id": id, "project_id": 42,
+        "url": "https://hooks.example.com/gitlab/events",
+        "push_events": true, "enable_ssl_verification": true,
+    })
+}
+
+/// `webhook.create`, which learns the webhook ID 31 from GitLab's answer,
+/// `webhook.update`, and the custom-header set and delete of webhook 9.
+fn webhook_readback_writes() -> [WebhookReadbackWrite; 4] {
+    let header = "/api/v4/projects/42/hooks/9/custom_headers/X-Trace";
+    let existing = WebhookReadbackWrite {
+        action: "webhook.update",
+        inputs: json!({
+            "project": "sip/service", "webhookId": 9, "name": "renamed",
+            "token": WEBHOOK_SECRET,
+        }),
+        verb: "PUT",
+        route: "/api/v4/projects/42/hooks/9",
+        accepted: ResponseTemplate::new(200).set_body_json(webhook_readback_json(9)),
+        hook: "/api/v4/projects/42/hooks/9",
+        webhook_id: 9,
+        reads_first: true,
+    };
+    [
+        WebhookReadbackWrite {
+            action: "webhook.create",
+            inputs: json!({
+                "project": "sip/service",
+                "url": "https://hooks.example.com/gitlab/events",
+                "events": ["push"],
+                "token": WEBHOOK_SECRET,
+            }),
+            verb: "POST",
+            route: "/api/v4/projects/42/hooks",
+            accepted: ResponseTemplate::new(201).set_body_json(webhook_readback_json(31)),
+            hook: "/api/v4/projects/42/hooks/31",
+            webhook_id: 31,
+            reads_first: false,
+        },
+        existing.clone(),
+        WebhookReadbackWrite {
+            action: "webhook.custom_header.set",
+            inputs: json!({
+                "project": "sip/service", "webhookId": 9, "key": "X-Trace",
+                "value": WEBHOOK_SECRET,
+            }),
+            route: header,
+            accepted: ResponseTemplate::new(204),
+            ..existing.clone()
+        },
+        WebhookReadbackWrite {
+            action: "webhook.custom_header.delete",
+            inputs: json!({ "project": "sip/service", "webhookId": 9, "key": "X-Trace" }),
+            verb: "DELETE",
+            route: header,
+            accepted: ResponseTemplate::new(204),
+            ..existing
+        },
+    ]
+}
+
+/// GitLab REST at `server`, accepting the test webhook destination, with
+/// `max_body_bytes` as the content bound.
+fn webhook_server_provider(server: &MockServer, max_body_bytes: u64) -> GitlabProvider {
+    allowlisted_server_provider(server, &["/api/v4/**"], max_body_bytes)
+}
+
+/// GitLab REST at `server`, as [`webhook_server_provider`], whose upstream
+/// allowlist admits only the `allowed` path patterns.
+fn allowlisted_server_provider(
+    server: &MockServer,
+    allowed: &[&str],
+    max_body_bytes: u64,
+) -> GitlabProvider {
+    let mut config = config();
+    config.api_base_url = format!("{}/api/v4", server.uri());
+    config.web_base_url = server.uri();
+    config.allowed_upstream_hosts = allowed
+        .iter()
+        .map(|pattern| format!("{}{pattern}", server.uri()))
+        .collect();
+    config.webhooks.allowed_destinations = vec!["https://hooks.example.com/gitlab/**".into()];
+    config.content.max_body_bytes = max_body_bytes;
+    GitlabProvider::new(
+        config,
+        &agent_access_provider::test_support::TestHost::default().context(),
+    )
+    .unwrap()
+}
+
+/// Serves the project, the webhook `write` reads first (once, when it does),
+/// and GitLab's acceptance of the write.
+async fn serve_accepted_webhook_write(server: &MockServer, write: &WebhookReadbackWrite) {
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/sip%2Fservice"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "id": 42, "path_with_namespace": "sip/service" })),
+        )
+        .mount(server)
+        .await;
+    if write.reads_first {
+        Mock::given(method("GET"))
+            .and(path(write.hook))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(webhook_readback_json(write.webhook_id)),
+            )
+            .up_to_n_times(1)
+            .mount(server)
+            .await;
+    }
+    Mock::given(method(write.verb))
+        .and(path(write.route))
+        .respond_with(write.accepted.clone())
+        .mount(server)
+        .await;
+}
+
+/// The method and path of each request `server` received.
+async fn received_requests(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| format!("{} {}", request.method, request.url.path()))
+        .collect()
+}
+
+/// `error` is the `applied_unverified` receipt of `write`, sent exactly once
+/// and read back once, with only the webhook ID as its locator.
+fn assert_unverified_webhook_write(
+    error: &ProviderError,
+    write: &WebhookReadbackWrite,
+    sent: &[String],
+    case: &str,
+) {
+    assert_eq!(error.decision(), Decision::Error, "{case}");
+    assert_eq!(
+        error.reason_code(),
+        ReasonCode::MutationVerificationFailed,
+        "{case}: {error:?}"
+    );
+    let receipt = error.result.as_deref().expect("receipt");
+    assert_eq!(
+        receipt,
+        &json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "mutation_readback",
+            "safeLocators": { "webhookIds": [write.webhook_id] },
+        }),
+        "{case}"
+    );
+    // Neither the secret nor the header key reaches the failure.
+    assert!(!format!("{error:?}").contains(WEBHOOK_SECRET), "{case}");
+    assert!(!receipt.to_string().contains("X-Trace"), "{case}");
+    let write_line = format!("{} {}", write.verb, write.route);
+    assert_eq!(
+        sent.iter().filter(|line| !line.starts_with("GET ")).count(),
+        1,
+        "{case}: {sent:?}"
+    );
+    let after_write = sent
+        .iter()
+        .skip_while(|line| **line != write_line)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_write,
+        [write_line, format!("GET {}", write.hook)],
+        "{case}: {sent:?}"
+    );
+}
+
+/// GitLab accepted a webhook write presented with a static token, then
+/// answered its readback with 401, 403, 404 or a 5xx. The write is reported
+/// applied but unverified, with the webhook it touched (the ID a create
+/// returned) and `retrySafe: false`, and is sent exactly once.
+#[tokio::test]
+async fn static_token_readback_rejections_after_an_accepted_webhook_write_keep_its_receipt() {
+    for status in [401, 403, 404, 500, 503] {
+        for write in webhook_readback_writes() {
+            let case = format!("{} readback {status}", write.action);
+            let server = MockServer::start().await;
+            serve_accepted_webhook_write(&server, &write).await;
+            Mock::given(method("GET"))
+                .and(path(write.hook))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_json(json!({ "message": format!("{status} upstream-detail") })),
+                )
+                .mount(&server)
+                .await;
+
+            let error = webhook_server_provider(&server, 1024 * 1024)
+                .invoke(test_invocation(write.action, write.inputs.clone()))
+                .await
+                .unwrap_err();
+            assert!(!error.message.contains("upstream-detail"), "{case}");
+            assert_unverified_webhook_write(
+                &error,
+                &write,
+                &received_requests(&server).await,
+                &case,
+            );
+        }
+    }
+}
+
+/// A readback that matches the accepted create or update but exceeds the
+/// configured content bounds cannot be returned: the write is reported
+/// applied but unverified rather than failed.
+#[tokio::test]
+async fn out_of_bounds_webhook_readback_leaves_the_accepted_write_unverified() {
+    let oversized = "d".repeat(65);
+    for write in webhook_readback_writes().into_iter().take(2) {
+        for description in ["short", oversized.as_str()] {
+            let case = format!("{} description {}", write.action, description.len());
+            let server = MockServer::start().await;
+            serve_accepted_webhook_write(&server, &write).await;
+            let mut readback = webhook_readback_json(write.webhook_id);
+            readback["description"] = json!(description);
+            if write.action == "webhook.update" {
+                readback["name"] = json!("renamed");
+            }
+            Mock::given(method("GET"))
+                .and(path(write.hook))
+                .respond_with(ResponseTemplate::new(200).set_body_json(readback))
+                .mount(&server)
+                .await;
+
+            let outcome = webhook_server_provider(&server, 64)
+                .invoke(test_invocation(write.action, write.inputs.clone()))
+                .await;
+            if description.len() <= 64 {
+                let result = outcome.unwrap_or_else(|error| panic!("{case}: {error:?}"));
+                assert_eq!(result.result["mutationStatus"], "applied", "{case}");
+                continue;
+            }
+            assert_unverified_webhook_write(
+                &outcome.unwrap_err(),
+                &write,
+                &received_requests(&server).await,
+                &case,
+            );
+        }
+    }
+}
+
+/// With a static token, a failure before a webhook write, or GitLab
+/// rejecting the write itself, applied nothing: each keeps its own reason
+/// and carries no receipt, and nothing is read back.
+#[tokio::test]
+async fn static_token_failures_before_or_rejecting_a_webhook_write_keep_their_reason() {
+    for (status, before_write, write_rejected) in [
+        (
+            401,
+            ReasonCode::UpstreamUnauthorized,
+            ReasonCode::UpstreamUnauthorized,
+        ),
+        (
+            403,
+            ReasonCode::ScopeUnresolved,
+            ReasonCode::UpstreamForbidden,
+        ),
+        (
+            404,
+            ReasonCode::ScopeUnresolved,
+            ReasonCode::ScopeUnresolved,
+        ),
+        (409, ReasonCode::UpstreamFailed, ReasonCode::UpstreamFailed),
+    ] {
+        for write in webhook_readback_writes() {
+            // The current webhook a write reads first fails.
+            if write.reads_first {
+                let case = format!("{} read before the write {status}", write.action);
+                let server = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .and(path("/api/v4/projects/sip%2Fservice"))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(
+                            json!({ "id": 42, "path_with_namespace": "sip/service" }),
+                        ),
+                    )
+                    .mount(&server)
+                    .await;
+                Mock::given(method("GET"))
+                    .and(path(write.hook))
+                    .respond_with(ResponseTemplate::new(status))
+                    .mount(&server)
+                    .await;
+                let error = webhook_server_provider(&server, 1024 * 1024)
+                    .invoke(test_invocation(write.action, write.inputs.clone()))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.reason_code(), before_write, "{case}: {error:?}");
+                assert!(error.result.is_none(), "{case}: {error:?}");
+                let sent = received_requests(&server).await;
+                assert!(
+                    sent.iter().all(|line| line.starts_with("GET ")),
+                    "{case}: {sent:?}"
+                );
+            }
+
+            // GitLab rejects the write itself.
+            let case = format!("{} write rejected {status}", write.action);
+            let server = MockServer::start().await;
+            serve_accepted_webhook_write(
+                &server,
+                &WebhookReadbackWrite {
+                    accepted: ResponseTemplate::new(status),
+                    ..write.clone()
+                },
+            )
+            .await;
+            let error = webhook_server_provider(&server, 1024 * 1024)
+                .invoke(test_invocation(write.action, write.inputs.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), write_rejected, "{case}: {error:?}");
+            assert!(error.result.is_none(), "{case}: {error:?}");
+            assert!(!format!("{error:?}").contains(WEBHOOK_SECRET), "{case}");
+            let sent = received_requests(&server).await;
+            let write_line = format!("{} {}", write.verb, write.route);
+            assert_eq!(sent.last(), Some(&write_line), "{case}: {sent:?}");
+            assert_eq!(
+                sent.iter().filter(|line| !line.starts_with("GET ")).count(),
+                1,
+                "{case}: {sent:?}"
+            );
+        }
+    }
+}
+
+/// The upstream allowlist admits the project lookup but not the webhook
+/// create: the Broker never sends the POST, so the create keeps its own
+/// reason without a receipt. Admitting the create but not its readback
+/// leaves the accepted create unverified, with the ID GitLab returned.
+#[tokio::test]
+async fn webhook_writes_the_allowlist_refuses_are_never_reported_applied() {
+    let create = webhook_readback_writes()[0].clone();
+    let project = "/api/v4/projects/sip%2Fservice";
+
+    let server = MockServer::start().await;
+    serve_accepted_webhook_write(&server, &create).await;
+    let error = allowlisted_server_provider(&server, &[project], 1024 * 1024)
+        .invoke(test_invocation(create.action, create.inputs.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(
+        error.reason_code(),
+        ReasonCode::UpstreamProtocolFailed,
+        "{error:?}"
+    );
+    assert!(error.result.is_none(), "{error:?}");
+    assert!(!format!("{error:?}").contains(WEBHOOK_SECRET));
+    assert_eq!(
+        received_requests(&server).await,
+        [format!("GET {project}"), format!("GET {project}")]
+    );
+
+    let server = MockServer::start().await;
+    serve_accepted_webhook_write(&server, &create).await;
+    let error = allowlisted_server_provider(&server, &[project, create.route], 1024 * 1024)
+        .invoke(test_invocation(create.action, create.inputs.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.reason_code(),
+        ReasonCode::MutationVerificationFailed,
+        "{error:?}"
+    );
+    assert_eq!(
+        error.result.as_deref(),
+        Some(&json!({
+            "mutationStatus": "applied_unverified",
+            "retrySafe": false,
+            "verificationStage": "mutation_readback",
+            "safeLocators": { "webhookIds": [31] },
+        }))
+    );
+    assert!(!format!("{error:?}").contains(WEBHOOK_SECRET));
+    assert_eq!(
+        received_requests(&server).await,
+        [
+            format!("GET {project}"),
+            format!("GET {project}"),
+            format!("POST {}", create.route),
+        ]
+    );
+}
+
+/// Approval, draft publication and suggestion application probe their
+/// target after a failed write. A write the upstream allowlist refuses was
+/// never sent: it keeps its own reason without a receipt and without the
+/// probe, even when repeating the probe's read would fail.
+#[tokio::test]
+async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+    let project = "/api/v4/projects/sip%2Fservice";
+    let merge_request = "/api/v4/projects/42/merge_requests/5";
+    let approvals = "/api/v4/projects/42/merge_requests/5/approvals";
+    let drafts = "/api/v4/projects/42/merge_requests/5/draft_notes";
+    let discussion = "/api/v4/projects/42/merge_requests/5/discussions/discussion-1";
+    let cases = [
+        (
+            "merge_request.unapprove",
+            json!({ "project": "sip/service", "iid": 5 }),
+            approvals,
+            json!({ "approved_by": [{ "user": { "id": 77, "username": "alice" } }] }),
+        ),
+        (
+            "merge_request.draft_note.publish_all",
+            json!({ "project": "sip/service", "iid": 5 }),
+            drafts,
+            json!([{ "id": 3, "author_id": 77, "merge_request_id": 500 }]),
+        ),
+        (
+            "merge_request.suggestion.apply",
+            json!({
+                "project": "sip/service", "iid": 5, "expectedHeadSha": SHA,
+                "discussionId": "discussion-1", "noteId": 900, "suggestionId": 456,
+            }),
+            discussion,
+            json!({
+                "id": "discussion-1",
+                "notes": [{
+                    "id": 900,
+                    "position": {
+                        "position_type": "text", "base_sha": SHA, "start_sha": SHA,
+                        "head_sha": SHA, "old_path": "src/lib.rs", "new_path": "src/lib.rs",
+                        "new_line": 3,
+                    },
+                    "suggestions": [{
+                        "id": 456, "from_line": 3, "to_line": 3, "applicable": true,
+                        "applied": false, "from_content": "old", "to_content": "new",
+                    }],
+                }],
+            }),
+        ),
+    ];
+    for (action, inputs, probe, body) in cases {
+        let server = MockServer::start().await;
+        for (route, body) in [
+            (
+                project,
+                json!({ "id": 42, "path_with_namespace": "sip/service" }),
+            ),
+            (
+                merge_request,
+                json!({
+                    "id": 500, "iid": 5, "project_id": 42, "source_project_id": 42,
+                    "target_project_id": 42, "sha": SHA,
+                }),
+            ),
+            ("/api/v4/user", json!({ "id": 77, "username": "alice" })),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        // The read before the write succeeds; repeating it would fail.
+        Mock::given(method("GET"))
+            .and(path(probe))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(probe))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let mut request = InvocationBuilder::from(test_invocation(action, inputs));
+        if action == "merge_request.suggestion.apply" {
+            request = request.state(ProviderState::new(GitlabSuggestionScopePreflight {
+                target_project_id: 42,
+                source_project_id: 42,
+            }));
+        }
+
+        let error = allowlisted_server_provider(
+            &server,
+            &[project, merge_request, "/api/v4/user", probe],
+            1024 * 1024,
+        )
+        .invoke(request.build())
+        .await
+        .unwrap_err();
+        assert_eq!(error.decision(), Decision::Error, "{action}");
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::UpstreamProtocolFailed,
+            "{action}: {error:?}"
+        );
+        assert!(error.result.is_none(), "{action}: {error:?}");
+        let sent = received_requests(&server).await;
+        assert!(
+            sent.iter().all(|line| line.starts_with("GET ")),
+            "{action}: {sent:?}"
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|line| **line == format!("GET {probe}"))
+                .count(),
+            1,
+            "{action}: {sent:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
     let date = UpstreamRetryAfter::after_seconds(300)

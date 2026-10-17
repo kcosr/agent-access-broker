@@ -3060,6 +3060,11 @@ impl GitlabProvider {
             // rather than reading as unverified when the probe below fails
             // the same way.
             Err(GitlabBackendError::Credential(error)) => return Err(error),
+            // A write the Broker could not prepare was never sent: it keeps
+            // its cause's reason whatever the probe below would find.
+            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
+                return Err(gitlab_backend_error(error));
+            }
             Err(error) => {
                 let remaining = self
                     .all_current_drafts(project.id, inputs.iid, credential)
@@ -3537,6 +3542,11 @@ impl GitlabProvider {
             // rather than reading as unverified when the probe below fails
             // the same way.
             Err(GitlabBackendError::Credential(error)) => return Err(error),
+            // A write the Broker could not prepare was never sent: it keeps
+            // its cause's reason whatever the probe below would find.
+            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
+                return Err(gitlab_backend_error(error));
+            }
             Err(error) => {
                 let unchanged = self
                     .backend
@@ -3726,6 +3736,11 @@ impl GitlabProvider {
             // rather than reading as unverified when the probe below fails
             // the same way.
             Err(GitlabBackendError::Credential(error)) => return Err(error),
+            // A write the Broker could not prepare was never sent: it keeps
+            // its cause's reason whatever the probe below would find.
+            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
+                return Err(gitlab_backend_error(error));
+            }
             Err(error) => {
                 let unchanged = self
                     .ensure_suggestions_state(&project, &merge_request, &inputs, credential, false)
@@ -5934,13 +5949,16 @@ impl GitlabProvider {
                     safe.clone(),
                 )
             })?;
-        ensure_webhook_in_project(&project, &readback.value, webhook_id).map_err(|_| {
-            mutation_verification_failed(MutationVerificationStage::MutationReadback, safe.clone())
-        })?;
-        ensure_webhook_matches_write(&readback.value, &write).map_err(|_| {
-            mutation_verification_failed(MutationVerificationStage::MutationReadback, safe.clone())
-        })?;
-        ensure_webhook_bounded(&readback.value, self.config.content.max_body_bytes)?;
+        // The readback must also be presentable: one the Broker cannot
+        // return leaves the accepted create unverified, never failed.
+        ensure_webhook_in_project(&project, &readback.value, webhook_id)
+            .and_then(|_| ensure_webhook_matches_write(&readback.value, &write))
+            .and_then(|_| {
+                ensure_webhook_bounded(&readback.value, self.config.content.max_body_bytes)
+            })
+            .map_err(|_| {
+                mutation_verification_failed(MutationVerificationStage::MutationReadback, safe)
+            })?;
         let mut result = gitlab_result(
             "webhook.create",
             &project,
@@ -6072,12 +6090,16 @@ impl GitlabProvider {
                     safe.clone(),
                 )
             })?;
+        // The readback must also be presentable: one the Broker cannot
+        // return leaves the accepted update unverified, never failed.
         ensure_webhook_in_project(&project, &readback.value, webhook_id)
             .and_then(|_| ensure_webhook_matches_write(&readback.value, &write))
+            .and_then(|_| {
+                ensure_webhook_bounded(&readback.value, self.config.content.max_body_bytes)
+            })
             .map_err(|_| {
                 mutation_verification_failed(MutationVerificationStage::MutationReadback, safe)
             })?;
-        ensure_webhook_bounded(&readback.value, self.config.content.max_body_bytes)?;
         let mut result = gitlab_result(
             "webhook.update",
             &project,
@@ -12649,23 +12671,28 @@ fn mutation_backend_error(
     locators: MutationSafeLocators,
 ) -> ProviderError {
     match error {
-        // A request that was never prepared keeps the mapping of its cause.
-        GitlabBackendError::RequestUnbuilt(error) => {
-            mutation_backend_error(*error, stage, locators)
-        }
-        // Only the write itself can be proven unsent; an unsent readback
-        // leaves an applied write unverified.
-        GitlabBackendError::NotSent { timed_out }
-            if stage == MutationVerificationStage::MutationResponse =>
-        {
-            mutation_not_sent(timed_out)
-        }
         GitlabBackendError::DraftPositionShapeInvalid => mutation_verification_failed(
             stage, locators,
         )
         .with_internal_diagnostic_code(InternalDiagnosticCode::DraftPositionShapeInvalid.as_str()),
-        GitlabBackendError::NotSent { .. }
-        | GitlabBackendError::NoResponse { .. }
+        // Every later request, such as the readback, follows a write GitLab
+        // accepted. Whatever stops it leaves that write unverified: a 401,
+        // 403 or 404 rejects only the readback, an unsent or unprepared
+        // readback proves nothing about the write, and neither throttling
+        // nor delegated access that cannot be presented (an OAuth refresh
+        // throttled, busy or uncertain, or a reconnect required) may invite a
+        // retry that would repeat the write.
+        _ if stage != MutationVerificationStage::MutationResponse => {
+            mutation_verification_failed(stage, locators)
+        }
+        // A write the Broker could not prepare, such as one the upstream
+        // allowlist refuses, was never sent: it keeps the reason of its cause
+        // without a receipt, never the receipt that cause would earn after
+        // sending.
+        GitlabBackendError::RequestUnbuilt(_) => gitlab_backend_error(error),
+        // Only the write itself can be proven unsent.
+        GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
+        GitlabBackendError::NoResponse { .. }
         | GitlabBackendError::Transport(_)
         | GitlabBackendError::Timeout
         | GitlabBackendError::Protocol(_)
@@ -12673,19 +12700,9 @@ fn mutation_backend_error(
         | GitlabBackendError::HttpStatus(500..=599) => {
             mutation_verification_failed(stage, locators)
         }
-        // Throttling rejects the mutation request itself, but a throttled
-        // readback leaves an applied mutation unverified. It must not read as
-        // upstream_rate_limited: waiting and retrying would repeat the write.
-        // Likewise, delegated access that cannot be presented (an OAuth
-        // refresh throttled, busy or uncertain, or a reconnect required) or
-        // that GitLab rejected: stopping the write itself, it applied nothing
-        // and keeps its own reason; stopping the readback, it leaves the
-        // applied write unverified.
-        GitlabBackendError::RateLimited(_) | GitlabBackendError::Credential(_)
-            if stage != MutationVerificationStage::MutationResponse =>
-        {
-            mutation_verification_failed(stage, locators)
-        }
+        // A rejection of the write itself, throttling, and delegated access
+        // that could not be presented applied nothing: each keeps its own
+        // reason, without a receipt.
         error => gitlab_backend_error(error),
     }
 }
