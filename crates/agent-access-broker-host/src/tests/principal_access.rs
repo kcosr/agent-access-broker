@@ -609,7 +609,7 @@ async fn administrator_can_delete_credentials_after_disabling_the_owner() {
                     owner_principal_id: "alice".into(),
                     service: "jira".into(),
                     name: name.into(),
-                    profile: "jira-cloud-api-token".into(),
+                    profile: "atlassian-api-token".into(),
                     credential_kind: "basic_api_token".into(),
                     secret: json!({"username":"alice@example.com","token":"synthetic"}),
                     metadata: json!({}),

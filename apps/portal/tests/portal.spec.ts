@@ -1659,7 +1659,7 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(page).toHaveURL(new RegExp(`/ui/admin/principals/${principalId}/credentials$`));
     // The jira connection, shown under its configured display name.
     const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Jira", exact: true }) });
-    await expect(row).toContainText("jira-cloud-api-token");
+    await expect(row).toContainText("atlassian-api-token");
     await row.getByRole("link").click();
     const details = page.getByRole("complementary", { name: / credential$/ });
     await details.getByLabel(/username/i).fill("alice@example.test");
@@ -2999,7 +2999,7 @@ public_url = "http://127.0.0.1:${port}/mcp"
 
 [credentials.connections.jira]
 display_name = "Jira"
-token_profile = "jira-cloud-api-token"
+token_profile = "atlassian-api-token"
 
 [credentials.per_user.jira]
 type = "connection"

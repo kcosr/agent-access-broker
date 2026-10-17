@@ -1014,10 +1014,10 @@ fn accepts_egress_proxy_config_at_global_and_service_scopes() {
 
 #[test]
 fn credential_input_schema_describes_required_basic_and_bearer_fields() {
-    let basic = credential_input_schema("jira", "Jira", "jira-cloud-api-token", "basic_api_token")
+    let basic = credential_input_schema("jira", "Jira", "atlassian-api-token", "basic_api_token")
         .expect("basic schema");
     assert_eq!(basic.connection, "jira");
-    assert_eq!(basic.profile, "jira-cloud-api-token");
+    assert_eq!(basic.profile, "atlassian-api-token");
     assert_eq!(basic.credential_kind, "basic_api_token");
     assert_eq!(basic.fields.len(), 2);
     assert_eq!(basic.fields[0].name, "username");
@@ -2094,7 +2094,10 @@ fn atlassian_bearer_profiles_require_the_exact_gateway_host() {
     jira.cloud_id = Some("11111111-2222-4333-8444-555555555555".to_string());
     jira.allowed_upstream_hosts =
         vec!["https://api.atlassian.com.example.net/ex/jira/**".to_string()];
-    assert_eq!(profile_kind(&config, "jira", "jira-bearer-token"), None);
+    assert_eq!(
+        profile_kind(&config, "jira", "atlassian-bearer-token"),
+        None
+    );
 
     config
         .providers
@@ -2104,7 +2107,7 @@ fn atlassian_bearer_profiles_require_the_exact_gateway_host() {
         "https://api.atlassian.com/ex/jira/11111111-2222-4333-8444-555555555555/**".to_string(),
     ];
     assert_eq!(
-        profile_kind(&config, "jira", "jira-bearer-token"),
+        profile_kind(&config, "jira", "atlassian-bearer-token"),
         Some("bearer_token")
     );
 }
@@ -2352,7 +2355,7 @@ fn rejects_the_removed_per_user_credential_types_and_fields() {
     // `credential_name` and `profile` are no longer credential fields.
     for field in [
         "credential_name = \"default\"",
-        "profile = \"jira-cloud-api-token\"",
+        "profile = \"atlassian-api-token\"",
     ] {
         let raw = format!(
             "{MINIMAL_BROKER_CONFIG}\n[credentials.per_user.jira]\ntype = \"connection\"\nconnection = \"jira\"\n{field}\n"
@@ -3022,42 +3025,140 @@ fn rejects_a_shared_token_connection_across_different_upstreams_offline() {
     );
 }
 
+/// One `atlassian` connection with the classic API token profile serves
+/// Jira and Confluence on one site: both consumers name it, a person stores
+/// one token for both, and backend validation sees a basic credential for
+/// each, which routes to the site.
 #[test]
-fn accepts_separate_jira_and_confluence_connections_on_product_profiles() {
-    let mut config = sample_broker();
-    enable_test_managed_store(&mut config);
-    use_connection(
-        &mut config,
-        "jira",
-        token_connection("jira-cloud-api-token"),
-        &["jira"],
-    );
-    use_connection(
-        &mut config,
-        "confluence",
-        token_connection("confluence-cloud-api-token"),
-        &["confluence"],
-    );
-    config.policy.grants[0].credential_mode = "per_user".to_string();
-
-    validate_broker_config(&config).unwrap();
-}
-
-#[test]
-fn rejects_a_shared_connection_profile_a_consumer_does_not_declare() {
+fn accepts_one_atlassian_connection_for_jira_and_confluence_on_the_site_route() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
     use_connection(
         &mut config,
         "atlassian",
-        token_connection("jira-cloud-api-token"),
+        ConnectionConfig {
+            display_name: Some("Atlassian".to_string()),
+            ..token_connection("atlassian-api-token")
+        },
+        &["jira", "confluence"],
+    );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+
+    validate_broker_config(&config).unwrap();
+    assert_eq!(
+        config
+            .credentials
+            .connection_consumers("atlassian")
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["confluence", "jira"])
+    );
+    let descriptors = configured_service_descriptors(&config);
+    for service in ["jira", "confluence"] {
+        let connection = config.credentials.personal_connection(service).unwrap();
+        assert_eq!(connection.id, "atlassian", "{service}");
+        for kind in [
+            crate::PrincipalKind::User,
+            crate::PrincipalKind::ServiceAccount,
+        ] {
+            assert_eq!(
+                connection.select(Some(kind)),
+                crate::Selection::Token("atlassian-api-token"),
+                "{service}"
+            );
+        }
+        assert_eq!(
+            resolved_credential_kind(
+                &config.credentials,
+                &config.credentials.per_user[service],
+                &descriptors[service],
+            ),
+            Some("basic_api_token"),
+            "{service}"
+        );
+    }
+}
+
+/// Deployments that keep a connection per product use the same vendor
+/// profile under each.
+#[test]
+fn accepts_separate_jira_and_confluence_connections_on_the_vendor_profile() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    for service in ["jira", "confluence"] {
+        use_connection(
+            &mut config,
+            service,
+            token_connection("atlassian-api-token"),
+            &[service],
+        );
+    }
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+
+    validate_broker_config(&config).unwrap();
+}
+
+/// The product-level Atlassian profiles are no longer token profiles: a
+/// connection naming one fails validation and names the vendor-level
+/// profiles each consumer accepts instead.
+#[test]
+fn rejects_retired_atlassian_product_profiles() {
+    for retired in ["jira-cloud-api-token", "confluence-cloud-api-token"] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        use_connection(
+            &mut config,
+            "atlassian",
+            token_connection(retired),
+            &["jira", "confluence"],
+        );
+        let errors = validation_errors(validate_broker_config(&config));
+        for service in ["jira", "confluence"] {
+            assert_contains(
+                &errors,
+                &format!(
+                    "credentials.connections.atlassian.token_profile {retired} is unsupported for service {service}, which accepts atlassian-api-token"
+                ),
+            );
+        }
+    }
+
+    // On the gateway, the bearer profiles are retired alike.
+    for (service, retired) in [
+        ("jira", "jira-bearer-token"),
+        ("confluence", "confluence-bearer-token"),
+    ] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        route_both_atlassian_products_through_the_gateway(&mut config);
+        use_connection(&mut config, service, token_connection(retired), &[service]);
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            &format!(
+                "credentials.connections.{service}.token_profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-bearer-token"
+            ),
+        );
+    }
+}
+
+/// A connection must still be declared by every consumer: the bearer
+/// profile exists only where the site uses the gateway.
+#[test]
+fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    use_connection(
+        &mut config,
+        "atlassian",
+        token_connection("atlassian-bearer-token"),
         &["jira", "confluence"],
     );
 
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.connections.atlassian.token_profile jira-cloud-api-token is unsupported for service confluence",
+        "credentials.connections.atlassian.token_profile atlassian-bearer-token is unsupported for service confluence, which accepts atlassian-api-token",
     );
     assert!(
         !errors
@@ -3065,6 +3166,38 @@ fn rejects_a_shared_connection_profile_a_consumer_does_not_declare() {
             .any(|error| error.contains("unsupported for service jira")),
         "{errors:?}"
     );
+}
+
+/// Service accounts' scoped tokens use per-product bearer connections
+/// through the gateway, beside bearer service credentials.
+#[test]
+fn accepts_per_product_bearer_connections_through_the_gateway() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    route_both_atlassian_products_through_the_gateway(&mut config);
+    for service in ["jira", "confluence"] {
+        use_connection(
+            &mut config,
+            service,
+            token_connection("atlassian-bearer-token"),
+            &[service],
+        );
+    }
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+
+    validate_broker_config(&config).unwrap();
+    let descriptors = configured_service_descriptors(&config);
+    for service in ["jira", "confluence"] {
+        assert_eq!(
+            resolved_credential_kind(
+                &config.credentials,
+                &config.credentials.per_user[service],
+                &descriptors[service],
+            ),
+            Some("bearer_token"),
+            "{service}"
+        );
+    }
 }
 
 #[test]
@@ -3144,7 +3277,7 @@ fn connection_ids_share_the_service_namespace_with_their_consumers_only() {
     use_connection(
         &mut config,
         "confluence",
-        token_connection("jira-cloud-api-token"),
+        token_connection("atlassian-api-token"),
         &["jira"],
     );
     use_connection(
@@ -3232,7 +3365,7 @@ fn connections_require_the_managed_store_and_credential_encryption() {
     use_connection(
         &mut config,
         "jira",
-        token_connection("jira-cloud-api-token"),
+        token_connection("atlassian-api-token"),
         &["jira"],
     );
 
@@ -3254,7 +3387,7 @@ fn backend_validation_resolves_connection_token_profiles() {
     config
         .credentials
         .connections
-        .insert("jira".to_string(), token_connection("jira-cloud-api-token"));
+        .insert("jira".to_string(), token_connection("atlassian-api-token"));
     config.credentials.connections.insert(
         "both".to_string(),
         ConnectionConfig {
@@ -3262,7 +3395,7 @@ fn backend_validation_resolves_connection_token_profiles() {
                 registration: "atlassian".to_string(),
                 profile: "default".to_string(),
             }),
-            ..token_connection("jira-cloud-api-token")
+            ..token_connection("atlassian-api-token")
         },
     );
     config.credentials.connections.insert(
@@ -3310,7 +3443,7 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
                 registration: "atlassian".to_string(),
                 profile: "default".to_string(),
             }),
-            ..token_connection("jira-bearer-token")
+            ..token_connection("atlassian-bearer-token")
         },
         &["jira"],
     );
@@ -3338,7 +3471,7 @@ fn accepts_atlassian_gateway_with_bearer_connection_per_user_credentials() {
     use_connection(
         &mut config,
         "jira",
-        token_connection("jira-bearer-token"),
+        token_connection("atlassian-bearer-token"),
         &["jira"],
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -3354,7 +3487,7 @@ fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
     use_connection(
         &mut config,
         "jira",
-        token_connection("jira-cloud-api-token"),
+        token_connection("atlassian-api-token"),
         &["jira"],
     );
 
@@ -3384,7 +3517,7 @@ fn accepts_confluence_gateway_with_bearer_connection_per_user_credentials() {
     use_connection(
         &mut config,
         "confluence",
-        token_connection("confluence-bearer-token"),
+        token_connection("atlassian-bearer-token"),
         &["confluence"],
     );
 
@@ -5443,6 +5576,24 @@ fn use_atlassian_gateway_for_jira(config: &mut BrokerConfig) {
                 .to_string(),
         );
     let credential = config.credentials.service.get_mut("jira").unwrap();
+    credential.kind = "bearer_token".to_string();
+    credential.username_ref = None;
+}
+
+/// Routes the sample Jira and Confluence services through the Atlassian
+/// gateway with static bearer service credentials.
+fn route_both_atlassian_products_through_the_gateway(config: &mut BrokerConfig) {
+    use_atlassian_gateway_for_jira(config);
+    config
+        .providers
+        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+        .unwrap()
+        .allowed_upstream_hosts
+        .push(
+            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
+                .to_string(),
+        );
+    let credential = config.credentials.service.get_mut("confluence").unwrap();
     credential.kind = "bearer_token".to_string();
     credential.username_ref = None;
 }

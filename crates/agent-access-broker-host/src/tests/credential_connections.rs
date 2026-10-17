@@ -12,7 +12,7 @@ use agent_access_provider::{
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use std::sync::Mutex;
 
-const JIRA_PROFILE: &str = "jira-cloud-api-token";
+const JIRA_PROFILE: &str = "atlassian-api-token";
 
 /// A Jira double whose credential probe always answers, recording each
 /// credential it verified.

@@ -2,7 +2,7 @@
 //! selects the method, and token rows are read as `(connection, default)`.
 use super::*;
 
-const PROFILE: &str = "jira-cloud-api-token";
+const PROFILE: &str = "atlassian-api-token";
 
 /// Jira on the lookup-trace provider with a per-user connection `connection`
 /// and a per-user grant for `agents`.

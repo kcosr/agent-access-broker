@@ -6,9 +6,7 @@ with Jira access to the `DEMO` project. Ask your administrator for the broker UR
 your sign-in method, and the services and execution contexts you should use.
 
 The screenshots use synthetic accounts and credentials in the local managed
-demo. The credential verification success and failure screenshots illustrate
-browser-only simulated responses; they do not demonstrate a connection to a real
-upstream service. The demo's Jira configuration uses an example host and fake
+demo. The demo's Atlassian configuration uses an example host and fake
 credentials. Run the CLI invocation below only against a configured deployment
 with a real issue you are allowed to read.
 
@@ -79,26 +77,19 @@ the upstream credential; give your agent only its Broker invocation token.
 
 1. Open **My access > Credentials** and select the credential connection. Each
    row is one connection and lists the services you are granted that use it; a
-   shared connection, such as GitLab for GitLab REST and Git, needs one token.
+   shared connection, such as Atlassian for Jira and Confluence or GitLab for
+   GitLab REST and Git, needs one token.
 2. Check its profile and the services in **Used by**. Use the fields requested
-   by the connection; for example, a Jira Cloud API-token profile asks for the
-   upstream username and token.
+   by the connection; for example, the `atlassian-api-token` profile asks for
+   your Atlassian account email and API token.
 3. Enter your upstream values and choose **Save credential** for an empty connection.
    If a credential already exists, the drawer shows **Replace secret** and the
    button is **Replace credential**. Supply the required replacement fields.
 4. After saving, check the status and verify it as described below.
 
-![Personal credential connections and statuses](../images/portal/guide-annotated/user-credentials-light.png)
-
-*Credential connections come from the broker's configuration and your permitted
-personal credential access. This capture predates shared connections and shows
-one row per service.*
-
-![Jira credential replacement fields with the secret masked](../images/portal/guide-annotated/user-credential-input-light.png)
-
-*This example already has a stored credential, so it shows Replace credential.
-First-time entry uses Save credential. Stored plaintext is not loaded into this
-replacement form.*
+Credential connections come from the broker's configuration and your permitted
+personal credential access. Stored plaintext is never loaded into the
+replacement form.
 
 Expected result: the broker saves its encrypted copy and the form clears the
 entered fields. Saving does not create service access or prove that the upstream
@@ -125,21 +116,6 @@ if **Connect** or **Reconnect** is unavailable.
    choose that section's **Verify**.
 3. Read **Status**, **Last checked**, **Last verified**, and any **Last error**.
    The last successful verification time and the latest attempt time are separate.
-
-![Credential drawer with a successful verification status](../images/portal/guide-annotated/user-credential-test-success-light.png)
-
-*Browser-only simulated success, used to illustrate the status presentation.
-It is not evidence of a live Jira connection.*
-
-![Credential drawer with a failed verification status and error](../images/portal/guide-annotated/user-credential-test-failure-light.png)
-
-*Browser-only simulated failure, used to illustrate the sanitized error and
-verification timestamps.*
-
-![Git gateway verification requiring a repository](../images/portal/guide-annotated/user-credential-test-repository-light.png)
-
-*Verifying through a Git gateway requires a repository the credential should
-reach. This capture predates shared connections.*
 
 Expected result: the status reflects the latest supported verification outcome.
 An upstream verification establishes the tested credential's access at that time;

@@ -294,7 +294,9 @@ binary and needs `python3`, whose absence fails it.
   `present.rs`).
 - `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
   (gateway credential rules, request authorization, tenant/gateway client
-  routes and their route fingerprint).
+  routes and their route fingerprint, and the vendor-level token profiles
+  `atlassian-api-token` and `atlassian-bearer-token` that Jira and Confluence
+  both declare, so one credential connection can serve both).
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
 - `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
 - `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and

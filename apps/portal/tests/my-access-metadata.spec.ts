@@ -83,7 +83,7 @@ principal_id = "admin"
 initial_password = "${ADMIN_PASSWORD}"
 [credentials.connections.jira]
 display_name = "Jira"
-token_profile = "jira-cloud-api-token"
+token_profile = "atlassian-api-token"
 [credentials.per_user.jira]
 type = "connection"
 connection = "jira"

@@ -70,6 +70,10 @@ drafts and reviewer state under Alice's upstream identity. A production
 operator may deliberately use a service credential for a bot reviewer, but all
 principals sharing that bot then share its draft set.
 
+Alice's Jira and Confluence grants share the `atlassian` credential connection:
+one stored account email and classic API token serves both products on the
+demo site.
+
 The demo config intentionally raises the service invocation limit
 (`[limits.invocations]`) and concurrency limits so browser walkthroughs and
 Playwright capture passes do not trip production-oriented defaults. Stop it with:
@@ -153,9 +157,9 @@ The guide includes populated drafts for creating users, groups, and service
 accounts; selecting a new group member; editing resources and grants; entering
 a masked service credential; supplying a repository for Git HTTP verification;
 and reviewing a restricted agent token before issuance. Forms remain
-unsubmitted. Jira verification success and failure images use browser-only
-simulated responses, explicitly identified in the manifest. They demonstrate
-the portal states without contacting an upstream or changing stored credentials.
+unsubmitted. Atlassian credential verification success and failure images use
+browser-only simulated responses, explicitly identified in the manifest. They
+demonstrate the portal states without contacting an upstream or changing stored credentials.
 It also includes local login, a required password-change draft, actual auditor
 views, new grant/resource drafts, account access, and disable/revoke confirmations.
 See the [illustrated portal guide](../docs/portal-guide/index.md) for the resulting

@@ -60,6 +60,7 @@ use tracing_subscriber::layer::Context as TracingLayerContext;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 
+mod atlassian_connections;
 mod audit_query;
 mod body_admission;
 mod broker;
@@ -6176,7 +6177,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "git-bearer-token",
         &["gitlab_git"],
     );
-    use_token_connection(&mut config, "jira", "jira-cloud-api-token", &["jira"]);
+    use_token_connection(&mut config, "jira", "atlassian-api-token", &["jira"]);
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["group:users".to_string()],
         execution_contexts: None,
@@ -12717,7 +12718,7 @@ async fn managed_jira_verify_marks_upstream_verified_after_provider_probe() {
                 owner_principal_id: "alice".to_string(),
                 service: "jira".to_string(),
                 name: "default".to_string(),
-                profile: "jira-cloud-api-token".to_string(),
+                profile: "atlassian-api-token".to_string(),
                 credential_kind: "basic_api_token".to_string(),
                 secret: json!({"username": "alice@example.com", "token": "jira-token"}),
                 metadata: json!({}),
@@ -12813,7 +12814,7 @@ async fn managed_jira_verify_does_not_mark_credential_after_upstream_failure() {
                 owner_principal_id: "alice".to_string(),
                 service: "jira".to_string(),
                 name: "default".to_string(),
-                profile: "jira-cloud-api-token".to_string(),
+                profile: "atlassian-api-token".to_string(),
                 credential_kind: "basic_api_token".to_string(),
                 secret: json!({"username": "alice@example.com", "token": "jira-token"}),
                 metadata: json!({}),
@@ -12891,7 +12892,7 @@ async fn managed_verify_does_not_mark_credential_after_local_failure() {
                 owner_principal_id: "alice".to_string(),
                 service: "jira".to_string(),
                 name: "default".to_string(),
-                profile: "jira-cloud-api-token".to_string(),
+                profile: "atlassian-api-token".to_string(),
                 credential_kind: "basic_api_token".to_string(),
                 secret: json!({"username": "alice@example.com", "token": "jira-token"}),
                 metadata: json!({}),
@@ -12968,7 +12969,7 @@ async fn admin_verify_rejects_disabled_managed_credential_owner() {
                 owner_principal_id: "alice".to_string(),
                 service: "jira".to_string(),
                 name: "default".to_string(),
-                profile: "jira-cloud-api-token".to_string(),
+                profile: "atlassian-api-token".to_string(),
                 credential_kind: "basic_api_token".to_string(),
                 secret: json!({"username": "alice@example.com", "token": "jira-token"}),
                 metadata: json!({}),
@@ -14943,7 +14944,7 @@ fn managed_jira_verify_config(
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
-    use_token_connection(&mut config, "jira", "jira-cloud-api-token", &["jira"]);
+    use_token_connection(&mut config, "jira", "atlassian-api-token", &["jira"]);
     // Verification probes as the owner, through a consumer it holds a
     // per_user grant on.
     config.policy.grants.push(PolicyGrantConfig {
@@ -14958,9 +14959,9 @@ fn managed_jira_verify_config(
     config
 }
 
-/// A Jira verification double's descriptor: the Jira cloud token profile
-/// and one per_user action, which the credential owner's verification grant
-/// names.
+/// A Jira verification double's descriptor: the classic Atlassian API token
+/// profile and one per_user action, which the credential owner's
+/// verification grant names.
 fn jira_verification_descriptor(name: &str) -> ServiceDescriptor {
     ServiceDescriptor::new("jira", name)
         .with_resource_scopes(fixture_scope_capabilities("project"))
@@ -14974,7 +14975,7 @@ fn jira_verification_descriptor(name: &str) -> ServiceDescriptor {
             .credential_modes(["per_user"]),
         ])
         .with_credentials(
-            CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
+            CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token"),
         )
 }
 

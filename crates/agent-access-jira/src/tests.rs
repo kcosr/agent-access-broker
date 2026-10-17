@@ -7219,6 +7219,58 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
     assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
 }
 
+/// Jira declares the vendor-level Atlassian profiles Confluence declares:
+/// the classic API token on every site, reaching the site route, and the
+/// service-account bearer token only when the site uses the gateway,
+/// reaching it.
+#[test]
+fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
+    let mut config = jira_config();
+    let site = jira_descriptor(&config);
+    assert_eq!(
+        site.credentials,
+        agent_access_provider::CredentialDescriptor::default()
+            .profile("atlassian-api-token", "basic_api_token")
+    );
+    let cloud_id = "11111111-1111-1111-1111-111111111111";
+    config.cloud_id = Some(cloud_id.to_string());
+    config.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/**"
+    ));
+    let descriptor = jira_descriptor(&config);
+    let backend = HttpJiraBackend::for_tests(config, ProviderLimits::default());
+    for (profile, credential, base) in [
+        (
+            "atlassian-api-token",
+            test_credential(),
+            "https://example.atlassian.net/rest/api/3/".to_string(),
+        ),
+        (
+            "atlassian-bearer-token",
+            bearer_credential("token"),
+            format!("https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/"),
+        ),
+    ] {
+        assert_eq!(
+            descriptor.credential_profile_kind(profile),
+            Some(credential.kind().as_str()),
+            "{profile}"
+        );
+        assert_eq!(
+            backend.api_base(&credential).unwrap().as_str(),
+            base,
+            "{profile}"
+        );
+    }
+    for retired in ["jira-cloud-api-token", "jira-bearer-token"] {
+        assert_eq!(
+            descriptor.credential_profile_kind(retired),
+            None,
+            "{retired}"
+        );
+    }
+}
+
 #[test]
 fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
     let cloud_id = "11111111-1111-1111-1111-111111111111";

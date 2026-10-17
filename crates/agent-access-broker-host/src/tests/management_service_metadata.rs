@@ -76,7 +76,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
     config.gateways.insert("gitlab_git".to_string(), gateway);
     for (service, profile) in [
         ("gitlab_git", "git-bearer-token"),
-        ("jira", "jira-cloud-api-token"),
+        ("jira", "atlassian-api-token"),
     ] {
         super::use_token_connection(&mut config, service, profile, &[service]);
     }
@@ -271,7 +271,7 @@ fn assert_credential_target_metadata(targets: &Value) {
         jira["consumers"][0]["credentialVerificationInputs"],
         json!([])
     );
-    assert_eq!(jira["profile"], "jira-cloud-api-token");
+    assert_eq!(jira["profile"], "atlassian-api-token");
 }
 
 #[tokio::test]

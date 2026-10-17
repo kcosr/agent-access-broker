@@ -74,29 +74,37 @@ lookup uses the user's credential. Provider guides document those requirements.
 
 Per-user credentials come from **credential connections**. A connection is one
 credential slot per principal that one or more services consume. For example,
-a Jira integration can let each principal store a Jira API token with:
+Jira and Confluence on one Atlassian site can let each principal store one
+Atlassian account email and API token for both with:
 
 ```toml
-[credentials.connections.jira]
-display_name = "Jira"
-token_profile = "jira-cloud-api-token"
+[credentials.connections.atlassian]
+display_name = "Atlassian"
+token_profile = "atlassian-api-token"
 
 [credentials.per_user.jira]
 type = "connection"
-connection = "jira"
+connection = "atlassian"
+
+[credentials.per_user.confluence]
+type = "connection"
+connection = "atlassian"
 ```
 
 This is an addition to the production baseline, not a complete broker config.
-Configure the Jira provider URL and other required provider settings as described
-in [Jira setup](providers-jira.md) before reloading.
+Configure the Jira and Confluence provider URLs and other required provider
+settings as described in [Jira setup](providers-jira.md) and
+[Confluence setup](providers-confluence.md) before reloading.
 
-Services that reach the same upstream account can share one connection. GitLab
-REST and a GitLab Git gateway can both name a `gitlab` connection, so each
-principal stores one GitLab token for both; see the
+Services that reach the same upstream account can share one connection, as Jira
+and Confluence do above. GitLab REST and a GitLab Git gateway can both name a
+`gitlab` connection, so each principal stores one GitLab token for both; see the
 [Git gateway](git-http-gateway.md#credentials-limits-and-audit). Grants stay
 per service, so a principal with only GitLab REST grants still cannot fetch
-through the gateway. Jira and Confluence declare different token profiles and
-keep separate connections.
+through the gateway, and one with only Jira grants cannot read Confluence. A
+deployment that routes Atlassian through its API gateway gives service accounts
+scoped bearer tokens instead, usually with one connection per product; see the
+[token profiles](configuration.md#connection-token-profiles).
 
 You decide each connection's method; principals never choose, and the Broker
 never falls back from one method to the other:

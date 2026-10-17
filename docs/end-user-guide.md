@@ -138,19 +138,17 @@ with the variable's name, not its expanded secret value. You can instead use
 
 `credentials targets` lists the connections you can store a token for, with
 their fields. Each command names the connection, which may be shared: the
-`gitlab` connection's one token serves GitLab REST and Git when your
-administrator shares it.
+`atlassian` connection's one account email and API token serves Jira and
+Confluence, and the `gitlab` connection's one token serves GitLab REST and Git,
+when your administrator shares them. Use the connection IDs `credentials
+targets` shows.
 
 ```bash
 agent-access --config ~/.config/agent-access/setup.toml credentials targets
 
-agent-access --config ~/.config/agent-access/setup.toml credentials put jira \
-  --username-env JIRA_USERNAME --field-env token=JIRA_API_TOKEN \
-  --display-name "My Jira account" --verify
-
-agent-access --config ~/.config/agent-access/setup.toml credentials put confluence \
-  --username-env CONFLUENCE_USERNAME --field-env token=CONFLUENCE_API_TOKEN \
-  --display-name "My Confluence account" --verify
+agent-access --config ~/.config/agent-access/setup.toml credentials put atlassian \
+  --username-env ATLASSIAN_USERNAME --field-env token=ATLASSIAN_API_TOKEN \
+  --display-name "My Atlassian account" --verify
 
 agent-access --config ~/.config/agent-access/setup.toml credentials put cloudbees_ci \
   --username-env CLOUDBEES_CI_USERNAME --field-env token=CLOUDBEES_CI_API_TOKEN \
@@ -174,8 +172,10 @@ list` shows. `--token-file`/`--token-env` select the **Broker** token;
 not interchangeable.
 
 ```bash
-agent-access --config ~/.config/agent-access/setup.toml credentials inspect jira
-agent-access --config ~/.config/agent-access/setup.toml credentials verify jira
+agent-access --config ~/.config/agent-access/setup.toml credentials inspect atlassian
+agent-access --config ~/.config/agent-access/setup.toml credentials verify atlassian
+agent-access --config ~/.config/agent-access/setup.toml credentials verify atlassian \
+  --service confluence
 agent-access --config ~/.config/agent-access/setup.toml credentials verify gitlab \
   --service gitlab_git --repository group/project
 ```
@@ -354,7 +354,7 @@ revoke the old token. Ask your administrator to revoke the setup token after onb
 finite setup token or browser session for later management.
 
 ```bash
-agent-access --config ~/.config/agent-access/setup.toml credentials delete jira
+agent-access --config ~/.config/agent-access/setup.toml credentials delete atlassian
 agent-access --config ~/.config/agent-access/setup.toml credentials delete-retained "<credential-id>"
 ```
 

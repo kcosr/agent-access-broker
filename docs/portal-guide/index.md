@@ -93,8 +93,8 @@ permissions still apply. See [account roles](../roles.md) and the
 2. The administrator selects the exact Jira `DEMO` project resource and creates
    a group grant for `issue.view` and `search` in `default`, using `per_user`
    credentials in [resources and grants](admin-grants.md).
-3. Alice reviews her effective access, supplies her Jira credential, and issues
-   a narrower token allowing only `issue.view` on `DEMO` in
+3. Alice reviews her effective access, supplies her Atlassian credential, and
+   issues a narrower token allowing only `issue.view` on `DEMO` in
    [user self-service](user.md).
 4. An auditor checks the request's outcome and correlated records in
    [auditor investigation](auditor.md).
@@ -119,10 +119,8 @@ output. The annotations are documentation overlays, rather than portal controls.
 Creation, replacement, password-change, and confirmation forms are captured as
 unsubmitted drafts. The auditor screenshots use a real `auditor` account with
 personal self-service disabled. Audit records are generated presentation
-fixtures. Jira verification success and failure are simulated at the browser
-response boundary and explicitly identified in their captions; they do not
-contact a live upstream. The demo's Jira credentials and host cannot be used to
-perform the real CLI example.
+fixtures. The demo's Atlassian credential and host cannot be used to perform
+the real CLI example.
 
 Screenshots show the interface, while the steps describe what to submit in your
 own configured deployment. Existing demo grants can be broader than the new

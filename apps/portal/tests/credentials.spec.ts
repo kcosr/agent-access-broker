@@ -91,9 +91,9 @@ async function fixture(page: Page, role: "user" | "admin" = "user", start = "/ui
 
 // A service account that lost every grant on the jira connection still owns its active token.
 const bot = { principalId: "bot", kind: "service_account", role: "user", selfServiceEnabled: false, displayName: "Build bot", groups: [], status: "active", ...stamp, signInMethods: { localPassword: "absent", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] };
-const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "jira-cloud-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
+const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
 const botCredentials = {
-  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, profile: "jira-cloud-api-token", credentialKind: "basic_api_token", registration: null, credential: botToken }],
+  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, profile: "atlassian-api-token", credentialKind: "basic_api_token", registration: null, credential: botToken }],
   retained: []
 };
 
@@ -156,7 +156,7 @@ test("an administrator sees a principal's active token after it lost every grant
   const jira = row(page, "Jira");
   await expect(jira).toContainText("Not verified");
   await expect(jira).toContainText("No current grants");
-  await expect(jira).toContainText("jira-cloud-api-token");
+  await expect(jira).toContainText("atlassian-api-token");
   await jira.getByRole("link", { name: "Jira", exact: true }).click();
   const drawer = page.getByRole("complementary", { name: "Jira credential", exact: true });
   await expect(drawer.getByText("No service this account is granted uses this connection now.")).toBeVisible();

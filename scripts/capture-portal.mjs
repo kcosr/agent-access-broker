@@ -286,7 +286,7 @@ async function credentialGuide(page) {
   let outcome = null;
   let record;
   const listPath = '/v1/credentials';
-  const verifyPath = '/v1/credentials/connections/jira/verify';
+  const verifyPath = '/v1/credentials/connections/atlassian/verify';
   const checkedAt = new Date().toISOString();
   const simulated = () => ({ ...record,
     verificationStatus: outcome === 'success' ? 'upstream_verified' : 'verification_failed',
@@ -301,9 +301,9 @@ async function credentialGuide(page) {
     if (request.method() === 'GET' && pathname === listPath) {
       const response = await route.fetch();
       const body = await response.json();
-      record = body.result?.connections?.find(value => value.connection === 'jira')?.credential;
-      if (!record) throw new Error('Credential test capture requires the seeded Jira credential');
-      if (outcome) body.result.connections = body.result.connections.map(value => value.connection === 'jira' ? { ...value, credential: simulated() } : value);
+      record = body.result?.connections?.find(value => value.connection === 'atlassian')?.credential;
+      if (!record) throw new Error('Credential test capture requires the seeded Atlassian credential');
+      if (outcome) body.result.connections = body.result.connections.map(value => value.connection === 'atlassian' ? { ...value, credential: simulated() } : value);
       await route.fulfill({ response, json: body });
     } else if (request.method() === 'POST' && pathname === verifyPath && outcome) {
       await route.fulfill({ status: outcome === 'success' ? 200 : 424,
@@ -315,15 +315,15 @@ async function credentialGuide(page) {
   await page.route('**/v1/credentials**', fixture);
   try {
     await visit(page, '/ui/credentials', listPath);
-    const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'Jira', exact: true }) });
+    const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'Atlassian', exact: true }) });
     await row.getByRole('link').click();
-    const drawer = page.getByRole('complementary', { name: 'Jira credential', exact: true });
+    const drawer = page.getByRole('complementary', { name: 'Atlassian credential', exact: true });
     await drawer.getByLabel(/username/i).fill('alice@example.test');
     await drawer.getByLabel(/token/i).first().fill('demo-documentation-token');
     await expect(drawer.getByRole('button', { name: 'Replace credential', exact: true })).toBeEnabled();
-    await capture(page, 'guide', 'user-credential-input-light', 'light', 'Jira credential entry with a synthetic username and masked token; replacement draft is not saved');
+    await capture(page, 'guide', 'user-credential-input-light', 'light', 'Atlassian credential entry, shared by Jira and Confluence, with a synthetic username and masked token; replacement draft is not saved');
     // Discard input before testing the saved synthetic credential.
-    await page.goto(`${origin}/ui/credentials?credential=jira`);
+    await page.goto(`${origin}/ui/credentials?credential=atlassian`);
     await drawer.waitFor();
     outcome = 'success';
     await drawer.getByRole('button', { name: 'Verify', exact: true }).click();

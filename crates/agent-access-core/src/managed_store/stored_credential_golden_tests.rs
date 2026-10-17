@@ -197,3 +197,195 @@ fn stored_credential_aad_is_derived_from_frozen_row_fields() {
          material_version=8db173cf-4bc2-431c-b943-321446e0e821;key_id=k1"
     );
 }
+
+// Vendor-level Atlassian rows. `upsert_user_credential` wrote these for
+// `alice` with key `k1` at c0f5858: an `atlassian-api-token` row under the
+// shared `atlassian` connection, which Jira and Confluence both consume, and
+// an `atlassian-bearer-token` row under a per-product `confluence`
+// connection. They are frozen like the rows above. The product-profile row
+// above (`jira`/`jira-cloud-api-token`) stays beside them: no connection
+// selects a product profile any longer, but its row must still decrypt for
+// cleanup and rewrap.
+const GOLDEN_ATLASSIAN_STORED_CREDENTIALS: [GoldenStoredCredential; 2] = [
+    GoldenStoredCredential {
+        credential_id: "3d881cd0-02cb-497e-b1c2-08ba76a4b4c3",
+        service: "atlassian",
+        profile: "atlassian-api-token",
+        credential_kind: "basic_api_token",
+        metadata_json: r#"{"displayName":"Golden atlassian"}"#,
+        secret_ref: "sqlite:8679ed83-4294-4985-87fe-ced8638c90a8",
+        material_version: "efc08149-29b8-4cd5-8262-d2acf02ce6a1",
+        nonce_hex: "0f20334e090f7468cf05580a",
+        ciphertext_hex: "c2db121b237a4ee8f9ab9b7d52a23af8b2fb34b7ed2d7b5720b069f6ef801ac2ca9d0ed42b060b4270f7c37d1a89a02b1a1503af06cae036d722b47cf8ec944426f668f3c07dd9d33b20d5db07a95b3384f1d64fdd69007ef0f7917debe9d6431a335d165bd7",
+        username: Some("golden-atlassian-user@example.test"),
+        token: "golden-atlassian-api-token",
+    },
+    GoldenStoredCredential {
+        credential_id: "a221934a-f519-4cbb-9b3b-002334d847f7",
+        service: "confluence",
+        profile: "atlassian-bearer-token",
+        credential_kind: "bearer_token",
+        metadata_json: r#"{"displayName":"Golden confluence"}"#,
+        secret_ref: "sqlite:19ff2e62-716d-4588-b943-98ffa9e3b073",
+        material_version: "780f37a8-8e4c-4b71-8e64-f108c0532258",
+        nonce_hex: "aedbd7907ab06494d3cd62ee",
+        ciphertext_hex: "8dac1051d9042c21a7eedd20d26d29e776feebc9cbd23923646f05683b4bf08cd5b4a99345f144e1778019ddb60ab55a36c3e0c056f54c57eb",
+        username: None,
+        token: "golden-atlassian-bearer-token",
+    },
+];
+
+/// The baseline store with the vendor-level Atlassian rows added beside the
+/// rows above, inserted with the same columns.
+fn store_with_golden_atlassian_stored_credentials() -> (TempDir, ManagedStore) {
+    let (temp, store) = store_with_golden_stored_credentials();
+    {
+        let conn = store.connection.lock().unwrap();
+        for golden in &GOLDEN_ATLASSIAN_STORED_CREDENTIALS {
+            conn.execute(
+                "INSERT INTO credentials
+                 (credential_id, owner_principal_id, owner_kind, service, name, profile,
+                  credential_kind, metadata_json, secret_backend, secret_ref, material_version,
+                  status, created_at, updated_at, created_by, updated_by, verification_status)
+                 VALUES (?1, 'alice', 'user', ?2, 'default', ?3, ?4, ?5, 'sqlite_encrypted', ?6, ?7,
+                         'active', '2026-10-16T00:00:00Z', '2026-10-16T00:00:00Z', 'admin', 'admin',
+                         'not_verified')",
+                params![
+                    golden.credential_id,
+                    golden.service,
+                    golden.profile,
+                    golden.credential_kind,
+                    golden.metadata_json,
+                    golden.secret_ref,
+                    golden.material_version,
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO credential_secret_material
+                 (secret_ref, credential_id, backend, secret_ciphertext, secret_nonce, key_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, 'sqlite_encrypted', ?3, ?4, 'k1', '2026-10-16T00:00:00Z',
+                         '2026-10-16T00:00:00Z')",
+                params![
+                    golden.secret_ref,
+                    golden.credential_id,
+                    golden_hex(golden.ciphertext_hex),
+                    golden_hex(golden.nonce_hex),
+                ],
+            )
+            .unwrap();
+        }
+    }
+    (temp, store)
+}
+
+fn expected_golden_credential(golden: &GoldenStoredCredential) -> ExecutionCredential {
+    match golden.username {
+        Some(username) => basic_credential(username, golden.token),
+        None => bearer_credential(golden.token),
+    }
+}
+
+#[test]
+fn vendor_atlassian_rows_resolve_beside_the_product_profile_row() {
+    let (_temp, store) = store_with_golden_atlassian_stored_credentials();
+    let ring = key_ring("k1");
+    store.check_ready(Some(&ring)).unwrap();
+    for golden in &GOLDEN_ATLASSIAN_STORED_CREDENTIALS {
+        let credential = store
+            .resolve_user_credential(&ring, "alice", golden.service, "default", golden.profile)
+            .unwrap();
+        assert_eq!(
+            credential.kind().as_str(),
+            golden.credential_kind,
+            "{}",
+            golden.service
+        );
+        assert_eq!(
+            credential,
+            expected_golden_credential(golden),
+            "{}",
+            golden.service
+        );
+    }
+    // The product-profile row still decrypts under its own profile, and is
+    // never read under a vendor-level profile its row does not carry.
+    let product = &GOLDEN_STORED_CREDENTIALS[0];
+    assert_eq!(
+        store
+            .resolve_user_credential(&ring, "alice", "jira", "default", product.profile)
+            .unwrap(),
+        expected_golden_credential(product)
+    );
+    for profile in ["atlassian-api-token", "atlassian-bearer-token"] {
+        let error = store
+            .resolve_user_credential(&ring, "alice", "jira", "default", profile)
+            .unwrap_err();
+        assert!(
+            matches!(error, ManagedStoreError::CredentialInvalid(_)),
+            "{profile}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn vendor_atlassian_aad_is_derived_from_frozen_row_fields() {
+    let (_temp, store) = store_with_golden_atlassian_stored_credentials();
+    let conn = store.connection.lock().unwrap();
+    let row = encrypted_credential_by_tuple(&conn, "alice", "atlassian", "default").unwrap();
+    assert_eq!(
+        credential_aad(&row).bytes(),
+        "schema_version=002_credential_secret_material;\
+         credential_id=3d881cd0-02cb-497e-b1c2-08ba76a4b4c3;owner_kind=user;\
+         owner_principal=alice;service=atlassian;name=default;\
+         credential_profile=atlassian-api-token;credential_kind=basic_api_token;\
+         secret_backend=sqlite_encrypted;secret_ref=sqlite:8679ed83-4294-4985-87fe-ced8638c90a8;\
+         material_version=efc08149-29b8-4cd5-8262-d2acf02ce6a1;key_id=k1"
+    );
+    let row = encrypted_credential_by_tuple(&conn, "alice", "confluence", "default").unwrap();
+    assert_eq!(
+        credential_aad(&row).bytes(),
+        "schema_version=002_credential_secret_material;\
+         credential_id=a221934a-f519-4cbb-9b3b-002334d847f7;owner_kind=user;\
+         owner_principal=alice;service=confluence;name=default;\
+         credential_profile=atlassian-bearer-token;credential_kind=bearer_token;\
+         secret_backend=sqlite_encrypted;secret_ref=sqlite:19ff2e62-716d-4588-b943-98ffa9e3b073;\
+         material_version=780f37a8-8e4c-4b71-8e64-f108c0532258;key_id=k1"
+    );
+}
+
+/// Rewrap re-encrypts every stored row, including product-profile rows no
+/// connection selects, and each still resolves under its own profile.
+#[test]
+fn rewrap_covers_product_and_vendor_atlassian_rows() {
+    let (_temp, store) = store_with_golden_atlassian_stored_credentials();
+    let ring = key_ring_with_keys("k2", &[("k1", 7), ("k2", 8)]);
+    let summary = store
+        .rewrap_credentials(&ring, "k1", "k2", "admin")
+        .unwrap();
+    let rows = GOLDEN_STORED_CREDENTIALS
+        .iter()
+        .chain(&GOLDEN_ATLASSIAN_STORED_CREDENTIALS)
+        .collect::<Vec<_>>();
+    assert_eq!(summary.rewrapped, rows.len() as u64);
+    assert_eq!(summary.conflicts, 0);
+    assert_eq!(store.active_credential_key_ids().unwrap(), vec!["k2"]);
+    let rewrapped = key_ring_with_keys("k2", &[("k2", 8)]);
+    for golden in rows {
+        assert_eq!(
+            store
+                .resolve_user_credential(
+                    &rewrapped,
+                    "alice",
+                    golden.service,
+                    "default",
+                    golden.profile
+                )
+                .unwrap(),
+            expected_golden_credential(golden),
+            "{}",
+            golden.service
+        );
+    }
+}

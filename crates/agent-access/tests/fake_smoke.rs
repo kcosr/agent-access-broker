@@ -382,7 +382,7 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=atlassian-api-token"
         );
         write_json_response(&mut stream, 200, jira_credential_schema_response());
 
@@ -390,7 +390,7 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
         assert_eq!(request.method, "PUT");
         assert_eq!(request.path, "/v1/credentials/connections/jira");
         let put_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(put_body["profile"], "jira-cloud-api-token");
+        assert_eq!(put_body["profile"], "atlassian-api-token");
         assert_eq!(put_body["secret"]["username"], "alice@example.com");
         assert_eq!(put_body["secret"]["token"], "jira-token");
         write_json_response(
@@ -443,7 +443,7 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
             "put",
             "jira",
             "--profile",
-            "jira-cloud-api-token",
+            "atlassian-api-token",
             "--username",
             "alice@example.com",
             "--field-file",
@@ -515,7 +515,7 @@ fn cli_credentials_put_verify_reuses_resolved_config_for_all_requests() {
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=atlassian-api-token"
         );
         assert_identity_headers(&request, &mut request_ids);
         write_json_response(&mut stream, 200, jira_credential_schema_response());
@@ -579,7 +579,7 @@ fn cli_credentials_put_verify_reuses_resolved_config_for_all_requests() {
             "put",
             "jira",
             "--profile",
-            "jira-cloud-api-token",
+            "atlassian-api-token",
             "--username",
             "alice@example.com",
             "--field-file",
@@ -644,7 +644,7 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
+            "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=atlassian-api-token"
         );
         assert_identity_headers(&request, &mut request_ids);
         write_json_response(&mut stream, 200, jira_credential_schema_response());
@@ -714,7 +714,7 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
             "bob",
             "jira",
             "--profile",
-            "jira-cloud-api-token",
+            "atlassian-api-token",
             "--username",
             "alice@example.com",
             "--field-file",
@@ -744,13 +744,13 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "put".to_string(),
             "jira".to_string(),
             "--profile".to_string(),
-            "jira-cloud-api-token".to_string(),
+            "atlassian-api-token".to_string(),
             "--username".to_string(),
             "alice@example.com".to_string(),
             "--token-file".to_string(),
             self_token_path.display().to_string(),
         ],
-        "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
+        "/v1/credentials/connections/jira/input-schema?profile=atlassian-api-token",
         None,
     );
 
@@ -760,13 +760,13 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "put".to_string(),
             "jira".to_string(),
             "--profile".to_string(),
-            "jira-cloud-api-token".to_string(),
+            "atlassian-api-token".to_string(),
             "--username".to_string(),
             "alice@example.com".to_string(),
             "--token-env".to_string(),
             "AAB_TEST_SELF_IDENTITY_TOKEN".to_string(),
         ],
-        "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
+        "/v1/credentials/connections/jira/input-schema?profile=atlassian-api-token",
         Some((
             "AAB_TEST_SELF_IDENTITY_TOKEN".to_string(),
             "identity-token".to_string(),
@@ -783,13 +783,13 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "bob".to_string(),
             "jira".to_string(),
             "--profile".to_string(),
-            "jira-cloud-api-token".to_string(),
+            "atlassian-api-token".to_string(),
             "--username".to_string(),
             "alice@example.com".to_string(),
             "--token-file".to_string(),
             admin_token_path.display().to_string(),
         ],
-        "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
+        "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=atlassian-api-token",
         None,
     );
 
@@ -801,13 +801,13 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "bob".to_string(),
             "jira".to_string(),
             "--profile".to_string(),
-            "jira-cloud-api-token".to_string(),
+            "atlassian-api-token".to_string(),
             "--username".to_string(),
             "alice@example.com".to_string(),
             "--token-env".to_string(),
             "AAB_TEST_ADMIN_IDENTITY_TOKEN".to_string(),
         ],
-        "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
+        "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=atlassian-api-token",
         Some((
             "AAB_TEST_ADMIN_IDENTITY_TOKEN".to_string(),
             "identity-token".to_string(),
@@ -827,7 +827,7 @@ fn cli_credentials_put_surfaces_management_put_error_against_stubbed_broker() {
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=atlassian-api-token"
         );
         write_json_response(&mut stream, 200, jira_credential_schema_response());
 
@@ -835,7 +835,7 @@ fn cli_credentials_put_surfaces_management_put_error_against_stubbed_broker() {
         assert_eq!(request.method, "PUT");
         assert_eq!(request.path, "/v1/credentials/connections/jira");
         let put_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(put_body["profile"], "jira-cloud-api-token");
+        assert_eq!(put_body["profile"], "atlassian-api-token");
         assert_eq!(put_body["secret"]["username"], "alice@example.com");
         assert_eq!(put_body["secret"]["token"], "jira-token");
         write_json_response(
@@ -862,7 +862,7 @@ fn cli_credentials_put_surfaces_management_put_error_against_stubbed_broker() {
             "put",
             "jira",
             "--profile",
-            "jira-cloud-api-token",
+            "atlassian-api-token",
             "--username",
             "alice@example.com",
             "--field-file",
@@ -896,7 +896,7 @@ fn cli_credentials_put_surfaces_management_verify_error_against_stubbed_broker()
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=atlassian-api-token"
         );
         write_json_response(&mut stream, 200, jira_credential_schema_response());
 
@@ -946,7 +946,7 @@ fn cli_credentials_put_surfaces_management_verify_error_against_stubbed_broker()
             "put",
             "jira",
             "--profile",
-            "jira-cloud-api-token",
+            "atlassian-api-token",
             "--username",
             "alice@example.com",
             "--field-file",
@@ -5325,7 +5325,7 @@ fn jira_credential_schema_response() -> serde_json::Value {
         "principal": "alice",
         "result": {
             "connection": "jira",
-            "profile": "jira-cloud-api-token",
+            "profile": "atlassian-api-token",
             "credentialKind": "basic_api_token",
             "fields": [
                 {

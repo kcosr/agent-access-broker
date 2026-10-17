@@ -1011,20 +1011,20 @@ owner lost every grant on its connection stays listed as the connection's
 {
   "connections": [
     {
-      "connection": "jira",
-      "displayName": "Jira",
+      "connection": "atlassian",
+      "displayName": "Atlassian",
       "method": "token",
       "consumers": [],
-      "otherConsumers": 1,
-      "profile": "jira-cloud-api-token",
+      "otherConsumers": 2,
+      "profile": "atlassian-api-token",
       "credentialKind": "basic_api_token",
       "registration": null,
       "credential": {
         "credentialId": "5d0e…",
-        "connection": "jira",
+        "connection": "atlassian",
         "ownerPrincipal": "bob",
         "ownerKind": "user",
-        "profile": "jira-cloud-api-token",
+        "profile": "atlassian-api-token",
         "credentialKind": "basic_api_token",
         "metadata": {},
         "status": "active",

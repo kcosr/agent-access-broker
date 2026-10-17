@@ -44,25 +44,35 @@ service-mode grants require this credential. Per-user-only paths instead use the
 principal's selected credential for lookup and execution.
 
 For per-user credentials, replace the service execution stanza with a
-[credential connection](configuration.md#credential-connections):
+[credential connection](configuration.md#credential-connections). Jira and
+Confluence declare the same Atlassian token profiles, so one connection serves
+both on one site:
 
 ```toml
-[credentials.connections.jira]
-display_name = "Jira"
-token_profile = "jira-cloud-api-token"
+[credentials.connections.atlassian]
+display_name = "Atlassian"
+token_profile = "atlassian-api-token"
 
 [credentials.per_user.jira]
 type = "connection"
-connection = "jira"
+connection = "atlassian"
+
+[credentials.per_user.confluence]
+type = "connection"
+connection = "atlassian"
 ```
 
-Each principal stores their own token for the connection, or an administrator
-provisions a service account's, and grants use `credential_mode = "per_user"`.
-The [configuration reference](configuration.md) describes secret sources, token
-profiles, attachment limits and optional egress/TLS settings. Atlassian bearer
-credentials additionally require `cloud_id` and an explicit
-`https://api.atlassian.com/**` allowlist; credential kind selects that gateway
-rather than the tenant route.
+Each principal stores their own account email and classic API token for the
+connection, or an administrator provisions a service account's, and grants use
+`credential_mode = "per_user"`. Without Confluence, omit its entry. To keep the
+products' tokens separate, give each product its own connection with the same
+profile. The
+[configuration reference](configuration.md#connection-token-profiles) describes
+secret sources, token profiles, attachment limits and optional egress/TLS
+settings. Atlassian bearer credentials, such as a service account's scoped
+token under the `atlassian-bearer-token` profile, additionally require
+`cloud_id` and an explicit `https://api.atlassian.com/**` allowlist; credential
+kind selects that gateway rather than the tenant route.
 
 For ordinary managed browser or `user_manage` credential management, enable the
 owner's self-service flag and grant them a `per_user` action on a service that
