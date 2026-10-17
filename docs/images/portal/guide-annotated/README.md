@@ -15,4 +15,7 @@ reviewed copy. Each manifest entry identifies its original guide image.
 
 All accounts and audit data are synthetic. Creation and confirmation forms are
 unsubmitted examples. Credential verification success and failure are simulated
-and labeled in their annotations.
+and labeled in both the annotations and guide captions. The five credential
+copies (`user-credential*-light.png`) place generated callout artwork on the
+unchanged capture, so every original UI pixel is preserved; their highlights
+have no tint.

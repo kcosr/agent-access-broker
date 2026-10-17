@@ -119,8 +119,10 @@ output. The annotations are documentation overlays, rather than portal controls.
 Creation, replacement, password-change, and confirmation forms are captured as
 unsubmitted drafts. The auditor screenshots use a real `auditor` account with
 personal self-service disabled. Audit records are generated presentation
-fixtures. The demo's Atlassian credential and host cannot be used to perform
-the real CLI example.
+fixtures. Credential verification success and failure are simulated at the
+browser response boundary and explicitly identified in their captions; they do
+not contact a live upstream. The demo's Atlassian credential and host cannot be
+used to perform the real CLI example.
 
 Screenshots show the interface, while the steps describe what to submit in your
 own configured deployment. Existing demo grants can be broader than the new
