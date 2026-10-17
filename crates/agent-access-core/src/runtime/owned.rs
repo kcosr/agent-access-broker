@@ -68,13 +68,17 @@ impl InvocationControl {
             .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     }
-    async fn interrupted(&self, preparing: bool) -> (ReasonCode, &'static str) {
+    async fn interrupted(
+        &self,
+        preparing: bool,
+        deadline: Option<tokio::time::Instant>,
+    ) -> (ReasonCode, &'static str) {
         tokio::select! {
             biased;
             _ = self.inner.forced.cancelled() => (ReasonCode::OperationCancelled, "operation stopped during broker shutdown"),
             _ = self.inner.cancel.cancelled(), if preparing => (ReasonCode::OperationCancelled, "operation canceled before provider dispatch"),
             _ = async {
-                if let Some(deadline) = self.inner.deadline { tokio::time::sleep_until(deadline).await; }
+                if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; }
                 else { std::future::pending::<()>().await; }
             } => (ReasonCode::OperationTimeout, "operation deadline exceeded"),
         }
@@ -94,7 +98,7 @@ impl PreparationFailure {
     }
 }
 
-fn interrupted_error(
+pub(super) fn interrupted_error(
     (reason, message): (ReasonCode, &'static str),
     dispatched: bool,
 ) -> ProviderError {
@@ -112,6 +116,18 @@ impl BrokerRuntime {
         request: InvokeRequest,
         control: InvocationControl,
     ) -> BrokerResponse<Value> {
+        // Preserve the supervisor's shared cancellation/dispatch state while
+        // tightening only this invocation's deadline. The producer budget also
+        // covers audit admission and scope/credential preparation.
+        let deadline = control
+            .inner
+            .deadline
+            .into_iter()
+            .chain(self.secret_output_operation_deadline(
+                &context.operation.service,
+                &context.operation.action,
+            ))
+            .min();
         let fallback = FinalizeContext {
             search_authorization: None,
             command: None,
@@ -139,7 +155,7 @@ impl BrokerRuntime {
         };
         let permit = tokio::select! {
             biased;
-            message = control.interrupted(true) => {
+            message = control.interrupted(true, deadline) => {
                 return self.finalize(fallback, Err(interrupted_error(message, false))).await;
             }
             result = admission => match result {
@@ -158,7 +174,7 @@ impl BrokerRuntime {
         .catch_unwind();
         let prepared = tokio::select! {
             biased;
-            message = control.interrupted(true) => Err(Box::new(PreparationFailure::new(fallback.clone(), Err(interrupted_error(message, false))))),
+            message = control.interrupted(true, deadline) => Err(Box::new(PreparationFailure::new(fallback.clone(), Err(interrupted_error(message, false))))),
             result = preparation => match result {
                 Ok(result) => result,
                 Err(_) => Err(Box::new(PreparationFailure::new(fallback, Err(interrupted_error((ReasonCode::OperationFailed, "operation failed during preparation"), false))))),
@@ -169,6 +185,7 @@ impl BrokerRuntime {
         let (finalize_context, result) = match prepared {
             Err(failure) => (failure.context, failure.result),
             Ok(mut prepared) => {
+                prepared.secret_outputs.bound_operation_deadline(deadline);
                 secret_outputs = prepared.secret_outputs.clone();
                 response_options = prepared.response_options;
                 let finalize_context = prepared.finalize_context.clone();
@@ -185,9 +202,8 @@ impl BrokerRuntime {
                     )
                 } else {
                     let body_parts = std::mem::take(&mut prepared.body_parts);
-                    let finalization = agent_access_provider::host::provider_finalization_context(
-                        control.inner.deadline,
-                    );
+                    let finalization =
+                        agent_access_provider::host::provider_finalization_context(deadline);
                     let execution =
                         AssertUnwindSafe(agent_access_provider::host::with_provider_finalization(
                             finalization.clone(),
@@ -197,7 +213,7 @@ impl BrokerRuntime {
                     tokio::pin!(execution);
                     let result = tokio::select! {
                         biased;
-                        message = control.interrupted(false) => {
+                        message = control.interrupted(false, deadline) => {
                             // Only cleanup of an already captured outcome gets one
                             // nonblocking poll. Pending work keeps the ordinary
                             // timeout, and hard shutdown never grants this poll.

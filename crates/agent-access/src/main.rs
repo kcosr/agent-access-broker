@@ -10391,6 +10391,11 @@ fn validate_inline_secret_references(
                 return Ok(());
             }
             for (name, value) in object {
+                if secret_reference_capability(name) {
+                    anyhow::bail!(
+                        "secret references require a strict reference object at a catalog-declared secret input"
+                    );
+                }
                 let name = name.replace('~', "~0").replace('/', "~1");
                 validate_inline_secret_references(value, &format!("{pointer}/{name}"), declared)?;
             }
@@ -10399,6 +10404,11 @@ fn validate_inline_secret_references(
             for (index, value) in values.iter().enumerate() {
                 validate_inline_secret_references(value, &format!("{pointer}/{index}"), declared)?;
             }
+        }
+        Value::String(value) if secret_reference_capability(value) => {
+            anyhow::bail!(
+                "secret references require a strict reference object at a catalog-declared secret input"
+            );
         }
         _ => {}
     }
@@ -22210,6 +22220,20 @@ upload_spool_dir = "upload-spool"
             )
             .is_err()
         );
+        for inputs in [
+            serde_json::json!({"other":reference["secretRef"]}),
+            serde_json::json!({"ordinary":{"values":[reference["secretRef"]]}}),
+            serde_json::json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
+        ] {
+            assert!(
+                reject_inline_sensitive_values(
+                    &serde_json::json!({"inputs":inputs}),
+                    &sensitive,
+                    &declared,
+                )
+                .is_err()
+            );
+        }
         for invalid in [
             serde_json::json!("inline-secret"),
             serde_json::json!(format!("sr_{}", "A".repeat(43))),

@@ -116,9 +116,12 @@ position. The runtime authorizes the consuming action and resources before
 resolution, then validates the resolved string against the original field schema.
 Secret fields cannot determine resource scope. Objects containing a Broker-shaped
 `secretRef` capability are rejected in undeclared positions. Ordinary upstream
-fields such as Kubernetes `secretRef: {name: "db"}` remain valid. A bare `sr_`
-capability string at a declared secret input is rejected; pass the reference
-object so it cannot be forwarded upstream as a literal secret.
+fields such as Kubernetes `secretRef: {name: "db"}` remain valid. A bare Broker
+capability string (`sr_` followed by 43 base64url characters) is rejected anywhere
+in action inputs, including object keys, nested objects, arrays and undeclared
+payload fields. Pass it only as the `secretRef` member of a strict reference
+object at a declared secret input, so it cannot be forwarded upstream as a literal
+string.
 
 Ordinary invocation use requires the same principal, original Broker token or
 exact trusted-human identity binding, trusted caller contract, and execution
@@ -161,8 +164,8 @@ max_receipts_total = 100000
 
 TTL must be positive, no greater than 24 hours, and in reference mode strictly
 longer than both `limits.request_timeout_ms` and `mcp.operation_timeout_ms`.
-This prevents ordinary configured deadlines from consuming the reservation
-lifetime before capture. Receipt retention is bounded to
+This keeps the configured producer budget shorter than the reservation lifetime.
+Receipt retention is bounded to
 30 days. Per-principal limits cannot exceed global limits. Each principal can also retain
 at most ten times `max_refs_per_principal` outcome receipts (1,000 by default),
 bounded by the global receipt limit. Failed or expired operations still occupy
@@ -170,7 +173,16 @@ receipt capacity until their retention deadline. This can refuse new issuance
 even when no active references remain. Reference admission
 fails before dispatch when capacity, identity, encryption, or storage checks fail.
 
+Actions declaring secret outputs use `mcp.operation_timeout_ms` as a total
+producer budget on every transport, in both reference and raw modes.
+The budget starts at governed invocation entry and includes audit admission,
+scope and credential preparation, and all sequential provider calls. An earlier
+incoming deadline takes precedence; later invocation phases do not reset it.
+
 Capture runs after a provider outcome is available and before output formatting.
+Protected capture and durable outcome finalization, including completion audit,
+run outside producer cancellation, preserving an already completed outcome at
+its deadline.
 A capture failure after issuance preserves safe outcome metadata and reports
 `retrySafe: false`; it never returns the plaintext. A timeout or interruption can
 leave the upstream outcome unknown. Request IDs are correlation values, not
@@ -178,7 +190,15 @@ idempotency keys. Never automatically repeat issuance after these failures.
 
 The store retains bounded non-secret outcome receipts after temporary material
 expires. Receipts contain allowlisted completion flags and provider-declared safe
-object identifiers, not arbitrary result or audit payloads. A lost response can still lose its usable reference; retained metadata
+object identifiers, not arbitrary result or audit payloads. At the store boundary,
+invalid optional receipt metadata is replaced with
+`executionState: "completed"`, `retrySafe: false` and `metadataOmitted: true`,
+while valid secret capture still commits and returns references. This applies to
+non-object metadata, metadata exceeding 16 KiB of serialized JSON, and metadata
+containing a Broker capability or captured secret. Invalid output contracts and
+storage, encryption or expiry failures still fail capture.
+
+A lost response can still lose its usable reference; retained metadata
 does not recreate an upstream one-time secret. Database failure can also prevent
 recording completion, and the Broker cannot atomically commit a local row and a
 remote GitLab mutation.

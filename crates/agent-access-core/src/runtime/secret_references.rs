@@ -13,11 +13,26 @@ pub(super) struct PreparedSecretOutputs {
     descriptors: Vec<SecretOutputDescriptor>,
     sensitive_output_pointers: Vec<String>,
     reservation: Option<SecretOutputReservationBatch>,
+    operation_deadline: Option<tokio::time::Instant>,
     dispatched: Arc<AtomicBool>,
     contaminated_error: Arc<AtomicBool>,
 }
 
 impl PreparedSecretOutputs {
+    pub(super) fn operation_deadline(&self) -> Option<tokio::time::Instant> {
+        self.operation_deadline
+    }
+
+    pub(super) fn bound_operation_deadline(&mut self, deadline: Option<tokio::time::Instant>) {
+        if !self.descriptors.is_empty() {
+            self.operation_deadline = self.operation_deadline.into_iter().chain(deadline).min();
+        }
+    }
+
+    pub(super) fn dispatched(&self) -> bool {
+        self.dispatched.load(Ordering::SeqCst)
+    }
+
     pub(super) fn mark_dispatched(&self) {
         self.dispatched.store(true, Ordering::SeqCst);
         if let Some(reservation) = &self.reservation {
@@ -104,6 +119,21 @@ impl PreparedSecretOutputs {
 }
 
 impl BrokerRuntime {
+    /// One producer budget covers preparation and sequential upstream calls on
+    /// every transport. Reference-mode configuration requires a longer TTL.
+    pub(super) fn secret_output_operation_deadline(
+        &self,
+        service: &str,
+        action: &str,
+    ) -> Option<tokio::time::Instant> {
+        self.action_descriptor(service, action)
+            .filter(|action| !action.secret_outputs.is_empty())
+            .map(|_| {
+                tokio::time::Instant::now()
+                    + Duration::from_millis(self.config.mcp.operation_timeout_ms)
+            })
+    }
+
     /// Discovery checks only the admitted identity's non-secret auth category.
     /// Final reservation still proves the exact live token/attested origin.
     pub(super) fn can_hold_secret_references(&self, identity: &IdentityContext) -> bool {
@@ -189,6 +219,10 @@ impl BrokerRuntime {
             clear_resolved_inputs(inputs, &resolved);
             return Err(reference_input_invalid());
         }
+        // Anchor the fallback before reservation for direct prepared-invocation
+        // users. Admission supplies its earlier whole-operation deadline.
+        let operation_deadline =
+            self.secret_output_operation_deadline(&context.service, &context.action);
         let reservation = if reference_mode && !action.secret_outputs.is_empty() {
             let (store, ring, origin) = material.ok_or_else(reference_denied)?;
             let config = &self.config.secret_outputs;
@@ -238,6 +272,7 @@ impl BrokerRuntime {
             descriptors: action.secret_outputs.clone(),
             sensitive_output_pointers: action.sensitive_output_pointers.clone(),
             reservation,
+            operation_deadline,
             dispatched: Arc::new(AtomicBool::new(false)),
             contaminated_error: Arc::new(AtomicBool::new(false)),
         })
@@ -446,16 +481,6 @@ pub(super) fn validate_reference_inputs(
     if action.secret_inputs.is_empty() {
         return Ok(());
     }
-    // A naked Broker capability is not an upstream literal secret. Require
-    // the declared reference object so the host authorizes and resolves it.
-    if action.secret_inputs.iter().any(|input| {
-        inputs
-            .pointer(input_pointer(input.pointer()))
-            .and_then(Value::as_str)
-            .is_some_and(is_secret_reference_capability)
-    }) {
-        return Err(reference_input_invalid());
-    }
     let schema = action
         .reference_input_schema()
         .map_err(|_| reference_input_invalid())?;
@@ -479,16 +504,20 @@ fn reject_undeclared_references(
                 .and_then(Value::as_str)
                 .is_some_and(is_secret_reference_capability)
             {
-                if !action
-                    .secret_inputs
-                    .iter()
-                    .any(|input| input.pointer() == pointer)
+                if parse_reference(value).is_err()
+                    || !action
+                        .secret_inputs
+                        .iter()
+                        .any(|input| input.pointer() == pointer)
                 {
                     return Err(reference_input_invalid());
                 }
                 return Ok(());
             }
             for (key, value) in object {
+                if is_secret_reference_capability(key) {
+                    return Err(reference_input_invalid());
+                }
                 let pointer = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
                 reject_undeclared_references(value, &pointer, action)?;
             }
@@ -497,6 +526,9 @@ fn reject_undeclared_references(
             for (index, value) in values.iter().enumerate() {
                 reject_undeclared_references(value, &format!("{pointer}/{index}"), action)?;
             }
+        }
+        Value::String(value) if is_secret_reference_capability(value) => {
+            return Err(reference_input_invalid());
         }
         _ => {}
     }
@@ -794,6 +826,10 @@ mod tests {
 
     struct SecretProvider {
         calls: AtomicUsize,
+        sequential_steps: AtomicUsize,
+        step_delay_ms: std::sync::atomic::AtomicU64,
+        scope_delay_ms: std::sync::atomic::AtomicU64,
+        observed_deadline: Mutex<Option<tokio::time::Instant>>,
         inputs: Mutex<Vec<String>>,
         token: String,
         pending: bool,
@@ -807,6 +843,10 @@ mod tests {
             &self,
             request: ScopeRequest<'_>,
         ) -> Result<ScopeResolution, ProviderError> {
+            let delay = self.scope_delay_ms.load(Ordering::SeqCst);
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
             // Scope hooks inspect only resource selectors. Declared secret
             // payloads remain structured references until after authorization.
             let project = request.inputs()["project"]
@@ -822,6 +862,17 @@ mod tests {
             request: ProviderInvocation,
         ) -> Result<ProviderResult, ProviderError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.observed_deadline.lock().unwrap() =
+                current_provider_finalization().and_then(|context| context.deadline());
+            let delay = self.step_delay_ms.load(Ordering::SeqCst);
+            if delay > 0 {
+                // Each upstream round trip fits its per-request limit; their
+                // combined duration must still fit the whole producer budget.
+                for _ in 0..3 {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    self.sequential_steps.fetch_add(1, Ordering::SeqCst);
+                }
+            }
             self.inputs
                 .lock()
                 .unwrap()
@@ -936,6 +987,10 @@ mod tests {
         config.policy.grants.clear();
         let provider = Arc::new(SecretProvider {
             calls: AtomicUsize::new(0),
+            sequential_steps: AtomicUsize::new(0),
+            step_delay_ms: std::sync::atomic::AtomicU64::new(0),
+            scope_delay_ms: std::sync::atomic::AtomicU64::new(0),
+            observed_deadline: Mutex::new(None),
             inputs: Mutex::new(vec![]),
             token: token.into(),
             pending,
@@ -1131,6 +1186,120 @@ mod tests {
         assert_eq!(result["retrySafe"], false);
         assert!(result["secretReceipt"]["receiptId"].is_string());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn producer_budget_bounds_sequential_calls_on_owned_and_direct_paths() {
+        for mode in [
+            crate::SecretOutputMode::Reference,
+            crate::SecretOutputMode::Raw,
+        ] {
+            for direct in [false, true] {
+                let (_dir, mut runtime, identity, provider) = fixture(mode, 128, false);
+                Arc::make_mut(&mut runtime.config).mcp.operation_timeout_ms = 300;
+                provider.step_delay_ms.store(125, Ordering::SeqCst);
+                let response = if direct {
+                    runtime
+                        .invoke(context(identity), request(json!("literal")))
+                        .await
+                } else {
+                    runtime
+                        .invoke_owned_json(
+                            context(identity),
+                            request(json!("literal")),
+                            InvocationControl::default(),
+                        )
+                        .await
+                };
+                assert_eq!(
+                    response.envelope.reason_code,
+                    Some(ReasonCode::OperationTimeout.into())
+                );
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+                assert!(provider.sequential_steps.load(Ordering::SeqCst) < 3);
+                let result = response.envelope.result.unwrap();
+                assert_eq!(result["executionState"], "unknown");
+                assert_eq!(result["retrySafe"], false);
+                assert!(!result.to_string().contains(&provider.token));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn producer_budget_includes_scope_preparation_on_owned_and_direct_paths() {
+        for direct in [false, true] {
+            let (_dir, mut runtime, identity, provider) =
+                fixture(crate::SecretOutputMode::Reference, 128, false);
+            Arc::make_mut(&mut runtime.config).mcp.operation_timeout_ms = 100;
+            provider.scope_delay_ms.store(300, Ordering::SeqCst);
+            let response = if direct {
+                runtime
+                    .invoke(context(identity), request(json!("literal")))
+                    .await
+            } else {
+                runtime
+                    .invoke_owned_json(
+                        context(identity),
+                        request(json!("literal")),
+                        InvocationControl::default(),
+                    )
+                    .await
+            };
+            assert_eq!(
+                response.envelope.reason_code,
+                Some(ReasonCode::OperationTimeout.into())
+            );
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                response.envelope.result.unwrap()["executionState"],
+                "not_dispatched"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn earlier_caller_deadline_and_supervisor_state_are_preserved() {
+        let (_dir, mut runtime, identity, provider) =
+            fixture(crate::SecretOutputMode::Reference, 128, true);
+        Arc::make_mut(&mut runtime.config).mcp.operation_timeout_ms = 1_000;
+        let control = InvocationControl::new(Some(Duration::from_millis(100)));
+        let latest_caller_deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+        let response = runtime
+            .invoke_owned_json(
+                context(identity),
+                request(json!("literal")),
+                control.clone(),
+            )
+            .await;
+        assert_eq!(
+            response.envelope.reason_code,
+            Some(ReasonCode::OperationTimeout.into())
+        );
+        assert!(provider.observed_deadline.lock().unwrap().unwrap() <= latest_caller_deadline);
+        assert!(control.dispatched());
+        assert!(!control.completed());
+    }
+
+    #[tokio::test]
+    async fn prepared_producer_cannot_dispatch_after_its_admission_deadline() {
+        let (_dir, mut runtime, identity, provider) =
+            fixture(crate::SecretOutputMode::Reference, 128, false);
+        Arc::make_mut(&mut runtime.config).mcp.operation_timeout_ms = 100;
+        let prepared = runtime
+            .begin_invoke(context(identity), request(json!("literal")))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let response = runtime.finish_prepared_invoke(prepared, vec![]).await;
+        assert_eq!(
+            response.envelope.reason_code,
+            Some(ReasonCode::OperationTimeout.into())
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            response.envelope.result.unwrap()["executionState"],
+            "not_dispatched"
+        );
     }
 
     #[tokio::test]
@@ -1530,6 +1699,63 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn bare_capabilities_are_rejected_everywhere_except_strict_declared_objects() {
+        let action = ActionDescriptor::new("send", "Send", json!({"type":"object"}));
+        let handle = format!("sr_{}", "a".repeat(43));
+        for input in [
+            json!({"ordinary": &handle}),
+            json!({"nested": [{"ordinary": &handle}]}),
+            json!({"nested": [&handle]}),
+            json!({handle.clone(): "ordinary"}),
+        ] {
+            assert!(validate_reference_inputs(&action, &input).is_err());
+        }
+        assert!(validate_reference_inputs(&action, &json!({"ordinary":"sr_short"})).is_ok());
+        let action = ActionDescriptor::new(
+            "send",
+            "Send",
+            json!({"type":"object","properties":{"token":{"type":"string"}}}),
+        )
+        .secret_input(SecretInputDescriptor::new("/inputs/token"));
+        assert!(
+            validate_reference_inputs(&action, &json!({"token":{"secretRef": &handle}})).is_ok()
+        );
+        assert!(
+            validate_reference_inputs(
+                &action,
+                &json!({"token":{"secretRef": &handle,"expiresAt":"2026-10-17T12:00:00Z"}})
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_reference_inputs(
+                &action,
+                &json!({"token":{"secretRef": &handle,"extra":"field"}})
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_capability_at_ordinary_input_never_reaches_provider() {
+        let (_dir, runtime, identity, provider) = fixture(crate::SecretOutputMode::Raw, 128, false);
+        let response = runtime
+            .invoke_owned_json(
+                context(identity),
+                InvokeRequest::new(
+                    json!({"project":format!("sr_{}", "a".repeat(43)),"message":"literal"}),
+                ),
+                InvocationControl::default(),
+            )
+            .await;
+        assert_eq!(
+            response.envelope.reason_code,
+            Some(ReasonCode::InputInvalid.into())
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

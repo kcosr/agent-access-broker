@@ -274,7 +274,6 @@ impl ManagedStore {
         captures: Vec<SecretOutputCapture>,
         safe_metadata: Value,
     ) -> Result<Vec<CapturedSecretReference>, ManagedStoreError> {
-        let metadata = metadata_json(&safe_metadata)?;
         let mut seen = BTreeSet::new();
         for capture in &captures {
             let slot = batch
@@ -291,10 +290,17 @@ impl ManagedStore {
                     "captured secret output is invalid or exceeds its reservation",
                 ));
             }
-            if metadata_contains_secret(&safe_metadata, &capture.value) {
-                return Err(input_invalid("receipt metadata contains a captured secret"));
-            }
         }
+        // Provider metadata must never prevent retention of an already-issued
+        // secret. Omit unsafe evidence while preserving the completed capture.
+        let metadata = if captures
+            .iter()
+            .any(|capture| metadata_contains_secret(&safe_metadata, &capture.value))
+        {
+            omitted_metadata("completed")
+        } else {
+            metadata_json(&safe_metadata).unwrap_or_else(|_| omitted_metadata("completed"))
+        };
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -364,15 +370,11 @@ impl ManagedStore {
         safe_metadata: &Value,
     ) -> Result<(), ManagedStoreError> {
         let metadata = metadata_json(safe_metadata).unwrap_or_else(|_| {
-            serde_json::json!({
-                "retrySafe":false,"metadataOmitted":true,
-                "executionState":match outcome {
-                    SecretReservationOutcome::NotDispatched=>"not_dispatched",
-                    SecretReservationOutcome::CaptureFailed=>"completed",
-                    _=>"unknown",
-                }
+            omitted_metadata(match outcome {
+                SecretReservationOutcome::NotDispatched => "not_dispatched",
+                SecretReservationOutcome::CaptureFailed => "completed",
+                SecretReservationOutcome::Unknown => "unknown",
             })
-            .to_string()
         });
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
@@ -424,16 +426,17 @@ impl ManagedStore {
         Ok(result)
     }
 
-    /// Resolve references only in declared credential secret fields. The
-    /// callback must check current management and origin authority, without
-    /// acquiring this store's lock again. All validation and the durable write
-    /// share one immediate transaction.
+    /// Resolve references only in declared credential secret fields.
+    /// Write authority is checked for literals and references alike. Origin
+    /// authority is checked only when resolving a reference. Callbacks must not
+    /// acquire this store's lock again; they share the durable write transaction.
     pub(crate) fn upsert_user_credential_with_secret_references(
         &self,
         ring: &CredentialKeyRing,
         mut request: CredentialWriteRequest,
         purpose: CredentialManagementPurpose,
-        authorize: impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
+        authorize_write: impl Fn(&Connection) -> Result<(), ManagedStoreError>,
+        authorize_origin: impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
     ) -> Result<SecretCredentialWriteResult, ManagedStoreError> {
         validate_credential_write_request(&request)?;
         validate_credential_metadata(&request.metadata)?;
@@ -465,9 +468,10 @@ impl ManagedStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
         purpose.check_active_owner(&tx, &request.owner_principal_id)?;
+        authorize_write(&tx)?;
         let mut references = Vec::new();
         if let Some(reference) = reference {
-            let (value, usage) = resolve_conn(&tx, ring, &reference, &authorize)?;
+            let (value, usage) = resolve_conn(&tx, ring, &reference, &authorize_origin)?;
             request.secret["token"] = Value::String(value);
             references.push(usage);
         }
@@ -608,11 +612,19 @@ fn metadata_contains_secret(value: &Value, secret: &str) -> bool {
 }
 
 fn metadata_json(value: &Value) -> Result<String, ManagedStoreError> {
+    fn contains_capability(value: &str) -> bool {
+        value.match_indices("sr_").any(|(start, _)| {
+            value
+                .get(start..start + 46)
+                .is_some_and(|candidate| reference_hash(candidate).is_ok())
+        })
+    }
     fn contains_reference(value: &Value) -> bool {
         match value {
-            Value::Object(object) => {
-                object.contains_key("secretRef") || object.values().any(contains_reference)
-            }
+            Value::String(value) => contains_capability(value),
+            Value::Object(object) => object
+                .iter()
+                .any(|(key, value)| contains_capability(key) || contains_reference(value)),
             Value::Array(array) => array.iter().any(contains_reference),
             _ => false,
         }
@@ -625,6 +637,13 @@ fn metadata_json(value: &Value) -> Result<String, ManagedStoreError> {
         ));
     }
     Ok(raw)
+}
+
+fn omitted_metadata(execution_state: &str) -> String {
+    serde_json::json!({
+        "executionState":execution_state,"retrySafe":false,"metadataOmitted":true
+    })
+    .to_string()
 }
 
 fn reference_hash(reference: &str) -> Result<String, ManagedStoreError> {
@@ -1381,7 +1400,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_validation_is_atomic_and_never_records_secret_metadata() {
+    fn capture_validation_is_atomic() {
         let (_temp, store, ring) = fixture();
         let batch = store
             .reserve_secret_outputs(&ring, request("alice"), &limits(), |_, _| Ok(()))
@@ -1389,11 +1408,17 @@ mod tests {
         let result = store.capture_secret_outputs(
             &ring,
             &batch,
-            vec![SecretOutputCapture {
-                pointer: "/result/issuedToken".into(),
-                value: SECRET.into(),
-            }],
-            json!({"accidental":SECRET}),
+            vec![
+                SecretOutputCapture {
+                    pointer: "/result/issuedToken".into(),
+                    value: SECRET.into(),
+                },
+                SecretOutputCapture {
+                    pointer: "/result/issuedToken".into(),
+                    value: SECRET.into(),
+                },
+            ],
+            json!({"tokenId":42}),
         );
         assert!(matches!(result, Err(ManagedStoreError::InputInvalid(_))));
         assert_eq!(
@@ -1415,6 +1440,65 @@ mod tests {
             .unwrap();
         assert_eq!(receipt.outcome, "capture_failed");
         assert_eq!(receipt.metadata["tokenId"], 42);
+    }
+
+    #[test]
+    fn capture_preserves_issued_secrets_when_receipt_metadata_must_be_omitted() {
+        let (_temp, store, ring) = fixture();
+        let capability = format!("sr_{}", URL_SAFE_NO_PAD.encode([42_u8; 32]));
+        let safe = json!({"safeLocators":{"secretRef":"db-credentials"}});
+        let cases = [
+            (safe.clone(), false),
+            (Value::Null, true),
+            (json!({"oversized":"x".repeat(MAX_METADATA_BYTES)}), true),
+            (json!({"accidentalSecret":SECRET}), true),
+            (json!({"secretRef":capability}), true),
+            (json!({"other":format!("prefix {capability} suffix")}), true),
+            (
+                json!({(capability.clone()):"capability in a property name"}),
+                true,
+            ),
+        ];
+        for (metadata, omitted) in cases {
+            let batch = store
+                .reserve_secret_outputs(&ring, request("alice"), &limits(), |_, _| Ok(()))
+                .unwrap();
+            batch.mark_dispatched();
+            let reference = store
+                .capture_secret_outputs(
+                    &ring,
+                    &batch,
+                    vec![SecretOutputCapture {
+                        pointer: "/result/issuedToken".into(),
+                        value: SECRET.into(),
+                    }],
+                    metadata,
+                )
+                .unwrap()
+                .remove(0);
+            assert_eq!(
+                store
+                    .resolve_secret_reference(&ring, &reference.secret_ref, authorize_alice)
+                    .unwrap(),
+                SECRET
+            );
+            let receipt = store
+                .secret_reference_receipt(&ring, batch.receipt_id(), authorize_alice)
+                .unwrap();
+            assert_eq!(receipt.outcome, "captured");
+            assert_eq!(
+                receipt.metadata,
+                if omitted {
+                    json!({"executionState":"completed","retrySafe":false,"metadataOmitted":true})
+                } else {
+                    safe.clone()
+                }
+            );
+            let encoded = serde_json::to_string(&receipt).unwrap();
+            assert!(!encoded.contains(SECRET));
+            assert!(!encoded.contains(&capability));
+            assert!(!encoded.contains(&reference.secret_ref));
+        }
     }
 
     #[test]
@@ -1690,6 +1774,7 @@ mod tests {
             &ring,
             credential(&reference.secret_ref, "destination"),
             CredentialManagementPurpose::Administrative,
+            |_| Ok(()),
             |_, _| Err(ManagedStoreError::SecretReferenceDenied),
         );
         assert!(matches!(
@@ -1705,6 +1790,7 @@ mod tests {
                 &ring,
                 credential(&reference.secret_ref, "destination"),
                 CredentialManagementPurpose::Administrative,
+                |_| Ok(()),
                 |conn, origin| {
                     assert_eq!(origin.principal(), "alice");
                     assert!(!conn.is_autocommit(), "origin check shares transaction");
@@ -1756,6 +1842,7 @@ mod tests {
             &ring,
             credential(&reference.secret_ref, "destination"),
             CredentialManagementPurpose::Administrative,
+            |_| Ok(()),
             authorize_alice,
         );
         assert!(matches!(result, Err(ManagedStoreError::Unavailable(_))));
@@ -1780,6 +1867,7 @@ mod tests {
                 &ring,
                 credential(&reference.secret_ref, "destination"),
                 CredentialManagementPurpose::Administrative,
+                |_| Ok(()),
                 authorize_alice,
             )
             .unwrap();
@@ -1803,6 +1891,7 @@ mod tests {
                 &ring,
                 write,
                 CredentialManagementPurpose::Administrative,
+                |_| Ok(()),
                 |_, _| Ok(())
             ),
             Err(ManagedStoreError::InputInvalid(_))
@@ -1814,6 +1903,7 @@ mod tests {
                 &ring,
                 write,
                 CredentialManagementPurpose::Administrative,
+                |_| Ok(()),
                 |_, _| Ok(())
             ),
             Err(ManagedStoreError::InputInvalid(_))
@@ -1836,6 +1926,7 @@ mod tests {
                     &ring,
                     write,
                     CredentialManagementPurpose::Administrative,
+                    |_| Ok(()),
                     |_, _| panic!("bare capabilities must fail before reference resolution"),
                 )
                 .unwrap_err();
@@ -1854,11 +1945,37 @@ mod tests {
                     &ring,
                     write,
                     CredentialManagementPurpose::Administrative,
+                    |_| Ok(()),
                     |_, _| panic!("ordinary literals do not resolve references"),
                 )
                 .unwrap();
             assert!(installed.references.is_empty());
         }
+    }
+
+    #[test]
+    fn literal_credential_write_requires_authority_inside_its_transaction() {
+        let (_temp, store, ring) = fixture();
+        let mut write = credential("unused", "destination");
+        write.secret = json!({"token":"literal-connection-token"});
+        let result = store.upsert_user_credential_with_secret_references(
+            &ring,
+            write,
+            CredentialManagementPurpose::Administrative,
+            |conn| {
+                assert!(
+                    !conn.is_autocommit(),
+                    "write authority shares the transaction"
+                );
+                Err(ManagedStoreError::BrokerTokenRevoked)
+            },
+            |_, _| panic!("literal credentials have no reference origin"),
+        );
+        assert!(matches!(result, Err(ManagedStoreError::BrokerTokenRevoked)));
+        assert!(matches!(
+            store.credential_by_tuple("destination", "gitlab-connection", "default"),
+            Err(ManagedStoreError::CredentialNotFound)
+        ));
     }
 
     #[test]

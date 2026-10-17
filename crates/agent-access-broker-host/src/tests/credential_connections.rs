@@ -546,54 +546,72 @@ async fn secret_reference_import_refuses_revoked_origin_without_writing_destinat
 }
 
 #[tokio::test]
-async fn secret_reference_import_rechecks_management_token_after_route_admission() {
-    let fixture = fixture_with_capture("jira", true).await;
-    let reference = captured_reference(&fixture).await;
-    let runtime = fixture._broker.runtime();
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        "Authorization",
-        format!("Bearer {}", fixture.admin).parse().unwrap(),
-    );
-    let admitted = runtime.resolve_identity(&headers).unwrap();
-    fixture
-        .store
-        .revoke_broker_token(
-            admitted
-                .source
-                .as_ref()
-                .unwrap()
-                .token_id
-                .as_deref()
-                .unwrap(),
-            "admin",
-        )
-        .unwrap();
-    let result = runtime.store_connection_credential(
-        &admitted,
-        CredentialWriteRequest {
-            owner_principal_id: "robot".into(),
-            service: "jira".into(),
-            name: "default".into(),
-            profile: JIRA_PROFILE.into(),
-            credential_kind: "basic_api_token".into(),
-            secret: json!({"username":"new-bot","token":reference}),
-            metadata: json!({}),
-            actor: "admin".into(),
-        },
-        agent_access_core::CredentialManagementPurpose::Administrative,
-    );
-    assert!(matches!(
-        result,
-        Err(agent_access_core::ManagedStoreError::BrokerTokenRevoked)
-    ));
-    assert!(
-        fixture
-            .store
-            .list_credentials(Some("robot"))
+async fn credential_import_rechecks_management_token_for_literals_and_references_after_admission() {
+    for expired in [false, true] {
+        let fixture = fixture_with_capture("jira", true).await;
+        let reference = captured_reference(&fixture).await;
+        let runtime = fixture._broker.runtime();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", fixture.admin).parse().unwrap(),
+        );
+        let admitted = runtime.resolve_identity(&headers).unwrap();
+        let token_id = admitted
+            .source
+            .as_ref()
             .unwrap()
-            .is_empty()
-    );
+            .token_id
+            .as_deref()
+            .unwrap();
+        if expired {
+            // Advance the authoritative token state after admission without
+            // publishing a runtime snapshot, as elapsed time can do naturally.
+            rusqlite::Connection::open(fixture.store.path()).unwrap().execute(
+                "UPDATE broker_tokens SET expires_at='1970-01-01T00:00:00.000000000Z' WHERE token_id=?1",
+                [token_id],
+            ).unwrap();
+        } else {
+            fixture
+                .store
+                .revoke_broker_token(token_id, "admin")
+                .unwrap();
+        }
+        for token in [reference, json!("literal-connection-token")] {
+            let result = runtime.store_connection_credential(
+                &admitted,
+                CredentialWriteRequest {
+                    owner_principal_id: "robot".into(),
+                    service: "jira".into(),
+                    name: "default".into(),
+                    profile: JIRA_PROFILE.into(),
+                    credential_kind: "basic_api_token".into(),
+                    secret: json!({"username":"new-bot","token":token}),
+                    metadata: json!({}),
+                    actor: "admin".into(),
+                },
+                agent_access_core::CredentialManagementPurpose::Administrative,
+            );
+            if expired {
+                assert!(matches!(
+                    result,
+                    Err(agent_access_core::ManagedStoreError::BrokerTokenExpired)
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(agent_access_core::ManagedStoreError::BrokerTokenRevoked)
+                ));
+            }
+            assert!(
+                fixture
+                    .store
+                    .list_credentials(Some("robot"))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
 }
 
 #[tokio::test]

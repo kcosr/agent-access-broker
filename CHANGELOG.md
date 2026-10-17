@@ -11,6 +11,12 @@ All notable changes to this project are documented in this file.
 - Declared transferable provider secrets default to encrypted temporary reference
   delivery. Configure `[secret_outputs] mode = "raw"` for intentional plaintext
   delivery. Reference-capable actions require a managed encrypted store.
+- Actions declaring secret outputs now use `mcp.operation_timeout_ms` as one
+  total producer budget on every transport, in both reference and raw modes.
+  It starts at governed invocation entry and includes audit admission, scope
+  and credential preparation, and sequential provider calls. An earlier caller
+  deadline wins. Secret capture and durable completion audit preserve known
+  outcomes outside producer cancellation.
 - Managed-store schema `029_secret_references` adds temporary encrypted outputs,
   bounded outcome receipts, and durable trusted-caller generations. Rollback
   requires a pre-migration backup.

@@ -984,6 +984,9 @@ mod tests {
             json!({"token":"inline-secret"}),
             json!({"token":format!("sr_{}", "A".repeat(43))}),
             json!({"other":reference}),
+            json!({"other":reference["secretRef"]}),
+            json!({"ordinary":{"values":[reference["secretRef"]]}}),
+            json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
             json!({"token":{"secretRef":reference["secretRef"],"extra":"literal"}}),
         ] {
             assert!(resolve_inputs(&args(json!({"inputs":inputs})), &action).is_err());

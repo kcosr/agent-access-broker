@@ -685,12 +685,14 @@ credential_mode = "per_user"
     for inputs in [
         consume("X-Send-Reference", json!(ISSUED)),
         consume("X-Send-Reference", json!(reference)),
+        consume(&reference, protected.clone()),
         consume(
             "X-Send-Reference",
             json!({"secretRef":reference,"extra":true}),
         ),
         undeclared,
     ] {
+        let upstream_calls = upstream.received_requests().await.unwrap().len();
         let denied = send_consumer(inputs.clone());
         assert!(!denied.status.success());
         for bytes in [&denied.stdout, &denied.stderr] {
@@ -706,9 +708,16 @@ credential_mode = "per_user"
             .await;
         assert_eq!(denied["result"]["isError"], true, "{denied}");
         assert!(!denied.to_string().contains(&reference));
+        assert_eq!(
+            upstream.received_requests().await.unwrap().len(),
+            upstream_calls,
+            "invalid inline capabilities must be rejected before any upstream request"
+        );
     }
 
-    let unavailable = json!({"secretRef":format!("sr_{}", "B".repeat(43))});
+    let unavailable_reference = format!("sr_{}", URL_SAFE_NO_PAD.encode([0u8; 32]));
+    assert!(!references.contains(&unavailable_reference));
+    let unavailable = json!({"secretRef":unavailable_reference});
     let denied = send_consumer(consume("X-Send-Reference", unavailable.clone()));
     assert!(!denied.status.success());
     let denied: Value = serde_json::from_slice(&denied.stdout).unwrap();

@@ -307,6 +307,13 @@ reserves capacity before dispatch and inserts either the raw string or a
 reference object after handling the protected value. Reference delivery never
 falls back to raw after capture fails.
 
+Actions declaring secret outputs share one total producer deadline across scope
+and credential preparation and sequential provider calls on every transport.
+The host caps this budget at `mcp.operation_timeout_ms` in both delivery modes;
+an earlier incoming deadline still applies. Capture and durable outcome
+finalization, including completion audit, preserve known completed outcomes
+outside producer cancellation.
+
 The sidecar is excluded from both serialization and deserialization, its
 `Debug` value is redacted, and its owned strings are zeroized on drop. Only the
 host uses `host::take_secret_outputs` and `host::SecretOutputValue::value`;
@@ -342,6 +349,11 @@ optional `expiresAt`. Unknown reference-object properties are rejected. The
 reference ID is `sr_` followed by 43 base64url characters. An output's visible
 expiry can be copied with its reference, but the stored deadline is authoritative;
 supplying a later expiry cannot renew the reference.
+Bare strings matching that capability format are rejected anywhere in action
+inputs, including object keys, arrays and undeclared fields. A capability is
+accepted only inside the strict reference object at a declared secret input.
+Ordinary upstream fields named `secretRef` remain valid when they do not contain
+a Broker capability.
 
 Scope resolution runs before the host resolves secret payloads. A provider
 opting into reference inputs must accept its `reference_input_schema()` during
@@ -356,8 +368,8 @@ including independently owned clones. A provider remains responsible for any
 additional copies it creates.
 
 ```rust check
-use agent_access_provider::{ActionDescriptor, ProviderResult, SecretOutputDescriptor};
 use agent_access_provider::deps::serde_json::{Map, Value};
+use agent_access_provider::{ActionDescriptor, ProviderResult, SecretOutputDescriptor};
 
 fn key_action() -> ActionDescriptor {
     let mut schema = Map::new();
@@ -371,8 +383,7 @@ fn key_result(key_id: u64, secret: String) -> ProviderResult {
     let mut metadata = Map::new();
     metadata.insert("keyId".into(), Value::from(key_id));
     metadata.insert("retrySafe".into(), Value::Bool(false));
-    ProviderResult::new(metadata.into())
-        .with_secret_output("/result/issuedToken", secret)
+    ProviderResult::new(metadata.into()).with_secret_output("/result/issuedToken", secret)
 }
 ```
 

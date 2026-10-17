@@ -749,6 +749,14 @@ continue through their ordinary Broker REST ingress. See
 
 ## Temporary secret outputs
 
-HTTP and stdio MCP use the same configured reference/raw delivery as HTTP invocation. MCP metadata advertises secret output pointers and delivery mode. Reconnecting does not invalidate a reference when its original identity, caller contract, and execution context still match.
+HTTP and stdio MCP use the same configured reference/raw delivery as HTTP
+invocation. MCP metadata advertises secret output pointers and delivery mode.
+Actions declaring secret outputs share the server's total producer budget
+`mcp.operation_timeout_ms` across all transports and both delivery modes, from
+governed invocation entry through preparation and sequential provider calls.
+An earlier incoming deadline takes precedence. Capture and completion audit
+preserve known completed outcomes outside producer cancellation.
+Reconnecting does not invalidate a reference when its original identity, caller
+contract, and execution context still match.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.

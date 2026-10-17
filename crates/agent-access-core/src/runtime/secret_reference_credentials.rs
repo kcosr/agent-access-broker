@@ -54,15 +54,8 @@ impl BrokerRuntime {
             key_ring,
             request,
             purpose,
-            |conn, origin| {
-                self.check_secret_reference_origin_conn(conn, origin)
-                    .map_err(credential_reference_origin_error)?;
+            |conn| {
                 self.check_credential_import_actor(conn, identity, &owner, &connection, purpose)?;
-                if purpose == CredentialManagementPurpose::Personal
-                    && origin.principal() != identity.principal
-                {
-                    return Err(ManagedStoreError::SecretReferenceDenied);
-                }
                 let owner_kind = crate::managed_store::principal_kind_at_conn(conn, &owner)?;
                 let configured = self
                     .effective_credentials()
@@ -80,6 +73,16 @@ impl BrokerRuntime {
                     return Err(ManagedStoreError::InputInvalid(
                         "credential connection does not select this token profile".into(),
                     ));
+                }
+                Ok(())
+            },
+            |conn, origin| {
+                self.check_secret_reference_origin_conn(conn, origin)
+                    .map_err(credential_reference_origin_error)?;
+                if purpose == CredentialManagementPurpose::Personal
+                    && origin.principal() != identity.principal
+                {
+                    return Err(ManagedStoreError::SecretReferenceDenied);
                 }
                 Ok(())
             },

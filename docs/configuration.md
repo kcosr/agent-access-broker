@@ -274,8 +274,15 @@ cancellation. Authentication-failure budgets apply to failed identity resolution
 timeout; SSE keepalives are scheduled within that idle window.
 
 `operation_timeout_ms` is the total HTTP MCP execution deadline, including
-preparation and verification. It does not change existing REST/stdio timeout
-semantics. `protocol_timeout_ms` bounds protocol/discovery and completed-response
+preparation and verification. Actions declaring transferable secret outputs also
+use this value as their total producer budget on every transport, in both
+reference and raw delivery modes. The budget starts at governed invocation
+entry and includes audit admission, scope and credential preparation, and all
+sequential provider calls. An earlier incoming deadline takes precedence; later
+invocation phases do not reset it. Protected capture and durable outcome
+finalization, including completion audit, preserve known completed outcomes
+outside producer cancellation.
+`protocol_timeout_ms` bounds protocol/discovery and completed-response
 delivery; keepalives do not extend these deadlines. Session storage is ephemeral.
 Restart or changes to `[mcp]`, `[identity]`,
 `[execution_context]`, `[broker_tokens]`, `[managed_store]`, or trusted-proxy
@@ -2434,6 +2441,13 @@ must cover both the API base and its definition document URL. See
 
 ## Temporary secret output policy
 
-The global `[secret_outputs]` table selects reference delivery by default or explicit raw delivery, with fixed TTL, per-principal/global count and byte quotas, and bounded receipt retention.
+The global `[secret_outputs]` table selects reference delivery by default or
+explicit raw delivery, with fixed TTL, per-principal/global count and byte quotas,
+and bounded receipt retention. In reference mode, the lifetime configured by
+`ttl_seconds` must be longer than both `limits.request_timeout_ms` and the total
+producer budget `mcp.operation_timeout_ms`. Invalid optional receipt metadata is
+replaced with safe completion flags; valid encrypted secret capture still
+succeeds. Storage, encryption, expiry and output-contract failures remain capture
+failures.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.

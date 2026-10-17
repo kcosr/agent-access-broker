@@ -4617,8 +4617,35 @@ impl BrokerRuntime {
         context: GovernedOperationContext,
         request: InvokeRequest,
     ) -> Result<PreparedInvocation, Box<BrokerResponse<Value>>> {
-        match self.prepare_invoke(context, request, None).await {
-            Ok(prepared) => Ok(prepared),
+        let deadline = self.secret_output_operation_deadline(
+            &context.operation.service,
+            &context.operation.action,
+        );
+        let preparation = self.prepare_invoke(context.clone(), request, None);
+        let result = if let Some(deadline) = deadline {
+            match tokio::time::timeout_at(deadline, preparation).await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(Box::new(
+                        self.governed_operation_error_response(
+                            context,
+                            owned::interrupted_error(
+                                (ReasonCode::OperationTimeout, "operation deadline exceeded"),
+                                false,
+                            ),
+                        )
+                        .await,
+                    ));
+                }
+            }
+        } else {
+            preparation.await
+        };
+        match result {
+            Ok(mut prepared) => {
+                prepared.secret_outputs.bound_operation_deadline(deadline);
+                Ok(prepared)
+            }
             Err(failure) => Err(Box::new(
                 self.finalize_pre_dispatch(failure.context, failure.result)
                     .await,
@@ -5392,7 +5419,34 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         let secret_outputs = prepared.secret_outputs.clone();
         let response_options = prepared.response_options;
-        let (context, result) = self.execute_prepared_invoke(prepared, body_parts).await;
+        let (context, result) = if let Some(deadline) = secret_outputs.operation_deadline() {
+            use futures_util::FutureExt;
+            let context = prepared.finalize_context.clone();
+            let finalization =
+                agent_access_provider::host::provider_finalization_context(Some(deadline));
+            let execution = agent_access_provider::host::with_provider_finalization(
+                finalization.clone(),
+                self.execute_prepared_invoke(prepared, body_parts),
+            );
+            tokio::pin!(execution);
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => {
+                    // As in owned JSON execution, only already captured
+                    // outcomes receive one immediate cleanup poll.
+                    let completed = if finalization.is_finalizing() {
+                        execution.as_mut().now_or_never()
+                    } else { None };
+                    completed.unwrap_or_else(|| (context, Err(owned::interrupted_error(
+                        (ReasonCode::OperationTimeout, "operation deadline exceeded"),
+                        secret_outputs.dispatched(),
+                    ))))
+                }
+                result = &mut execution => result,
+            }
+        } else {
+            self.execute_prepared_invoke(prepared, body_parts).await
+        };
         let result = self.complete_prepared_invoke(
             &context,
             &secret_outputs,
