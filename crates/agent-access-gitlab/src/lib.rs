@@ -7166,11 +7166,17 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             // treated alike. OAuth access never reaches them.
             gitlab_action(
                 action,
-                "Manage a GitLab project bot credential; returns a newly issued secret in result.issuedToken",
+                "Manage a GitLab project bot credential; result.issuedToken follows Broker secret delivery policy",
                 schema,
             )
-            .sensitive_output("/result/issuedToken")
+            .secret_output(SecretOutputDescriptor::new("/result/issuedToken", 8192))
             .token_only()
+        } else if *action == "project.member.view" {
+            gitlab_read_action(
+                action,
+                "Read a direct project member's username by userId, including a newly issued project token's bot user",
+                schema,
+            )
         } else if matches!(*action, "project.access_token.list" | "project.access_token.view" | "service_account.list" | "service_account.view" | "service_account.token.list") {
             gitlab_read_action(
                 action,

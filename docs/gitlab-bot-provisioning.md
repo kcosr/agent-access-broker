@@ -80,17 +80,21 @@ require Premium or Ultimate; self-managed GitLab supports them on all tiers.
 See the [project access token API](https://docs.gitlab.com/api/project_access_tokens/)
 and [project token requirements](https://docs.gitlab.com/user/project/settings/project_access_tokens/).
 
-Choose a future date within the operator's limit in place of `YYYY-MM-DD`:
+Choose a future date within the operator's limit in place of `YYYY-MM-DD`.
+These examples return references in the default mode. Store the reference using
+[the credential handoff](secret-references.md#install-into-a-credential-connection)
+before unrelated work. In an explicitly configured raw-mode deployment, adding
+`--token-output PATH` writes a new private token file instead:
 
 ```bash
 agent-access gitlab project access-token create team/repo \
   --name code-review-bot --access-level 30 --scopes api \
-  --expires-at YYYY-MM-DD --token-output ./review-bot.token
+  --expires-at YYYY-MM-DD
 
 agent-access gitlab project access-token list team/repo --max-results 20
 agent-access gitlab project access-token view team/repo 123
 agent-access gitlab project access-token rotate team/repo 123 \
-  --expires-at YYYY-MM-DD --token-output ./review-bot-next.token
+  --expires-at YYYY-MM-DD
 agent-access gitlab project access-token revoke team/repo 124
 ```
 
@@ -120,14 +124,13 @@ agent-access gitlab service-account create team/repo \
 # Use the returned result.serviceAccount.id in subsequent commands.
 agent-access gitlab service-account member-set team/repo 70 --access-level 30
 agent-access gitlab service-account token create team/repo 70 \
-  --name reviewer-tool --scopes api --expires-at YYYY-MM-DD \
-  --token-output ./reviewer-tool.token
+  --name reviewer-tool --scopes api --expires-at YYYY-MM-DD
 
 agent-access gitlab service-account list team/repo
 agent-access gitlab service-account view team/repo 70
 agent-access gitlab service-account token list team/repo 70
 agent-access gitlab service-account token rotate team/repo 70 123 \
-  --expires-at YYYY-MM-DD --token-output ./reviewer-tool-next.token
+  --expires-at YYYY-MM-DD
 agent-access gitlab service-account token revoke team/repo 70 124
 agent-access gitlab service-account delete team/repo 70
 ```
@@ -214,26 +217,24 @@ changes use `result.member`. Metadata reads and audit records do not include raw
 tokens. Unexpected upstream fields are discarded. Execution and lookup
 credentials are never returned.
 
-This is deliberate issuance of a new credential for downstream use. The
-canonical HTTP, `invoke`, and `send` responses deliver that new secret to the
-authorized caller. Without `--token-output`, the typed CLI also prints it in its
-JSON response. With `--token-output`, it writes only the new token plus a newline
-to a new file, created with mode 0600 on Unix, and prints metadata with
-`tokenWritten: true`. Existing files and symlinks are rejected before the
-upstream call. The parent directory must already exist. A failed call may leave
-an empty reserved file when the outcome is uncertain; inspect the outcome before
-removing it and retrying. A definitive Broker denial removes the unused reservation. If local cleanup fails,
-the CLI warns and preserves the denial response and exit code.
+The global [temporary secret reference policy](secret-references.md) controls
+these four outputs. The default reference mode returns `{secretRef, expiresAt}`;
+explicit raw mode returns the new token string. There is no per-call raw override
+or plaintext fallback. The typed CLI's `--token-output` requires raw mode and
+reserves a new private file before issuing. Without it, the CLI prints the
+configured result shape. HTTP responses carry `Cache-Control: no-store`.
 
-The runtime catalog advertises `sensitiveOutputPointers: ["/result/issuedToken"]`
-for these four actions. OpenAPI operations and JSON send variants publish
-`x-agent-access-sensitive-output-pointers` with the same envelope-relative
-pointer. This marker describes sensitivity; it does not hide results from a
-client, model, transcript, or downstream MCP tool. MCP adapters must preserve
-this deliberate output contract and decide how their client will receive the
-secret. HTTP responses containing issued tokens carry `Cache-Control: no-store`.
-No server-side secret destination, automatic managed-credential import, or
-external secret-manager write is part of this feature.
+The catalog advertises `secretOutputMode`, `secretOutputs`, and
+`sensitiveOutputPointers: ["/result/issuedToken"]`. Equivalent OpenAPI, send, and
+MCP metadata preserve these declarations. Store references promptly using
+`credentials put` or `admin credentials put --field-ref token=...`; only the
+existing management interfaces can perform this credential handoff.
+
+`project.member.view` takes `project` and `userId` and returns the direct
+project member's `id`, `username`, `name`, and `accessLevel`. Use the returned
+`accessToken.userId` to obtain a project token bot's username. This separate
+read requires a repository-scoped grant and never issues or rotates a token.
+An arbitrary project's member read does not assert that the member is a bot.
 
 A downstream token acts directly under GitLab permissions. Broker grants and
 broker-token restrictions govern its issuance, not its later use. Revoking a

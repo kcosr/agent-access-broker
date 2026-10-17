@@ -1,7 +1,8 @@
-//! Project-owned automation identities and deliberately exported, newly issued credentials.
+//! Project-owned automation identities and protected, newly issued credentials.
 use super::*;
 
 pub const PROVISIONING_ACTIONS: &[&str] = &[
+    "project.member.view",
     "project.access_token.list",
     "project.access_token.view",
     "project.access_token.create",
@@ -80,6 +81,7 @@ pub(crate) fn issues_token(action: &str) -> bool {
 // This is a closed operation enum, never a caller-supplied path or HTTP method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitlabProvisioningOperation {
+    ProjectMemberView,
     ProjectTokenList,
     ProjectTokenView,
     ProjectTokenCreate,
@@ -100,6 +102,7 @@ pub enum GitlabProvisioningOperation {
 impl GitlabProvisioningOperation {
     fn from_action(action: &str) -> Option<Self> {
         Some(match action {
+            "project.member.view" => Self::ProjectMemberView,
             "project.access_token.list" => Self::ProjectTokenList,
             "project.access_token.view" => Self::ProjectTokenView,
             "project.access_token.create" => Self::ProjectTokenCreate,
@@ -120,6 +123,7 @@ impl GitlabProvisioningOperation {
     fn operation(self) -> &'static str {
         use GitlabProvisioningOperation::*;
         match self {
+            ProjectMemberView => "project.member.view",
             ProjectTokenList => "project.access_token.list",
             ProjectTokenView => "project.access_token.view",
             ProjectTokenCreate => "project.access_token.create",
@@ -147,7 +151,10 @@ impl GitlabProvisioningOperation {
         self.is_list()
             || matches!(
                 self,
-                Self::ProjectTokenView | Self::AccountView | Self::MemberView
+                Self::ProjectMemberView
+                    | Self::ProjectTokenView
+                    | Self::AccountView
+                    | Self::MemberView
             )
     }
     fn is_account(self) -> bool {
@@ -159,7 +166,7 @@ impl GitlabProvisioningOperation {
     fn is_member(self) -> bool {
         matches!(
             self,
-            Self::MemberView | Self::MemberAdd | Self::MemberUpdate
+            Self::ProjectMemberView | Self::MemberView | Self::MemberAdd | Self::MemberUpdate
         )
     }
 }
@@ -172,8 +179,9 @@ pub(crate) fn provisioning_schema(action: &str, config: &GitlabProviderConfig) -
         properties.insert(key, schema);
     };
     let operation = GitlabProvisioningOperation::from_action(action).expect("known action");
-    if action.starts_with("service_account.")
-        && !matches!(action, "service_account.list" | "service_account.create")
+    if operation == GitlabProvisioningOperation::ProjectMemberView
+        || (action.starts_with("service_account.")
+            && !matches!(action, "service_account.list" | "service_account.create"))
     {
         add("userId".into(), json!({"type":"integer", "minimum":1}));
         required.push("userId");
@@ -388,6 +396,27 @@ fn account_metadata(value: &Value, user_id: Option<u64>) -> Result<Value, Provid
     }
     Ok(json!({"id":id, "name":value["name"], "username":value["username"]}))
 }
+fn member_metadata(value: &Value, user_id: u64) -> Result<Value, ProviderError> {
+    if value["id"].as_u64() != Some(user_id)
+        || !value["username"].as_str().is_some_and(|username| {
+            !username.is_empty()
+                && username.len() <= 255
+                && !username
+                    .chars()
+                    .any(|c| c.is_control() || c.is_whitespace())
+        })
+        || !value["name"].is_string()
+        || value["access_level"].as_u64().is_none()
+    {
+        return Err(provisioning_protocol());
+    }
+    // The project member endpoint itself proves direct membership. Never fall
+    // back to a global user lookup or copy email/identity attributes.
+    Ok(
+        json!({"id":user_id,"username":value["username"],"name":value["name"],
+        "accessLevel":value["access_level"]}),
+    )
+}
 fn check_role(level: u64, config: &GitlabProvisioningConfig) -> Result<(), ProviderError> {
     if ![10, 15, 20, 25, 30, 40].contains(&level) || level > u64::from(config.max_access_level) {
         return Err(provisioning_invalid());
@@ -460,6 +489,8 @@ fn provisioning_result(
     use GitlabProvisioningOperation::*;
     let mut result = if matches!(op, ProjectTokenRevoke | AccountTokenRevoke | AccountDelete) {
         provisioning_locators(op, user_id, token_id, response)
+    } else if op == ProjectMemberView {
+        json!({"member": member_metadata(response, user_id)?})
     } else if op.is_account() {
         if op == AccountCreate
             && (response["name"] != body["name"]
@@ -509,11 +540,10 @@ fn provisioning_result(
         {
             return Err(provisioning_protocol());
         }
-        let secret = response["token"]
+        response["token"]
             .as_str()
             .filter(|s| !s.is_empty() && s.len() <= 8192 && !s.chars().any(char::is_control))
             .ok_or_else(provisioning_protocol)?;
-        result["issuedToken"] = json!(secret);
     }
     if !op.is_read() {
         result["mutationStatus"] = json!("applied");
@@ -637,7 +667,7 @@ impl GitlabProvider {
                 credential,
             )
         };
-        if user_id > 0 {
+        if user_id > 0 && op != ProjectMemberView {
             let account = call(AccountView, json!({}))
                 .await
                 .map_err(|e| provisioning_failure(e, None))?;
@@ -766,7 +796,7 @@ impl GitlabProvider {
         }});
         let known_locators = provisioning_locators(op, user_id, token_id, &Value::Null);
         let started = Instant::now();
-        let response = call(op, body.clone()).await.map_err(|e| {
+        let mut response = call(op, body.clone()).await.map_err(|e| {
             let mut error = provisioning_failure(e, (!op.is_read()).then_some(&known_locators));
             error.upstream_duration_ms = Some(elapsed_ms(started));
             error
@@ -793,7 +823,7 @@ impl GitlabProvider {
                 .with_upstream(Some(response.status), Some(response.duration_ms))
                 .with_audit(audit)
         })?;
-        Ok(gitlab_result(
+        let mut result = gitlab_result(
             action,
             &project,
             Some(locators),
@@ -801,7 +831,17 @@ impl GitlabProvider {
             response.duration_ms,
             parsed,
             self.backend.egress_proxy_audit(credential),
-        ))
+        );
+        if issues_token(action) {
+            // Validation above established a bounded token; keep its bytes out
+            // of ordinary result JSON, Debug and serialization. The host owns
+            // the operator-selected raw/reference delivery policy.
+            let Value::String(secret) = response.value["token"].take() else {
+                unreachable!("validated token")
+            };
+            result = result.with_secret_output("/result/issuedToken", secret);
+        }
+        Ok(result)
     }
 
     async fn find_service_account_token(
@@ -878,7 +918,9 @@ impl HttpGitlabBackend {
             ProjectTokenRotate => format!("{prefix}/access_tokens/{}/rotate", request.token_id),
             AccountList | AccountCreate => format!("{prefix}/service_accounts"),
             AccountView | AccountDelete => account,
-            MemberView | MemberUpdate => format!("{prefix}/members/{}", request.user_id),
+            ProjectMemberView | MemberView | MemberUpdate => {
+                format!("{prefix}/members/{}", request.user_id)
+            }
             MemberAdd => format!("{prefix}/members"),
             AccountTokenList | AccountTokenCreate => tokens,
             AccountTokenRotate => format!("{tokens}/{}/rotate", request.token_id),
@@ -897,7 +939,7 @@ impl HttpGitlabBackend {
             });
         }
         match op {
-            ProjectTokenView | AccountView | MemberView => {
+            ProjectMemberView | ProjectTokenView | AccountView | MemberView => {
                 self.get_json(op.operation(), url, credential).await
             }
             ProjectTokenRevoke | AccountTokenRevoke | AccountDelete => {

@@ -716,7 +716,13 @@ and project service-account actions (`service_account.list/view/create/delete`,
 require explicit repository grants and operator-enabled provisioning. Inspect
 live schemas for the exact action; names above group suffixes, not literal actions.
 Create/rotate require a future `expiresAt` within operator limits and return a
-new secret in `result.issuedToken`. Metadata reads never return token material.
+new credential in `result.issuedToken`: `{secretRef, expiresAt}` in the default
+reference mode, or a string in explicitly configured raw mode. Inspect
+`secretOutputMode` in discovery. Metadata reads never return token material.
+Store references promptly through an authorized credential connection handoff;
+expiry removes only the temporary copy, never the upstream token. Do not repeat
+issuance because a reference expired. `project.member.view` independently reads
+the username for the returned project member user ID.
 Sensitive output markers are envelope-relative. These are new downstream
 credentials; Broker execution credentials remain private. Avoid copying issued
 secrets into logs or unrelated messages. Direct use follows GitLab permissions,
@@ -724,9 +730,10 @@ not Broker grants. Do not automatically retry issuance or rotation after an
 uncertain outcome; inspect and revoke/reconcile the upstream token first.
 
 The typed CLI exposes `gitlab project access-token` and `gitlab service-account`.
-Use `--token-output PATH` on token create/rotate to create a private local token
-file while stdout contains metadata. HTTP/invoke/send deliver the new token in
-the canonical JSON response. Service accounts are created first, then assigned
+In raw mode, use `--token-output PATH` on token create/rotate to create a private
+local token file while stdout contains metadata. Reference mode rejects that
+option before issuance. HTTP/invoke/send return the configured shape in the
+canonical JSON response. Service accounts are created first, then assigned
 membership with `service_account.member.set`, then issued tokens. Each step is
 separately authorized; keep the returned account ID if a later step fails.
 

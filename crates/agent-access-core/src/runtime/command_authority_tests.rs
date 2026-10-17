@@ -513,6 +513,7 @@ async fn prepare(
                 execution_context: context(),
             },
             InvokeRequest::new(inputs),
+            None,
         )
         .await
         .map_err(|failure| failure.result.unwrap_err())

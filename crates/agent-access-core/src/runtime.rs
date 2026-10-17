@@ -37,6 +37,9 @@ mod provider_state_tests;
 mod resource_attribute_tests;
 #[cfg(test)]
 mod resource_coverage_tests;
+mod secret_reference_credentials;
+pub(crate) mod secret_reference_identity;
+mod secret_references;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use audit_sqlite::override_query_limits as override_audit_query_limits;
 pub use audit_sqlite::{AuditVerifyCheck, AuditVerifyReport, verify_sqlite_audit_database};
@@ -1839,6 +1842,7 @@ pub struct PreparedInvocation {
     body_parts: Vec<BrokerBodyPart>,
     state: Option<ProviderState>,
     response_options: agent_access_provider::presentation::ResponseOptions,
+    secret_outputs: secret_references::PreparedSecretOutputs,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
 }
@@ -2132,6 +2136,15 @@ impl BrokerRuntime {
         if let Some(store) = &managed_store {
             store.configure_identity_token_encryption(credential_key_ring.clone());
         }
+        // The host acquires the exclusive state locks before initial runtime
+        // construction. Only that cold start may recover abandoned work;
+        // reload candidates must preserve reservations held by live operations.
+        // Fixed expiry removes ciphertext before startup key readiness.
+        if let Some(store) = &managed_store {
+            store
+                .prepare_secret_references_for_runtime(previous.is_none())
+                .map_err(runtime_managed_store_error)?;
+        }
         let oauth = if config.oauth.registrations.is_empty() {
             None
         } else {
@@ -2327,7 +2340,7 @@ impl BrokerRuntime {
             .check_import_catalog_budgets()
             .map_err(runtime_managed_store_error)?;
         if previous.is_none() {
-            runtime.activate_oauth()?;
+            runtime.activate_runtime_authority()?;
             runtime.warn_aggregate_mcp_names();
         }
         Ok(runtime)
@@ -2374,21 +2387,6 @@ impl BrokerRuntime {
 
     pub fn oauth_manager(&self) -> Option<&crate::OAuthManager> {
         self.oauth.as_ref()
-    }
-
-    /// Activate only after candidate validation succeeds. Staged reloads must
-    /// not change persisted OAuth admission or invalidate a running snapshot.
-    pub fn activate_oauth(&self) -> Result<(), RuntimeError> {
-        let result = if let Some(manager) = &self.oauth {
-            manager.activate()
-        } else if let Some(store) = &self.managed_store {
-            crate::OAuthManager::disable_all(store)
-        } else {
-            Ok(())
-        };
-        result.map_err(|error| RuntimeError::ManagedStore {
-            message: error.to_string(),
-        })
     }
 
     pub fn deactivate_oauth(&self) {
@@ -3251,6 +3249,7 @@ impl BrokerRuntime {
             let mut spec = api_service_spec(
                 &service.descriptor,
                 self.scoped_mcp_ready(&service.descriptor.service),
+                self.config.secret_outputs.mode,
             )?;
             spec.availability = Some(service.availability.clone());
             Some(spec)
@@ -3268,7 +3267,11 @@ impl BrokerRuntime {
                 });
                 (!descriptor.actions.is_empty())
                     .then(|| {
-                        api_service_spec(&descriptor, self.scoped_mcp_ready(&descriptor.service))
+                        api_service_spec(
+                            &descriptor,
+                            self.scoped_mcp_ready(&descriptor.service),
+                            self.config.secret_outputs.mode,
+                        )
                     })
                     .flatten()
             })
@@ -4614,8 +4617,35 @@ impl BrokerRuntime {
         context: GovernedOperationContext,
         request: InvokeRequest,
     ) -> Result<PreparedInvocation, Box<BrokerResponse<Value>>> {
-        match self.prepare_invoke(context, request).await {
-            Ok(prepared) => Ok(prepared),
+        let deadline = self.secret_output_operation_deadline(
+            &context.operation.service,
+            &context.operation.action,
+        );
+        let preparation = self.prepare_invoke(context.clone(), request, None);
+        let result = if let Some(deadline) = deadline {
+            match tokio::time::timeout_at(deadline, preparation).await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(Box::new(
+                        self.governed_operation_error_response(
+                            context,
+                            owned::interrupted_error(
+                                (ReasonCode::OperationTimeout, "operation deadline exceeded"),
+                                false,
+                            ),
+                        )
+                        .await,
+                    ));
+                }
+            }
+        } else {
+            preparation.await
+        };
+        match result {
+            Ok(mut prepared) => {
+                prepared.secret_outputs.bound_operation_deadline(deadline);
+                Ok(prepared)
+            }
             Err(failure) => Err(Box::new(
                 self.finalize_pre_dispatch(failure.context, failure.result)
                     .await,
@@ -4626,7 +4656,8 @@ impl BrokerRuntime {
     async fn prepare_invoke(
         &self,
         context: GovernedOperationContext,
-        request: InvokeRequest,
+        mut request: InvokeRequest,
+        identity_proof: Option<&crate::AttestedIdentityProof>,
     ) -> Result<PreparedInvocation, Box<owned::PreparationFailure>> {
         let GovernedOperationContext {
             operation:
@@ -4769,12 +4800,16 @@ impl BrokerRuntime {
             )));
         };
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
-        if response_options != agent_access_provider::presentation::ResponseOptions::default()
-            && let Err(error) = agent_access_provider::presentation::validate_response_options(
-                action_descriptor.presentation.as_ref(),
-                response_options,
-            )
-        {
+        let request_contract = (|| {
+            if response_options != agent_access_provider::presentation::ResponseOptions::default() {
+                agent_access_provider::presentation::validate_response_options(
+                    action_descriptor.presentation.as_ref(),
+                    response_options,
+                )?;
+            }
+            secret_references::validate_reference_inputs(&action_descriptor, &request.inputs)
+        })();
+        if let Err(error) = request_contract {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
                     search_authorization: None,
@@ -5257,6 +5292,42 @@ impl BrokerRuntime {
         } else {
             None
         };
+        let finalize_context = FinalizeContext {
+            search_authorization: audit_search_authorization,
+            command,
+            agent_request_id,
+            broker_request_id,
+            policy_generation,
+            identity: identity.clone(),
+            service: service.clone(),
+            action: action.clone(),
+            upstream_resource_ownership,
+            resource_scopes: scopes,
+            credential_mode: audit_credential_mode,
+            matched_grant: Some(policy.matched_grant),
+            source,
+            execution_context: Some(execution_context.clone()),
+            redact_error_resource_scopes: lookup_scopes_before_policy,
+            personal_lookup_connection: personal_lookup_connection.clone(),
+            started,
+        };
+        // References are resolved only after the exact action, resource and
+        // credential authority has been admitted. Capacity is reserved before
+        // any irreversible provider invocation.
+        let secret_outputs = match self.prepare_secret_references(
+            &finalize_context,
+            &action_descriptor,
+            &mut request.inputs,
+            identity_proof,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    finalize_context,
+                    Err(error),
+                )));
+            }
+        };
         let admitted = agent_access_provider::host::admitted_request(
             agent_access_provider::host::AdmittedRequestParts {
                 service: service.clone(),
@@ -5283,25 +5354,8 @@ impl BrokerRuntime {
             state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
-            finalize_context: FinalizeContext {
-                search_authorization: audit_search_authorization,
-                command,
-                agent_request_id,
-                broker_request_id,
-                policy_generation,
-                identity,
-                service,
-                action,
-                upstream_resource_ownership,
-                resource_scopes: scopes,
-                credential_mode: audit_credential_mode,
-                matched_grant: Some(policy.matched_grant),
-                source,
-                execution_context: Some(execution_context),
-                redact_error_resource_scopes: lookup_scopes_before_policy,
-                personal_lookup_connection: personal_lookup_connection.clone(),
-                started,
-            },
+            finalize_context,
+            secret_outputs,
         })
     }
 
@@ -5363,9 +5417,43 @@ impl BrokerRuntime {
         body_parts: Vec<BrokerBodyPart>,
         require_stream: bool,
     ) -> BrokerResponse<Value> {
-        let (context, result) = self
-            .execute_prepared_invoke(prepared, body_parts, require_stream)
-            .await;
+        let secret_outputs = prepared.secret_outputs.clone();
+        let response_options = prepared.response_options;
+        let (context, result) = if let Some(deadline) = secret_outputs.operation_deadline() {
+            use futures_util::FutureExt;
+            let context = prepared.finalize_context.clone();
+            let finalization =
+                agent_access_provider::host::provider_finalization_context(Some(deadline));
+            let execution = agent_access_provider::host::with_provider_finalization(
+                finalization.clone(),
+                self.execute_prepared_invoke(prepared, body_parts),
+            );
+            tokio::pin!(execution);
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => {
+                    // As in owned JSON execution, only already captured
+                    // outcomes receive one immediate cleanup poll.
+                    let completed = if finalization.is_finalizing() {
+                        execution.as_mut().now_or_never()
+                    } else { None };
+                    completed.unwrap_or_else(|| (context, Err(owned::interrupted_error(
+                        (ReasonCode::OperationTimeout, "operation deadline exceeded"),
+                        secret_outputs.dispatched(),
+                    ))))
+                }
+                result = &mut execution => result,
+            }
+        } else {
+            self.execute_prepared_invoke(prepared, body_parts).await
+        };
+        let result = self.complete_prepared_invoke(
+            &context,
+            &secret_outputs,
+            response_options,
+            require_stream,
+            result,
+        );
         self.finalize(context, result).await
     }
 
@@ -5373,7 +5461,6 @@ impl BrokerRuntime {
         &self,
         prepared: PreparedInvocation,
         body_parts: Vec<BrokerBodyPart>,
-        require_stream: bool,
     ) -> (FinalizeContext, Result<ProviderResult, ProviderError>) {
         let PreparedInvocation {
             resource_binding,
@@ -5382,7 +5469,8 @@ impl BrokerRuntime {
             request,
             body_parts: _,
             state,
-            response_options,
+            response_options: _,
+            secret_outputs,
             body_part_specs: _,
             finalize_context,
         } = prepared;
@@ -5479,15 +5567,18 @@ impl BrokerRuntime {
                         .await?
                 }
                 None => {
-                    run_provider_hook(
-                        hook.clone(),
-                        provider.invoke(agent_access_provider::host::invocation(
-                            request,
-                            body_parts,
-                            resource_attributes,
-                            state,
-                        )),
-                    )
+                    secret_outputs.mark_dispatched();
+                    run_provider_hook(hook.clone(), async {
+                        provider
+                            .invoke(agent_access_provider::host::invocation(
+                                request,
+                                body_parts,
+                                resource_attributes,
+                                state,
+                            ))
+                            .await
+                            .map_err(|error| secret_outputs.sanitize_provider_error(error))
+                    })
                     .await?
                 }
             };
@@ -5501,6 +5592,20 @@ impl BrokerRuntime {
                 error
             }
         });
+        (finalize_context, result)
+    }
+
+    /// Capture is deliberately outside the cancellable upstream wait. Once an
+    /// outcome exists, expiry/cancellation cannot strand its one-time secret.
+    fn complete_prepared_invoke(
+        &self,
+        context: &FinalizeContext,
+        secret_outputs: &secret_references::PreparedSecretOutputs,
+        response_options: agent_access_provider::presentation::ResponseOptions,
+        require_stream: bool,
+        result: Result<ProviderResult, ProviderError>,
+    ) -> Result<ProviderResult, ProviderError> {
+        let result = self.complete_secret_outputs(secret_outputs, result);
         let result = result.and_then(|result| {
             if !require_stream
                 || result
@@ -5515,18 +5620,18 @@ impl BrokerRuntime {
                 "provider result stream was not available",
             ))
         });
-        let result = if require_stream {
+        if require_stream {
             result
         } else {
             present_provider_outcome(
-                self.action_presentation(&service, &action).as_ref(),
+                self.action_presentation(&context.service, &context.action)
+                    .as_ref(),
                 response_options,
-                self.presentation_body_limit(&service),
+                self.presentation_body_limit(&context.service),
                 self.config.limits.max_upstream_response_bytes,
                 result,
             )
-        };
-        (finalize_context, result)
+        }
     }
 
     fn action_presentation(&self, service: &str, action: &str) -> Option<ActionPresentation> {
@@ -8282,6 +8387,15 @@ fn provider_error_from_managed_store(error: ManagedStoreError) -> ProviderError 
 /// never carries the store's internal detail.
 fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
     match error {
+        ManagedStoreError::SecretReferenceNotFound => "secret reference is unavailable",
+        ManagedStoreError::SecretReferenceExpired => {
+            "secret reference expired; do not repeat issuance"
+        }
+        ManagedStoreError::SecretReferenceDenied => "secret reference use is not authorized",
+        ManagedStoreError::SecretReferenceCapacity => "temporary secret capacity is exhausted",
+        ManagedStoreError::SecretReferenceStateConflict => {
+            "secret reservation is no longer writable"
+        }
         ManagedStoreError::CredentialNotFound => "managed per_user credential is not provisioned",
         ManagedStoreError::CredentialExpired => "managed per_user credential is expired",
         ManagedStoreError::CredentialDecryptFailed => "managed per_user credential cannot decrypt",

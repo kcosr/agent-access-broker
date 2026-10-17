@@ -1808,6 +1808,7 @@ async fn invoke_malformed_gitlab_draft_readback(
     };
     let mut config = base_fake_config();
     config.providers.insert(provider_config);
+    config.secret_outputs.mode = crate::SecretOutputMode::Raw;
     config.credentials.service.insert(
         "gitlab".to_string(),
         fake_service_credential(format!("file:{}", service_token_path.display())),
@@ -8089,6 +8090,7 @@ fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
     };
     for provider in ["gitlab", "cloudbees_ci"] {
         let mut config = base_fake_config();
+        config.secret_outputs.mode = crate::SecretOutputMode::Raw;
         match provider {
             "gitlab" => {
                 config
@@ -8415,6 +8417,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
     let key_path =
         write_temp_secret(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([19_u8; 32]));
     BrokerConfig {
+        secret_outputs: Default::default(),
         imports: Default::default(),
         command_imports: Default::default(),
         oauth: Default::default(),

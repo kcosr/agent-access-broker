@@ -2394,3 +2394,9 @@ them keeps the consent evidence. Target discovery merges the per-product entries
 `accessible-resources` lists for one site into one target and adds the granted
 account-level `read:me`, so the manager's whole-profile eligibility check sees
 the site with both products' scopes.
+
+## Transferable provider secrets
+
+The SDK declares bounded string outputs carried in a private sidecar. Core reserves storage before dispatch and captures completed outcomes before formatting. Runtime resolution and credential handoff enforce current origin validity.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

@@ -372,11 +372,12 @@ impl ManagedStore {
         active(&conn, owner)?;
         Ok(read(&conn, ring, owner, registration)?)
     }
-    pub(crate) fn oauth_reconcile(
+    pub(crate) fn oauth_reconcile<T>(
         &self,
         ring: &CredentialKeyRing,
         registrations: &BTreeMap<String, ReconciledRegistration>,
-    ) -> Result<(), OAuthError> {
+        activate_other_authority: impl FnOnce(&Connection) -> Result<T, OAuthError>,
+    ) -> Result<T, OAuthError> {
         let mut conn = self.connection.lock().map_err(|_| OAuthError::Storage)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -434,6 +435,7 @@ impl ManagedStore {
                 }
             }
         }
+        let result = activate_other_authority(&tx)?;
         tx.commit().map_err(|_| OAuthError::Storage)?;
         self.configure_oauth_revocation(Some(super::oauth_revocation::RevocationCapture {
             ring: ring.clone(),
@@ -446,7 +448,7 @@ impl ManagedStore {
         for (owner, registration, outcome) in events {
             tracing::info!(target:"agent_access_core::oauth",event="activation_reconciliation",owner,registration,outcome);
         }
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -553,7 +555,10 @@ fn check_configuration(
     Ok(())
 }
 impl ManagedStore {
-    pub(crate) fn oauth_disable_all(&self) -> Result<(), OAuthError> {
+    pub(crate) fn oauth_disable_all<T>(
+        &self,
+        activate_other_authority: impl FnOnce(&Connection) -> Result<T, OAuthError>,
+    ) -> Result<T, OAuthError> {
         let mut conn = self.connection.lock().map_err(|_| OAuthError::Storage)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -577,6 +582,7 @@ impl ManagedStore {
         // Without a registration no client can revoke the kept families.
         let abandoned =
             super::oauth_revocation::abandon_all(&tx, crate::oauth::revocation::clock())?;
+        let result = activate_other_authority(&tx)?;
         tx.commit().map_err(|_| OAuthError::Storage)?;
         self.configure_oauth_revocation(None);
         for (owner, registration) in affected {
@@ -585,7 +591,7 @@ impl ManagedStore {
         if abandoned > 0 {
             tracing::info!(target:"agent_access_core::oauth",event="remote_revocation_abandoned",count=abandoned,outcome="oauth_disabled");
         }
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -603,6 +609,115 @@ pub(super) fn validate_discovery_revision_structure(
 mod tests {
     use super::*;
     #[test]
+    fn secret_reference_activation_failure_preserves_oauth_family_and_caller_generation() {
+        let (_dir, store, ring) = test_fixture();
+        let registration = |fingerprint: &str| {
+            BTreeMap::from([(
+                "stub".into(),
+                ReconciledRegistration {
+                    fingerprint: fingerprint.into(),
+                    credential_revision: "credential".into(),
+                    revokes: false,
+                },
+            )])
+        };
+        let original_callers = vec![("relay".into(), [11; 32])];
+        let changed_callers = vec![("relay".into(), [12; 32])];
+        store
+            .oauth_reconcile(&ring, &registration("original"), |conn| {
+                ManagedStore::synchronize_secret_reference_callers_conn(
+                    conn,
+                    &ring,
+                    &original_callers,
+                )
+                .map_err(|_| OAuthError::Storage)
+            })
+            .unwrap();
+        let state: SlotState = serde_json::from_value(serde_json::json!({
+            "generation":"slot-generation",
+            "config_fingerprint":"original",
+            "credential_revision":"credential",
+            "flows":{},
+            "connection":{
+                "id":"connection-id", "subject":"upstream-user", "display_name":"Fixture",
+                "status":"ready", "reason":null, "revalidation":"none",
+                "family":{
+                    "id":"family-id", "material_version":"material-version",
+                    "refresh_token":"synthetic-preserved-refresh-token",
+                    "consent_scopes":["read"], "targets":[], "access":{}, "attempt":null,
+                    "retry_not_before":0, "retry_count":0, "rejection_count":0
+                }
+            }
+        }))
+        .unwrap();
+        let original_state = serde_json::to_value(&state).unwrap();
+        store
+            .oauth_update(&ring, "user", "stub", "original", |_, _| Ok((state, ())))
+            .unwrap();
+        test_sql(
+            &store,
+            "CREATE TRIGGER reject_caller_activation BEFORE UPDATE ON secret_reference_caller_generations BEGIN SELECT RAISE(FAIL, 'synthetic activation failure'); END",
+        );
+        for disable in [false, true] {
+            let activate_callers = |conn: &Connection| {
+                ManagedStore::synchronize_secret_reference_callers_conn(
+                    conn,
+                    &ring,
+                    &changed_callers,
+                )
+                .map_err(|_| OAuthError::Storage)
+            };
+            let result = if disable {
+                store.oauth_disable_all(activate_callers)
+            } else {
+                store.oauth_reconcile(&ring, &registration("replacement"), activate_callers)
+            };
+            assert!(matches!(result, Err(OAuthError::Storage)));
+            assert_eq!(
+                serde_json::to_value(
+                    store
+                        .oauth_read(&ring, "user", "stub", "original")
+                        .unwrap()
+                        .unwrap()
+                )
+                .unwrap(),
+                original_state,
+            );
+            let conn = store.connection.lock().unwrap();
+            ManagedStore::check_secret_reference_caller_conn(&conn, &ring, "relay", &[11; 32], 1)
+                .unwrap();
+            assert!(
+                ManagedStore::check_secret_reference_caller_conn(
+                    &conn, &ring, "relay", &[12; 32], 2
+                )
+                .is_err()
+            );
+        }
+        test_sql(&store, "DROP TRIGGER reject_caller_activation");
+        let generations = store
+            .oauth_reconcile(&ring, &registration("replacement"), |conn| {
+                ManagedStore::synchronize_secret_reference_callers_conn(
+                    conn,
+                    &ring,
+                    &changed_callers,
+                )
+                .map_err(|_| OAuthError::Storage)
+            })
+            .unwrap();
+        assert_eq!(generations["relay"], 2);
+        assert!(
+            store
+                .oauth_read(&ring, "user", "stub", "replacement")
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            store.oauth_read(&ring, "user", "stub", "original"),
+            Err(OAuthError::Stale)
+        ));
+    }
+
+    #[test]
     fn snapshot_aad_key_readiness_rewrap_and_principal_disable() {
         let (_dir, store, ring) = test_fixture();
         store
@@ -616,6 +731,7 @@ mod tests {
                         revokes: false,
                     },
                 )]),
+                |_| Ok(()),
             )
             .unwrap();
         let state = SlotState {

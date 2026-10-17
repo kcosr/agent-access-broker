@@ -3355,6 +3355,7 @@ pub(crate) async fn admin_principal_credential_put(
         Err(response) => return *response,
     };
     put_connection_credential(
+        state,
         context,
         operation,
         admin_request(principal, connection),

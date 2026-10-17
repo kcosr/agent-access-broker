@@ -36,11 +36,16 @@ const ADAPTER_PRODUCTION_TARGETS = new Set(["sdk", "helper", "core"]);
 // fenced as well. Provider, adapter, reference and helper code presents
 // credentials only through the upstream client's send methods, in their own
 // scheme or a placement of its own, so none of their sources, tests included,
-// may name these, however they are imported.
+// may name these, however they are imported. The protected output extraction
+// port and its plaintext-bearing type are likewise host-only. Provider tests
+// use the SDK's feature-gated `secret_outputs_match` equality inspector; the
+// test-only API never exposes plaintext or relaxes this source fence.
 export const HOST_ONLY_ITEMS = Object.freeze([
   "authorize_host_request",
   "token_as_basic",
   "gateway_upstream_authorization",
+  "take_secret_outputs",
+  "SecretOutputValue",
 ]);
 const HOST_ONLY_FENCED_ROLES = Object.freeze(["native", "adapter", "reference", "helper"]);
 // The Rust source locations of a package, relative to its manifest directory.

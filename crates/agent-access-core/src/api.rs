@@ -85,6 +85,12 @@ pub struct ApiActionSpec {
     /// JSON pointers into sensitive values, including secret exports and opaque imported payloads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive_output_pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_outputs: Vec<agent_access_provider::SecretOutputDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_input_pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_output_mode: Option<crate::SecretOutputMode>,
     pub io: ActionIo,
     pub response_kind: ResponseKind,
     pub exit_policy: ExitPolicy,
@@ -251,6 +257,7 @@ pub fn empty_catalog(identity: Value) -> ApiCatalog {
 pub fn api_service_spec(
     descriptor: &ServiceDescriptor,
     scoped_mcp_ready: bool,
+    secret_output_mode: crate::SecretOutputMode,
 ) -> Option<ApiServiceSpec> {
     if !matches!(descriptor.surface, ServiceSurface::Invoke) {
         return None;
@@ -258,7 +265,7 @@ pub fn api_service_spec(
     let actions = descriptor
         .actions
         .iter()
-        .filter_map(|action| api_action_spec(&descriptor.service, action))
+        .filter_map(|action| api_action_spec(&descriptor.service, action, secret_output_mode))
         .collect::<Vec<_>>();
     Some(ApiServiceSpec {
         availability: None,
@@ -284,7 +291,11 @@ pub fn api_service_spec(
     })
 }
 
-fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiActionSpec> {
+fn api_action_spec(
+    service: &str,
+    action: &ActionDescriptor,
+    secret_output_mode: crate::SecretOutputMode,
+) -> Option<ApiActionSpec> {
     if !is_service_name(service) || !is_action_name(&action.action) {
         return None;
     }
@@ -297,7 +308,15 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         // An I/O kind this host does not serve is never published.
         _ => return None,
     };
-    let sensitive_input_pointers = sensitive_input_pointers_from_schema(&action.input_schema);
+    let mut sensitive_input_pointers = sensitive_input_pointers_from_schema(&action.input_schema);
+    for field in &action.secret_inputs {
+        if !sensitive_input_pointers
+            .iter()
+            .any(|pointer| pointer == field.pointer())
+        {
+            sensitive_input_pointers.push(field.pointer().to_owned());
+        }
+    }
     let response_capabilities =
         agent_access_provider::presentation::response_capabilities(action.presentation.as_ref());
     let mut rendered_body_owners = Vec::new();
@@ -324,7 +343,14 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         credential_modes: action.credential_modes.clone(),
         lookup_required: action.lookup.credential_required(),
         upstream_resource_ownership: action.upstream_resource_ownership,
-        input_schema: action.input_schema.clone(),
+        input_schema: action.reference_input_schema().ok()?,
+        secret_outputs: action.secret_outputs.clone(),
+        secret_input_pointers: action
+            .secret_inputs
+            .iter()
+            .map(|field| field.pointer().to_owned())
+            .collect(),
+        secret_output_mode: (!action.secret_outputs.is_empty()).then_some(secret_output_mode),
         sensitive_input_pointers,
         sensitive_output_pointers: action.sensitive_output_pointers.clone(),
         io,
@@ -511,6 +537,9 @@ pub fn openapi_from_catalog(
                     "operationId": format!("invoke.{}.{}", service.service, action.action),
                     "x-agent-access-read-only": action.read_only,
                     "x-agent-access-sensitive-output-pointers": action.sensitive_output_pointers,
+                    "x-agent-access-secret-outputs": action.secret_outputs,
+                    "x-agent-access-secret-input-pointers": action.secret_input_pointers,
+                    "x-agent-access-secret-output-mode": action.secret_output_mode,
                     "requestBody": {
                         "required": true,
                         "content": request_content
@@ -2849,7 +2878,22 @@ fn credential_put_body_schema() -> Value {
         "type": "object", "additionalProperties": false, "required": ["secret"],
         "properties": {
             "profile": {"type": "string", "description": "Optional; must equal the connection's token profile."},
-            "secret": {"type": "object", "description": "The fields of the connection's input schema."},
+            "secret": {
+                "type": "object", "additionalProperties": false,
+                "required": ["token"],
+                "properties": {
+                    "username": {"type": "string"},
+                    "token": {"oneOf": [
+                        {"type": "string"},
+                        {"type": "object", "additionalProperties": false, "required": ["secretRef"],
+                         "properties": {
+                            "secretRef": {"type": "string", "pattern": "^sr_[A-Za-z0-9_-]{43}$"},
+                            "expiresAt": {"type": "string", "description": "Informational only; the Broker enforces its stored expiry."}
+                         }}
+                    ]}
+                },
+                "description": "The connection's credential fields. A token reference is resolved and installed atomically without returning plaintext."
+            },
             "metadata": {"type": "object"}
         }
     })
@@ -3310,7 +3354,10 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
         "x-agent-access-exit-policy": action.exit_policy,
         "x-agent-access-io": action.io,
         "x-agent-access-sensitive-pointers": action.sensitive_input_pointers,
-        "x-agent-access-sensitive-output-pointers": action.sensitive_output_pointers
+        "x-agent-access-sensitive-output-pointers": action.sensitive_output_pointers,
+        "x-agent-access-secret-outputs": action.secret_outputs,
+        "x-agent-access-secret-input-pointers": action.secret_input_pointers,
+        "x-agent-access-secret-output-mode": action.secret_output_mode
     });
     if let Some(documentation) = &action.documentation {
         schema["x-agent-access-documentation"] = documentation.clone();

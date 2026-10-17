@@ -64,6 +64,18 @@ auto_migrate = false
 # Each key file below contains an independently generated, unpadded base64url
 # encoding of 32 random bytes. Keep files owner-only and back them up separately
 # from the databases. Retain every encryption key still used by stored secrets.
+# Declared provider secrets are encrypted temporarily and returned as references.
+# Fixed lifetime; reads do not extend it. Expiration never revokes upstream tokens.
+[secret_outputs]
+mode = "reference"
+ttl_seconds = 14400
+max_refs_per_principal = 100
+max_refs_total = 10000
+max_bytes_per_principal = 1048576
+max_bytes_total = 67108864
+receipt_retention_seconds = 604800
+max_receipts_total = 100000
+
 [credential_encryption]
 active_key = "k1"
 

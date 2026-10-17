@@ -1252,6 +1252,11 @@ pub agent_access_core::managed_store::ManagedStoreError::ResourceInUse
 pub agent_access_core::managed_store::ManagedStoreError::ResourceNotFound
 pub agent_access_core::managed_store::ManagedStoreError::RightMissing
 pub agent_access_core::managed_store::ManagedStoreError::SchemaInvalid(alloc::string::String)
+pub agent_access_core::managed_store::ManagedStoreError::SecretReferenceCapacity
+pub agent_access_core::managed_store::ManagedStoreError::SecretReferenceDenied
+pub agent_access_core::managed_store::ManagedStoreError::SecretReferenceExpired
+pub agent_access_core::managed_store::ManagedStoreError::SecretReferenceNotFound
+pub agent_access_core::managed_store::ManagedStoreError::SecretReferenceStateConflict
 pub agent_access_core::managed_store::ManagedStoreError::SelfServiceDisabled
 pub agent_access_core::managed_store::ManagedStoreError::Unavailable(alloc::string::String)
 pub agent_access_core::managed_store::ManagedStoreError::VersionConflict

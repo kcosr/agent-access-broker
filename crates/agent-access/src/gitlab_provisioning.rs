@@ -2,6 +2,25 @@ use super::*;
 use serde_json::{Value, json};
 
 #[derive(Debug, Subcommand)]
+pub(super) enum ProjectMemberCommand {
+    View { project: String, user_id: u64 },
+}
+
+pub(super) async fn run_project_member(
+    ctx: &CliContext<'_>,
+    command: &ProjectMemberCommand,
+) -> Result<()> {
+    let ProjectMemberCommand::View { project, user_id } = command;
+    run_provisioning(
+        ctx,
+        "project.member.view",
+        json!({"project":project,"userId":user_id}),
+        None,
+    )
+    .await
+}
+
+#[derive(Debug, Subcommand)]
 pub(super) enum ProjectTokenCommand {
     List {
         project: String,
@@ -120,7 +139,7 @@ pub(super) struct TokenDeliveryArgs {
     /// Required token expiry in YYYY-MM-DD UTC, within operator limits.
     #[arg(long)]
     expires_at: String,
-    /// Write only the issued token to a new private file; stdout retains metadata.
+    /// In Broker raw mode, write the token to a new private file; stdout retains metadata.
     #[arg(long)]
     token_output: Option<PathBuf>,
 }
@@ -278,6 +297,14 @@ async fn run_provisioning(
         }
         return crate::run_invoke_parts(ctx, "gitlab", action, inputs).await;
     }
+    if delivery.is_some_and(|delivery| delivery.token_output.is_some()) {
+        let spec = output_action_spec(ctx, "gitlab", action).await?;
+        if spec.secret_output_mode != Some(agent_access_core::SecretOutputMode::Raw) {
+            crate::exit_cli_input_error(anyhow::anyhow!(
+                "--token-output requires Broker raw secret delivery mode; omit it to receive a protected reference"
+            ));
+        }
+    }
     // Reserve the destination before a non-repeatable issuance, rejecting existing files and symlinks.
     let mut output = delivery
         .and_then(|d| d.token_output.as_ref())
@@ -295,6 +322,26 @@ async fn run_provisioning(
         send_invoke_parts_with_options(ctx, "gitlab", action, inputs, ResponseOptions::default())
             .await?;
     if let Some(file) = output.as_mut() {
+        // A reload may change delivery mode after the catalog preflight. Keep
+        // the protected reference and successful issuance metadata intact.
+        if value
+            .pointer("/result/issuedToken/secretRef")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            if let Some(path) = delivery.and_then(|d| d.token_output.as_ref())
+                && let Err(error) = remove_reserved_token_output(file, path)
+            {
+                eprintln!(
+                    "Cannot remove unused token output reservation {}: {error}.",
+                    path.display()
+                );
+            }
+            eprintln!(
+                "Broker returned a protected secret reference after its delivery policy changed. No raw token was written; retain the reference below and do not repeat issuance."
+            );
+            print_invoke_value_and_exit(status, value, ResponseFormat::Json);
+        }
         // Remove the secret before any printing, including failure responses.
         let token = value
             .get_mut("result")
@@ -324,23 +371,7 @@ async fn run_provisioning(
             && let Some(path) = delivery.and_then(|d| d.token_output.as_ref())
         {
             // Cleanup must never hide the Broker's definitive denial or alter its exit code.
-            let cleanup = || -> std::io::Result<()> {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    let reserved = file.metadata()?;
-                    let current = match fs::symlink_metadata(path) {
-                        Ok(metadata) => metadata,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                        Err(error) => return Err(error),
-                    };
-                    if current.dev() != reserved.dev() || current.ino() != reserved.ino() {
-                        return Ok(());
-                    }
-                }
-                fs::remove_file(path)
-            };
-            if let Err(error) = cleanup() {
+            if let Err(error) = remove_reserved_token_output(file, path) {
                 eprintln!(
                     "Cannot remove unused token output reservation {}: {error}. Issuance was denied.",
                     path.display()
@@ -353,4 +384,23 @@ async fn run_provisioning(
         }
     }
     print_invoke_value_and_exit(status, value, ResponseFormat::Json);
+}
+
+fn remove_reserved_token_output(file: &fs::File, path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let reserved = file.metadata()?;
+        let current = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if current.dev() != reserved.dev() || current.ino() != reserved.ino() {
+            return Ok(());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    fs::remove_file(path)
 }

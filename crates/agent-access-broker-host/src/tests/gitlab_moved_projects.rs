@@ -75,6 +75,9 @@ fn write_moved_projects_config(
         r#"[deployment]
 environment = "test"
 
+[secret_outputs]
+mode = "raw"
+
 [identity]
 mode = "anonymous"
 authority = "toml"

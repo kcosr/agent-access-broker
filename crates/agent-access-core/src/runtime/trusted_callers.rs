@@ -13,6 +13,16 @@ pub(super) struct ResolvedTrustedCaller {
     credential: Arc<str>,
     config: TrustedCallerConfig,
     binding: [u8; 32],
+    // Loaded once with the security contract, never refreshed onto a newer
+    // ledger generation while an admitted operation is still using this value.
+    reference_generation: Option<i64>,
+}
+
+impl ResolvedTrustedCaller {
+    pub(super) fn secret_reference_contract(&self) -> Option<(&str, &[u8; 32], i64)> {
+        self.reference_generation
+            .map(|generation| (self.name.as_str(), &self.binding, generation))
+    }
 }
 
 /// Opaque equality evidence for the complete loaded caller security contract.
@@ -173,6 +183,7 @@ pub(super) fn load_trusted_callers(
             credential: Arc::from(credential),
             config: caller.clone(),
             binding: digest.finalize().into(),
+            reference_generation: None,
         });
     }
     Ok(Arc::new(callers))
@@ -205,6 +216,49 @@ pub(super) fn validate_caller_principal_credentials(
 }
 
 impl BrokerRuntime {
+    /// Atomically activate retained OAuth state and durable caller generations
+    /// after candidate admission succeeds. Hosts hold their publication fence
+    /// and publish without another fallible operation after this succeeds.
+    pub fn activate_runtime_authority(&mut self) -> Result<(), RuntimeError> {
+        let Some(store) = &self.managed_store else {
+            return Ok(());
+        };
+        let contracts = zeroize::Zeroizing::new(
+            self.trusted_callers
+                .iter()
+                .map(|caller| (caller.name.clone(), caller.binding))
+                .collect::<Vec<_>>(),
+        );
+        let mut caller_failure = None;
+        let activate_callers = |conn: &rusqlite::Connection| {
+            let result = match &self.credential_key_ring {
+                Some(ring) => {
+                    ManagedStore::synchronize_secret_reference_callers_conn(conn, ring, &contracts)
+                }
+                None => ManagedStore::check_secret_reference_callers_without_key_ring_conn(conn)
+                    .map(|()| BTreeMap::new()),
+            };
+            result.map_err(|error| {
+                caller_failure = Some(error);
+                crate::OAuthError::Storage
+            })
+        };
+        let generations = match &self.oauth {
+            Some(manager) => manager.activate_with(activate_callers),
+            None => store.oauth_disable_all(activate_callers),
+        }
+        .map_err(|error| match caller_failure {
+            Some(error) => runtime_managed_store_error(error),
+            None => RuntimeError::ManagedStore {
+                message: error.to_string(),
+            },
+        })?;
+        for caller in Arc::make_mut(&mut self.trusted_callers) {
+            caller.reference_generation = generations.get(&caller.name).copied();
+        }
+        Ok(())
+    }
+
     pub fn caller_security_binding(&self) -> CallerSecurityBinding {
         CallerSecurityBinding(
             self.trusted_callers

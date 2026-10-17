@@ -6441,6 +6441,7 @@ mod tests {
         audit_path: &Path,
     ) -> BrokerConfig {
         BrokerConfig {
+            secret_outputs: Default::default(),
             imports: Default::default(),
             command_imports: Default::default(),
             oauth: Default::default(),

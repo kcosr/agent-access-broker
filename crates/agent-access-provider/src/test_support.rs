@@ -23,6 +23,45 @@ mod trace_capture;
 pub use invocation::InvocationBuilder;
 pub use trace_capture::{TraceCapture, TraceCaptureDispatcher, install_trace_capture};
 
+/// Whether a result carries exactly these synthetic secret outputs, independent
+/// of order. This test-only inspector compares values without revealing them or
+/// draining the protected sidecar. Duplicate pointers never match. Production
+/// providers have no inspector; the host extraction port stays host-only.
+pub fn secret_outputs_match(result: &crate::ProviderResult, expected: &[(&str, &str)]) -> bool {
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeSet;
+    use subtle::ConstantTimeEq;
+
+    let actual = &result.secret_outputs;
+    if actual.len() != expected.len()
+        || actual
+            .iter()
+            .map(|output| output.pointer())
+            .collect::<BTreeSet<_>>()
+            .len()
+            != actual.len()
+        || expected
+            .iter()
+            .map(|(pointer, _)| *pointer)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != expected.len()
+    {
+        return false;
+    }
+    actual.iter().all(|output| {
+        expected
+            .iter()
+            .find(|(pointer, _)| *pointer == output.pointer())
+            .is_some_and(|(_, expected)| {
+                bool::from(
+                    Sha256::digest(output.value().as_bytes())
+                        .ct_eq(&Sha256::digest(expected.as_bytes())),
+                )
+            })
+    })
+}
+
 /// A test provider that states its own descriptor, so tests can inject it
 /// without a backend configuration.
 pub trait DescribedProvider: Provider + 'static {

@@ -99,6 +99,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         execution_context,
         identity,
         credentials,
+        secret_outputs,
         imports,
         command_imports,
         oauth,
@@ -125,6 +126,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         )
         .put("identity", identity_value(identity))
         .put("credentials", credentials_value(credentials))
+        .put("secret_outputs", secret_outputs_value(secret_outputs))
         .put("imports", imports_value(imports))
         .put(
             "command_imports",
@@ -156,6 +158,35 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         .put("limits", limits_value(limits))
         .opt("audit", audit.as_ref().map(audit_value))
         .table()
+}
+
+fn secret_outputs_value(config: &agent_access_core::SecretOutputsConfig) -> Value {
+    let agent_access_core::SecretOutputsConfig {
+        mode,
+        ttl_seconds,
+        max_refs_per_principal,
+        max_refs_total,
+        max_bytes_per_principal,
+        max_bytes_total,
+        receipt_retention_seconds,
+        max_receipts_total,
+    } = config;
+    Fields::default()
+        .put(
+            "mode",
+            match mode {
+                agent_access_core::SecretOutputMode::Reference => "reference",
+                agent_access_core::SecretOutputMode::Raw => "raw",
+            },
+        )
+        .int("ttl_seconds", *ttl_seconds)
+        .int("max_refs_per_principal", *max_refs_per_principal)
+        .int("max_refs_total", *max_refs_total)
+        .int("max_bytes_per_principal", *max_bytes_per_principal)
+        .int("max_bytes_total", *max_bytes_total)
+        .int("receipt_retention_seconds", *receipt_retention_seconds)
+        .int("max_receipts_total", *max_receipts_total)
+        .value()
 }
 
 fn deployment_value(deployment: &DeploymentConfig) -> Value {

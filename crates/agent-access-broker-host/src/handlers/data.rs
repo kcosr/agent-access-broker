@@ -805,6 +805,9 @@ fn discovery_error_envelope(
 pub(crate) struct AdmittedInvocation {
     pub(crate) snapshot: std::sync::Arc<RuntimeSnapshot>,
     pub(crate) context: GovernedOperationContext,
+    // Retain the exact attested proof resolved at intake. Temporary-reference
+    // ownership must never reconstruct one from the later identity mapping.
+    pub(crate) identity_proof: Option<agent_access_core::AttestedIdentityProof>,
     pub(crate) permits: RequestPermits,
 }
 
@@ -925,11 +928,31 @@ async fn admit_invoke_with_identity(
         }
     };
 
+    let mut ordinary_identity_proof = None;
     let identity_result = if let Some(pin) = identity_pin {
         pin.revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
             .await
     } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
+        let intake_snapshot = snapshot.clone();
+        let intake_headers = headers.clone();
+        match tokio::task::spawn_blocking(move || {
+            let admission = intake_snapshot.runtime.admit_ingress(&intake_headers)?;
+            intake_snapshot
+                .runtime
+                .resolve_admitted_identity_with_proof(&intake_headers, &admission)
+        })
+        .await
+        .unwrap_or(Err(agent_access_core::IdentityFailure::Unavailable))
+        {
+            Ok(resolved) => {
+                // Ordinary HTTP admission resolves once. Keep its original
+                // proof for reference ownership without adopting MCP's later
+                // session revalidation or updating token usage a second time.
+                ordinary_identity_proof = resolved.proof;
+                Ok(resolved.identity)
+            }
+            Err(error) => Err(error),
+        }
     };
     let identity = match identity_result {
         Ok(identity) => {
@@ -1041,6 +1064,9 @@ async fn admit_invoke_with_identity(
     Ok(AdmittedInvocation {
         snapshot,
         context,
+        identity_proof: identity_pin
+            .and_then(|pin| pin.proof.clone())
+            .or(ordinary_identity_proof),
         permits,
     })
 }
@@ -1071,6 +1097,7 @@ pub(crate) async fn invoke(
     let AdmittedInvocation {
         snapshot,
         context,
+        identity_proof,
         permits,
     } = admitted;
 
@@ -1146,6 +1173,7 @@ pub(crate) async fn invoke(
                 AdmittedInvocation {
                     snapshot,
                     context,
+                    identity_proof,
                     permits,
                 },
                 request,

@@ -427,11 +427,11 @@ fn resolve_inputs_with_env(
     }
     let mut envelope = json!({"inputs":inputs});
     if args.request_file.is_none() {
-        for pointer in &action.sensitive_input_pointers {
-            if crate::json_pointer_or_descendant_exists(&envelope, pointer) {
-                bail!("inline sensitive input is not allowed; use secretSources or requestFile");
-            }
-        }
+        crate::reject_inline_sensitive_values(
+            &envelope,
+            &action.sensitive_input_pointers,
+            &action.secret_input_pointers,
+        )?;
     }
     let mut pointers = BTreeSet::new();
     for binding in &args.secret_sources {
@@ -765,12 +765,16 @@ mod tests {
             "allowed_upstream_hosts":["https://gitlab.example.com/api/v4/**"]
         }))
         .unwrap();
-        agent_access_core::api_service_spec(&agent_access_gitlab::gitlab_descriptor(&config), true)
-            .unwrap()
-            .actions
-            .into_iter()
-            .find(|action| action.action == name)
-            .unwrap()
+        agent_access_core::api_service_spec(
+            &agent_access_gitlab::gitlab_descriptor(&config),
+            true,
+            agent_access_core::SecretOutputMode::Reference,
+        )
+        .unwrap()
+        .actions
+        .into_iter()
+        .find(|action| action.action == name)
+        .unwrap()
     }
 
     #[test]
@@ -960,6 +964,62 @@ mod tests {
         assert!(read_local_file(Path::new("relative.json"), 100).is_err());
         assert!(resolve_inputs(&args(json!({"inputs":{},"requestFile":file})), &action()).is_err());
         assert!(resolve_inputs(&args(json!({"inputs":null})), &action()).is_err());
+    }
+
+    #[test]
+    fn declared_secret_inputs_accept_inline_references_but_keep_literal_sources_private() {
+        let mut action = action();
+        action.sensitive_input_pointers = vec!["/inputs/token".into()];
+        action.secret_input_pointers = vec!["/inputs/token".into()];
+        let reference = json!({
+            "secretRef":format!("sr_{}", "A".repeat(43)),
+            "expiresAt":"2099-01-01T00:00:00Z",
+        });
+        let arguments = args(json!({"inputs":{"token":reference}}));
+        assert_eq!(
+            resolve_inputs(&arguments, &action).unwrap()["token"],
+            reference
+        );
+        for inputs in [
+            json!({"token":"inline-secret"}),
+            json!({"token":format!("sr_{}", "A".repeat(43))}),
+            json!({"other":reference}),
+            json!({"other":reference["secretRef"]}),
+            json!({"ordinary":{"values":[reference["secretRef"]]}}),
+            json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
+            json!({"other":format!("Bearer {}", reference["secretRef"].as_str().unwrap())}),
+            json!({(format!("TOKEN={}", reference["secretRef"].as_str().unwrap())):"ordinary-value"}),
+            json!({"other":format!("\"{}\"", reference["secretRef"].as_str().unwrap())}),
+            json!({"other":format!("日本{}語", reference["secretRef"].as_str().unwrap())}),
+            json!({"token":{"secretRef":reference["secretRef"],"extra":"literal"}}),
+        ] {
+            assert!(resolve_inputs(&args(json!({"inputs":inputs})), &action).is_err());
+        }
+        let capability = reference["secretRef"].as_str().unwrap();
+        for continuation in [
+            format!("prefix{capability}"),
+            format!("{capability}suffix"),
+            format!("_{capability}"),
+            format!("{capability}-"),
+            format!("eyJhbGciOiJIUzI1NiJ9.eyJ{capability}aWQiOjF9.signature"),
+        ] {
+            resolve_inputs(&args(json!({"inputs":{"other":continuation}})), &action).unwrap();
+            resolve_inputs(
+                &args(json!({"inputs":{(continuation):"ordinary-value"}})),
+                &action,
+            )
+            .unwrap();
+        }
+        action.secret_input_pointers.clear();
+        assert!(resolve_inputs(&arguments, &action).is_err());
+
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("request.json");
+        std::fs::write(&file, br#"{"token":"local-literal-secret"}"#).unwrap();
+        assert_eq!(
+            resolve_inputs(&args(json!({"requestFile":file})), &action).unwrap()["token"],
+            "local-literal-secret"
+        );
     }
 
     #[test]

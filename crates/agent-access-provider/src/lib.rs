@@ -38,7 +38,8 @@
 //!   signer wrapping, delegated-lease wrapping, the host-origin failure port
 //!   and the host-only authorization of the host's own requests. Provider code
 //!   consumes the capabilities they produce; provider tests may implement or
-//!   call them, except the host-only request authorization.
+//!   call them, except host-only request authorization and protected output
+//!   extraction. The test-support equality inspector covers secret outputs.
 //! - [`deps`] re-exports the third-party types and macros that supported
 //!   signatures name (see [Third-party dependencies](#third-party-dependencies)).
 //! - `test_support`, behind the `test-support` Cargo feature, holds
@@ -201,6 +202,7 @@ mod reason;
 mod resource;
 mod result;
 mod scope;
+mod secret;
 mod signing;
 mod state;
 #[cfg(any(test, feature = "test-support"))]
@@ -297,6 +299,7 @@ pub use result::{
     ProviderResult, ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
+pub use secret::{SecretContractError, SecretInputDescriptor, SecretOutputDescriptor};
 pub use signing::{SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};

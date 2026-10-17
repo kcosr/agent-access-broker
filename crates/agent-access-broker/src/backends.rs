@@ -177,7 +177,12 @@ mod tests {
             let readiness = evaluate_scoped_mcp_readiness(&descriptor, max_catalog_bytes);
             assert!(readiness.ready, "{}: {readiness:?}", descriptor.service);
             let mut catalog = agent_access_core::empty_catalog(serde_json::json!({}));
-            let service = agent_access_core::api_service_spec(&descriptor, true).unwrap();
+            let service = agent_access_core::api_service_spec(
+                &descriptor,
+                true,
+                agent_access_core::SecretOutputMode::Reference,
+            )
+            .unwrap();
             assert!(service.actions.iter().all(|action| action.scoped_mcp_name.as_deref() == Some(action.action.as_str())));
             catalog.services.push(service);
             for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {

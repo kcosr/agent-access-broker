@@ -9952,6 +9952,9 @@ impl GitlabDocument {
     fn render(&self, directory: &FixtureDir) -> String {
         let mut document = format!(
             r#"
+[secret_outputs]
+mode = "raw"
+
 [credentials.service.gitlab]
 type = "bearer_token"
 token_ref = {service_token}
