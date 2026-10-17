@@ -7,6 +7,9 @@ license.workspace = true
 [package.metadata.agent-access]
 role = "native"
 
+[features]
+test-support = []
+
 [dependencies]
 agent-access-atlassian = { path = "../agent-access-atlassian" }
 agent-access-content = { path = "../agent-access-content" }

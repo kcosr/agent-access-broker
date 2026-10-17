@@ -1,6 +1,9 @@
 //! The Jira backend seam, its wire types, and the HTTP implementation.
 use super::*;
-use agent_access_atlassian::{AtlassianClients, AtlassianProduct, AtlassianRoutes};
+use agent_access_atlassian::{
+    AtlassianAccessError, AtlassianClients, AtlassianCredential, AtlassianDownloadError,
+    AtlassianProduct, AtlassianRoutes,
+};
 use agent_access_provider::host::UpstreamClientFactory;
 
 #[cfg(test)]
@@ -9,13 +12,13 @@ mod issue_types_tests;
 
 #[async_trait]
 pub trait JiraBackend: Send + Sync {
-    fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
+    fn egress_proxy_audit(&self, _credential: &AtlassianCredential) -> Value {
         EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
         &self,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira current-user verification is not supported by this backend".to_string(),
@@ -25,20 +28,20 @@ pub trait JiraBackend: Send + Sync {
     async fn issue_metadata(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueMetadata>, JiraBackendError>;
 
     async fn issue(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssue>, JiraBackendError>;
 
     async fn issue_types(
         &self,
         _project: &str,
         _request: JiraIssueTypeListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueTypePage>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue type listing is not supported by this backend".to_string(),
@@ -48,7 +51,7 @@ pub trait JiraBackend: Send + Sync {
     async fn create_issue(
         &self,
         _request: JiraIssueCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCreatedIssue>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue create is not supported by this backend".to_string(),
@@ -59,7 +62,7 @@ pub trait JiraBackend: Send + Sync {
         &self,
         _issue_key: &str,
         _request: JiraIssueUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue update is not supported by this backend".to_string(),
@@ -70,7 +73,7 @@ pub trait JiraBackend: Send + Sync {
         &self,
         _issue_key: &str,
         _request: JiraIssueParentSetRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue parent update is not supported by this backend".to_string(),
@@ -80,7 +83,7 @@ pub trait JiraBackend: Send + Sync {
     async fn issue_parent(
         &self,
         _issue_key: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueParentReadback>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue parent readback is not supported by this backend".to_string(),
@@ -89,7 +92,7 @@ pub trait JiraBackend: Send + Sync {
 
     async fn issue_link_types(
         &self,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraIssueLinkType>>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue link type listing is not supported by this backend".to_string(),
@@ -99,7 +102,7 @@ pub trait JiraBackend: Send + Sync {
     async fn create_issue_link(
         &self,
         _request: JiraIssueLinkCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue link creation is not supported by this backend".to_string(),
@@ -109,7 +112,7 @@ pub trait JiraBackend: Send + Sync {
     async fn issue_links(
         &self,
         _issue_key: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueLinks>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira issue link readback is not supported by this backend".to_string(),
@@ -119,14 +122,14 @@ pub trait JiraBackend: Send + Sync {
     async fn search(
         &self,
         request: JiraSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraSearchPage>, JiraBackendError>;
 
     async fn comments(
         &self,
         _issue_key: &str,
         _request: JiraCommentListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment listing is not supported by this backend".to_string(),
@@ -137,14 +140,14 @@ pub trait JiraBackend: Send + Sync {
         &self,
         issue_key: &str,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError>;
 
     async fn add_comment(
         &self,
         issue_key: &str,
         request: JiraCommentAddRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError>;
 
     async fn update_comment(
@@ -152,7 +155,7 @@ pub trait JiraBackend: Send + Sync {
         _issue_key: &str,
         _comment_id: &str,
         _request: JiraCommentUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment update is not supported by this backend".to_string(),
@@ -163,7 +166,7 @@ pub trait JiraBackend: Send + Sync {
         &self,
         _issue_key: &str,
         _comment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment delete is not supported by this backend".to_string(),
@@ -173,7 +176,7 @@ pub trait JiraBackend: Send + Sync {
     async fn comment_property_keys(
         &self,
         _comment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPropertyKeys>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment property listing is not supported by this backend".to_string(),
@@ -184,7 +187,7 @@ pub trait JiraBackend: Send + Sync {
         &self,
         _comment_id: &str,
         _property_key: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment property get is not supported by this backend".to_string(),
@@ -196,7 +199,7 @@ pub trait JiraBackend: Send + Sync {
         _comment_id: &str,
         _property_key: &str,
         _value: Value,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment property set is not supported by this backend".to_string(),
@@ -207,7 +210,7 @@ pub trait JiraBackend: Send + Sync {
         &self,
         _comment_id: &str,
         _property_key: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
             "Jira comment property delete is not supported by this backend".to_string(),
@@ -218,25 +221,25 @@ pub trait JiraBackend: Send + Sync {
         &self,
         issue_key: &str,
         attachment: JiraAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachment>, JiraBackendError>;
 
     async fn issue_attachment_metadata(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraAttachment>>, JiraBackendError>;
 
     async fn issue_attachment_list(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueAttachmentList>, JiraBackendError>;
 
     async fn attachment_content(
         &self,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachmentContent>, JiraBackendError>;
 }
 
@@ -635,6 +638,22 @@ pub enum JiraBackendError {
     },
     #[error("Jira response protocol error: {0}")]
     Protocol(String),
+    /// Delegated (OAuth) access could not be presented: the lease's own
+    /// failure (a refresh busy, throttled or uncertain, consent pending, a
+    /// reconnect required, or an operation that already recovered), access
+    /// for another site, or access Jira rejected again. Nothing was sent, or
+    /// Jira's 401 applied nothing. Reported unchanged.
+    #[error("Jira credential could not be presented")]
+    Credential(ProviderError),
+}
+
+impl From<AtlassianAccessError> for JiraBackendError {
+    fn from(error: AtlassianAccessError) -> Self {
+        match error {
+            AtlassianAccessError::Credential(error) => Self::Credential(error),
+            _ => Self::Protocol("unsupported Jira credential kind".to_string()),
+        }
+    }
 }
 
 /// Marks a failure that followed a write's success `status` as
@@ -703,6 +722,7 @@ pub(crate) fn jira_backend_error(error: JiraBackendError) -> ProviderError {
             ReasonCode::UpstreamProtocolFailed,
             "Jira response protocol error",
         ),
+        JiraBackendError::Credential(error) => error,
     }
 }
 
@@ -731,6 +751,9 @@ pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
         | JiraBackendError::IssueCreateResponseInvalid { .. }
         | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
+        // Never the outcome of reading a response; only presenting a
+        // credential reports it.
+        JiraBackendError::Credential(_) => ReasonCode::CredentialInvalid,
     }
 }
 
@@ -768,9 +791,34 @@ impl HttpJiraBackend {
         })
     }
 
+    /// This backend with its gateway route served below `gateway`, an
+    /// origin such as a stub server's: `{gateway}/ex/jira/{cloud_id}/rest/api/3/`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn with_gateway_origin(
+        mut self,
+        gateway: &str,
+        clients: &dyn UpstreamClientFactory,
+    ) -> Result<Self, ProviderBuildError> {
+        let site = self.config.site();
+        let cloud_id = site.gateway_cloud_id().ok_or_else(|| {
+            ProviderBuildError::invalid("the test Jira site does not use the Atlassian gateway")
+        })?;
+        let base = Url::parse(&format!(
+            "{}/ex/jira/{cloud_id}/{}",
+            gateway.trim_end_matches('/'),
+            JIRA_PRODUCT.api_path
+        ))
+        .map_err(|error| ProviderBuildError::invalid(error.to_string()))?;
+        let gateway = AtlassianClients::new(JIRA_PRODUCT, &site, base, clients)?;
+        if let Some(route) = self.routes.gateway_mut() {
+            *route = gateway;
+        }
+        Ok(self)
+    }
+
     pub(crate) fn client_for(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&AtlassianClients, JiraBackendError> {
         self.routes
             .for_credential(credential)
@@ -797,7 +845,7 @@ impl HttpJiraBackend {
 
     pub(crate) fn api_base(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<Url, JiraBackendError> {
         Ok(self.client_for(credential)?.api_base.clone())
     }
@@ -805,7 +853,7 @@ impl HttpJiraBackend {
 
 #[cfg(test)]
 impl HttpJiraBackend {
-    pub(crate) fn egress_proxy_for_test(&self, credential: &ExecutionCredential) -> Value {
+    pub(crate) fn egress_proxy_for_test(&self, credential: &AtlassianCredential) -> Value {
         self.client_for(credential)
             .unwrap()
             .client
@@ -817,14 +865,14 @@ impl HttpJiraBackend {
 impl HttpJiraBackend {
     pub(crate) fn request_client(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&UpstreamClient, JiraBackendError> {
         Ok(&self.client_for(credential)?.client)
     }
 
     pub(crate) fn stream_client(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&UpstreamClient, JiraBackendError> {
         Ok(&self.client_for(credential)?.stream_client)
     }
@@ -832,7 +880,7 @@ impl HttpJiraBackend {
 
 #[async_trait]
 impl JiraBackend for HttpJiraBackend {
-    fn egress_proxy_audit(&self, credential: &ExecutionCredential) -> Value {
+    fn egress_proxy_audit(&self, credential: &AtlassianCredential) -> Value {
         self.client_for(credential)
             .map(|clients| clients.client.egress_route().audit_value())
             .unwrap_or_else(|_| EgressRoute::direct().audit_value())
@@ -842,7 +890,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         project: &str,
         request: JiraIssueTypeListRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueTypePage>, JiraBackendError> {
         let project = utf8_percent_encode(project, JIRA_PATH_SEGMENT_ENCODE_SET);
         let mut url = self
@@ -894,7 +942,7 @@ impl JiraBackend for HttpJiraBackend {
 
     async fn current_user(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -923,7 +971,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn issue_metadata(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueMetadata>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -953,7 +1001,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn issue(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssue>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -986,7 +1034,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn create_issue(
         &self,
         request: JiraIssueCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCreatedIssue>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1076,7 +1124,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1114,7 +1162,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueParentSetRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1147,7 +1195,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn issue_parent(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueParentReadback>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1177,7 +1225,7 @@ impl JiraBackend for HttpJiraBackend {
 
     async fn issue_link_types(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraIssueLinkType>>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1206,7 +1254,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn create_issue_link(
         &self,
         request: JiraIssueLinkCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1239,7 +1287,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn issue_links(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueLinks>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1270,7 +1318,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn search(
         &self,
         request: JiraSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraSearchPage>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1313,7 +1361,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         request: JiraCommentListRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1352,7 +1400,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         request: JiraCommentAddRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1390,7 +1438,7 @@ impl JiraBackend for HttpJiraBackend {
         issue_key: &str,
         comment_id: &str,
         request: JiraCommentUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1435,7 +1483,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1467,25 +1515,30 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         attachment: JiraAttachmentUpload,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachment>, JiraBackendError> {
         let url = self
             .api_base(credential)?
             .join(&format!("issue/{issue_key}/attachments"))
             .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
-        let upload_part = jira_upload_part(&attachment).await?;
-        let form = reqwest::multipart::Form::new().part("file", upload_part.part);
         let started = Instant::now();
         let client = self.stream_client(credential)?;
         let mut response = send_jira_upload(
             client,
             credential,
-            client
-                .request(Method::POST, url.clone())
-                .header("Accept", "application/json")
-                .header("X-Atlassian-Token", "no-check")
-                .multipart(form),
-            upload_part.progress,
+            || async {
+                // Each attempt reopens the spooled body.
+                let upload_part = jira_upload_part(&attachment).await?;
+                let form = reqwest::multipart::Form::new().part("file", upload_part.part);
+                Ok((
+                    client
+                        .request(Method::POST, url.clone())
+                        .header("Accept", "application/json")
+                        .header("X-Atlassian-Token", "no-check")
+                        .multipart(form),
+                    upload_part.progress,
+                ))
+            },
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
             UpstreamCall::new("attachment.add"),
         )
@@ -1530,7 +1583,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn issue_attachment_metadata(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraAttachment>>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1560,7 +1613,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn issue_attachment_list(
         &self,
         issue_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueAttachmentList>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1591,7 +1644,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn attachment_content(
         &self,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachmentContent>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
@@ -1642,7 +1695,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1671,7 +1724,7 @@ impl JiraBackend for HttpJiraBackend {
     async fn comment_property_keys(
         &self,
         comment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPropertyKeys>, JiraBackendError> {
         let url = self
             .api_base(credential)?
@@ -1701,7 +1754,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         comment_id: &str,
         property_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
         let property_key = jira_path_segment(property_key);
         let url = self
@@ -1733,7 +1786,7 @@ impl JiraBackend for HttpJiraBackend {
         comment_id: &str,
         property_key: &str,
         value: Value,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let property_key = jira_path_segment(property_key);
         let url = self
@@ -1767,7 +1820,7 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         comment_id: &str,
         property_key: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let property_key = jira_path_segment(property_key);
         let url = self
@@ -1798,34 +1851,32 @@ impl JiraBackend for HttpJiraBackend {
 }
 
 impl HttpJiraBackend {
+    /// Downloads `url`, following up to 5 of Atlassian's media redirects.
+    /// The credential reaches only hops within the route's site, each with
+    /// freshly revalidated delegated access, and a redirect to another site
+    /// on the route's origin fails before it is sent. Delegated access that
+    /// Jira itself answers with 401 recovers once and the download starts
+    /// over ([`AtlassianCredential::download`]).
     pub(crate) async fn attachment_content_response(
         &self,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<reqwest::Response, JiraBackendError> {
-        let client = self.stream_client(credential)?;
-        let authorization = atlassian_authorization(credential)?;
-        client
-            .get_following_redirects(
+        credential
+            .download(
+                self.client_for(credential)?,
                 url,
-                RedirectRules::new(5, Duration::from_millis(self.limits.request_timeout_ms))
-                    .with_authorization(&authorization)
-                    // Atlassian media hosts join broker logs by these headers.
-                    .correlating_other_origins(),
+                5,
+                Duration::from_millis(self.limits.request_timeout_ms),
                 "attachment.download",
+                "Jira",
             )
             .await
-            .map_err(jira_upstream_error)
+            .map_err(|error| match error {
+                AtlassianDownloadError::Upstream(error) => jira_upstream_error(error),
+                AtlassianDownloadError::Access(error) => error.into(),
+            })
     }
-}
-
-/// `credential`'s authorization as the SDK presents it; an unsupported
-/// credential kind fails before any request is sent.
-fn atlassian_authorization(
-    credential: &ExecutionCredential,
-) -> Result<UpstreamAuthorization, JiraBackendError> {
-    atlassian_credential_authorization(credential)
-        .ok_or_else(|| JiraBackendError::Protocol("unsupported Jira credential kind".to_string()))
 }
 
 pub(crate) fn jira_path_segment(value: &str) -> String {
@@ -1917,18 +1968,44 @@ pub(crate) fn jira_visibility_to_value(visibility: &JiraCommentVisibility) -> Va
 
 /// Sends through `client` with `credential`'s authorization, mapping
 /// transport failures to Jira errors. An unsupported credential kind fails
-/// before anything is sent.
+/// before anything is sent. Delegated access is pinned immediately before
+/// each attempt. Jira answering it with 401 authenticated nothing and so
+/// applied nothing: the presented version is marked rejected and, when the
+/// operation's lease can still recover, the request is repeated once with the
+/// renewed access ([`AtlassianCredential::rejected`]). A static token's 401
+/// is never repeated.
 pub(crate) async fn send_jira_request(
     client: &UpstreamClient,
-    credential: &ExecutionCredential,
+    credential: &AtlassianCredential,
     request: reqwest::RequestBuilder,
     call: UpstreamCall<'_>,
 ) -> Result<reqwest::Response, JiraBackendError> {
-    let authorization = atlassian_authorization(credential)?;
-    client
-        .send(request, call.with_authorization(&authorization))
-        .await
-        .map_err(jira_upstream_error)
+    let mut request = request;
+    let mut attempt = call.attempt;
+    loop {
+        let presented = credential.present().await?;
+        // A copy for the one repeat a delegated 401 permits.
+        let replay = if attempt == call.attempt && presented.is_delegated() {
+            request.try_clone()
+        } else {
+            None
+        };
+        let mut response = client
+            .send(
+                request,
+                call.with_attempt(attempt)
+                    .with_authorization(presented.authorization()),
+            )
+            .await
+            .map_err(jira_upstream_error)?;
+        if response.status().as_u16() == 401 && presented.is_delegated() {
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+            request = credential.rejected(&presented, replay, "Jira").await?;
+            attempt += 1;
+            continue;
+        }
+        return Ok(response);
+    }
 }
 
 pub(crate) fn jira_upstream_error(error: UpstreamError) -> JiraBackendError {
@@ -2113,24 +2190,47 @@ pub(crate) async fn jira_upload_part(
         .map_err(|error| JiraBackendError::Protocol(error.to_string()))
 }
 
-pub(crate) async fn send_jira_upload(
+/// Sends one upload through `client`. Its body is a stream that cannot be
+/// repeated, so `prepare` builds the request and its progress for each
+/// attempt; a delegated 401 repeats the upload at most once, as
+/// [`send_jira_request`] does.
+pub(crate) async fn send_jira_upload<F, Fut>(
     client: &UpstreamClient,
-    credential: &ExecutionCredential,
-    request: reqwest::RequestBuilder,
-    progress: Option<UploadProgress>,
+    credential: &AtlassianCredential,
+    mut prepare: F,
     idle_timeout: Duration,
     call: UpstreamCall<'_>,
-) -> Result<reqwest::Response, JiraBackendError> {
-    let authorization = atlassian_authorization(credential)?;
-    client
-        .send_upload(
-            request,
-            progress,
-            idle_timeout,
-            call.with_authorization(&authorization),
-        )
-        .await
-        .map_err(jira_upstream_error)
+) -> Result<reqwest::Response, JiraBackendError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<
+            Output = Result<(reqwest::RequestBuilder, Option<UploadProgress>), JiraBackendError>,
+        >,
+{
+    let mut attempt = call.attempt;
+    loop {
+        let presented = credential.present().await?;
+        let (request, progress) = prepare().await?;
+        let mut response = client
+            .send_upload(
+                request,
+                progress,
+                idle_timeout,
+                call.with_attempt(attempt)
+                    .with_authorization(presented.authorization()),
+            )
+            .await
+            .map_err(jira_upstream_error)?;
+        if response.status().as_u16() == 401 && presented.is_delegated() {
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+            credential
+                .rejected(&presented, (attempt == call.attempt).then_some(()), "Jira")
+                .await?;
+            attempt += 1;
+            continue;
+        }
+        return Ok(response);
+    }
 }
 
 pub(crate) fn validate_jira_body_response(

@@ -84,6 +84,70 @@ management uses explicit scoped credential rights; see the
 [administrator guide](administrator-guide.md) for that distinct setup and the
 complete user handoff. OAuth connections use grant-based personal setup instead.
 
+### OAuth connections
+
+People can connect their Atlassian account instead of storing a token. Give the
+connection an `oauth` registration of the [`atlassian` dialect](oauth.md#atlassian)
+for the site, beside `token_profile = "atlassian-bearer-token"` for service
+accounts or alone:
+
+```toml
+[providers.jira]
+tenant_host = "example.atlassian.net"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://api.atlassian.com/ex/jira/**",
+  "https://api.media.atlassian.com/**",
+]
+
+[credentials.connections.atlassian]
+display_name = "Atlassian"
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.per_user.jira]
+type = "connection"
+connection = "atlassian"
+```
+
+- **Route.** OAuth always goes through the Atlassian gateway,
+  `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`, so `cloud_id`
+  and `api.atlassian.com` are required; a classic API token keeps the site
+  route and a bearer token the gateway. A connection with `oauth` cannot use
+  `atlassian-api-token` (see the [validation table](oauth.md#atlassian-registration)).
+- **Access per request.** Before every request, including the project
+  lookups before policy and at execution and each authorized hop of an
+  attachment download, Jira revalidates the invocation's lease and pins its
+  access to the gateway route's cloud ID and the `api.atlassian.com` audience.
+  Access for another site fails as `credential_invalid` before anything is
+  sent, and a connection lost between two download hops fails with its own
+  reason before the next hop.
+- **401.** The lookups and the execution share one recovery: when Jira answers
+  the connection's access with 401, the Broker marks it rejected, renews it
+  once and repeats the request, writes and uploads included, because the 401
+  applied nothing. A second 401 fails as `credential_invalid`, asking the
+  person to reconnect Atlassian. A connection that cannot be refreshed fails
+  with its own reason, such as `concurrency_limited` while another refresh
+  runs.
+- **Writes.** A connection failure before a write keeps its own reason and
+  carries no receipt; in an attachment batch, before any upload applied, the
+  batch fails with it. One that stops the read-back after Jira accepted the
+  write reports `mutation_verification_failed` with an `applied_unverified`
+  receipt.
+- **Verification.** Credential verification (`myself`) applies to stored and
+  service tokens; OAuth connections are checked by connecting them.
+
+Each action needs these Atlassian OAuth scopes:
+
+| Actions | Scopes |
+| --- | --- |
+| `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
+| `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
+
+`read:jira-user` serves only token verification and is not needed. The
+registration also requests `read:me` and `offline_access`; see
+[Atlassian scopes](oauth.md#atlassian-scopes).
+
 Create `jira_project` resources and action grants through the configured policy
 authority, then validate and reload configuration. Start with a granted view or
 search action and verify its scope and audit record. The explicit content settings
@@ -269,7 +333,10 @@ verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
 `retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
 `post_create_readback`), and `safeLocators` holding the created or changed issue
 IDs and keys. It carries no retry wait: inspect those issues instead of repeating
-the mutation.
+the mutation. A person's [OAuth connection](#oauth-connections) failing during
+that readback, or Jira rejecting its access again, reports the same
+`mutation_verification_failed` receipt; before the mutation, such a failure
+keeps its own reason without a receipt.
 
 A Jira write action sends its mutation request after its reads. When the Broker
 proves that request never reached Jira, because no connection was established
@@ -919,8 +986,7 @@ is the credential method and:
 - for a stored or service token, its type, which chooses the tenant or gateway
   route. The token value is not bound, so replacing a stored token with another
   of the same type keeps the continuation;
-- for delegated (OAuth) access, which Jira does not yet accept, the OAuth
-  connection and its generation, never the current access token: a routine
+- for delegated (OAuth) access, the OAuth connection and its generation, never the current access token: a routine
   refresh keeps the continuation, while disconnecting and reconnecting or
   connecting another Atlassian account invalidates it;
 - for a route through the Atlassian gateway (a bearer token or OAuth), the
@@ -1091,7 +1157,10 @@ waiting and repeating the batch would upload them again, so the reason code is
 Upload only the failed and skipped files, later, instead of the whole batch.
 When the first upload was proven never sent, nothing was created: the
 `upstream_failed` error carries `mutationStatus: "not_applied"` and
-`retrySafe: true`, and the whole batch can be repeated. When an upload may have
+`retrySafe: true`, and the whole batch can be repeated. When the first upload
+could not present a person's OAuth connection, or Jira rejected its access
+again, nothing was created and the batch fails with the connection's own
+reason. When an upload may have
 created its attachment before the batch failed (an earlier upload succeeded, or
 the failed upload got no response, a redirect, a 5xx, or a success status with an
 unreadable response), the error keeps its result and adds
@@ -1120,7 +1189,13 @@ vs all-failed terminal outcomes.*
 **`attachment.download`** confirms the issue/project and the attachment's
 membership by lookup, validates the metadata size and content type, then GETs
 `attachment/content/{id}?redirect=false` with the execution credential. It follows
-up to 5 allowlisted redirects, attaching auth only on same-origin hops; every
+up to 5 allowlisted redirects, presenting the credential only on hops within the
+route's site: the tenant host for a classic API token, or the configured cloud
+ID's `https://api.atlassian.com/ex/jira/<cloud_id>/` path for OAuth and bearer
+tokens. A redirect on the same origin outside that site, such as another cloud
+ID on the gateway, fails the download (`upstream_protocol_failed`) before it is
+sent, whether it comes directly or back from a media host. Hops to other
+allowlisted origins, such as Atlassian's media hosts, carry no credential; every
 hop carries the correlation headers. The byte
 cap is `min(config.attachments.max_download_bytes, limits.max_download_bytes)`, and
 the streamed size is checked against the metadata size. Download is served as a raw

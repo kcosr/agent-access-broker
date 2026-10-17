@@ -188,7 +188,7 @@ async fn personal_space_http_lookup_encodes_keys_and_parses_authoritative_metada
     for key in PERSONAL_KEYS {
         let response = agent_access_provider::host::with_correlation_context(
             crate::CorrelationContext::for_tests(),
-            backend.space_by_key(key, &credential()),
+            backend.space_by_key(key, &AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -298,7 +298,11 @@ async fn personal_space_page_and_blog_reads_and_writes_keep_authorized_space() {
             // supplies the authoritative space for the host's grant decision;
             // a fabricated invocation is not a host authorization test.
             let scopes = provider
-                .lookup_scopes(action, &inputs, Some(&credential()))
+                .lookup_scopes(
+                    action,
+                    &inputs,
+                    Some(&AtlassianCredential::from_static(credential())),
+                )
                 .await
                 .unwrap();
             assert_eq!(

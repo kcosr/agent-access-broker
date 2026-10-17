@@ -369,6 +369,67 @@ read_only = true
 # upstream_identity_provider = "azure_activedirectory_v2"
 # upstream_tenant_id = "00000000-0000-0000-0000-000000000000"
 
+# Atlassian OAuth: people connect their Atlassian account once for Jira and
+# Confluence, which act through the Atlassian gateway; service accounts keep
+# administrator-provisioned scoped tokens (atlassian-bearer-token). OAuth
+# requires the gateway on both providers (cloud_id set and api.atlassian.com
+# in allowed_upstream_hosts), and a connection with oauth uses
+# atlassian-bearer-token or no token_profile: atlassian-api-token beside
+# oauth is rejected. Create an OAuth 2.0 integration in the Atlassian
+# developer console with this callback URL and the Jira, Confluence and User
+# Identity APIs, and enable sharing. The target is the site's cloud ID, the
+# providers' cloud_id. Requires managed identity/store/encryption, browser
+# auth and management. See docs/oauth.md#atlassian.
+# [oauth.registrations.atlassian]
+# adapter = "atlassian"
+# base_url = "https://auth.atlassian.com"
+# redirect_uri = "https://broker.example.com/v1/oauth/callback/atlassian"
+# client_id = "YOUR_ATLASSIAN_CLIENT_ID"
+# client_secret_ref = "env:ATLASSIAN_OAUTH_CLIENT_SECRET"
+# client_auth = "client_secret_post"
+# encoding = "json"
+# rotation = "rotate_refresh"
+#
+# [oauth.registrations.atlassian.permission_profiles.default]
+# scopes = ["read:me", "offline_access",
+#           "read:jira-work", "write:jira-work",
+#           "read:confluence-content.all", "write:confluence-content", "search:confluence",
+#           "write:confluence-file", "readonly:content.attachment:confluence",
+#           "read:page:confluence", "write:page:confluence", "delete:page:confluence",
+#           "read:space:confluence", "read:content.metadata:confluence",
+#           "read:hierarchical-content:confluence", "read:attachment:confluence",
+#           "read:comment:confluence", "write:comment:confluence", "delete:comment:confluence"]
+# audience = "api.atlassian.com"
+# target = "00000000-0000-0000-0000-000000000000"
+#
+# People on OAuth, with each product's service-account tokens:
+# [credentials.connections.jira]
+# token_profile = "atlassian-bearer-token"
+# oauth = { registration = "atlassian", profile = "default" }
+#
+# [credentials.connections.confluence]
+# token_profile = "atlassian-bearer-token"
+# oauth = { registration = "atlassian", profile = "default" }
+#
+# [credentials.per_user.jira]
+# type = "connection"
+# connection = "jira"
+#
+# [credentials.per_user.confluence]
+# type = "connection"
+# connection = "confluence"
+#
+# Or OAuth only, one connection for both products:
+# [credentials.connections.atlassian]
+# display_name = "Atlassian"
+# oauth = { registration = "atlassian", profile = "default" }
+#
+# One shared registration requires every person to have both products on the
+# site. For single-product users, register one integration per product and
+# give each product connection its own registration, such as
+# oauth = { registration = "atlassian_jira", profile = "default" }, whose
+# profile requests read:me, offline_access and that product's scopes.
+
 [policy]
 authority = "toml"
 default_decision = "deny"

@@ -114,6 +114,14 @@ deployment that routes Atlassian through its API gateway gives service accounts
 scoped bearer tokens instead, usually with one connection per product; see the
 [token profiles](configuration.md#connection-token-profiles).
 
+Through the gateway, people can instead connect their Atlassian account with
+[Atlassian OAuth](oauth.md#atlassian), once for both products when one
+registration serves both. That registration's scopes are checked as a whole, so
+it suits sites where everyone has both Jira and Confluence. Where some people
+have only one product, register one Atlassian integration per product and give
+each product connection its own registration; see
+[one registration or one per product](oauth.md#one-registration-or-one-per-product).
+
 You decide each connection's method; principals never choose, and the Broker
 never falls back from one method to the other:
 
@@ -125,8 +133,9 @@ never falls back from one method to the other:
 
 OAuth is available for services that accept delegated credentials: Gmail,
 GitLab REST and GitLab Git gateways, which share one GitLab OAuth connection
-per instance ([GitLab setup](oauth.md#gitlab)), and imported MCP OAuth
-services. An import with a personal binding publishes its own connection under
+per instance ([GitLab setup](oauth.md#gitlab)), Jira and Confluence, which can
+share one Atlassian OAuth connection per site ([Atlassian setup](oauth.md#atlassian)),
+and imported MCP OAuth services. An import with a personal binding publishes its own connection under
 its service ID. See
 [credential connections](configuration.md#credential-connections) for every
 rule.
@@ -223,7 +232,8 @@ version checks and caller setup.
 ## Enable personal OAuth connections
 
 For Gmail, GitLab (GitLab REST and GitLab Git gateways on one connection; see
-[GitLab setup](oauth.md#gitlab)) and imported MCP OAuth, enable the human
+[GitLab setup](oauth.md#gitlab)), Jira and Confluence (one Atlassian connection;
+see [Atlassian setup](oauth.md#atlassian)) and imported MCP OAuth, enable the human
 owner's self-service setting, configure a credential connection whose `oauth`
 names the registration and permission profile (imports publish theirs), and
 assign a matching active action grant with `credentialMode = "per_user"` on a

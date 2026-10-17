@@ -2457,8 +2457,9 @@ than one decision: a `verification_mismatch` from a verify action returns
 status is fixed by the reason code, but the decision is not.
 
 `mutation_verification_failed` is always `decision = error`: GitLab may have
-accepted a mutation, or Jira or Confluence applied one before throttling the
-requests that verify it, but the Broker could not prove its final state. Its
+accepted a mutation, or Jira or Confluence applied one before throttling or a
+failed OAuth connection stopped the requests that verify it, but the Broker
+could not prove its final state. Its
 HTTP status is 409 and CLI exit is 2. The closed result reports
 `mutationStatus = "applied_unverified"`, `retrySafe = false`, a fixed
 `verificationStage`, and only proven IDs under `safeLocators`; a partial Jira
@@ -2617,11 +2618,11 @@ delivers only the bytes within the limit.
 
 A delegated OAuth credential's own failures pass through providers unchanged.
 In particular, a refresh already in progress for the same connection reports
-`concurrency_limited` (HTTP 429, `decision = error`) through Gmail, GitLab REST
-and imported MCP actions, although providers cannot report that reason
-themselves. A GitLab write that GitLab already applied when such a failure
-stopped its read-back reports `mutation_verification_failed` with an
-`applied_unverified` receipt instead. The same
+`concurrency_limited` (HTTP 429, `decision = error`) through Gmail, GitLab REST,
+Jira, Confluence and imported MCP actions, although providers cannot report
+that reason themselves. A GitLab, Jira or Confluence write that the upstream
+already applied when such a failure stopped its read-back reports
+`mutation_verification_failed` with an `applied_unverified` receipt instead. The same
 applies to the SDK's own contract failures: a provider that finds its operation
 state missing or of another type, or asks for an authority its action was not
 admitted with, reports `broker_provider_contract_failed`.

@@ -85,16 +85,21 @@ name = "agent-access-atlassian"
 version = "0.1.0"
 dependencies = [
  "agent-access-provider",
+ "async-trait",
  "reqwest",
+ "serde_json",
  "sha2",
+ "tokio",
  "url",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
 name = "agent-access-broker"
 version = "0.1.0"
 dependencies = [
+ "agent-access-atlassian",
  "agent-access-broker-host",
  "agent-access-cloudbees-ci",
  "agent-access-command-import",
@@ -121,6 +126,7 @@ name = "agent-access-broker-host"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "agent-access-atlassian",
  "agent-access-broker-host",
  "agent-access-cloudbees-ci",
  "agent-access-command-import",

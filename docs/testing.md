@@ -235,9 +235,10 @@ role = "native"
 
 The roles are `sdk` (`agent-access-provider`), `core`, `host`
 (`agent-access-broker-host`), `assembly` (`agent-access-broker`), `cli`
-(`agent-access`), `native` (backend crates), `reference`
-(`agent-access-conformance`), `adapter` (the MCP and OpenAPI import adapters),
-and `helper` (`agent-access-atlassian`, `agent-access-content`).
+(`agent-access`), `native` (backend and OAuth dialect crates, including
+`agent-access-atlassian`, whose helpers Jira and Confluence also use),
+`reference` (`agent-access-conformance`), `adapter` (the MCP and OpenAPI
+import adapters), and `helper` (`agent-access-content`).
 `node scripts/check-crate-boundaries.mjs` reads
 `cargo metadata --locked --format-version 1 --all-features` and fails when a
 workspace member has no known role or when a resolved dependency edge crosses
@@ -1891,6 +1892,56 @@ and throttling, a service account's stored token, and a real `git` clone whose
 rejection Git reports without asking its credential helper to erase the Broker
 token (it requires `git` and `git http-backend`). No test reaches a real GitLab
 instance.
+
+## Atlassian OAuth
+
+`cargo test -p agent-access-atlassian --lib` covers the `atlassian` dialect
+against stubbed Atlassian endpoints: registration rules, including the
+cloud-ID target, required scopes and one profile; the consumer check that
+requires the gateway on the profile's cloud ID; the authorization URL's
+audience, consent prompt and PKCE; JSON code exchange and refresh with and
+without a response `scope` (an exchange without it fails, a refresh keeps the
+granted scopes); identity mapping; token-response bounds and error
+classification, including Atlassian's 403 `invalid_grant`; and site discovery,
+which merges a site's product entries, adds `read:me` only when granted, keeps
+extra scopes and reports grants for other sites. It also checks every row of
+the Atlassian gateway validation table with and without service credentials,
+and the credential Jira and Confluence present: static tokens as before,
+delegated access pinned to the gateway route's cloud ID and audience, one
+recovery per operation, a second 401 as `credential_invalid`, and
+`mutation_verification_failed` receipts for read-backs the connection stopped.
+
+`cargo test -p agent-access-jira --lib access_tests` and
+`cargo test -p agent-access-confluence --lib access_tests` run each provider
+with delegated doubles against a stub serving both routes: OAuth through the
+gateway on the configured site and refused for another site, static tokens
+routed by kind, one recovery across the lookups and execution, a second 401 as
+`credential_invalid` with reconnect, read-back failures after an accepted write
+reported applied but unverified and failures before it passed through
+unchanged, and, for Jira, uploads and downloads repeated once after a 401; for
+Confluence, a personal-space (`~key`) page read and search through the gateway.
+
+The Broker host's `tests::oauth::atlassian_dialect` drives browser consent and
+a delegated lease through the OAuth manager with a test consumer that acts
+through the gateway on one site: the merged site target, the pinned cloud ID and
+`api.atlassian.com` audience, a refresh without `scope` that keeps the granted
+scopes and rereads the sites, and a 403 `invalid_grant` that requires reconnect.
+Installation stores nothing for an exchange without `scope`, a grant for another
+site, or a site without one of the shared profile's products. It also validates
+full configurations for every row of the Atlassian connection table, including
+simultaneous bearer service credentials and per-product registrations.
+
+`tests::oauth::atlassian_products` runs the real Jira and Confluence providers
+and dialect against one stub serving the OAuth endpoints and, in place of
+`api.atlassian.com`, the gateway routes (the providers' `test-support`
+`provider_with_gateway`): a Jira issue read and a lookup-backed comment list, a
+personal-space (`~alice`) page read and search, audited with the connection; a
+request in flight across another request's refresh recovering once with the
+stored successor; a refresh response lost in transit requiring reconnect for
+both products; a service account's bearer token through the gateway beside
+people's OAuth; and a consent for another site or without Confluence, or a
+refresh that drops Confluence, leaving both products unusable (option A). No
+test reaches Atlassian.
 
 ## Imported MCP services
 

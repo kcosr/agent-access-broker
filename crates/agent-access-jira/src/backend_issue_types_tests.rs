@@ -3,8 +3,8 @@ use agent_access_provider::test_support::{basic_credential, bearer_credential};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn credential() -> ExecutionCredential {
-    basic_credential("service@example.com", "token")
+fn credential() -> AtlassianCredential {
+    AtlassianCredential::from_static(basic_credential("service@example.com", "token"))
 }
 
 fn backend(api: &MockServer, limits: ProviderLimits) -> HttpJiraBackend {
@@ -41,8 +41,9 @@ fn page() -> Value {
 async fn issue_types_uses_selected_auth_and_gateway_and_requests_one_page() {
     let api = MockServer::start().await;
     let mut backend = backend(&api, ProviderLimits::default());
-    backend.routes.gateway_mut().unwrap().api_base =
-        Url::parse(&format!("{}/ex/jira/cloud/rest/api/3/", api.uri())).unwrap();
+    let gateway = backend.routes.gateway_mut().unwrap();
+    gateway.api_base = Url::parse(&format!("{}/ex/jira/cloud/rest/api/3/", api.uri())).unwrap();
+    gateway.site_base = Url::parse(&format!("{}/ex/jira/cloud/", api.uri())).unwrap();
     let mut response = page();
     response["startAt"] = json!(2);
     response["total"] = json!(5);
@@ -61,7 +62,10 @@ async fn issue_types_uses_selected_auth_and_gateway_and_requests_one_page() {
             .mount(&api)
             .await;
     }
-    for credential in [credential(), bearer_credential("selected-token")] {
+    for credential in [
+        credential(),
+        AtlassianCredential::from_static(bearer_credential("selected-token")),
+    ] {
         let result = backend
             .issue_types("PROJ", request(2, 2), &credential)
             .await

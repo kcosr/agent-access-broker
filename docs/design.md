@@ -173,11 +173,12 @@ also includes a same-origin browser portal frontend:
   linked by the broker binary) that uses every extension point of the backend
   contract; broker acceptance tests register it to prove a backend needs no
   host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
-- **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
-  backends: Atlassian gateway credential rules, request authorization, the
-  tenant/gateway client routes selected by credential type, the route
-  fingerprint their relayed continuations bind, and the credential binding
-  (`bind_atlassian_access`) of every continuation and draft handle.
+- **`agent-access-atlassian`** — a native module crate: the `atlassian` OAuth
+  dialect, which the broker binary registers, and the helpers shared by the
+  Jira and Confluence backends: Atlassian gateway credential rules, request
+  authorization, the tenant/gateway client routes selected by credential type,
+  the route fingerprint their relayed continuations bind, and the credential
+  binding (`bind_atlassian_access`) of every continuation and draft handle.
 - **`agent-access-broker-host`** — the broker host library: module
   composition (`BrokerComposition`), the application (`BrokerApplication`:
   command parsing, configuration validation, audit verification, and the
@@ -226,7 +227,7 @@ flowchart TD
     Core --> SDK
     Natives --> SDK
     Own --> SDK
-    Natives --> Helpers[Helpers: content and Atlassian]
+    Natives --> Helpers[Helper: content]
     Helpers --> SDK
     Reference[Conformance reference, tests only] --> SDK
     CLI[agent-access CLI] --> Core
@@ -385,10 +386,16 @@ origin: the client refuses, before sending, any request to another origin that
 carries an `Authorization`, `Proxy-Authorization` or `Cookie` header or a header
 value marked sensitive, as proven unsent (see
 [credentials and origins](provider-sdk.md#credentials-and-origins)). The
-redirect helper presents the backend's authorization only on hops to that origin. Redirect
+redirect helper presents the backend's authorization only on hops within the
+chain's authorized path on that origin: the client's base, or a prefix the
+backend names, such as an Atlassian site's `/ex/<product>/<cloudId>/` path on the
+gateway. With an authorization, a hop on the base origin outside that path fails
+the chain before it is sent. An authorization can come from a per-hop
+authorizer, which Jira and Confluence use to revalidate delegated access
+immediately before each authorized hop. Redirect
 hops to other origins carry correlation headers only when the backend opts in
-(Jira does, for Atlassian media hosts; CloudBees CI does not, for artifact
-storage). Each request records one
+(Jira and Confluence do, for Atlassian media hosts; CloudBees CI does not, for
+artifact storage). Each request records one
 `upstream_request_completed` trace, either when the backend has classified the
 response or when the response is dropped. The trace captures the provider hook
 that sent the request, including from work moved onto other tasks with
@@ -2287,8 +2294,11 @@ admin config status reports the active `shutdownTimeoutMs`.
   normal brokered path and should be treated as a migration or break-glass
   exception by deployment policy.
 - **Redirects.** All three providers follow redirects manually, limited to
-  allowlisted hosts, and drop upstream auth on cross-origin hops. Both Atlassian
-  providers reject redirect responses on non-content (body) endpoints.
+  allowlisted hosts, and drop upstream auth on cross-origin hops. Atlassian
+  attachment downloads present it only within the route's site (the tenant host,
+  or the configured cloud ID's gateway path) and refuse a redirect to another
+  site on the same origin. Both Atlassian providers reject redirect responses on
+  non-content (body) endpoints.
 - **Atlassian gateway.** `bearer_token` Jira/Confluence credentials route through
   the Atlassian gateway and require `providers.<svc>.cloud_id` (validated UUID)
   plus `api.atlassian.com` in `allowed_upstream_hosts`.
@@ -2319,8 +2329,9 @@ Their subsequent direct use is governed by GitLab, independently of Broker grant
 on-demand versioned token leases beneath typed per-user actions. Refresh
 material remains encrypted in the managed store, outside invocation tokens and
 agent containers. Production integrations include Google for Gmail, GitLab for
-GitLab REST and GitLab Git gateways sharing one connection per instance, and
-approved imported MCP OAuth registrations. An independent development-only test provider
+GitLab REST and GitLab Git gateways sharing one connection per instance,
+Atlassian for Jira and Confluence through the Atlassian gateway, and approved
+imported MCP OAuth registrations. An independent development-only test provider
 exercises collection resources and lifecycle fault recovery.
 
 Personal OAuth setup requires self-service, a credential connection that selects
@@ -2347,8 +2358,8 @@ classifying failures. The manager's fences rely on that classification: a
 dialect reports a retry-after, permission, or request rejection only when the
 authorization server guarantees the grant was not consumed. Dialects register
 with the binary through the backend registry, like backends; core registers
-none of its own, and this binary selects `google`, `gitlab`, `mcp_oauth` and the
-development-only `stub` dialect from `agent-access-fake`. Dialect requests go through an
+none of its own, and this binary selects `google`, `gitlab`, `atlassian`,
+`mcp_oauth` and the development-only `stub` dialect from `agent-access-fake`. Dialect requests go through an
 `UpstreamClient` with OAuth's own bounds (15 seconds total, 5 seconds to
 connect), the registration's allowlist, and upstream traces. The manager
 builds them through its host OAuth client factory, one client per approved
@@ -2369,3 +2380,16 @@ material is consuming, and each grant supersedes earlier access. Code exchange
 reads granted scopes from the token response, or else from the new token's info
 before returning the grant; refresh takes them from the response, or else keeps
 the consent evidence the manager supplies, without another request.
+
+The `atlassian` dialect lives in `agent-access-atlassian`, beside the helpers
+Jira and Confluence share. Its fixed endpoints are Atlassian's authorization
+server and the Atlassian gateway. A registration's one profile targets a site's
+cloud ID with the audience `api.atlassian.com`, and its consumer check accepts
+only services that act through the gateway on that cloud ID, so Jira and
+Confluence pin their leases to the cloud ID their gateway route uses. Its
+refresh material is consuming and rotates the refresh token. Granted scopes come
+only from token responses: an exchange without them fails, and a refresh without
+them keeps the consent evidence. Target discovery merges the per-product entries
+`accessible-resources` lists for one site into one target and adds the granted
+account-level `read:me`, so the manager's whole-profile eligibility check sees
+the site with both products' scopes.

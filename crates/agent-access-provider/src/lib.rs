@@ -109,8 +109,9 @@
 //! change advances the 0.x minor line (a future 1.x line uses major versions)
 //! and is documented in the changelog; no old interface, alias or parallel
 //! parser is kept. The implementable traits are [`Provider`],
-//! [`BackendConfig`], [`OAuthDialect`], the presentation codec and renderer
-//! traits, and the host's [`UpstreamClientFactory`](host::UpstreamClientFactory),
+//! [`BackendConfig`], [`OAuthDialect`], [`RedirectAuthorizer`], the
+//! presentation codec and renderer traits, and the host's
+//! [`UpstreamClientFactory`](host::UpstreamClientFactory),
 //! [`StableSigningKey`] and [`DelegatedLease`] ports; adding a required method
 //! to one is incompatible. A downstream module's domain reason inventory is
 //! part of its own compatibility contract. There is no stable binary ABI:
@@ -300,9 +301,9 @@ pub use signing::{SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};
 pub use upstream::{
-    BodyReadError, ClientProfile, PendingUpstreamTrace, RedirectRules, UploadProgress,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
-    file_upload_body, read_bounded_body, take_upstream_trace,
+    BodyReadError, ClientProfile, PendingUpstreamTrace, RedirectAuthorizer, RedirectRules,
+    UploadProgress, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
+    complete_upstream_trace, file_upload_body, read_bounded_body, take_upstream_trace,
 };
 pub use upstream_allowlist::{path_matches_pattern, same_origin, url_allowed_by_patterns};
 pub use upstream_rate_limit::{

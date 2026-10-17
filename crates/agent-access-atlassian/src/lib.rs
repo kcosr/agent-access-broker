@@ -1,17 +1,47 @@
-//! Helpers shared by the Jira and Confluence backends: configuration
-//! validation, credential authorization, the tenant/gateway client routes and
-//! the credential binding of their continuations.
+//! The `atlassian` OAuth dialect ([`ATLASSIAN_OAUTH_DIALECT`]) and the
+//! helpers the Jira and Confluence backends share: configuration
+//! validation, the credential each request presents ([`AtlassianCredential`],
+//! with delegated access pinned per request and one 401 recovery, and
+//! attachment downloads whose redirects keep it on the route's site), the
+//! tenant/gateway client routes, the credential binding of their
+//! continuations and the receipts of writes whose verification failed.
+mod access;
+mod oauth;
+
+pub use access::{
+    AtlassianAccessError, AtlassianCredential, AtlassianDownloadError, AtlassianWriteVerification,
+    PresentedAccess, is_delegated_access_failure,
+};
+pub use oauth::{ATLASSIAN_OAUTH_AUDIENCE, ATLASSIAN_OAUTH_DIALECT};
+
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
     ClientProfile, ContinuationBinding, ContinuationStage, CredentialDescriptor, EgressDeclaration,
-    EgressProxyConfig, ExecutionAccess, ExecutionCredential, ProviderBuildError, ProviderError,
-    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority,
-    UpstreamAuthorization, UpstreamClient, UpstreamClientSpec,
+    EgressProxyConfig, ExecutionAccess, ProviderBuildError, ProviderError, ReasonCode,
+    ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority, UpstreamClient,
+    UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::sync::Arc;
 use url::Url;
 
+/// Checks an Atlassian provider's execution credentials against its route.
+///
+/// The site route takes Basic API tokens; the Atlassian gateway, enabled by
+/// `api.atlassian.com` in the allowlist, takes bearer tokens and delegated
+/// (OAuth) access, and then every credential must use it:
+///
+/// | Per-user connection | Gateway | Result |
+/// | --- | --- | --- |
+/// | `basic_api_token` profile only | off | valid: site route |
+/// | `bearer_token` profile only | on | valid: gateway |
+/// | OAuth only | on (required) | valid: gateway |
+/// | `bearer_token` profile and OAuth | on | valid: OAuth for people, bearer tokens for service accounts, both through the gateway |
+/// | `basic_api_token` profile and OAuth | either | rejected: site tokens would mix with gateway OAuth |
+///
+/// A `credentials.service` credential must be a bearer token when the
+/// gateway is on, and a bearer credential requires the gateway.
 pub fn validate_atlassian_gateway_credential(
     service: &str,
     patterns: &[String],
@@ -20,21 +50,37 @@ pub fn validate_atlassian_gateway_credential(
     errors: &mut Vec<String>,
 ) {
     let uses_gateway = uses_atlassian_gateway_host(patterns);
-    if credentials.per_user_delegated {
-        errors.push(format!(
-            "credentials.per_user.{service} offers delegated (OAuth) access, which {service} does not accept"
-        ));
+    let delegated = credentials.per_user_delegated;
+    if delegated {
+        if credentials.per_user == Some("basic_api_token") {
+            errors.push(format!(
+                "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent"
+            ));
+        }
+        if !uses_gateway {
+            errors.push(format!(
+                "credentials.per_user.{service} offers delegated (OAuth) access, which requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
+            ));
+        }
     }
+    // Beside OAuth, the per-user kind is `oauth` for a connection without a
+    // token profile, whose access is the delegated credential checked above,
+    // or a basic profile, already rejected above.
+    let per_user_static = credentials
+        .per_user
+        .filter(|kind| !(delegated && matches!(*kind, "oauth" | "basic_api_token")));
     let execution_credentials = [
         ("credentials.service", credentials.service),
-        ("credentials.per_user", credentials.per_user),
+        ("credentials.per_user", per_user_static),
     ];
-    let mut has_bearer_execution_credential = false;
+    let mut has_gateway_execution_credential = delegated;
+    let mut bearer_mode = None;
 
     for (mode, credential) in execution_credentials {
         if let Some(kind) = credential {
             if kind == "bearer_token" {
-                has_bearer_execution_credential = true;
+                has_gateway_execution_credential = true;
+                bearer_mode.get_or_insert(mode);
             } else if uses_gateway {
                 errors.push(format!(
                     "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but {mode}.{service} does not resolve to a bearer_token credential"
@@ -43,14 +89,9 @@ pub fn validate_atlassian_gateway_credential(
         }
     }
 
-    if has_bearer_execution_credential && !uses_gateway {
+    if let Some(mode) = bearer_mode.filter(|_| !uses_gateway) {
         errors.push(format!(
-            "{mode}.{service}.type bearer_token requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com",
-            mode = if credentials.service == Some("bearer_token") {
-                "credentials.service"
-            } else {
-                "credentials.per_user"
-            }
+            "{mode}.{service}.type bearer_token requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
         ));
     }
 
@@ -68,9 +109,9 @@ pub fn validate_atlassian_gateway_credential(
         )),
     }
 
-    if !has_bearer_execution_credential {
+    if !has_gateway_execution_credential {
         errors.push(format!(
-            "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but no bearer_token execution credential is configured"
+            "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured"
         ));
     }
 }
@@ -97,22 +138,6 @@ pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
             .and_then(|url| url.host_str().map(str::to_string))
             .is_some_and(|host| host == "api.atlassian.com")
     })
-}
-
-/// How an Atlassian execution credential authenticates a request: HTTP
-/// Basic for a tenant API token, a bearer token through the gateway. Returns
-/// `None` for a credential kind Atlassian providers do not support, which the
-/// caller must reject. The SDK presents the authorization when the request is
-/// sent; this helper never reads the material.
-pub fn atlassian_credential_authorization(
-    credential: &ExecutionCredential,
-) -> Option<UpstreamAuthorization> {
-    match credential.kind() {
-        StaticCredentialKind::BasicApiToken | StaticCredentialKind::BearerToken => {
-            Some(credential.authorization())
-        }
-        _ => None,
-    }
 }
 
 /// Binds a continuation or handle to the execution material that reaches an
@@ -172,6 +197,19 @@ fn atlassian_access_unavailable() -> ProviderError {
     )
 }
 
+/// Deterministic wire fixtures. No production configuration can move the
+/// dialect's endpoints.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use agent_access_provider::OAuthDialectRegistration;
+
+    /// The `atlassian` dialect with its authorization, token, identity and
+    /// site endpoints below `base`, as a development fixture.
+    pub fn dialect(base: &str) -> &'static OAuthDialectRegistration {
+        crate::oauth::test_dialect(base)
+    }
+}
+
 /// One Atlassian product's REST API: its provider name, which also names its
 /// configuration section and gateway product, its display name, the API path
 /// below the tenant host and the gateway site, and statuses with
@@ -194,10 +232,22 @@ pub struct AtlassianSite<'a> {
 }
 
 impl AtlassianSite<'_> {
-    /// Whether bearer credentials route through the Atlassian gateway: a
-    /// cloud ID is configured and `api.atlassian.com` is allowed.
+    /// Whether bearer credentials and delegated access route through the
+    /// Atlassian gateway: a cloud ID is configured and `api.atlassian.com`
+    /// is allowed.
     pub fn uses_gateway(&self) -> bool {
         self.cloud_id.is_some() && uses_atlassian_gateway_host(self.allowed_upstream_hosts)
+    }
+
+    /// The cloud ID of the site's gateway route as the route names it, a
+    /// lowercase hyphenated UUID: what delegated access is pinned to before
+    /// each request. `None` when the site does not use the gateway or its
+    /// cloud ID is not a UUID, which validation rejects.
+    pub fn gateway_cloud_id(&self) -> Option<Arc<str>> {
+        self.cloud_id
+            .filter(|_| self.uses_gateway())
+            .and_then(|cloud_id| uuid::Uuid::parse_str(cloud_id).ok())
+            .map(|cloud_id| Arc::from(cloud_id.hyphenated().to_string()))
     }
 
     /// The credentials Jira and Confluence declare for this site: the
@@ -263,19 +313,41 @@ impl AtlassianSite<'_> {
 #[derive(Clone)]
 pub struct AtlassianClients {
     pub api_base: Url,
+    /// The root of the route's site, which `api_base` extends with the
+    /// product's API path: `https://<tenant_host>/` on the tenant route, or
+    /// `https://api.atlassian.com/ex/<provider>/<cloud_id>/` on the gateway,
+    /// whose one origin serves every site. Attachment download redirects
+    /// present the credential only within it.
+    pub site_base: Url,
     pub client: UpstreamClient,
     pub stream_client: UpstreamClient,
 }
 
 impl AtlassianClients {
-    /// Clients for `api_base` with the site's egress declaration and
-    /// allowlist, labelled `providers.<provider>.egress_proxy`.
+    /// Clients for `api_base`, which must end with the product's API path,
+    /// with the site's egress declaration and allowlist, labelled
+    /// `providers.<provider>.egress_proxy`.
     pub fn new(
         product: AtlassianProduct,
         site: &AtlassianSite<'_>,
         api_base: Url,
         factory: &dyn UpstreamClientFactory,
     ) -> Result<Self, ProviderBuildError> {
+        let site_root = api_base
+            .path()
+            .strip_suffix(product.api_path)
+            .filter(|root| root.ends_with('/'))
+            .ok_or_else(|| {
+                ProviderBuildError::invalid(format!(
+                    "providers.{}: the API base {api_base} does not end with {}",
+                    product.provider, product.api_path
+                ))
+            })?
+            .to_owned();
+        let mut site_base = api_base.clone();
+        site_base.set_path(&site_root);
+        site_base.set_query(None);
+        site_base.set_fragment(None);
         let label = format!("providers.{}.egress_proxy", product.provider);
         let client = |profile| {
             UpstreamClient::build(
@@ -295,13 +367,14 @@ impl AtlassianClients {
             client: client(ClientProfile::Request)?,
             stream_client: client(ClientProfile::Stream)?,
             api_base,
+            site_base,
         })
     }
 }
 
 /// An Atlassian provider's routes: Basic API-token credentials use the
-/// tenant host, bearer credentials the Atlassian gateway when the site
-/// enables it.
+/// tenant host; bearer credentials and delegated (OAuth) access use the
+/// Atlassian gateway when the site enables it.
 #[derive(Clone)]
 pub struct AtlassianRoutes {
     product: AtlassianProduct,
@@ -336,7 +409,8 @@ impl AtlassianRoutes {
                     ))
                 })?;
                 let gateway_base = Url::parse(&format!(
-                    "https://api.atlassian.com/ex/{provider}/{cloud_id}/{}",
+                    "https://api.atlassian.com/ex/{provider}/{}/{}",
+                    cloud_id.hyphenated(),
                     product.api_path
                 ))
                 .map_err(|error| ProviderBuildError::invalid(error.to_string()))?;
@@ -365,12 +439,14 @@ impl AtlassianRoutes {
         }
     }
 
-    /// The clients for `credential`'s route.
+    /// The clients for `credential`'s route: the gateway for delegated
+    /// access and bearer tokens, whatever else the site allows, and the
+    /// tenant host otherwise.
     pub fn for_credential(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<&AtlassianClients, AtlassianRouteUnavailable> {
-        if credential.kind() == StaticCredentialKind::BearerToken {
+        if credential.routes_through_gateway() {
             self.gateway.as_ref().ok_or(AtlassianRouteUnavailable {
                 product: self.product,
             })
@@ -385,7 +461,8 @@ impl AtlassianRoutes {
     }
 }
 
-/// A bearer credential with no gateway route configured.
+/// A bearer credential or delegated access with no gateway route
+/// configured.
 #[derive(Debug, Clone, Copy)]
 pub struct AtlassianRouteUnavailable {
     product: AtlassianProduct,
@@ -396,7 +473,7 @@ impl fmt::Display for AtlassianRouteUnavailable {
         let AtlassianProduct { provider, name, .. } = self.product;
         write!(
             formatter,
-            "bearer {name} credentials require providers.{provider}.cloud_id and api.atlassian.com in allowed_upstream_hosts"
+            "{name} bearer tokens and OAuth connections require providers.{provider}.cloud_id and api.atlassian.com in allowed_upstream_hosts"
         )
     }
 }
@@ -502,7 +579,7 @@ mod tests {
             assert_eq!(declared.kind, credential.kind().as_str(), "{profile}");
             assert_eq!(
                 routes
-                    .for_credential(&credential)
+                    .for_credential(&AtlassianCredential::from_static(credential.clone()))
                     .unwrap()
                     .api_base
                     .as_str(),
@@ -512,63 +589,146 @@ mod tests {
         }
     }
 
+    /// Every row of the Atlassian validation and routing table, with and
+    /// without simultaneous service credentials: the gateway takes bearer
+    /// tokens and OAuth, the site takes Basic tokens, and a connection never
+    /// mixes Basic site tokens with gateway OAuth.
     #[test]
-    fn gateway_validation_accepts_bearer_kinds_and_rejects_delegated_access() {
-        let validate = |credentials: ServiceCredentialKinds<'_>| {
+    fn gateway_validation_follows_the_connection_table() {
+        const SITE_BEARER: &str = "credentials.per_user.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const SERVICE_SITE_BEARER: &str = "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const OAUTH_SITE: &str = "credentials.per_user.jira offers delegated (OAuth) access, which requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const BASIC_WITH_OAUTH: &str = "credentials.per_user.jira combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent";
+        const GATEWAY_PER_USER_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.per_user.jira does not resolve to a bearer_token credential";
+        const GATEWAY_SERVICE_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.service.jira does not resolve to a bearer_token credential";
+        const GATEWAY_NONE: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured";
+
+        let validate = |gateway: bool, credentials: ServiceCredentialKinds<'_>| {
             let mut errors = Vec::new();
             validate_atlassian_gateway_credential(
                 "jira",
-                &hosts(true),
+                &hosts(gateway),
                 Some(CLOUD_ID),
                 credentials,
                 &mut errors,
             );
             errors
         };
-        assert!(validate(ServiceCredentialKinds::new(None, Some("bearer_token"))).is_empty());
-        // A connection with a bearer token profile that also offers OAuth is
-        // still rejected: delegated access is not supported here.
-        assert_eq!(
-            validate(
-                ServiceCredentialKinds::new(None, Some("bearer_token"))
-                    .with_per_user_delegated(true)
+        let kinds = |service, per_user, delegated| {
+            ServiceCredentialKinds::new(service, per_user).with_per_user_delegated(delegated)
+        };
+        let none: [&str; 0] = [];
+        let basic = Some("basic_api_token");
+        let bearer = Some("bearer_token");
+        let oauth = Some("oauth");
+        for (gateway, service, per_user, delegated, expected) in [
+            // atlassian-api-token only: the site route.
+            (false, None, basic, false, &none[..]),
+            (false, basic, basic, false, &none[..]),
+            (
+                true,
+                None,
+                basic,
+                false,
+                &[GATEWAY_PER_USER_BASIC, GATEWAY_NONE][..],
             ),
-            [
-                "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept"
-            ]
-        );
-        assert_eq!(
-            validate(
-                ServiceCredentialKinds::new(None, Some("oauth")).with_per_user_delegated(true)
+            // atlassian-bearer-token only: the gateway.
+            (true, None, bearer, false, &none[..]),
+            (true, bearer, bearer, false, &none[..]),
+            (false, None, bearer, false, &[SITE_BEARER][..]),
+            // OAuth only: the gateway, which it requires.
+            (true, None, oauth, true, &none[..]),
+            (true, bearer, oauth, true, &none[..]),
+            (true, basic, oauth, true, &[GATEWAY_SERVICE_BASIC][..]),
+            (false, None, oauth, true, &[OAUTH_SITE][..]),
+            (
+                false,
+                bearer,
+                oauth,
+                true,
+                &[OAUTH_SITE, SERVICE_SITE_BEARER][..],
             ),
-            [
-                "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept",
-                "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.per_user.jira does not resolve to a bearer_token credential",
-                "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token execution credential is configured",
-            ]
-        );
+            // atlassian-bearer-token and OAuth: people use OAuth and
+            // service accounts bearer tokens, both through the gateway.
+            (true, None, bearer, true, &none[..]),
+            (true, bearer, bearer, true, &none[..]),
+            (true, basic, bearer, true, &[GATEWAY_SERVICE_BASIC][..]),
+            // atlassian-api-token and OAuth: rejected either way.
+            (true, None, basic, true, &[BASIC_WITH_OAUTH][..]),
+            (true, bearer, basic, true, &[BASIC_WITH_OAUTH][..]),
+            (
+                false,
+                None,
+                basic,
+                true,
+                &[BASIC_WITH_OAUTH, OAUTH_SITE][..],
+            ),
+            (
+                false,
+                basic,
+                basic,
+                true,
+                &[BASIC_WITH_OAUTH, OAUTH_SITE][..],
+            ),
+            // Service credentials alone keep their rules.
+            (true, bearer, None, false, &none[..]),
+            (
+                true,
+                basic,
+                None,
+                false,
+                &[GATEWAY_SERVICE_BASIC, GATEWAY_NONE][..],
+            ),
+            (true, None, None, false, &[GATEWAY_NONE][..]),
+            (false, bearer, None, false, &[SERVICE_SITE_BEARER][..]),
+            // A secret store's records carry their own kinds.
+            (
+                true,
+                None,
+                Some("secret_store"),
+                false,
+                &[GATEWAY_PER_USER_BASIC, GATEWAY_NONE][..],
+            ),
+        ] {
+            assert_eq!(
+                validate(gateway, kinds(service, per_user, delegated)),
+                expected,
+                "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}"
+            );
+        }
     }
 
+    /// Each route's API base extends its site's root, the scope its
+    /// download redirects present the credential in: the tenant host, or
+    /// the configured cloud ID's path on the gateway shared by every site.
     #[test]
     fn credentials_route_to_the_tenant_or_the_gateway() {
         let host = TestHost::default();
         let allowed = hosts(true);
         let routes = AtlassianRoutes::new(PRODUCT, &site(Some(CLOUD_ID), &allowed), &host).unwrap();
+        let tenant = routes
+            .for_credential(&AtlassianCredential::from_static(basic_credential(
+                "agent@example.com",
+                "token",
+            )))
+            .unwrap();
         assert_eq!(
-            routes
-                .for_credential(&basic_credential("agent@example.com", "token"))
-                .unwrap()
-                .api_base
-                .as_str(),
+            tenant.api_base.as_str(),
             "https://example.atlassian.net/wiki/rest/api/"
         );
+        assert_eq!(tenant.site_base.as_str(), "https://example.atlassian.net/");
+        let gateway = routes
+            .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                "token",
+            )))
+            .unwrap();
         assert_eq!(
-            routes
-                .for_credential(&bearer_credential("token"))
-                .unwrap()
-                .api_base
-                .as_str(),
+            gateway.api_base.as_str(),
             format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/")
+        );
+        assert_eq!(
+            gateway.site_base.as_str(),
+            format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/")
         );
         let built = host.built_clients();
         assert_eq!(built.len(), 4);
@@ -584,11 +744,37 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 routes
-                    .for_credential(&bearer_credential("token"))
+                    .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                        "token"
+                    )))
                     .err()
                     .unwrap()
                     .to_string(),
-                "bearer Confluence credentials require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
+                "Confluence bearer tokens and OAuth connections require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
+            );
+        }
+    }
+
+    #[test]
+    fn clients_need_an_api_base_ending_with_the_product_api_path() {
+        let allowed = hosts(true);
+        for base in [
+            "https://example.atlassian.net/rest/api/",
+            "https://example.atlassian.net/xwiki/rest/api/",
+        ] {
+            let error = AtlassianClients::new(
+                PRODUCT,
+                &site(None, &allowed),
+                Url::parse(base).unwrap(),
+                &TestHost::default(),
+            )
+            .err()
+            .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not end with wiki/rest/api/"),
+                "{error}"
             );
         }
     }
@@ -933,24 +1119,6 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
             assert_eq!(error.message, "selected credential material is unavailable");
-        }
-    }
-
-    /// Basic credentials authorize tenant requests and bearer credentials
-    /// gateway requests; the authorization reveals neither. The SDK's tests
-    /// and the Jira and Confluence mock-upstream tests check the bytes sent.
-    #[test]
-    fn authorization_accepts_basic_and_bearer_credentials() {
-        for credential in [
-            basic_credential("agent@example.com", "api-token"),
-            bearer_credential("gateway-token"),
-        ] {
-            let authorization = atlassian_credential_authorization(&credential).unwrap();
-            let rendered = format!("{authorization:?}");
-            assert!(
-                !rendered.contains("token") && !rendered.contains("agent@"),
-                "{rendered}"
-            );
         }
     }
 }

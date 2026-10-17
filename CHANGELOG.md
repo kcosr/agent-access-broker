@@ -287,6 +287,22 @@ All notable changes to this project are documented in this file.
   A provider that needs credentials on another origin builds a client whose
   base is that origin, and marks custom credential headers sensitive. The
   shipped providers already met this rule.
+- `get_following_redirects` presents a chain's authorization only on hops
+  within its authorized path: the client's base origin at or below the base's
+  path, compared by whole segments, instead of any hop on the base origin.
+  `RedirectRules::with_authorized_prefix(&url)` names another path on that
+  origin, such as one tenant's path on a gateway shared by many tenants. With
+  an authorization, a hop on the base origin outside the path fails the chain
+  as `UpstreamError::Redirect` before it is sent, and a credential that
+  `with_decorate` adds outside it fails as `NotSent`. A path that a server could
+  decode into a dot segment, such as `..%2F`, is outside every path.
+  `RedirectRules::with_authorizer` takes the new implementable
+  `RedirectAuthorizer` trait, which supplies each authorized hop's
+  authorization immediately before that hop is sent, so delegated access is
+  revalidated per hop; its failure is the new `UpstreamError::Authorization`,
+  which carries the provider's own `ProviderError`. `with_authorization` keeps
+  presenting one static credential. CloudBees CI's redirects already stayed
+  within its controller base.
 - `[limits].upload_spool_dir` is now required. It previously defaulted to
   `<working directory>/target/agent-access-upload-spool`, which under a service
   manager such as systemd is `/target/agent-access-upload-spool`, and the Broker
@@ -831,9 +847,77 @@ All notable changes to this project are documented in this file.
   erase the Broker token. Gateway audit records of a personal connection add
   `providerAudit.gateway.credentialMethod` (`oauth` or `token`). See
   [Git gateway OAuth connections](docs/git-http-gateway.md#oauth-connections).
+- The production `atlassian` OAuth dialect (`adapter = "atlassian"`,
+  `agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT`, selected by the Broker
+  binary) connects a person's Atlassian account for Jira and Confluence
+  through an OAuth 2.0 integration from Atlassian's developer console.
+  Registrations use `base_url = "https://auth.atlassian.com"`,
+  `client_secret_post`, `encoding = "json"`, `rotation = "rotate_refresh"` and
+  exactly one explicit permission profile requesting `read:me` and
+  `offline_access`, whose `audience` is `api.atlassian.com` and whose `target`
+  is the site's cloud ID. Authorization always asks for
+  `audience=api.atlassian.com` and `prompt=consent`, with the host's PKCE
+  challenge. The connected account is `/me`'s `account_id`. Granted scopes come
+  from the token response: a code exchange without `scope` fails and stores
+  nothing, and a refresh without it keeps the originally granted scopes.
+  Targets are the sites `accessible-resources` lists, with each site's product
+  entries merged into one target with the union of their scopes plus the
+  granted `read:me`; connecting requires the profile's site with every
+  requested scope. Refresh material is consuming, and Atlassian's HTTP 403
+  `invalid_grant` requires reconnect. Only consumers acting through the
+  Atlassian gateway on the profile's cloud ID pass offline validation.
+  Disconnect stays local (`remoteRevocation: "not_requested"`). The docs cover
+  the integration's setup, scopes, per-product registrations for people with
+  only one product, the shared 65,000-point hourly quota and the 90-day
+  inactivity expiry. See [Atlassian OAuth](docs/oauth.md#atlassian).
+- Jira and Confluence accept delegated access: a credential connection they use
+  may set an `atlassian` OAuth registration, and people's lookups and actions
+  then use their Atlassian connection, with one lease per invocation. OAuth
+  always goes through the Atlassian gateway,
+  `https://api.atlassian.com/ex/{jira|confluence}/{cloudId}/`, while stored and
+  service tokens keep routing by kind. Immediately before each request,
+  including lookups, list pages and read-backs, the provider pins the access to
+  the gateway route's cloud ID and the `api.atlassian.com` audience; an
+  attachment download does so before each redirect hop within the site. A 401
+  marks the presented access rejected and renews it once per invocation,
+  whether it answered a lookup or the execution, and repeats that request,
+  including a write or an upload; a further 401 fails as `credential_invalid`
+  asking the person to reconnect Atlassian. A connection failure before a write
+  keeps its own reason without a receipt, also for an attachment batch before
+  any upload applied; one that stops a read-back after the write was accepted
+  reports `mutation_verification_failed` with an `applied_unverified` receipt,
+  `retrySafe: false` and its safe locators. Credential verification stays
+  token-only. The provider guides list each action's Atlassian OAuth scopes,
+  and the sample and OAuth guide request that inventory: `read:me`,
+  `offline_access`, `read:jira-work`, `write:jira-work` and Confluence's
+  classic (REST API v1) and granular (v2) scopes, without `read:jira-user` or
+  `read:confluence-space.summary`. See
+  [Jira](docs/providers-jira.md#oauth-connections) and
+  [Confluence](docs/providers-confluence.md#oauth-connections) OAuth
+  connections.
 
 ### Changed
 
+- Jira and Confluence validation accepts OAuth connections through the
+  Atlassian gateway: a per-user connection with `oauth` alone, or with the
+  `atlassian-bearer-token` profile, is valid when the provider allows
+  `api.atlassian.com`, and counts as the gateway's execution credential. An
+  `oauth` connection without the gateway fails with
+  `credentials.per_user.<service> offers delegated (OAuth) access, which
+  requires providers.<service>.allowed_upstream_hosts to include
+  api.atlassian.com`, and a connection combining `atlassian-api-token` with
+  `oauth` is rejected with `credentials.per_user.<service> combines OAuth with
+  a basic_api_token profile; ...`. A gateway without either credential now
+  reports `no bearer_token or OAuth execution credential is configured`.
+  `credentials.service` entries must still be `bearer_token` on the gateway.
+- `agent-access-atlassian` is a `native` module crate: it registers the
+  `atlassian` OAuth dialect, the assembly links it directly, its build status
+  module is listed with release provenance, and `api/agent-access-atlassian.txt`
+  inventories its selection entry point. Its Jira and Confluence helpers stay
+  unsupported outside the first-party providers; their backend seams
+  (`JiraBackend`, `ConfluenceBackend`) now take an `AtlassianCredential`, a
+  static token or the invocation's delegated access, instead of a static
+  credential.
 - Git gateway error responses are labeled `Content-Type: text/plain;
   charset=utf-8`, so Git shows their one-line reason as `remote:` output when
   ref discovery fails. Their status, reason code header and body are unchanged.
@@ -1029,6 +1113,15 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Jira and Confluence attachment downloads through the Atlassian gateway
+  presented the credential, such as a service account's bearer token, on every
+  redirect hop to `api.atlassian.com`, whose one origin serves every Atlassian
+  site. A redirect to another site's cloud ID, directly or back from a media
+  host, therefore received the credential and could return that site's bytes.
+  Downloads now present the credential only within the route's site (the
+  configured cloud ID's `/ex/<product>/<cloudId>/` path, or the tenant host),
+  and such a redirect fails with `upstream_protocol_failed` before it is sent.
+  Media host redirects still work without the credential.
 - The Broker now enforces `limits.max_download_bytes` on every raw download
   itself instead of relying on each provider to bound its stream. A download
   that would pass the limit delivers only the bytes within it, then fails as a

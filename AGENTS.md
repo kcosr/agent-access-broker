@@ -255,8 +255,9 @@ binary and needs `python3`, whose absence fails it.
   Static credentials and delegated access have no plaintext accessor, and
   providers never hold a request carrying one: they
   hand an `UpstreamAuthorization` to the send method (`UpstreamCall`,
-  `RedirectRules`), and the client adds the sensitive header to the request it
-  builds. Only the host's raw-client paths (Git gateway, Git verification) use
+  `RedirectRules`, or a per-hop `RedirectAuthorizer`), and the client adds the
+  sensitive header to the request it builds, along a redirect chain only within
+  its authorized path. Only the host's raw-client paths (Git gateway, Git verification) use
   the host-only `host::authorize_host_request` and the host-only
   `host::token_as_basic` placement, which presents a token as HTTP Basic; the
   boundary check rejects both in native, adapter, reference and helper crates.
@@ -300,10 +301,13 @@ binary and needs `python3`, whose absence fails it.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
-  client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`).
+  client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Its
+  `test-support` feature serves the production provider with its gateway
+  route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`backend.rs` wire
   seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
-  page-token and draft-handle families, `config.rs`, `present.rs`).
+  page-token and draft-handle families, `config.rs`, `present.rs`), with the
+  same `test-support` provider fixture as Jira.
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `access.rs` the credential each request
   presents: a static token, or delegated access pinned to the instance before
@@ -311,10 +315,22 @@ binary and needs `python3`, whose absence fails it.
   `provisioning.rs`, `present.rs`) and the `gitlab` OAuth dialect (`oauth.rs`:
   one instance's target and `gitlab` audience, token-info scope evidence at
   code exchange, and the account's linked sign-ins for `login_binding`).
-- `crates/agent-access-atlassian`: helpers shared by the Atlassian backends
-  (gateway credential rules, request authorization, tenant/gateway client
-  routes and their route fingerprint, the credential binding of their
-  continuations and draft handles, and the vendor-level token profiles
+- `crates/agent-access-atlassian`: a `native` module crate holding the
+  `atlassian` OAuth dialect (`oauth.rs`: `auth.atlassian.com` consent with
+  `audience=api.atlassian.com` and `prompt=consent`, JSON token requests,
+  token-response scope evidence, `accessible-resources` sites merged per cloud
+  ID with the granted `read:me`, a cloud-ID target and `api.atlassian.com`
+  audience, and the consumer check that requires the gateway on that cloud ID)
+  and the helpers shared by the Atlassian backends (gateway credential rules
+  with the OAuth connection table; `access.rs`, the credential each request
+  presents: a static token, or delegated access pinned to the gateway route's
+  cloud ID and `api.atlassian.com` before every request, with one 401 recovery
+  per operation, attachment downloads that present it only within the route's
+  site (`AtlassianClients::site_base`), revalidated before each redirect hop,
+  and the `mutation_verification_failed` receipt of a read-back
+  the connection stopped; tenant/gateway client routes, where OAuth always
+  takes the gateway, and their route fingerprint; the credential binding of
+  their continuations and draft handles; and the vendor-level token profiles
   `atlassian-api-token` and `atlassian-bearer-token` that Jira and Confluence
   both declare, so one credential connection can serve both).
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
@@ -485,9 +501,10 @@ binary and needs `python3`, whose absence fails it.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
-- `docs/oauth.md`: delegated OAuth, production Google and GitLab dialects
-  (including GitLab administrator setup and scopes), separate test provider,
-  consent, refresh recovery, and connection boundaries.
+- `docs/oauth.md`: delegated OAuth, production Google, GitLab and Atlassian
+  dialects (including their administrator setup and scopes, and Atlassian's
+  connection table, per-product registrations, quota and lifecycle), separate
+  test provider, consent, refresh recovery, and connection boundaries.
 - `docs/database.md`: managed-store database schema, token hashing, credential
   encryption, key readiness, rewrap, lifecycle, and backup/recovery model, plus
   the separate SQLite audit database.
@@ -523,13 +540,15 @@ binary and needs `python3`, whose absence fails it.
   verify stdin and stdout contract, error codes and receipts, network settings,
   process lifecycle and limits, audit, and the trust model.
 - `docs/providers-jira.md`: Jira issue, search, comment, attachment,
-  verification, URL locator, and attribution behavior.
+  verification, URL locator, and attribution behavior, and OAuth connections
+  with each action's Atlassian scopes.
 - `docs/providers-gmail.md`: Google connection setup, Gmail actions, MIME bounds,
   refresh recovery, and live smoke instructions.
 - `docs/providers-teams.md`: signed Workflow destinations, managed setup, payloads,
   client commands, and acceptance/delivery limits.
 - `docs/providers-confluence.md`: Confluence page, blog, draft, comment,
-  attachment, CQL, URL locator, and attribution behavior.
+  attachment, CQL, URL locator, and attribution behavior, and OAuth
+  connections with each action's Atlassian scopes.
 - `docs/providers-cloudbees-ci.md`: CloudBees CI job resources and
   job/build/Pipeline/test reads, log/report/artifact downloads, queue inspection,
   and trigger actions.

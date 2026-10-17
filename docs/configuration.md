@@ -524,9 +524,11 @@ Validation rules:
 - **OAuth.** Every consumer must accept delegated credentials. The OAuth
   connection serves a consumer's metadata lookups as well as its execution.
   Today these consumers are `gmail`, GitLab REST (`gitlab`), Git gateways
-  whose `credential_modes` include `per_user`, and the development
-  `oauth_stub` service; see [oauth.md](oauth.md) and
-  [Git gateway OAuth connections](git-http-gateway.md#oauth-connections).
+  whose `credential_modes` include `per_user`, `jira`, `confluence`, and the
+  development `oauth_stub` service; see [oauth.md](oauth.md),
+  [Git gateway OAuth connections](git-http-gateway.md#oauth-connections) and
+  [Jira](providers-jira.md#oauth-connections) and
+  [Confluence](providers-confluence.md#oauth-connections) OAuth connections.
 - **Shared registrations.** Connections that reference the same OAuth
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or
@@ -543,7 +545,9 @@ Validation rules:
   connection requires the registration's dialect to accept each consumer, or
   reports `credentials.connections.<id>.oauth: <service> does not act on the
   upstream registration <registration> grants access to: <reason>`; the
-  `gitlab` dialect accepts only consumers on its registration's instance. These checks
+  `gitlab` dialect accepts only consumers on its registration's instance, and
+  the `atlassian` dialect only consumers that act through the Atlassian gateway
+  on its profile's cloud ID. These checks
   run at `config validate`, at startup and reload, and whenever the imported
   catalog is published, including import creation, without contacting
   upstream. Stored tokens are not bound to an upstream: changing the consumers'
@@ -577,7 +581,9 @@ kinds configured for its service (`ServiceCredentialKinds`). For a
 `type = "connection"` entry, `per_user` is the connection's token profile kind
 (`basic_api_token` or `bearer_token`), or `oauth` for a connection with only
 `oauth`, and a separate delegated flag reports that the connection also offers
-OAuth. Gmail therefore requires a connection with only `oauth`.
+OAuth. Gmail therefore requires a connection with only `oauth`, and Jira and
+Confluence accept OAuth only through the Atlassian gateway, alone or beside an
+`atlassian-bearer-token` profile (see [`[providers.jira]`](#providersjira)).
 
 ### Connection token profiles
 
@@ -609,9 +615,10 @@ gateway on both providers. Atlassian service-account tokens are scoped to the
 products chosen when they are created, and Atlassian does not document one
 token holding both products' scopes, so give each product its own bearer
 connection unless you have verified such a token. With the gateway enabled, a
-provider's per-user credential must resolve to `bearer_token` (see
+provider's per-user credential must resolve to `bearer_token` or OAuth (see
 [`[providers.jira]`](#providersjira)), so a deployment that routes through the
-gateway uses `atlassian-bearer-token` for its connections.
+gateway uses `atlassian-bearer-token`, [Atlassian OAuth](oauth.md#atlassian)
+or both for its connections.
 
 ### Secret-ref syntax
 
@@ -1186,15 +1193,19 @@ dependency_inward = "is blocked by"
   path segments, and credentials in the URL are rejected. `*` matches one path
   segment; `**` matches zero or more path segments while still requiring any
   later pattern segments to match. Including `api.atlassian.com` enables the
-  gateway and requires a `bearer_token` execution credential (and vice versa: a
-  `bearer_token` credential requires `api.atlassian.com` in the allowlist).
-  With the gateway enabled, each configured `credentials.service` and
-  `credentials.per_user` entry must resolve to `bearer_token`: a static
+  gateway and requires a `bearer_token` or OAuth execution credential (and vice
+  versa: a `bearer_token` credential or an OAuth connection requires
+  `api.atlassian.com` in the allowlist). With the gateway enabled, each
+  configured `credentials.service` entry must resolve to `bearer_token`, and
+  each `credentials.per_user` entry to `bearer_token` or OAuth: a static
   `bearer_token`, or a credential connection whose `token_profile` is the
-  bearer profile `atlassian-bearer-token`. A `basic_api_token`, a connection
-  with a basic profile such as `atlassian-api-token`, a connection that also
-  offers OAuth (delegated per-user access), and a `secret_store` (whose records
-  carry their own kinds) are rejected.
+  bearer profile `atlassian-bearer-token`, whose `oauth` names an
+  [Atlassian registration](oauth.md#atlassian), or both. A `basic_api_token`, a
+  connection with a basic profile such as `atlassian-api-token`, and a
+  `secret_store` (whose records carry their own kinds) are rejected. A
+  connection that combines `atlassian-api-token` with `oauth` is rejected with
+  or without the gateway, because Basic site tokens would mix with gateway
+  OAuth.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
   `media_types` entry must contain a `/`. See the cross-section limits checks in
@@ -2260,8 +2271,9 @@ A [credential connection](#credential-connections) binds services to a
 registration and permission profile with its `oauth` key. Registrations require
 managed storage/encryption and browser management. A registration's `adapter` must name an OAuth dialect the
 binary selects: `google` for Gmail, [`gitlab`](oauth.md#gitlab) for GitLab
-REST and Git, `mcp_oauth` for approved imported MCP services, or the
-development-only `stub`. The Broker core defines no dialect of
+REST and Git, [`atlassian`](oauth.md#atlassian) for Jira and Confluence
+through the Atlassian gateway, `mcp_oauth` for approved imported MCP services,
+or the development-only `stub`. The Broker core defines no dialect of
 its own. This is separate from Microsoft OIDC browser login.
 A registration may set `login_binding = { provider = "microsoft",
 upstream_identity_provider = "<name>", upstream_tenant_id = "<tenant>" }` to

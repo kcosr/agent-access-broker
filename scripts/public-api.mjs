@@ -32,6 +32,7 @@ const DIFF_LINE_LIMIT = 4000;
 // The reviewed selection entry points of every native, OAuth-dialect and import
 // adapter crate the assembly links. Each path names a root export.
 export const SELECTION_ENTRY_POINTS = Object.freeze({
+  "agent-access-atlassian": ["agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT"],
   "agent-access-cloudbees-ci": ["agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND"],
   "agent-access-command-import": ["agent_access_command_import::registration"],
   "agent-access-confluence": ["agent_access_confluence::CONFLUENCE_BACKEND"],

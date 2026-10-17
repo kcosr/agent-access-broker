@@ -8,9 +8,12 @@
 //! A provider hands the authorization to a send method of
 //! [`UpstreamClient`](crate::UpstreamClient) together with its request
 //! ([`UpstreamCall::with_authorization`](crate::UpstreamCall::with_authorization),
-//! [`RedirectRules::with_authorization`](crate::RedirectRules::with_authorization));
-//! the client adds the sensitive header to the built request immediately
-//! before dispatch, and only on its base origin.
+//! [`RedirectRules::with_authorization`](crate::RedirectRules::with_authorization)
+//! or, obtained for each hop, a
+//! [`RedirectAuthorizer`](crate::RedirectAuthorizer)); the client adds the
+//! sensitive header to the built request immediately before dispatch, and
+//! only on its base origin (along a redirect chain, only within its
+//! authorized path).
 use crate::correlation::{BROKER_REQUEST_ID_HEADER, REQUEST_ID_HEADER};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -114,8 +117,9 @@ pub enum CredentialPlacementError {
 
 /// Credential material the SDK presents on upstream requests. It exposes
 /// nothing: a provider hands it to the send method with the request
-/// ([`UpstreamCall::with_authorization`](crate::UpstreamCall::with_authorization)
-/// or [`RedirectRules::with_authorization`](crate::RedirectRules::with_authorization)),
+/// ([`UpstreamCall::with_authorization`](crate::UpstreamCall::with_authorization),
+/// [`RedirectRules::with_authorization`](crate::RedirectRules::with_authorization)
+/// or a [`RedirectAuthorizer`](crate::RedirectAuthorizer)),
 /// and the [`UpstreamClient`](crate::UpstreamClient) adds its header to the
 /// built request immediately before dispatch.
 ///

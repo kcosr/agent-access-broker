@@ -5,14 +5,21 @@ edition.workspace = true
 license.workspace = true
 
 [package.metadata.agent-access]
-role = "helper"
+role = "native"
+
+[features]
+test-support = []
 
 [dependencies]
 agent-access-provider = { path = "../agent-access-provider" }
+async-trait.workspace = true
 reqwest.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
+tokio.workspace = true
+wiremock.workspace = true

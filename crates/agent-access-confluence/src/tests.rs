@@ -134,9 +134,13 @@ fn descriptor_lookup_requirements_follow_scope_resolution_needs() {
 fn descriptor_offers_gateway_bearer_profile_only_for_gateway_configs() {
     let mut config = confluence_config();
     let direct = confluence_descriptor(&config);
+    // Delegated (OAuth) access is accepted on every site; validation
+    // requires the gateway for it.
     assert_eq!(
         direct.credentials,
-        CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token")
+        CredentialDescriptor::default()
+            .profile("atlassian-api-token", "basic_api_token")
+            .delegated(CONFLUENCE_OAUTH_CONNECTION)
     );
     assert_eq!(direct.presentation_body_limit, Some(1024));
     config.allowed_upstream_hosts = vec!["https://api.atlassian.com/ex/confluence/**".to_string()];
@@ -182,7 +186,10 @@ fn vendor_profiles_select_the_site_route_or_the_gateway() {
             "{profile}"
         );
         assert_eq!(
-            backend.api_base(&credential).unwrap().as_str(),
+            backend
+                .api_base(&AtlassianCredential::from_static(credential.clone()))
+                .unwrap()
+                .as_str(),
             base,
             "{profile}"
         );
@@ -316,7 +323,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
                 "space": "ENG", "title": "Child", "parentPageId": "200",
                 "contentFormat": "storage", "content": "<p>body</p>"
             }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -327,7 +334,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -337,7 +344,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -359,7 +366,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -368,7 +375,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap_err();
@@ -385,7 +392,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .lookup_scopes(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap_err();
@@ -848,7 +855,7 @@ async fn page_view_resolves_viewpage_locator_with_lookup_before_policy() {
             &json!({
                 "url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"
             }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -896,7 +903,7 @@ async fn blog_scope_lookup_redirects_stay_scope_resolution_denials() {
             .lookup_scopes(
                 "blog.view",
                 &json!({ "blogId": "123456" }),
-                Some(&credential()),
+                Some(&AtlassianCredential::from_static(credential())),
             )
             .await
             .unwrap_err();
@@ -939,7 +946,7 @@ async fn page_view_rejects_legacy_space_input() {
         .lookup_scopes(
             "page.view",
             &json!({ "pageId": "123456", "space": "OPS" }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap_err();
@@ -979,7 +986,7 @@ async fn verify_scope_resolution_uses_lookup_for_existing_pages_in_requested_spa
                 "pageId": "123456",
                 "expectVersion": 7
             }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -1019,7 +1026,7 @@ async fn verify_scope_resolution_uses_authoritative_space_from_lookup() {
                 "pageId": "123456",
                 "expectVersion": 7
             }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -1091,7 +1098,9 @@ async fn comment_scope_resolution_walks_nested_parent_chain_with_lookup() {
                 "contentFormat": "storage",
                 "content": "<p>reply</p>"
             }),
-            Some(&credential_with_token("lookup-token")),
+            Some(&AtlassianCredential::from_static(credential_with_token(
+                "lookup-token",
+            ))),
         )
         .await
         .unwrap();
@@ -1173,6 +1182,7 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
             &confluence_descriptor(&confluence_config()),
             &[String::from("page.footer_comment.add")],
         ),
+        gateway_cloud_id: None,
     };
     let broker_request_id = "550e8400-e29b-41d4-a716-446655440000";
     let mut request = invocation(
@@ -1821,7 +1831,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
                     "commentId": "6003",
                     "bodyFormat": "storage"
                 }),
-                Some(&credential()),
+                Some(&AtlassianCredential::from_static(credential())),
             )
             .await
             .unwrap_err()
@@ -1848,7 +1858,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
                     "commentId": "6003",
                     "bodyFormat": "storage"
                 }),
-                Some(&credential()),
+                Some(&AtlassianCredential::from_static(credential())),
             )
             .await
             .unwrap_err()
@@ -3174,7 +3184,11 @@ async fn confluence_draft_attachment_lookup_paginates_beyond_first_page() {
     );
 
     let response = provider
-        .draft_attachment_for_page("123456", "att201", &credential())
+        .draft_attachment_for_page(
+            "123456",
+            "att201",
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap();
 
@@ -4076,7 +4090,7 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
             .lookup_scopes(
                 "blog.view",
                 &json!({ "blogId": "123456" }),
-                Some(&credential()),
+                Some(&AtlassianCredential::from_static(credential())),
             )
             .await
             .unwrap();
@@ -4099,7 +4113,7 @@ async fn attachment_download_scope_lookup_defers_membership_checks() {
                 "pageId": "123456",
                 "attachmentId": "att1"
             }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -4146,7 +4160,7 @@ async fn blog_attachment_download_scope_lookup_defers_membership_checks() {
                 "blogId": "123456",
                 "attachmentId": "att1"
             }),
-            Some(&credential()),
+            Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap();
@@ -4854,7 +4868,7 @@ async fn http_backend_rejects_unallowlisted_confluence_api_url_before_request() 
     config.allowed_upstream_hosts = vec!["https://other.example/wiki/rest/api/**".to_string()];
     let backend = HttpConfluenceBackend::for_tests(config, ProviderLimits::default());
     let error = backend
-        .page_metadata("123456", &credential())
+        .page_metadata("123456", &AtlassianCredential::from_static(credential()))
         .await
         .unwrap_err();
     assert!(
@@ -4901,7 +4915,12 @@ async fn http_backend_attachment_list_fails_closed_on_overreturn_or_missing_pare
     );
 
     let error = backend
-        .page_attachments_page("123456", 1, None, &credential())
+        .page_attachments_page(
+            "123456",
+            1,
+            None,
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -4935,7 +4954,12 @@ async fn http_backend_attachment_list_fails_closed_on_overreturn_or_missing_pare
     );
 
     let error = backend
-        .page_attachments_page("123456", 1, None, &credential())
+        .page_attachments_page(
+            "123456",
+            1,
+            None,
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -4991,7 +5015,12 @@ async fn http_backend_blog_attachment_list_uses_v2_and_requires_parent_membershi
     );
 
     let first = backend
-        .blog_attachments_page("123456", 1, None, &credential())
+        .blog_attachments_page(
+            "123456",
+            1,
+            None,
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap();
     assert_eq!(first.value.attachments.len(), 1);
@@ -5006,7 +5035,7 @@ async fn http_backend_blog_attachment_list_uses_v2_and_requires_parent_membershi
             "123456",
             1,
             first.value.next_position.as_deref(),
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -5039,7 +5068,12 @@ async fn http_backend_blog_attachment_list_uses_v2_and_requires_parent_membershi
         Url::parse(&format!("{}/wiki/rest/api/", server.uri())).unwrap(),
     );
     let error = backend
-        .blog_attachments_page("123456", 1, None, &credential())
+        .blog_attachments_page(
+            "123456",
+            1,
+            None,
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -5087,7 +5121,7 @@ async fn http_backend_search_requests_bounded_page_metadata() {
                 max_results: 2,
                 next_page_token: None,
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         ),
     )
     .await
@@ -5156,7 +5190,7 @@ async fn http_backend_builds_confluence_page_write_requests() {
                     value: "<p>created</p>".to_string(),
                 },
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -5174,7 +5208,7 @@ async fn http_backend_builds_confluence_page_write_requests() {
                     value: "<p>updated</p>".to_string(),
                 },
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -5254,7 +5288,7 @@ async fn http_backend_exposes_only_allowlisted_validation_for_content_mutations(
                     value: "<p>created</p>".to_string(),
                 },
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap_err();
@@ -5267,7 +5301,7 @@ async fn http_backend_exposes_only_allowlisted_validation_for_content_mutations(
     );
 
     let lookup_error = backend
-        .page_metadata("123456", &credential())
+        .page_metadata("123456", &AtlassianCredential::from_static(credential()))
         .await
         .unwrap_err();
     assert_eq!(lookup_error, ConfluenceBackendError::HttpStatus(400));
@@ -5321,7 +5355,10 @@ async fn http_backend_uses_exact_move_ancestor_hierarchy_and_child_routes() {
         .await;
 
     let backend = http_confluence_backend_for_server(&server);
-    let ancestors = backend.page_ancestors("200", &credential()).await.unwrap();
+    let ancestors = backend
+        .page_ancestors("200", &AtlassianCredential::from_static(credential()))
+        .await
+        .unwrap();
     assert_eq!(ancestors.value[0].id, "folder-abc");
     assert_eq!(ancestors.value[0].content_type, "folder");
     assert_eq!(ancestors.value[1].id, "55555");
@@ -5330,18 +5367,22 @@ async fn http_backend_uses_exact_move_ancestor_hierarchy_and_child_routes() {
             "100",
             ConfluencePageMovePosition::Before,
             "200",
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
     assert_eq!(moved.value, "100");
     let hierarchy = backend
-        .page_hierarchy("100", false, &credential())
+        .page_hierarchy(
+            "100",
+            false,
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap();
     assert_eq!(hierarchy.value.parent_page_id.as_deref(), Some("200"));
     let children = backend
-        .page_direct_children("55555", &credential())
+        .page_direct_children("55555", &AtlassianCredential::from_static(credential()))
         .await
         .unwrap();
     assert_eq!(children.value[0].child_position, 0);
@@ -5439,7 +5480,7 @@ async fn http_backend_builds_confluence_comment_mutation_requests() {
                     value: "<p>updated</p>".to_string(),
                 },
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -5451,7 +5492,11 @@ async fn http_backend_builds_confluence_comment_mutation_requests() {
     );
 
     let deleted = backend
-        .delete_comment(ConfluenceCommentKind::Inline, "6001", &credential())
+        .delete_comment(
+            ConfluenceCommentKind::Inline,
+            "6001",
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap();
     assert_eq!(deleted.status, 204);
@@ -5516,14 +5561,18 @@ async fn http_backend_comment_mutations_fail_closed_on_conflict_and_delete_statu
                     value: "<p>updated</p>".to_string(),
                 },
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap_err();
     assert_eq!(update_error, ConfluenceBackendError::Conflict);
 
     let delete_error = backend
-        .delete_comment(ConfluenceCommentKind::Footer, "5002", &credential())
+        .delete_comment(
+            ConfluenceCommentKind::Footer,
+            "5002",
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap_err();
     // Confluence answered the delete with an unexpected success status: the
@@ -5600,7 +5649,7 @@ async fn http_backend_comment_pagination_uses_link_header_and_rejects_disagreeme
                 max_results: 2,
                 cursor: None,
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -5619,7 +5668,7 @@ async fn http_backend_comment_pagination_uses_link_header_and_rejects_disagreeme
                 max_results: 2,
                 cursor: None,
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap_err();
@@ -5725,7 +5774,7 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
                 ))),
                 sha256: sha256_hex(upload_bytes),
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -5733,7 +5782,7 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
     assert!(!upload_path.exists());
 
     let attachments = backend
-        .page_attachments("123456", &credential())
+        .page_attachments("123456", &AtlassianCredential::from_static(credential()))
         .await
         .unwrap();
     assert_eq!(attachments.value.len(), 1);
@@ -5741,7 +5790,11 @@ async fn http_backend_handles_confluence_attachment_upload_download_and_paginati
 
     let downloaded = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
-        backend.attachment_content("123456", "att123", &credential()),
+        backend.attachment_content(
+            "123456",
+            "att123",
+            &AtlassianCredential::from_static(credential()),
+        ),
     )
     .await
     .unwrap();
@@ -5881,7 +5934,7 @@ async fn http_backend_streams_confluence_attachment_upload_from_file() {
                 ))),
                 sha256: sha256_hex(upload_bytes),
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap();
@@ -6310,18 +6363,20 @@ impl CommentStubConfluenceBackend {
 
     fn comments_for_credential(
         &self,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> &BTreeMap<String, ConfluenceComment> {
         self.comments_by_token
             .iter()
-            .find(|(token, _)| *credential == credential_with_token(token))
+            .find(|(token, _)| {
+                credential.static_credential() == Some(&credential_with_token(token))
+            })
             .map_or(&self.comments, |(_, comments)| comments)
     }
 
     fn observe(
         &self,
         operation: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
         object_id: Option<String>,
         body_format: Option<String>,
     ) {
@@ -6330,7 +6385,10 @@ impl CommentStubConfluenceBackend {
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential: credential.clone(),
+                credential: credential
+                    .static_credential()
+                    .expect("the stub backend receives static tokens")
+                    .clone(),
                 object_id,
                 body_format,
             });
@@ -6415,7 +6473,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.observe("page_metadata", credential, Some(page_id.to_string()), None);
         let page = self
@@ -6433,7 +6491,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -6441,7 +6499,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn blog_metadata(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.observe("blog_metadata", credential, Some(blog_id.to_string()), None);
         let blog = self
@@ -6459,7 +6517,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn blog(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.blog_metadata(blog_id, credential).await
     }
@@ -6467,7 +6525,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "comment stub does not search pages".to_string(),
@@ -6477,7 +6535,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "comment stub does not create pages".to_string(),
@@ -6487,7 +6545,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "comment stub does not update pages".to_string(),
@@ -6498,7 +6556,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "comment stub does not add attachments".to_string(),
@@ -6508,7 +6566,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "comment stub does not list attachments".to_string(),
@@ -6519,7 +6577,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -6532,7 +6590,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
         kind: ConfluenceCommentKind,
         comment_id: &str,
         body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         self.observe(
             "comment",
@@ -6561,7 +6619,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn comments_page(
         &self,
         request: ConfluenceCommentListRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         self.observe(
             "comments_page",
@@ -6604,7 +6662,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
         body_format: Option<&str>,
         max_results: u32,
         _cursor: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceCommentListPage>, ConfluenceBackendError> {
         self.observe(
             "comment_replies_page",
@@ -6634,7 +6692,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn add_comment(
         &self,
         request: ConfluenceCommentCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         self.observe(
             "add_comment",
@@ -6671,7 +6729,7 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
     async fn update_comment(
         &self,
         request: ConfluenceCommentUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceComment>, ConfluenceBackendError> {
         self.observe(
             "update_comment",
@@ -6700,7 +6758,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn page_metadata(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not resolve page metadata".to_string(),
@@ -6710,7 +6768,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn page(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not fetch pages".to_string(),
@@ -6720,7 +6778,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not search pages".to_string(),
@@ -6730,7 +6788,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not create pages".to_string(),
@@ -6740,7 +6798,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not update pages".to_string(),
@@ -6751,7 +6809,7 @@ impl ConfluenceBackend for BlogViewBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not add page attachments".to_string(),
@@ -6761,7 +6819,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "blog view stub does not list page attachments".to_string(),
@@ -6772,7 +6830,7 @@ impl ConfluenceBackend for BlogViewBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -6783,7 +6841,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn space_by_id(
         &self,
         space_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         if space_id != self.space.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -6798,7 +6856,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn blog(
         &self,
         blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         if blog_id != self.blog.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -6813,7 +6871,7 @@ impl ConfluenceBackend for BlogViewBackend {
     async fn blog_scope_evidence(
         &self,
         blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
     {
         if blog_id != self.blog.id {
@@ -6836,7 +6894,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
     async fn page_metadata(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: ConfluencePage {
@@ -6861,7 +6919,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -6869,7 +6927,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not search".to_string(),
@@ -6879,7 +6937,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not create pages".to_string(),
@@ -6889,7 +6947,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not update pages".to_string(),
@@ -6900,7 +6958,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not add attachments".to_string(),
@@ -6910,7 +6968,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: vec![self.attachment.clone()],
@@ -6923,7 +6981,7 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Ok(ConfluenceBackendResponse {
@@ -6939,7 +6997,7 @@ impl ConfluenceBackend for AttachmentListBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.record_credential("page_metadata", credential);
         if page_id != self.page.id {
@@ -6955,7 +7013,7 @@ impl ConfluenceBackend for AttachmentListBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -6963,7 +7021,7 @@ impl ConfluenceBackend for AttachmentListBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not search".to_string(),
@@ -6973,7 +7031,7 @@ impl ConfluenceBackend for AttachmentListBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not create pages".to_string(),
@@ -6983,7 +7041,7 @@ impl ConfluenceBackend for AttachmentListBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not update pages".to_string(),
@@ -6994,7 +7052,7 @@ impl ConfluenceBackend for AttachmentListBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not add attachments".to_string(),
@@ -7004,7 +7062,7 @@ impl ConfluenceBackend for AttachmentListBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not eagerly list attachments".to_string(),
@@ -7016,7 +7074,7 @@ impl ConfluenceBackend for AttachmentListBackend {
         page_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         self.record_credential("page_attachments_page", credential);
@@ -7053,7 +7111,7 @@ impl ConfluenceBackend for AttachmentListBackend {
         page_id: &str,
         max_results: u32,
         next_position: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         self.record_credential("page_draft_attachments_page", credential);
@@ -7065,7 +7123,7 @@ impl ConfluenceBackend for AttachmentListBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -7075,11 +7133,14 @@ impl ConfluenceBackend for AttachmentListBackend {
 }
 
 impl AttachmentListBackend {
-    fn record_credential(&self, operation: &str, credential: &ExecutionCredential) {
-        self.credential_observations
-            .lock()
-            .unwrap()
-            .push((operation.to_string(), credential.clone()));
+    fn record_credential(&self, operation: &str, credential: &AtlassianCredential) {
+        self.credential_observations.lock().unwrap().push((
+            operation.to_string(),
+            credential
+                .static_credential()
+                .expect("the stub backend receives static tokens")
+                .clone(),
+        ));
     }
 }
 
@@ -7089,7 +7150,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         &self,
         _page_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         *self.backend_calls.lock().unwrap() += 1;
         Err(ConfluenceBackendError::Protocol(
@@ -7101,7 +7162,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         &self,
         _blog_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         *self.backend_calls.lock().unwrap() += 1;
         Err(ConfluenceBackendError::Protocol(
@@ -7112,7 +7173,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         if page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7127,7 +7188,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn space_by_key(
         &self,
         space: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         if space != self.space.key {
             return Err(ConfluenceBackendError::NotFound);
@@ -7142,7 +7203,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn space_by_id(
         &self,
         space_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         if space_id != self.space.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7157,7 +7218,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn blog_metadata(
         &self,
         blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         if blog_id != self.blog.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7172,7 +7233,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn blog(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.blog_metadata(blog_id, credential).await
     }
@@ -7180,7 +7241,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -7189,7 +7250,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         &self,
         page_id: &str,
         _get_draft: bool,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePageHierarchy>, ConfluenceBackendError> {
         if page_id == "234567" {
             let request = self
@@ -7220,7 +7281,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attribution stub does not search pages".to_string(),
@@ -7230,7 +7291,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn create_page(
         &self,
         request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_create_requests
             .lock()
@@ -7259,7 +7320,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn update_page(
         &self,
         request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         if request.page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7292,7 +7353,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attribution stub does not add attachments".to_string(),
@@ -7302,7 +7363,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "attribution stub does not list attachments".to_string(),
@@ -7313,7 +7374,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -7324,7 +7385,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn create_blog(
         &self,
         request: ConfluenceBlogCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.blog_create_requests
             .lock()
@@ -7354,7 +7415,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     async fn update_blog(
         &self,
         request: ConfluenceBlogUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         if request.blog_id != self.blog.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7390,7 +7451,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
     async fn page_metadata(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         if self.page_metadata_forbidden {
             return Err(ConfluenceBackendError::Forbidden);
@@ -7418,7 +7479,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -7426,7 +7487,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: ConfluenceSearchPage {
@@ -7442,7 +7503,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not create pages".to_string(),
@@ -7452,7 +7513,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not update pages".to_string(),
@@ -7463,7 +7524,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not add attachments".to_string(),
@@ -7473,7 +7534,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         if self.page_attachments_forbidden {
             return Err(ConfluenceBackendError::Forbidden);
@@ -7495,7 +7556,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -7509,7 +7570,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let page = self
             .pages
@@ -7526,7 +7587,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn space_by_key(
         &self,
         space: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         if space != self.space.key {
             return Err(ConfluenceBackendError::NotFound);
@@ -7541,7 +7602,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -7550,7 +7611,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         &self,
         page_id: &str,
         _get_draft: bool,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePageHierarchy>, ConfluenceBackendError> {
         self.throttled_after_mutation(self.throttle_hierarchy_after_mutation)?;
         let hierarchy = self
@@ -7570,7 +7631,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn page_ancestors(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageAncestor>>, ConfluenceBackendError>
     {
         Ok(ConfluenceBackendResponse {
@@ -7583,7 +7644,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn page_direct_children(
         &self,
         page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageChild>>, ConfluenceBackendError> {
         self.throttled_after_mutation(self.throttle_children_after_mutation)?;
         let children = self
@@ -7614,7 +7675,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         page_id: &str,
         position: ConfluencePageMovePosition,
         target_page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<String>, ConfluenceBackendError> {
         self.moves.lock().unwrap().push((
             page_id.to_string(),
@@ -7676,7 +7737,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page move test backend does not search".to_string(),
@@ -7686,7 +7747,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn create_page(
         &self,
         request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         let parent_page_id = request
             .parent_page_id
@@ -7712,7 +7773,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page move test backend does not update pages".to_string(),
@@ -7722,7 +7783,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn create_page_draft(
         &self,
         request: ConfluenceDraftCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         if self.fail_draft_create {
             return Err(self.mutation_failure.clone());
@@ -7765,7 +7826,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page move test backend does not add attachments".to_string(),
@@ -7775,7 +7836,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "page move test backend does not list attachments".to_string(),
@@ -7786,7 +7847,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -7799,7 +7860,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
 impl ConfluenceBackend for StubConfluenceBackend {
     async fn current_user(
         &self,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Value>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: json!({"accountId": "alice-account"}),
@@ -7811,7 +7872,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn page_metadata(
         &self,
         page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         if page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7826,7 +7887,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn page(
         &self,
         page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         if page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
@@ -7841,7 +7902,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Ok(ConfluenceBackendResponse {
             value: self.search_page.clone(),
@@ -7853,7 +7914,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not create pages".to_string(),
@@ -7863,7 +7924,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not update pages".to_string(),
@@ -7874,7 +7935,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not add attachments".to_string(),
@@ -7884,7 +7945,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not list attachments".to_string(),
@@ -7895,7 +7956,7 @@ impl ConfluenceBackend for StubConfluenceBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -7982,7 +8043,7 @@ fn http_backend_records_service_proxy_selection_for_test_clients() {
         Url::parse("https://example.atlassian.net/wiki/rest/api/").unwrap(),
     );
 
-    let audit = backend.egress_proxy_for_test(&credential());
+    let audit = backend.egress_proxy_for_test(&AtlassianCredential::from_static(credential()));
     assert_eq!(audit["mode"], json!("service"));
     assert_eq!(
         audit["proxy"],
@@ -8011,7 +8072,10 @@ async fn http_backend_routes_page_requests_through_selected_proxy() {
         Url::parse(&format!("{}/wiki/rest/api/", upstream.uri())).unwrap(),
     );
 
-    let response = backend.page("123456", &credential()).await.unwrap();
+    let response = backend
+        .page("123456", &AtlassianCredential::from_static(credential()))
+        .await
+        .unwrap();
 
     assert_eq!(response.value.title, "Runbook");
     let request = request_rx.await.unwrap();
@@ -8049,7 +8113,11 @@ async fn http_backend_routes_attachment_streams_through_selected_proxy() {
     );
 
     let response = backend
-        .attachment_content("123456", "att123", &credential())
+        .attachment_content(
+            "123456",
+            "att123",
+            &AtlassianCredential::from_static(credential()),
+        )
         .await
         .unwrap();
     let bytes = stream_bytes(response.value.stream).await;
@@ -8117,6 +8185,7 @@ fn confluence_attribution_provider(
         ProviderAttributionConfig::from_patterns(&confluence_descriptor(&config), &patterns);
     ConfluenceProvider {
         continuations: ConfluenceContinuations::new(&config, &ProviderLimits::default(), None),
+        gateway_cloud_id: config.site().gateway_cloud_id(),
         config,
         limits: ProviderLimits::default(),
         backend,
@@ -8427,7 +8496,7 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
                 temp_file: None,
                 sha256: sha256_hex(b"data"),
             },
-            &credential(),
+            &AtlassianCredential::from_static(credential()),
         )
         .await
         .unwrap_err();
@@ -8458,7 +8527,7 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
     );
 
     let list_error = backend
-        .page_attachments("123456", &credential())
+        .page_attachments("123456", &AtlassianCredential::from_static(credential()))
         .await
         .unwrap_err();
     assert_eq!(
@@ -9061,7 +9130,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn page_metadata(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.after_finish()?;
         Err(ConfluenceBackendError::NotFound)
@@ -9070,7 +9139,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn blog_metadata(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.after_finish()?;
         Err(ConfluenceBackendError::NotFound)
@@ -9079,7 +9148,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.page_metadata(page_id, credential).await
     }
@@ -9087,7 +9156,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn space_by_id(
         &self,
         space_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         ok(ConfluenceSpace {
             id: space_id.to_string(),
@@ -9101,7 +9170,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not search".to_string(),
@@ -9111,7 +9180,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn create_page(
         &self,
         _request: ConfluencePageCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not create pages".to_string(),
@@ -9121,7 +9190,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn update_page(
         &self,
         _request: ConfluencePageUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not update pages".to_string(),
@@ -9132,7 +9201,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         &self,
         _page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         Err(ConfluenceBackendError::Protocol(
             "stub does not add current attachments".to_string(),
@@ -9142,7 +9211,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn page_attachments(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         self.after_finish()?;
         ok(self.existing_attachments.clone())
@@ -9151,7 +9220,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn blog_attachments(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
         self.after_finish()?;
         ok(self.existing_attachments.clone())
@@ -9161,7 +9230,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         &self,
         _page_id: &str,
         _attachment_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
         Err(ConfluenceBackendError::Protocol(
@@ -9173,7 +9242,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         &self,
         page_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         ok(self.draft(page_id)?)
     }
@@ -9182,7 +9251,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         &self,
         blog_id: &str,
         _body_format: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         ok(self.draft(blog_id)?)
     }
@@ -9190,7 +9259,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn update_page_draft(
         &self,
         request: ConfluenceDraftUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         self.published(request)
     }
@@ -9198,7 +9267,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn update_blog_draft(
         &self,
         request: ConfluenceDraftUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
         self.published(request)
     }
@@ -9206,7 +9275,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn discard_page_draft(
         &self,
         _page_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         self.discarded()
     }
@@ -9214,7 +9283,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
     async fn discard_blog_draft(
         &self,
         _blog_id: &str,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<()>, ConfluenceBackendError> {
         self.discarded()
     }
@@ -9223,7 +9292,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         &self,
         page_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         ok(self.upload(page_id)?)
     }
@@ -9232,7 +9301,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         &self,
         blog_id: &str,
         _attachment: ConfluenceAttachmentUpload,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
         ok(self.upload(blog_id)?)
     }
@@ -9242,7 +9311,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         _page_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         self.attachment_page()
@@ -9253,7 +9322,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         _blog_id: &str,
         _max_results: u32,
         _next_position: Option<&str>,
-        _credential: &ExecutionCredential,
+        _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
     {
         self.attachment_page()
@@ -9699,78 +9768,4 @@ fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
             .unwrap();
         assert_eq!(action.documentation, Some(documentation));
     }
-}
-
-/// A delegated lease that no Confluence path may use.
-struct UnusedLease;
-
-#[async_trait::async_trait]
-impl DelegatedLease for UnusedLease {
-    fn access(&self) -> DelegatedAccess {
-        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
-    }
-    fn binding_identity(&self) -> DelegatedBindingId {
-        agent_access_provider::test_support::delegated_binding_id("unused")
-    }
-    async fn revalidate(&self) -> Result<(), ProviderError> {
-        panic!("Confluence must not revalidate delegated lookup access");
-    }
-    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
-        panic!("Confluence must not mark delegated lookup access rejected");
-    }
-    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
-        panic!("Confluence must not recover delegated lookup access");
-    }
-}
-
-/// Confluence accepts no delegated credentials, so delegated lookup access
-/// fails closed in scope resolution and in body admission, before any
-/// upstream call, instead of standing in for a static credential.
-#[tokio::test]
-async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
-    let server = MockServer::start().await;
-    let provider = ConfluenceProvider::with_backend(
-        confluence_config(),
-        ProviderLimits::default(),
-        Arc::new(http_confluence_backend_for_server(&server)),
-    );
-    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
-    let assert_unsupported = |error: ProviderError| {
-        assert_eq!(error.decision(), Decision::Deny);
-        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
-        assert_eq!(
-            error.message,
-            "Confluence lookups do not accept delegated credentials"
-        );
-    };
-
-    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
-        "confluence",
-        "page.view",
-        json!({ "pageId": "123456" }),
-    )
-    .delegated_lookup(delegated.clone());
-    assert_unsupported(
-        provider
-            .resolve_scopes(fixture.request())
-            .await
-            .unwrap_err(),
-    );
-
-    let admitted = InvocationBuilder::new("confluence", "attachment.add")
-        .inputs(json!({ "pageId": "123456", "attachments": [] }))
-        .resources(ResourceScopes::from([(
-            "space".to_string(),
-            vec!["ENG".to_string()],
-        )]))
-        .credential(credential())
-        .delegated_lookup(delegated)
-        .admitted();
-    assert_unsupported(
-        provider
-            .authorize_body_parts(&admitted, None)
-            .await
-            .unwrap_err(),
-    );
-    assert!(server.received_requests().await.unwrap().is_empty());
 }

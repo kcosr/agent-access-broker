@@ -2842,14 +2842,17 @@ impl StubJiraBackend {
     fn record_credential(
         &self,
         operation: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) {
         self.credential_observations
             .lock()
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential: credential.clone(),
+                credential: credential
+                    .static_credential()
+                    .expect("the stub backend receives static tokens")
+                    .clone(),
             });
     }
 }
@@ -2860,7 +2863,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         project: &str,
         request: JiraIssueTypeListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueTypePage>, JiraBackendError> {
         self.record_credential("issue_types", credential);
         let start_at = request.start_at;
@@ -2902,7 +2905,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_metadata(
         &self,
         issue_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<agent_access_jira::JiraIssueMetadata>, JiraBackendError> {
         self.record_credential("issue_metadata", credential);
         let issue = self
@@ -2924,7 +2927,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue(
         &self,
         issue_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssue>, JiraBackendError> {
         self.record_credential("issue", credential);
         Ok(JiraBackendResponse {
@@ -2941,7 +2944,7 @@ impl JiraBackend for StubJiraBackend {
     async fn create_issue(
         &self,
         request: JiraIssueCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCreatedIssue>, JiraBackendError> {
         self.record_credential("create_issue", credential);
         self.created_issues.lock().unwrap().push(request);
@@ -2964,7 +2967,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("update_issue", credential);
         self.updated_issues
@@ -2982,7 +2985,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraIssueParentSetRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("set_issue_parent", credential);
         self.parent_updates
@@ -2999,7 +3002,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_parent(
         &self,
         issue_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueParentReadback>, JiraBackendError> {
         self.record_credential("issue_parent", credential);
         Ok(JiraBackendResponse {
@@ -3017,7 +3020,7 @@ impl JiraBackend for StubJiraBackend {
 
     async fn issue_link_types(
         &self,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraIssueLinkType>>, JiraBackendError> {
         self.record_credential("issue_link_types", credential);
         Ok(JiraBackendResponse {
@@ -3030,7 +3033,7 @@ impl JiraBackend for StubJiraBackend {
     async fn create_issue_link(
         &self,
         request: JiraIssueLinkCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("create_issue_link", credential);
         self.created_issue_links.lock().unwrap().push(request);
@@ -3044,7 +3047,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_links(
         &self,
         issue_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueLinks>, JiraBackendError> {
         self.record_credential("issue_links", credential);
         Ok(JiraBackendResponse {
@@ -3063,7 +3066,7 @@ impl JiraBackend for StubJiraBackend {
     async fn search(
         &self,
         request: JiraSearchRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraSearchPage>, JiraBackendError> {
         self.record_credential("search", credential);
         *self.last_search.lock().unwrap() = Some(request);
@@ -3078,7 +3081,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         request: JiraCommentListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         self.record_credential("comments", credential);
         *self.last_comment_list.lock().unwrap() = Some(request.clone());
@@ -3130,7 +3133,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         request: JiraCommentAddRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("add_comment", credential);
         self.added_comments.lock().unwrap().push(request.clone());
@@ -3150,7 +3153,7 @@ impl JiraBackend for StubJiraBackend {
         _issue_key: &str,
         comment_id: &str,
         request: JiraCommentUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("update_comment", credential);
         self.updated_comments
@@ -3171,7 +3174,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         comment_id: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("delete_comment", credential);
         self.deleted_comments
@@ -3189,7 +3192,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _issue_key: &str,
         attachment: JiraAttachmentUpload,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachment>, JiraBackendError> {
         self.record_credential("add_attachment", credential);
         let mut attachment = attachment;
@@ -3214,7 +3217,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_attachment_metadata(
         &self,
         _issue_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<Vec<JiraAttachment>>, JiraBackendError> {
         self.record_credential("issue_attachment_metadata", credential);
         Ok(JiraBackendResponse {
@@ -3227,7 +3230,7 @@ impl JiraBackend for StubJiraBackend {
     async fn issue_attachment_list(
         &self,
         issue_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssueAttachmentList>, JiraBackendError> {
         self.record_credential("issue_attachment_list", credential);
         let issue = self
@@ -3252,7 +3255,7 @@ impl JiraBackend for StubJiraBackend {
     async fn attachment_content(
         &self,
         attachment_id: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraAttachmentContent>, JiraBackendError> {
         self.record_credential("attachment_content", credential);
         Ok(JiraBackendResponse {
@@ -3272,7 +3275,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         comment_id: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraComment>, JiraBackendError> {
         self.record_credential("comment", credential);
         let comment = self
@@ -3301,7 +3304,7 @@ impl JiraBackend for StubJiraBackend {
     async fn comment_property_keys(
         &self,
         _comment_id: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraCommentPropertyKeys>, JiraBackendError> {
         self.record_credential("comment_property_keys", credential);
         Ok(JiraBackendResponse {
@@ -3317,7 +3320,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _comment_id: &str,
         property_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
         self.record_credential("comment_property", credential);
         Ok(JiraBackendResponse {
@@ -3338,7 +3341,7 @@ impl JiraBackend for StubJiraBackend {
         _comment_id: &str,
         property_key: &str,
         value: serde_json::Value,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("set_comment_property", credential);
         self.set_properties
@@ -3356,7 +3359,7 @@ impl JiraBackend for StubJiraBackend {
         &self,
         _comment_id: &str,
         property_key: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_jira::AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         self.record_credential("delete_comment_property", credential);
         self.deleted_properties

@@ -1,6 +1,8 @@
 //! Confluence backend: page, blog, draft, comment, attachment, search, and
 //! verification actions against Confluence Cloud, authorized against
 //! `confluence_space` resources.
+#[cfg(test)]
+mod access_tests;
 mod backend;
 mod config;
 mod continuation;
@@ -16,8 +18,9 @@ use continuation::*;
 use cql::*;
 use validation::*;
 
+pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
-    atlassian_credential_authorization, bind_atlassian_access,
+    AtlassianWriteVerification, bind_atlassian_access, is_delegated_access_failure,
     validate_atlassian_gateway_credential,
 };
 use agent_access_content::{
@@ -72,6 +75,9 @@ pub struct ConfluenceProvider {
     /// Seals list and search continuations and draft handles.
     continuations: ConfluenceContinuations,
     attribution: ProviderAttributionConfig,
+    /// The cloud ID of the site's gateway route, which delegated access is
+    /// pinned to; `None` when the site does not use the gateway.
+    gateway_cloud_id: Option<Arc<str>>,
 }
 
 impl ConfluenceProvider {
@@ -79,23 +85,29 @@ impl ConfluenceProvider {
         config: ConfluenceProviderConfig,
         host: &BuildContext<'_>,
     ) -> Result<Self, ProviderBuildError> {
+        let backend =
+            HttpConfluenceBackend::new(config.clone(), host.limits().clone(), host.clients())?;
+        Ok(Self::over_http(config, host, backend))
+    }
+
+    fn over_http(
+        config: ConfluenceProviderConfig,
+        host: &BuildContext<'_>,
+        backend: HttpConfluenceBackend,
+    ) -> Self {
         let limits = host.limits().clone();
-        let backend = Arc::new(HttpConfluenceBackend::new(
-            config.clone(),
-            limits.clone(),
-            host.clients(),
-        )?);
-        Ok(Self {
+        Self {
             continuations: ConfluenceContinuations::new(
                 &config,
                 &limits,
                 host.stable_signing_key().cloned(),
             ),
+            gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
             limits,
-            backend,
+            backend: Arc::new(backend),
             attribution: host.attribution().clone(),
-        })
+        }
     }
 
     fn from_backend(
@@ -105,6 +117,7 @@ impl ConfluenceProvider {
     ) -> Self {
         Self {
             continuations: ConfluenceContinuations::new(&config, &limits, None),
+            gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
             limits,
             backend,
@@ -128,11 +141,46 @@ impl ConfluenceProvider {
     ) -> Self {
         Self {
             continuations: ConfluenceContinuations::new(&config, &limits, Some(stable_signing_key)),
+            gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
             limits,
             backend,
             attribution: ProviderAttributionConfig::default(),
         }
+    }
+
+    /// The execution material the host selected, as Confluence presents
+    /// it.
+    fn execution_credential(
+        &self,
+        request: &AdmittedRequest,
+    ) -> Result<AtlassianCredential, ProviderError> {
+        AtlassianCredential::from_execution(request.execution(), self.gateway_cloud_id.as_ref())
+    }
+
+    /// The lookup access of an admitted operation, which Confluence
+    /// requires.
+    fn lookup_credential(
+        &self,
+        request: &AdmittedRequest,
+    ) -> Result<AtlassianCredential, ProviderError> {
+        self.optional_lookup_credential(request.lookup_access())?
+            .ok_or_else(|| {
+                ProviderError::deny(
+                    ReasonCode::CredentialNotProvisioned,
+                    "lookup credential material is unavailable",
+                )
+            })
+    }
+
+    /// The lookup access the host selected, if any: a static token, or the
+    /// operation's delegated credential, whose lease and recovery budget
+    /// execution shares.
+    fn optional_lookup_credential(
+        &self,
+        lookup_access: Option<&LookupAccess>,
+    ) -> Result<Option<AtlassianCredential>, ProviderError> {
+        AtlassianCredential::from_lookup(lookup_access, self.gateway_cloud_id.as_ref())
     }
 }
 
@@ -344,6 +392,40 @@ pub static CONFLUENCE_SPACE_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
     &[],
 );
 
+/// What connecting an Atlassian account through OAuth lets agents do in
+/// Confluence, shown where a person connects it.
+const CONFLUENCE_OAUTH_CONNECTION: &str = "Lets agents act on Confluence as your Atlassian account, through the Atlassian gateway. Agent access is limited by your Broker grants. Atlassian's consent page lists the broader scopes the connection grants.";
+
+/// Provider fixtures for tests outside this crate.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use super::*;
+
+    /// The production Confluence provider for `config`'s site, built with
+    /// `host`, whose Atlassian gateway route is served below `gateway`, an
+    /// origin such as a stub server's, instead of
+    /// `https://api.atlassian.com`:
+    /// `{gateway}/ex/confluence/{cloud_id}/wiki/rest/api/` and its v2
+    /// sibling. The site must use the gateway, and
+    /// `config.allowed_upstream_hosts` must also admit that route.
+    /// Everything else, including the descriptor, is the production
+    /// provider's.
+    pub fn provider_with_gateway(
+        config: ConfluenceProviderConfig,
+        host: &BuildContext<'_>,
+        gateway: &str,
+    ) -> Result<ServiceProvider, ProviderBuildError> {
+        let backend =
+            HttpConfluenceBackend::new(config.clone(), host.limits().clone(), host.clients())?
+                .with_gateway_origin(gateway, host.clients())?;
+        let descriptor = confluence_descriptor(&config);
+        Ok(ServiceProvider::new(
+            descriptor,
+            Arc::new(ConfluenceProvider::over_http(config, host, backend)),
+        ))
+    }
+}
+
 /// Confluence's authoritative service descriptor, derived from its typed
 /// configuration alone.
 pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescriptor {
@@ -367,7 +449,12 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 })
                 .collect(),
         )
-        .with_credentials(config.site().credential_descriptor())
+        .with_credentials(
+            config
+                .site()
+                .credential_descriptor()
+                .delegated(CONFLUENCE_OAUTH_CONNECTION),
+        )
         .with_presentation_body_limit(config.content.max_body_bytes);
     match config.site().upstream_authority() {
         Some(authority) => descriptor.with_upstream_authority(authority),
@@ -1440,7 +1527,7 @@ impl ConfluenceProvider {
         &self,
         action: &str,
         inputs: &Value,
-        lookup_credential: Option<&ExecutionCredential>,
+        lookup_credential: Option<&AtlassianCredential>,
     ) -> Result<ResourceScopes, ProviderError> {
         match action {
             "page.view" => {
@@ -1773,10 +1860,11 @@ impl Provider for ConfluenceProvider {
                 .draft_handle_scopes(&request, content_type, &content_id, &draft_handle)
                 .map(ScopeResolution::resources);
         }
+        let lookup_credential = self.optional_lookup_credential(request.lookup_access())?;
         self.lookup_scopes(
             request.action(),
             request.inputs(),
-            static_lookup_credential(request.lookup_access())?,
+            lookup_credential.as_ref(),
         )
         .await
         .map(ScopeResolution::resources)
@@ -1797,7 +1885,7 @@ impl Provider for ConfluenceProvider {
                 "Confluence action does not accept multipart body parts",
             ));
         }
-        let credential = lookup_credential(request)?;
+        let credential = &self.lookup_credential(request)?;
         let (body_part_specs, state) = if request.action() == "attachment.add" {
             let inputs = parse_attachment_add_inputs(request.inputs())?;
             validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
@@ -1877,11 +1965,15 @@ impl Provider for ConfluenceProvider {
         ))
     }
 
+    /// Verifies a stored or service token with `user/current`. Delegated
+    /// (OAuth) access has no verification route: people connect and
+    /// reconnect it in the portal.
     async fn verify_execution_credential(
         &self,
         credential: &ExecutionCredential,
         _correlation: &crate::CorrelationContext,
     ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
+        let credential = &AtlassianCredential::from_static(credential.clone());
         let response = self
             .backend
             .current_user(credential)
@@ -2039,7 +2131,7 @@ impl ConfluenceProvider {
         &self,
         action: ConfluenceCommentAction,
         inputs: &Value,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ResourceScopes, ProviderError> {
         match action.operation {
             ConfluenceCommentOperation::List => {
@@ -2106,7 +2198,7 @@ impl ConfluenceProvider {
         &self,
         container_type: ConfluenceCommentContainerType,
         container_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceResolvedCommentContainer, ProviderError> {
         match container_type {
             ConfluenceCommentContainerType::Page => {
@@ -2126,7 +2218,7 @@ impl ConfluenceProvider {
         action: ConfluenceCommentAction,
         comment_id: &str,
         target_body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceCommentEvidence, ProviderError> {
         let mut current_id = validate_comment_id(comment_id)?;
         let mut seen = BTreeSet::new();
@@ -2361,8 +2453,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_list_inputs(action, request.inputs())?;
         let body_format =
             configured_comment_body_format(inputs.body_format.as_deref(), &self.config)?;
@@ -2468,8 +2560,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_id_inputs(request.inputs())?;
         let body_format =
             configured_comment_body_format(inputs.body_format.as_deref(), &self.config)?;
@@ -2519,8 +2611,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_add_inputs(action, request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             request.action(),
@@ -2585,8 +2677,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_update_inputs(request.inputs())?;
         let next_version = next_comment_version(inputs.base_version)?;
         let (body, content_audit, _attribution) = self.prepare_write_content(
@@ -2662,7 +2754,7 @@ impl ConfluenceProvider {
             .await
             .map_err(|error| {
                 // The update applied: throttling must not invite a second update.
-                error.unverified_after_mutation(
+                error.unverified_after_atlassian_write(
                     "post_update_readback",
                     json!({"commentId": inputs.comment_id, "version": next_version}),
                 )
@@ -2721,8 +2813,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_delete_inputs(request.inputs())?;
         let evidence = self
             .comment_container_evidence(action, &inputs.comment_id, None, lookup_credential)
@@ -2783,8 +2875,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_reply_list_inputs(request.inputs())?;
         let body_format =
             configured_comment_body_format(inputs.body_format.as_deref(), &self.config)?;
@@ -2899,8 +2991,8 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
         action: ConfluenceCommentAction,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_reply_add_inputs(request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             request.action(),
@@ -2949,7 +3041,7 @@ impl ConfluenceProvider {
             .await
             .map_err(|error| {
                 // The reply exists: throttling must not invite a second reply.
-                error.unverified_after_mutation(
+                error.unverified_after_atlassian_write(
                     "post_create_readback",
                     json!({
                         "commentId": response.value.id,
@@ -3002,7 +3094,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let authorized_space = authorized_single_scope(request.resource_scopes()?, "space")?;
         let locator = page_locator_from_inputs(request.inputs(), &self.config)?;
         let authorized_page = locator.page_id.as_str();
@@ -3046,7 +3138,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_spaces(&inputs)?;
         let authorization = search_authorization(&request)?;
@@ -3150,8 +3242,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let authorized_space = authorized_single_scope(request.resource_scopes()?, "space")?;
         let inputs = parse_page_create_inputs(request.inputs(), &self.config)?;
         if inputs.space != authorized_space {
@@ -3268,7 +3360,7 @@ impl ConfluenceProvider {
                 audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                 // The page exists: throttling here must not invite a second create.
                 return Err(confluence_backend_error(error)
-                    .unverified_after_mutation(
+                    .unverified_after_atlassian_write(
                         "post_create_readback",
                         json!({
                             "pageId": page.id,
@@ -3369,8 +3461,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_move_inputs(request.inputs(), &self.config)?;
         let page_response = self
             .confirmed_page_response(
@@ -3575,7 +3667,7 @@ impl ConfluenceProvider {
                     );
                     audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                     return Err(confluence_backend_error(error)
-                        .unverified_after_mutation(
+                        .unverified_after_atlassian_write(
                             "post_move_hierarchy_readback",
                             json!({
                                 "pageId": page.id,
@@ -3649,7 +3741,7 @@ impl ConfluenceProvider {
                     );
                     audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                     return Err(confluence_backend_error(error)
-                        .unverified_after_mutation(
+                        .unverified_after_atlassian_write(
                             "post_move_order_readback",
                             json!({
                                 "pageId": page.id,
@@ -3756,7 +3848,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_page_update_inputs(request.inputs())?;
         let title_override = inputs.title.clone();
         let (body, content_audit, attribution) = self.prepare_write_content(
@@ -3865,8 +3957,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let authorized_space = authorized_single_scope(request.resource_scopes()?, "space")?;
         let inputs = parse_page_draft_create_inputs(request.inputs(), &self.config)?;
         if inputs.space != authorized_space {
@@ -4020,7 +4112,7 @@ impl ConfluenceProvider {
                     );
                     audit["upstreamFailure"] = json!(sanitized_backend_reason(&error));
                     return Err(confluence_backend_error(error)
-                        .unverified_after_mutation(
+                        .unverified_after_atlassian_write(
                             "post_create_readback",
                             json!({
                                 "pageId": draft.id,
@@ -4120,8 +4212,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_stage_inputs(request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             "page.draft.stage",
@@ -4239,8 +4331,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_body_format_inputs(request.action(), request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -4284,8 +4376,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_update_inputs(request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             "page.draft.update",
@@ -4363,8 +4455,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_body_format_inputs(request.action(), request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -4438,7 +4530,7 @@ impl ConfluenceProvider {
                     .await
                     .map_err(|error| {
                         // The page is published: throttling must not invite a second publish.
-                        confluence_backend_error(error).unverified_after_mutation(
+                        confluence_backend_error(error).unverified_after_atlassian_write(
                             "post_publish_attachment_readback",
                             json!({"pageId": published.id}),
                         )
@@ -4504,8 +4596,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_discard_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -4541,10 +4633,12 @@ impl ConfluenceProvider {
                 Err(error)
                     if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
                 Err(error) => {
-                    return Err(confluence_backend_error(error).unverified_after_mutation(
-                        "post_discard_readback",
-                        json!({"pageId": draft.id}),
-                    ));
+                    return Err(
+                        confluence_backend_error(error).unverified_after_atlassian_write(
+                            "post_discard_readback",
+                            json!({"pageId": draft.id}),
+                        ),
+                    );
                 }
             }
             match self
@@ -4561,10 +4655,12 @@ impl ConfluenceProvider {
                 Err(error)
                     if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
                 Err(error) => {
-                    return Err(confluence_backend_error(error).unverified_after_mutation(
-                        "post_discard_readback",
-                        json!({"pageId": draft.id}),
-                    ));
+                    return Err(
+                        confluence_backend_error(error).unverified_after_atlassian_write(
+                            "post_discard_readback",
+                            json!({"pageId": draft.id}),
+                        ),
+                    );
                 }
             }
             let result = json!({
@@ -4601,7 +4697,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_verify_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -4707,8 +4803,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_attachment_add_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -4777,6 +4873,25 @@ impl ConfluenceProvider {
                         )
                         .await
                     {
+                        if is_delegated_access_failure(&error) {
+                            // The upload applied, but the connected
+                            // account's access failed before it could be
+                            // verified: report it applied and unverified,
+                            // never as a failure whose retry would upload
+                            // the attachments again.
+                            let attachment_ids = successes
+                                .iter()
+                                .filter_map(|success: &Value| success.get("attachmentId").cloned())
+                                .chain([json!(attachment.id)])
+                                .collect::<Vec<_>>();
+                            return Err(error.unverified_after_atlassian_write(
+                                "post_upload_readback",
+                                json!({
+                                    "pageId": metadata_response.value.id,
+                                    "attachmentIds": attachment_ids,
+                                }),
+                            ));
+                        }
                         if error.reason_code() != ReasonCode::UpstreamRateLimited {
                             // The upload applied: repeating the batch would
                             // upload it again.
@@ -4827,6 +4942,12 @@ impl ConfluenceProvider {
                         "size": attachment.size,
                         "contentType": attachment.content_type,
                     }));
+                }
+                // Delegated access that could not be presented, or that
+                // Confluence rejected, uploaded nothing: before any upload
+                // applied, the batch fails with the connection's own failure.
+                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                    return Err(error);
                 }
                 Err(error) => {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
@@ -4966,8 +5087,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_attachment_list_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -5065,8 +5186,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_page_draft_attachment_download_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Page,
@@ -5139,8 +5260,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_add_inputs(request.inputs())?;
         let metadata_response =
             match ProviderState::optional::<ConfluencePagePreflight>(request.state())? {
@@ -5192,6 +5313,12 @@ impl ConfluenceProvider {
                         "attachmentId": response.value.id,
                         "attachment": upload_audit,
                     }));
+                }
+                // Delegated access that could not be presented, or that
+                // Confluence rejected, uploaded nothing: before any upload
+                // applied, the batch fails with the connection's own failure.
+                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                    return Err(error);
                 }
                 Err(error) => {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
@@ -5320,8 +5447,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_download_inputs(request.inputs())?;
         let page = self
             .confirmed_page(&inputs.page_id, None, lookup_credential)
@@ -5402,8 +5529,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_list_inputs(request.inputs(), &self.config)?;
         let page = self
             .confirmed_page(
@@ -5512,7 +5639,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_verify_inputs(request.inputs())?;
         let page_response = match self
             .backend
@@ -5622,7 +5749,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let authorized_space = authorized_single_scope(request.resource_scopes()?, "space")?;
         let inputs = parse_blog_view_inputs(request.inputs(), &self.config)?;
         let response = self
@@ -5670,7 +5797,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_spaces(&inputs)?;
         let authorization = search_authorization(&request)?;
@@ -5767,8 +5894,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let authorized_space = authorized_single_scope(request.resource_scopes()?, "space")?;
         let inputs = parse_blog_create_inputs(request.inputs())?;
         if inputs.space != authorized_space {
@@ -5868,7 +5995,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_blog_update_inputs(request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             "blog.update",
@@ -5990,8 +6117,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let authorized_space = authorized_single_scope(request.resource_scopes()?, "space")?;
         let inputs = parse_blog_draft_create_inputs(request.inputs())?;
         if inputs.space != authorized_space {
@@ -6081,8 +6208,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_stage_inputs(request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             "blog.draft.stage",
@@ -6190,8 +6317,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_body_format_inputs(request.action(), request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -6235,8 +6362,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_update_inputs(request.inputs())?;
         let (body, content_audit, attribution) = self.prepare_write_content(
             "blog.draft.update",
@@ -6314,8 +6441,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_body_format_inputs(request.action(), request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -6386,7 +6513,7 @@ impl ConfluenceProvider {
                     .await
                     .map_err(|error| {
                         // The blog post is published: throttling must not invite a second publish.
-                        confluence_backend_error(error).unverified_after_mutation(
+                        confluence_backend_error(error).unverified_after_atlassian_write(
                             "post_publish_attachment_readback",
                             json!({"blogId": published.id}),
                         )
@@ -6452,8 +6579,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_discard_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -6489,10 +6616,12 @@ impl ConfluenceProvider {
                 Err(error)
                     if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
                 Err(error) => {
-                    return Err(confluence_backend_error(error).unverified_after_mutation(
-                        "post_discard_readback",
-                        json!({"blogId": draft.id}),
-                    ));
+                    return Err(
+                        confluence_backend_error(error).unverified_after_atlassian_write(
+                            "post_discard_readback",
+                            json!({"blogId": draft.id}),
+                        ),
+                    );
                 }
             }
             match self
@@ -6509,10 +6638,12 @@ impl ConfluenceProvider {
                 Err(error)
                     if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
                 Err(error) => {
-                    return Err(confluence_backend_error(error).unverified_after_mutation(
-                        "post_discard_readback",
-                        json!({"blogId": draft.id}),
-                    ));
+                    return Err(
+                        confluence_backend_error(error).unverified_after_atlassian_write(
+                            "post_discard_readback",
+                            json!({"blogId": draft.id}),
+                        ),
+                    );
                 }
             }
             let result = json!({
@@ -6549,7 +6680,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_verify_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -6655,8 +6786,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_attachment_add_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -6725,6 +6856,25 @@ impl ConfluenceProvider {
                         )
                         .await
                     {
+                        if is_delegated_access_failure(&error) {
+                            // The upload applied, but the connected
+                            // account's access failed before it could be
+                            // verified: report it applied and unverified,
+                            // never as a failure whose retry would upload
+                            // the attachments again.
+                            let attachment_ids = successes
+                                .iter()
+                                .filter_map(|success: &Value| success.get("attachmentId").cloned())
+                                .chain([json!(attachment.id)])
+                                .collect::<Vec<_>>();
+                            return Err(error.unverified_after_atlassian_write(
+                                "post_upload_readback",
+                                json!({
+                                    "blogId": metadata_response.value.id,
+                                    "attachmentIds": attachment_ids,
+                                }),
+                            ));
+                        }
                         if error.reason_code() != ReasonCode::UpstreamRateLimited {
                             // The upload applied: repeating the batch would
                             // upload it again.
@@ -6775,6 +6925,12 @@ impl ConfluenceProvider {
                         "size": attachment.size,
                         "contentType": attachment.content_type,
                     }));
+                }
+                // Delegated access that could not be presented, or that
+                // Confluence rejected, uploaded nothing: before any upload
+                // applied, the batch fails with the connection's own failure.
+                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                    return Err(error);
                 }
                 Err(error) => {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
@@ -6914,8 +7070,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_attachment_list_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -7013,8 +7169,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_draft_attachment_download_inputs(request.inputs())?;
         let handle = self.decode_draft_handle_for_request(
             ConfluenceDraftContentType::Blog,
@@ -7087,8 +7243,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_attachment_add_inputs(request.inputs())?;
         let metadata_response =
             match ProviderState::optional::<ConfluenceBlogPreflight>(request.state())? {
@@ -7147,6 +7303,12 @@ impl ConfluenceProvider {
                         "attachmentId": response.value.id,
                         "attachment": upload_audit,
                     }));
+                }
+                // Delegated access that could not be presented, or that
+                // Confluence rejected, uploaded nothing: before any upload
+                // applied, the batch fails with the connection's own failure.
+                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                    return Err(error);
                 }
                 Err(error) => {
                     if let ConfluenceBackendError::RateLimited(retry_after) = &error {
@@ -7278,8 +7440,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_attachment_download_inputs(request.inputs())?;
         let blog = self
             .confirmed_blog(&inputs.blog_id, lookup_credential)
@@ -7362,8 +7524,8 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
-        let lookup_credential = lookup_credential(request.admitted())?;
+        let credential = &self.execution_credential(request.admitted())?;
+        let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_blog_attachment_list_inputs(request.inputs(), &self.config)?;
         let blog = self
             .confirmed_blog(&inputs.locator.blog_id, lookup_credential)
@@ -7471,7 +7633,7 @@ impl ConfluenceProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let credential = invocation_credential(&request)?;
+        let credential = &self.execution_credential(request.admitted())?;
         let inputs = parse_blog_verify_inputs(request.inputs())?;
         let blog_response = self
             .confirmed_blog_response(&inputs.blog_id, credential)
@@ -7620,7 +7782,7 @@ impl ConfluenceProvider {
         &self,
         page_id: &str,
         body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ProviderError> {
         let response = self
             .backend
@@ -7635,7 +7797,7 @@ impl ConfluenceProvider {
         &self,
         blog_id: &str,
         body_format: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ProviderError> {
         let response = self
             .backend
@@ -7649,7 +7811,7 @@ impl ConfluenceProvider {
     async fn draft_response_with_resolved_space(
         &self,
         mut response: ConfluenceBackendResponse<ConfluenceDraftContent>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ProviderError> {
         let space_response = self
             .backend
@@ -7674,7 +7836,7 @@ impl ConfluenceProvider {
         &self,
         page_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ProviderError> {
         let response = self.draft_attachments_for_page(page_id, credential).await?;
         draft_attachment_from_collection(response, page_id, attachment_id)
@@ -7684,7 +7846,7 @@ impl ConfluenceProvider {
         &self,
         blog_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ProviderError> {
         let response = self.draft_attachments_for_blog(blog_id, credential).await?;
         draft_attachment_from_collection(response, blog_id, attachment_id)
@@ -7693,7 +7855,7 @@ impl ConfluenceProvider {
     async fn draft_attachments_for_page(
         &self,
         page_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ProviderError> {
         let mut attachments = Vec::new();
         let mut next_position = None;
@@ -7745,7 +7907,7 @@ impl ConfluenceProvider {
     async fn draft_attachments_for_blog(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ProviderError> {
         let mut attachments = Vec::new();
         let mut next_position = None;
@@ -7798,7 +7960,7 @@ impl ConfluenceProvider {
         &self,
         page_id: &str,
         candidate_space: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluencePage, ProviderError> {
         Ok(self
             .confirmed_page_response(page_id, candidate_space, credential)
@@ -7810,7 +7972,7 @@ impl ConfluenceProvider {
         &self,
         page_id: &str,
         candidate_space: Option<&str>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ProviderError> {
         let response = self
             .backend
@@ -7838,7 +8000,7 @@ impl ConfluenceProvider {
     async fn confirmed_blog(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBlog, ProviderError> {
         Ok(self
             .confirmed_blog_response(blog_id, credential)
@@ -7849,7 +8011,7 @@ impl ConfluenceProvider {
     async fn confirmed_blog_response(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ProviderError> {
         let response = self
             .blog_metadata_response_with_space(blog_id, credential)
@@ -7872,7 +8034,7 @@ impl ConfluenceProvider {
     async fn blog_scope_evidence(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBlogScopeEvidence, ProviderError> {
         Ok(self
             .blog_scope_evidence_response(blog_id, credential)
@@ -7883,7 +8045,7 @@ impl ConfluenceProvider {
     async fn blog_scope_evidence_response(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ProviderError> {
         let mut response = self
             .backend
@@ -7911,7 +8073,7 @@ impl ConfluenceProvider {
     async fn blog_metadata_response_with_space(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ProviderError> {
         let response = self
             .backend
@@ -7925,7 +8087,7 @@ impl ConfluenceProvider {
     async fn blog_response_with_space(
         &self,
         blog_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ProviderError> {
         let response = self
             .backend
@@ -7939,7 +8101,7 @@ impl ConfluenceProvider {
     async fn blog_response_with_resolved_space(
         &self,
         mut response: ConfluenceBackendResponse<ConfluenceBlog>,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ProviderError> {
         let space_response = self
             .backend
@@ -7964,7 +8126,7 @@ impl ConfluenceProvider {
         &self,
         page_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceAttachment, ProviderError> {
         Ok(self
             .attachment_for_page_response(page_id, attachment_id, credential)
@@ -7976,7 +8138,7 @@ impl ConfluenceProvider {
         &self,
         page_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ProviderError> {
         let response = self
             .backend
@@ -8006,7 +8168,7 @@ impl ConfluenceProvider {
         &self,
         blog_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceAttachment, ProviderError> {
         Ok(self
             .attachment_for_blog_response(blog_id, attachment_id, credential)
@@ -8018,7 +8180,7 @@ impl ConfluenceProvider {
         &self,
         blog_id: &str,
         attachment_id: &str,
-        credential: &ExecutionCredential,
+        credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ProviderError> {
         let response = self
             .backend
@@ -8045,45 +8207,9 @@ impl ConfluenceProvider {
     }
 }
 
-fn invocation_credential(
-    request: &ProviderInvocation,
-) -> Result<&ExecutionCredential, ProviderError> {
-    request.execution().static_credential().ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "selected credential material is unavailable",
-        )
-    })
-}
-
-fn lookup_credential(request: &AdmittedRequest) -> Result<&ExecutionCredential, ProviderError> {
-    static_lookup_credential(request.lookup_access())?.ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "lookup credential material is unavailable",
-        )
-    })
-}
-
-/// The static lookup credential the host selected, if any. Confluence does not
-/// accept delegated credentials, so delegated or unknown lookup access fails
-/// closed instead of standing in for a static credential.
-fn static_lookup_credential(
-    lookup_access: Option<&LookupAccess>,
-) -> Result<Option<&ExecutionCredential>, ProviderError> {
-    match lookup_access {
-        None => Ok(None),
-        Some(LookupAccess::Static(credential)) => Ok(Some(credential)),
-        Some(_) => Err(ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "Confluence lookups do not accept delegated credentials",
-        )),
-    }
-}
-
 fn required_lookup_credential(
-    credential: Option<&ExecutionCredential>,
-) -> Result<&ExecutionCredential, ProviderError> {
+    credential: Option<&AtlassianCredential>,
+) -> Result<&AtlassianCredential, ProviderError> {
     credential.ok_or_else(|| {
         ProviderError::deny(
             ReasonCode::CredentialNotProvisioned,
@@ -12194,6 +12320,8 @@ impl ConfluenceWrite {
             ConfluenceBackendError::AcceptedUnreadable(_) => Some(
                 MutationReceipt::applied_unverified("mutation_response", self.locators()),
             ),
+            // Delegated access that could not be presented, or that
+            // Confluence rejected, applied nothing and keeps its own reason.
             ConfluenceBackendError::Unauthorized
             | ConfluenceBackendError::Forbidden
             | ConfluenceBackendError::NotFound
@@ -12204,7 +12332,8 @@ impl ConfluenceWrite {
             | ConfluenceBackendError::Transport(_)
             | ConfluenceBackendError::Timeout
             | ConfluenceBackendError::ResponseTooLarge
-            | ConfluenceBackendError::Protocol(_) => None,
+            | ConfluenceBackendError::Protocol(_)
+            | ConfluenceBackendError::Credential(_) => None,
         };
         let failure = map(error);
         match receipt {
@@ -12215,15 +12344,16 @@ impl ConfluenceWrite {
 }
 
 /// Runs what follows a write Confluence accepted: a failure that reports no
-/// receipt keeps its reason and gains `applied_unverified` at `stage`.
+/// receipt gains `applied_unverified` at `stage`, keeping its reason unless
+/// delegated access or throttling stopped the verification
+/// ([`AtlassianWriteVerification`]).
 async fn after_accepted_write(
     stage: &str,
     locators: Value,
     tail: impl Future<Output = Result<ProviderResult, ProviderError>>,
 ) -> Result<ProviderResult, ProviderError> {
-    tail.await.map_err(|error| {
-        error.or_mutation_receipt(MutationReceipt::applied_unverified(stage, locators))
-    })
+    tail.await
+        .map_err(|error| error.unverified_after_atlassian_write(stage, locators))
 }
 
 /// Whether an upload that failed may still have created its attachment.
@@ -12257,6 +12387,7 @@ fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
         ConfluenceBackendError::ResponseTooLarge
         | ConfluenceBackendError::Redirected
         | ConfluenceBackendError::Protocol(_) => "upstream_protocol_failed",
+        ConfluenceBackendError::Credential(_) => "delegated_access_failed",
     }
 }
 

@@ -2,6 +2,7 @@
 //! and a composition mirroring the upstream selection, and the build status
 //! of an unstamped test assembly.
 use super::{AssemblyIdentity, BrokerApplication, BrokerBuildStatus, BrokerComposition};
+use agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT;
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
 use agent_access_core::BackendRegistry;
@@ -25,9 +26,10 @@ static NATIVES: [&BackendRegistration; 8] = [
     // Last, so its resource type keeps the bundled listing order.
     &OAUTH_STUB_BACKEND,
 ];
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 4] = [
     &GOOGLE_OAUTH_DIALECT,
     &GITLAB_OAUTH_DIALECT,
+    &ATLASSIAN_OAUTH_DIALECT,
     &STUB_OAUTH_DIALECT,
 ];
 
@@ -41,7 +43,7 @@ fn import_adapters() -> [ImportedAdapterRegistration; 3] {
 }
 
 pub(crate) fn backend_registry() -> BackendRegistry {
-    registry_of(NATIVES)
+    registry_of(NATIVES, OAUTH_DIALECTS)
 }
 
 /// The assembly's selection with `replacement` in place of the native of the
@@ -49,19 +51,59 @@ pub(crate) fn backend_registry() -> BackendRegistry {
 pub(crate) fn backend_registry_replacing(
     replacement: &'static BackendRegistration,
 ) -> BackendRegistry {
-    registry_of(NATIVES.map(|native| {
+    registry_of(replacing_native(replacement), OAUTH_DIALECTS)
+}
+
+/// The assembly's selection with `dialect` in place of the OAuth dialect of
+/// the same ID, for tests whose linked backends consume a dialect fixture
+/// that reaches a stub server.
+pub(crate) fn backend_registry_with_dialect(
+    dialect: &'static OAuthDialectRegistration,
+) -> BackendRegistry {
+    registry_of(NATIVES, replacing_dialect(dialect))
+}
+
+/// [`backend_registry_replacing`] with `dialect` in place of the OAuth
+/// dialect of the same ID, for tests whose test-local backend consumes a
+/// dialect fixture that reaches a stub server.
+pub(crate) fn backend_registry_replacing_with_dialect(
+    replacement: &'static BackendRegistration,
+    dialect: &'static OAuthDialectRegistration,
+) -> BackendRegistry {
+    registry_of(replacing_native(replacement), replacing_dialect(dialect))
+}
+
+fn replacing_dialect(
+    dialect: &'static OAuthDialectRegistration,
+) -> [&'static OAuthDialectRegistration; 4] {
+    OAUTH_DIALECTS.map(|linked| {
+        if linked.id() == dialect.id() {
+            dialect
+        } else {
+            linked
+        }
+    })
+}
+
+fn replacing_native(
+    replacement: &'static BackendRegistration,
+) -> [&'static BackendRegistration; 8] {
+    NATIVES.map(|native| {
         if native.kind() == replacement.kind() {
             replacement
         } else {
             native
         }
-    }))
+    })
 }
 
-fn registry_of(natives: [&'static BackendRegistration; 8]) -> BackendRegistry {
+fn registry_of(
+    natives: [&'static BackendRegistration; 8],
+    dialects: [&'static OAuthDialectRegistration; 4],
+) -> BackendRegistry {
     BackendRegistry::new(natives)
         .expect("linked backends register consistently")
-        .with_oauth_dialects(OAUTH_DIALECTS)
+        .with_oauth_dialects(dialects)
         .expect("linked OAuth dialects register consistently")
         .with_imported_adapters(import_adapters())
         .expect("linked imported adapters register consistently")
