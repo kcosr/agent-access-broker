@@ -1021,6 +1021,260 @@ async fn jira_moved_issue_denial_does_not_leak_content() {
     stop(broker).await;
 }
 
+/// One issue of a project whose key changed: Jira resolves both `alias` and
+/// the issue's current `key` to it.
+fn renamed_issue_backend(alias: &str, key: &str, project: &str, secret: &str) -> StubJiraBackend {
+    let issue = JiraIssue {
+        id: "10007".to_string(),
+        key: key.to_string(),
+        project: project.to_string(),
+        summary: Some(format!("{secret} summary")),
+        status: Some("Open".to_string()),
+        issue_type: Some("Task".to_string()),
+        created: None,
+        updated: None,
+        creator: None,
+        reporter: None,
+        assignee: None,
+        priority: None,
+        labels: None,
+        description: Some(jira_adf_text(&format!("{secret} description"))),
+    };
+    StubJiraBackend {
+        issues: BTreeMap::from([(alias.to_string(), issue.clone()), (key.to_string(), issue)]),
+        // The comment belongs to the current key, so listing it proves the
+        // Broker sends the key Jira confirmed rather than the alias.
+        comments: Mutex::new(BTreeMap::from([(
+            "10070".to_string(),
+            jira_comment_with_body("10070", &format!("{secret} comment")),
+        )])),
+        comment_issue_keys: Mutex::new(BTreeMap::from([("10070".to_string(), key.to_string())])),
+        attachments: Mutex::new(vec![JiraAttachment {
+            id: "10071".to_string(),
+            filename: "notes.txt".to_string(),
+            size: 13,
+            content_type: "text/plain".to_string(),
+        }]),
+        attachment_content: Mutex::new(BTreeMap::from([(
+            "10071".to_string(),
+            JiraAttachmentContent::from_bytes("notes.txt", "text/plain", b"renamed notes".to_vec()),
+        )])),
+        search_page: Mutex::new(None),
+        last_search: Mutex::new(None),
+        ..StubJiraBackend::default()
+    }
+}
+
+fn jira_cli(base_url: &str, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_agent-access"))
+        .args(["--url", base_url, "--no-token", "jira"])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// Project `LEGACY` was renamed to `PROJ`, which the grant names. Old keys and
+/// old browser links resolve through Jira to `PROJ-7` and are authorized by
+/// `PROJ`; results report the current key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jira_renamed_project_keys_resolve_to_the_current_issue() {
+    let backend = Arc::new(renamed_issue_backend(
+        "LEGACY-7", "PROJ-7", "PROJ", "renamed",
+    ));
+    let broker = start_broker(
+        JiraAccess::AnonymousService,
+        jira_service(
+            jira_provider_config(2),
+            agent_access_provider::ProviderLimits::default(),
+            backend.clone(),
+        ),
+    )
+    .await;
+    let base_url = broker.public_url();
+    let mut cursor = 0;
+
+    for locator in [
+        vec!["LEGACY-7"],
+        vec![
+            "--issue-url",
+            "https://example.atlassian.net/browse/LEGACY-7",
+        ],
+        vec![
+            "--issue-url",
+            "https://example.atlassian.net/jira/software/c/projects/LEGACY/issues/LEGACY-7",
+        ],
+        vec![
+            "--issue-url",
+            "https://example.atlassian.net/jira/software/c/projects/LEGACY/issues/PROJ-7",
+        ],
+        vec![
+            "--issue-url",
+            "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/LEGACY-7",
+        ],
+    ] {
+        let mut args = vec!["issue", "view"];
+        args.extend(&locator);
+        let view = jira_cli(&base_url, &args);
+        assert_success(&format!("renamed issue view {locator:?}"), &view);
+        let view: serde_json::Value = serde_json::from_slice(&view.stdout).unwrap();
+        assert_eq!(view["result"]["key"], "PROJ-7", "{locator:?}");
+        assert_eq!(view["result"]["project"], "PROJ");
+        assert_eq!(
+            view["result"]["webUrl"],
+            "https://example.atlassian.net/browse/PROJ-7"
+        );
+        assert_new_backend_operations(
+            &backend,
+            &mut cursor,
+            &["issue_metadata", "issue_metadata", "issue"],
+        );
+    }
+
+    let comments = jira_cli(
+        &base_url,
+        &["issue", "comment", "list", "--issue", "LEGACY-7"],
+    );
+    assert_success("renamed comment list", &comments);
+    let comments: serde_json::Value = serde_json::from_slice(&comments.stdout).unwrap();
+    assert_eq!(comments["result"]["issue"]["key"], "PROJ-7");
+    assert_eq!(comments["result"]["comments"][0]["commentId"], "10070");
+
+    let comment = jira_cli(
+        &base_url,
+        &[
+            "issue",
+            "comment",
+            "view",
+            "10070",
+            "--issue-url",
+            "https://example.atlassian.net/browse/LEGACY-7",
+        ],
+    );
+    assert_success("renamed comment view", &comment);
+    let comment: serde_json::Value = serde_json::from_slice(&comment.stdout).unwrap();
+    assert_eq!(comment["result"]["issue"]["key"], "PROJ-7");
+    assert_eq!(comment["result"]["comment"]["commentId"], "10070");
+
+    let attachments = jira_cli(
+        &base_url,
+        &[
+            "issue",
+            "attachment",
+            "list",
+            "--issue-url",
+            "https://example.atlassian.net/jira/software/c/projects/LEGACY/issues/LEGACY-7",
+        ],
+    );
+    assert_success("renamed attachment list", &attachments);
+    let attachments: serde_json::Value = serde_json::from_slice(&attachments.stdout).unwrap();
+    assert_eq!(attachments["result"]["issue"]["key"], "PROJ-7");
+    assert_eq!(
+        attachments["result"]["attachments"][0]["attachmentId"],
+        "10071"
+    );
+
+    let download = jira_cli(
+        &base_url,
+        &[
+            "issue",
+            "attachment",
+            "download",
+            "LEGACY-7",
+            "10071",
+            "--output",
+            "-",
+        ],
+    );
+    assert_success("renamed attachment download", &download);
+    assert_eq!(download.stdout, b"renamed notes");
+
+    stop(broker).await;
+}
+
+/// Project `PROJ`, which the grant names, was renamed to `OTHER`. Its old keys
+/// and links now resolve to `OTHER-2`, which no grant covers: every issue path
+/// denies after the lookup without reading content.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jira_renamed_project_outside_the_grant_is_denied_on_every_issue_path() {
+    let backend = Arc::new(renamed_issue_backend(
+        "PROJ-2",
+        "OTHER-2",
+        "OTHER",
+        "secret renamed",
+    ));
+    let broker = start_broker(
+        JiraAccess::AnonymousService,
+        jira_service(
+            jira_provider_config(2),
+            agent_access_provider::ProviderLimits::default(),
+            backend.clone(),
+        ),
+    )
+    .await;
+    let base_url = broker.public_url();
+    let mut cursor = 0;
+
+    for args in [
+        vec!["issue", "view", "PROJ-2"],
+        vec![
+            "issue",
+            "view",
+            "--issue-url",
+            "https://example.atlassian.net/browse/PROJ-2",
+        ],
+        vec![
+            "issue",
+            "view",
+            "--issue-url",
+            "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/PROJ-2",
+        ],
+        vec![
+            "issue",
+            "view",
+            "--issue-url",
+            "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/OTHER-2",
+        ],
+        vec!["issue", "comment", "list", "--issue", "PROJ-2"],
+        vec!["issue", "comment", "view", "10070", "--issue", "PROJ-2"],
+        vec!["issue", "attachment", "list", "PROJ-2"],
+        vec![
+            "issue",
+            "attachment",
+            "download",
+            "PROJ-2",
+            "10071",
+            "--output",
+            "-",
+        ],
+    ] {
+        let output = jira_cli(&base_url, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let denial: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(denial["decision"], "deny", "{args:?}");
+        assert_eq!(denial["reasonCode"], "scope_unresolved", "{args:?}");
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!printed.contains("secret renamed"), "{args:?}");
+        assert!(!printed.contains("renamed notes"), "{args:?}");
+        // Only the scope-resolution lookup ran.
+        assert_new_backend_operations(&backend, &mut cursor, &["issue_metadata"]);
+    }
+
+    let audit = broker.audit().unwrap().text();
+    assert!(!audit.contains("secret renamed"));
+
+    stop(broker).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backend() {
     let backend = Arc::new(StubJiraBackend {

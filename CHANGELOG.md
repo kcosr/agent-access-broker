@@ -1264,6 +1264,20 @@ All notable changes to this project are documented in this file.
   Returned content is now checked against the granted space keys or all-except
   exclusions, as `docs/design.md` describes. A caller-written name still
   narrows the query, but cannot widen access or lift an exclusion.
+- Jira references that use a previous project key, which Jira keeps as aliases
+  after a project key change, could be refused although Jira resolves them.
+  Modern issue URLs (`/jira/.../projects/{project}/issues/{key}`) whose project
+  segment differs from the key prefix, such as an old project with a current
+  key, were rejected as `locator_invalid` before the lookup. They are now
+  accepted when the segment is a valid project key, and the issue key alone
+  identifies the issue. Search with all-project access rejected the current
+  issues Jira returns for JQL `project = OLD` or explicit `projects: ["OLD"]`,
+  because containment was narrowed to the names the caller wrote. Returned
+  issues are now checked against the authorization boundary only. A create
+  whose project key Jira resolved to a renamed project's current key reported
+  `upstream_protocol_failed`; it is now `scope_unresolved`, keeping its
+  `applied_unverified` receipt. Issues are still authorized by their current
+  project, never by the alias prefix, and results report the current key.
 
 ### Removed
 

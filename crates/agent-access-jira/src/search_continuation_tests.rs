@@ -335,7 +335,8 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     // Explicit projects: an unrelated grant change keeps the composed query
     // and the continuation, but losing a requested project denies before the
     // token is used, and returned issues are checked against the current
-    // boundary.
+    // grant boundary rather than the requested projects (Jira resolves a
+    // previous project key to the renamed project's current issues).
     let narrowed = json!({"query": {"type": "jql", "value": QUERY}, "projects": ["PROJ"]});
     let token = harness
         .first_page(search(narrowed.clone(), finite(&["PROJ", "OPS_TOOLS"]), None).build())
@@ -357,9 +358,25 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
     assert_eq!(harness.upstream_searches(), searches);
-    let mut outside = page_with_upstream_token(UPSTREAM);
-    outside.issues[0].project = "OPS_TOOLS".to_string();
-    outside.issues[0].key = "OPS_TOOLS-7".to_string();
+    let mut renamed = page_with_upstream_token(UPSTREAM);
+    renamed.issues[0].project = "OPS_TOOLS".to_string();
+    renamed.issues[0].key = "OPS_TOOLS-7".to_string();
+    *harness.backend.search_page.lock().unwrap() = Some(renamed.clone());
+    harness
+        .provider
+        .invoke(
+            search(
+                narrowed.clone(),
+                finite(&["PROJ", "OPS_TOOLS"]),
+                Some(&token),
+            )
+            .build(),
+        )
+        .await
+        .unwrap();
+    let mut outside = renamed;
+    outside.issues[0].project = "OTHER".to_string();
+    outside.issues[0].key = "OTHER-7".to_string();
     *harness.backend.search_page.lock().unwrap() = Some(outside);
     let error = harness
         .provider

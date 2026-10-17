@@ -441,8 +441,10 @@ An issue may be supplied as a key or as a URL. A URL locator
 (`issue_locator_from_url`) requires `https`, a host equal to the configured
 `tenant_host`, no userinfo, no explicit port, no query and no fragment. Accepted
 browser paths are `/browse/{issueKey}` and modern Jira paths of the form
-`/jira/.../projects/{projectKey}/issues/{issueKey}`. When the modern path
-carries a project key, it must match the issue key prefix. REST API `self` URLs
+`/jira/.../projects/{projectKey}/issues/{issueKey}`. The modern path's project
+segment must be a valid project key, but it is navigation context and is not
+compared with the issue key: the issue key alone identifies the issue (see
+[Renamed project keys](#renamed-project-keys)). REST API `self` URLs
 such as `/rest/api/3/issue/{id}` are rejected because they carry only the
 numeric issue ID. Malformed issue keys and invalid URL locators are
 `locator_invalid` (HTTP 403).
@@ -458,8 +460,46 @@ parent changes, dependency links, comment actions, comment-property actions,
 mutations, `verify`, `attachment.download`, and `attachment.list`, the broker
 confirms the issue's project through pre-authorization metadata lookup before
 authorization.
-`issue.view` denies with `scope_unresolved` if the confirmed metadata id, key,
-or project disagree with the request.
+`issue.view` denies with `scope_unresolved` if the confirmed project is not
+authorized, or if the full read's id, key, or project disagree with the
+confirmed metadata.
+
+### Renamed project keys
+
+When a Jira administrator changes a project key, for example from `OLD` to
+`NEW`, Jira re-keys the project's issues (`OLD-123` becomes `NEW-123`) and keeps
+the previous keys as aliases. Old issue keys, browser links, and JQL that names
+`OLD` keep working in Jira, and issue text keeps the old keys. Jira's issue API
+resolves `OLD-123` without a redirect and returns the issue under its current
+key and project. The Broker handles these references as follows:
+
+- **Issue keys and URLs.** `OLD-123`, `/browse/OLD-123`, and modern links whose
+  project segment and key mix old and new keys are accepted as locators. The
+  pre-authorization lookup resolves them through Jira, and policy authorizes
+  the issue's current project `NEW`, never the alias prefix. A grant that
+  names only `OLD` no longer covers the issue: such requests deny with
+  `scope_unresolved` without returning content. After confirmation, every
+  read and write uses the current key, and results, `webUrl`, audit, and
+  object IDs report `NEW-123`. To detect an alias, compare the returned issue
+  key with the locator you sent.
+- **Search.** Jira also resolves `OLD` in explicit `projects`, JQL `project`
+  clauses, and `key`/`text` queries for `OLD-123`. Returned issues carry their
+  current keys and are checked against the authorized project boundary, as
+  described in [`search` and JQL](#search-and-jql).
+- **Project-key inputs.** `issue_type.list`, `issue.create`,
+  `issue.child.create`, and explicit search `projects` are authorized by the
+  project key as written. With finite grants for `NEW`, `OLD` is denied before
+  any Jira request. If a grant still names `OLD` and Jira creates the issue as
+  `NEW-5`, the create fails with `scope_unresolved` and an
+  `applied_unverified` receipt (see [`issue.create`](#issuecreate)).
+- **Operator action.** Project resource entries name project keys. After a key
+  change, update every entry, group exclusion, and token restriction that names
+  the previous key. An entry still naming `OLD` stops authorizing the
+  project's issues. An exclusion still naming `OLD` stops excluding them from
+  issue actions, although search's injected `project NOT IN (OLD)` predicate
+  still excludes them through Jira's alias. Jira can release a previous key
+  for reuse by another project, so treat an old key as the current key of
+  whichever project holds it.
 
 Static config validation requires `credentials.lookup.jira` whenever any
 lookup-backed Jira grant uses `credential_mode = "service"`. At runtime, the
@@ -552,10 +592,13 @@ key. Before full readback, the broker validates that the created key is a valid
 Jira issue key whose project prefix matches the authorized requested project.
 It then reads the issue back with the execution credential and returns
 `operation: "issue.create"` plus the same bounded issue shape as `issue.view`.
-If Jira accepts an old renamed-project key alias and returns a current key
-prefix, the broker fails closed after creation; operators should reconcile the
-created issue id/key from failure audit and update grants to current project
-keys before retrying.
+An invalid created key is `upstream_protocol_failed`. A valid key in another
+project, for example when Jira resolves a
+[previous project key](#renamed-project-keys) and creates the issue under the
+current one, is `scope_unresolved`: the issue exists outside the authorized
+project. Both failures carry the `applied_unverified` receipt. Reconcile the
+created issue id/key from `safeLocators` or failure audit, and update grants to
+the current project key before retrying.
 
 Audit includes issue id/key when available, project, issue type id,
 `descriptionProvided`, credential mode, egress proxy, and attribution metadata
@@ -619,9 +662,10 @@ The provider sends `POST /rest/api/3/issue` with only
 `fields.project.key`, `fields.issuetype.id`, `fields.summary`,
 `fields.parent.key`, and optional `fields.description`. Jira must return
 `201 Created` with a created issue id and key. The broker validates the created
-key against the requested target project, reads the new issue back with the
-execution credential, then reads `fields=project,parent` and verifies that Jira
-reports the requested parent key or id. Tenant-specific Jira rules for Epics,
+key against the requested target project as `issue.create` does, reads the
+new issue back with the execution credential, then reads
+`fields=project,parent` and verifies that Jira reports the requested parent
+key or id. Tenant-specific Jira rules for Epics,
 subtasks, hierarchy levels, issue types, and cross-project parenting remain
 upstream validation failures.
 
@@ -923,8 +967,15 @@ Scope composition:
   `project NOT IN (...)` predicate before upstream pagination and counts.
 - For unrestricted **all** with no requested projects, the canonical caller JQL
   needs no additional containment predicate.
-- Explicit project selections narrow the effective boundary and cannot discard
-  exclusions. Returned issue containment is checked against that boundary.
+- Explicit project selections narrow the composed query and cannot discard
+  exclusions: each requested project must be inside the authorization
+  boundary.
+- Returned issues are checked against the authorization boundary (finite
+  projects, or all except exclusions, after token restrictions), not against
+  explicit `projects` or JQL `project` clauses. Jira resolves a
+  [previous project key](#renamed-project-keys) in those clauses to the
+  renamed project, whose issues carry its current key. Those issues are
+  returned when that project is authorized and rejected otherwise.
 - Empty or ordering-only JQL with **all** or **all except** scope returns
   `input_invalid`: supply explicit authorized `projects` or a filter such as
   `updated >= -7d`. Jira's enhanced search endpoint requires a bounded query;
@@ -1030,7 +1081,7 @@ generic message. Operators can distinguish the actual failing check through
 | --- | --- |
 | `jira_search_issue_key_invalid` | An issue key does not match the broker's accepted key format. |
 | `jira_search_issue_project_mismatch` | The issue key's project prefix differs from `fields.project.key`. |
-| `jira_search_project_unauthorized` | The reported project is outside the effective response scope. |
+| `jira_search_project_unauthorized` | The reported project is outside the authorization boundary. |
 
 The first failing check in that order determines the log code. All three checks
 are recorded as booleans in `providerAudit.searchResultValidation` in the audit
@@ -1048,9 +1099,9 @@ records `effectiveSearchScope`, `injectedScopePredicate`,
 `resultCount`. Raw JQL, page tokens, issue bodies, and raw rejected identifiers
 are not included. The log-only diagnostic code is not copied into the audit or
 agent response. `searchAuthorization.scope` in the audit remains the full
-authorization plan; `effectiveSearchScope` also reflects narrowing by explicit
-`projects` and, for all/all-except access, JQL `project =` / `project IN` clauses.
-Returned issues are checked against this effective response scope.
+authorization plan; `effectiveSearchScope` is the scope the composed query uses,
+which reflects narrowing by explicit `projects`. Returned issues are checked
+against the authorization boundary in `searchAuthorization.scope`.
 
 After deploying a diagnostic build, reproduce once through the same identity
 and context. Collect the matching `invoke_completed` event and raw audit record

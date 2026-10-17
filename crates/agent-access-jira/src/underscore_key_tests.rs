@@ -60,20 +60,23 @@ fn underscore_project_keys_are_canonical_and_match_discovery_schema() {
 fn underscore_issue_locators_and_jql_preserve_project_identity() {
     let config = jira_config();
     let locator = issue_locator_from_key("OPS_TOOLS-12345").unwrap();
-    assert_eq!(locator.candidate_project, "OPS_TOOLS");
+    assert_eq!(locator.issue_key, "OPS_TOOLS-12345");
     for url in [
         "https://example.atlassian.net/browse/OPS_TOOLS-12345",
         "https://example.atlassian.net/jira/software/c/projects/OPS_TOOLS/issues/OPS_TOOLS-12345",
+        // A previous project key in the path still names the issue by its key.
+        "https://example.atlassian.net/jira/software/c/projects/OTHER_TOOLS/issues/OPS_TOOLS-12345",
     ] {
         let locator = issue_locator_from_url(url, &config).unwrap();
         assert_eq!(locator.issue_key, "OPS_TOOLS-12345");
-        assert_eq!(locator.candidate_project, "OPS_TOOLS");
     }
-    assert!(issue_locator_from_url(
-        "https://example.atlassian.net/jira/software/c/projects/OTHER_TOOLS/issues/OPS_TOOLS-12345",
-        &config,
-    )
-    .is_err());
+    assert!(
+        issue_locator_from_url(
+            "https://example.atlassian.net/jira/software/c/projects/_TOOLS/issues/OPS_TOOLS-12345",
+            &config,
+        )
+        .is_err()
+    );
     for query in [
         "project = OPS_TOOLS",
         "project = \"OPS_TOOLS\"",
