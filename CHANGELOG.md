@@ -1156,6 +1156,17 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- GitLab REST resolves the old path or web URL of a renamed, moved or
+  transferred project to the project's current identity. GitLab 16.7 and later
+  answer a lookup of the old path with a redirect naming the project's numeric
+  ID, which the Broker reported as `upstream_failed`. It now takes only that
+  ID, without following the redirect, reads the project by ID through
+  `api_base_url`, and authorizes, executes and reports its current path. A path
+  another project has since taken names that project, as in GitLab. Every
+  action also requires the project it looks up again at execution to have an
+  authorized path, so a project moved, or a path taken over, between
+  authorization and execution is refused with `scope_unresolved` instead of
+  acted on.
 - Jira and Confluence attachment downloads through the Atlassian gateway
   presented the credential, such as a service account's bearer token, on every
   redirect hop to `api.atlassian.com`, whose one origin serves every Atlassian

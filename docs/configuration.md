@@ -1364,7 +1364,9 @@ allow_disable_ssl_verification = false
 
 - `api_base_url` is required and must end in `/api/v4`.
 - `web_base_url` is required and is used only to validate and parse GitLab web
-  URLs supplied as locators.
+  URLs supplied as locators. Set it to GitLab's external URL, the origin of
+  the links GitLab shows, even when `api_base_url` reaches GitLab through
+  another host.
 - `allowed_upstream_hosts` must include the configured API base path prefix; each
   entry follows the same allowlist syntax as Jira and Confluence.
 - `[providers.gitlab.attachments]` declares upload limits: `max_bytes`,

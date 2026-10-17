@@ -7662,3 +7662,382 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
         );
     }
 }
+
+/// GitLab's answer for the old path of a renamed, moved or transferred
+/// project: `301` to its numeric ID on GitLab's external URL, which here is
+/// deliberately another origin than the configured API base.
+fn moved_project_response(location: &str) -> ResponseTemplate {
+    ResponseTemplate::new(301)
+        .insert_header("location", location)
+        .set_body_string(format!(
+            "This resource has been moved permanently to {location}"
+        ))
+}
+
+async fn mount_get(server: &MockServer, route: &str, response: ResponseTemplate) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(response)
+        .mount(server)
+        .await;
+}
+
+async fn scopes_for(provider: &GitlabProvider, action: &str, inputs: Value) -> ResourceScopes {
+    let fixture =
+        agent_access_provider::test_support::ScopeRequestFixture::new("gitlab", action, inputs)
+            .lookup_credential(test_credential());
+    provider
+        .resolve_scopes(fixture.request())
+        .await
+        .unwrap()
+        .into_parts()
+        .0
+}
+
+#[tokio::test]
+async fn moved_project_paths_and_urls_resolve_to_the_current_project_by_id() {
+    let server = MockServer::start().await;
+    mount_get(
+        &server,
+        "/api/v4/projects/old%2Fservice",
+        moved_project_response("https://gitlab-external.example.test/gitlab/api/v4/projects/42"),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/42",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42, "path_with_namespace": "sip/service"
+        })),
+    )
+    .await;
+    // GitLab appends the request path's extension to the location, so a
+    // moved path whose last segment has a dot names `<id>.<suffix>`.
+    mount_get(
+        &server,
+        "/api/v4/projects/old-group%2Fsite.docs",
+        moved_project_response("https://gitlab-external.example.test/api/v4/projects/43.docs"),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/43",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 43, "path_with_namespace": "new-group/site.docs"
+        })),
+    )
+    .await;
+    let provider = provider_for_server(&server);
+
+    for (action, inputs) in [
+        ("project.view", json!({ "project": "old/service" })),
+        (
+            "project.view",
+            json!({ "url": "https://gitlab.example.com/old/service" }),
+        ),
+        ("issue.view", json!({ "project": "old/service", "iid": 5 })),
+        (
+            "issue.view",
+            json!({ "url": "https://gitlab.example.com/old/service/-/issues/5" }),
+        ),
+        (
+            "merge_request.view",
+            json!({ "url": "https://gitlab.example.com/old/service/-/merge_requests/9" }),
+        ),
+        ("issue.search", json!({ "project": "old/service" })),
+    ] {
+        assert_eq!(
+            scopes_for(&provider, action, inputs.clone()).await,
+            repository_scopes_from_path("sip/service"),
+            "{action} {inputs}"
+        );
+    }
+    assert_eq!(
+        scopes_for(
+            &provider,
+            "project.view",
+            json!({ "project": "old-group/site.docs" })
+        )
+        .await,
+        repository_scopes_from_path("new-group/site.docs")
+    );
+    // Only the ID comes from the redirect: each lookup reads the project
+    // again by ID through the configured API base, and nothing is sent to
+    // the location's origin.
+    let requests = received_requests(&server).await;
+    assert_eq!(requests.len(), 14);
+    for pair in requests[..12].chunks(2) {
+        assert_eq!(
+            pair,
+            [
+                "GET /api/v4/projects/old%2Fservice",
+                "GET /api/v4/projects/42"
+            ]
+        );
+    }
+    assert_eq!(
+        requests[12..],
+        [
+            "GET /api/v4/projects/old-group%2Fsite.docs",
+            "GET /api/v4/projects/43"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn moved_project_redirects_that_name_no_project_id_fail_closed() {
+    for location in [
+        None,
+        Some("https://gitlab.example.com/api/v4/projects/old%2Fservice"),
+        Some("https://gitlab.example.com/api/v4/projects/sip%2Fservice"),
+        Some("https://gitlab.example.com/api/v4/groups/42"),
+        Some("https://gitlab.example.com/api/v4/projects/42/issues/5"),
+        Some("https://gitlab.example.com/api/v4/projects/42/"),
+        Some("https://gitlab.example.com/api/v4/projects/0"),
+        Some("https://gitlab.example.com/api/v4/projects/42abc"),
+        Some("https://gitlab.example.com/api/v3/projects/42"),
+        Some("https://gitlab.example.com/old/service"),
+    ] {
+        let server = MockServer::start().await;
+        let response = match location {
+            Some(location) => moved_project_response(location),
+            None => ResponseTemplate::new(301),
+        };
+        mount_get(&server, "/api/v4/projects/old%2Fservice", response).await;
+        let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+            "gitlab",
+            "project.view",
+            json!({ "project": "old/service" }),
+        )
+        .lookup_credential(test_credential());
+        let error = provider_for_server(&server)
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Error, "{location:?}");
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::UpstreamProtocolFailed,
+            "{location:?}"
+        );
+        assert_eq!(
+            received_requests(&server).await,
+            ["GET /api/v4/projects/old%2Fservice"],
+            "{location:?}"
+        );
+    }
+
+    // Other redirects keep failing as a non-success status, and a project ID
+    // lookup that answers another project is refused.
+    let server = MockServer::start().await;
+    mount_get(
+        &server,
+        "/api/v4/projects/old%2Fservice",
+        ResponseTemplate::new(302).insert_header("location", "/api/v4/projects/42"),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/old%2Fother",
+        moved_project_response("https://gitlab.example.com/api/v4/projects/42"),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/42",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 41, "path_with_namespace": "sip/service"
+        })),
+    )
+    .await;
+    let provider = provider_for_server(&server);
+    for (project, reason) in [
+        ("old/service", ReasonCode::UpstreamFailed),
+        ("old/other", ReasonCode::UpstreamProtocolFailed),
+    ] {
+        let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+            "gitlab",
+            "project.view",
+            json!({ "project": project }),
+        )
+        .lookup_credential(test_credential());
+        let error = provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), reason, "{project}");
+    }
+    assert_eq!(
+        received_requests(&server).await,
+        [
+            "GET /api/v4/projects/old%2Fservice",
+            "GET /api/v4/projects/old%2Fother",
+            "GET /api/v4/projects/42"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn execution_acts_on_the_moved_project_id_only_under_its_admitted_current_path() {
+    let server = MockServer::start().await;
+    mount_get(
+        &server,
+        "/api/v4/projects/old%2Fservice",
+        moved_project_response("https://gitlab-external.example.test/api/v4/projects/42"),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/42",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42, "path_with_namespace": "sip/service"
+        })),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/42/issues/5",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 500, "iid": 5, "project_id": 42, "title": "Moved issue"
+        })),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/projects/42/issues/5/notes"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(note_json(701, "noted", "Issue", 5)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = provider_for_server(&server);
+    let invocation = |action: &str, inputs: Value, admitted: &str| {
+        InvocationBuilder::new("gitlab", action)
+            .inputs(inputs)
+            .resources(repository_scopes_from_path(admitted))
+            .credential(test_credential())
+            .lookup_credential(test_credential())
+            .build()
+    };
+
+    let viewed = provider
+        .invoke(invocation(
+            "issue.view",
+            json!({ "url": "https://gitlab.example.com/old/service/-/issues/5" }),
+            "sip/service",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        viewed.audit.as_ref().unwrap()["gitlab"]["project"],
+        "sip/service"
+    );
+    assert_eq!(viewed.audit.as_ref().unwrap()["gitlab"]["projectId"], 42);
+    assert_eq!(viewed.result["issue"]["title"], "Moved issue");
+    // A write through the old path goes to the numeric project ID; GitLab
+    // refuses writes to a moved project's old path with 405.
+    let noted = provider
+        .invoke(invocation(
+            "issue.note.add",
+            json!({ "project": "old/service", "iid": 5, "contentFormat": "markdown", "content": "noted" }),
+            "sip/service",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(noted.audit.as_ref().unwrap()["gitlab"]["projectId"], 42);
+    let before = received_requests(&server).await;
+    assert!(
+        before
+            .iter()
+            .filter(|request| !request.starts_with("GET "))
+            .all(|request| request == "POST /api/v4/projects/42/issues/5/notes"),
+        "{before:?}"
+    );
+
+    // Authority admitted for the stale path string, or for another project,
+    // never reaches the moved project.
+    for admitted in ["old/service", "sip/other"] {
+        let error = provider
+            .invoke(invocation(
+                "issue.view",
+                json!({ "project": "old/service", "iid": 5 }),
+                admitted,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny, "{admitted}");
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::ScopeUnresolved,
+            "{admitted}"
+        );
+        assert_eq!(
+            error.message,
+            "GitLab project did not match the authorized repository"
+        );
+    }
+    let after = received_requests(&server).await;
+    assert_eq!(
+        after[before.len()..],
+        [
+            "GET /api/v4/projects/old%2Fservice",
+            "GET /api/v4/projects/42",
+            "GET /api/v4/projects/old%2Fservice",
+            "GET /api/v4/projects/42"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_old_path_another_project_now_owns_resolves_to_its_current_owner() {
+    // GitLab removes a redirect when another project takes its path, and
+    // answers the path with that project.
+    let server = MockServer::start().await;
+    mount_get(
+        &server,
+        "/api/v4/projects/sip%2Fold-name",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 99, "path_with_namespace": "sip/old-name"
+        })),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/99/issues/5",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 990, "iid": 5, "project_id": 99
+        })),
+    )
+    .await;
+    let provider = provider_for_server(&server);
+    assert_eq!(
+        scopes_for(
+            &provider,
+            "issue.view",
+            json!({ "project": "sip/old-name", "iid": 5 })
+        )
+        .await,
+        repository_scopes_from_path("sip/old-name")
+    );
+    let invocation = |admitted: &str| {
+        InvocationBuilder::new("gitlab", "issue.view")
+            .inputs(json!({ "project": "sip/old-name", "iid": 5 }))
+            .resources(repository_scopes_from_path(admitted))
+            .credential(test_credential())
+            .lookup_credential(test_credential())
+            .build()
+    };
+    let viewed = provider.invoke(invocation("sip/old-name")).await.unwrap();
+    assert_eq!(viewed.audit.as_ref().unwrap()["gitlab"]["projectId"], 99);
+    // The path's former owner, now `sip/service`, is not what the path
+    // names any more.
+    let error = provider
+        .invoke(invocation("sip/service"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert!(
+        !received_requests(&server)
+            .await
+            .iter()
+            .any(|request| request.contains("/projects/42"))
+    );
+}

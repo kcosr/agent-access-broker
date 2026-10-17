@@ -24,6 +24,9 @@ pub trait GitlabBackend: Send + Sync {
         credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabUser>, GitlabBackendError>;
 
+    /// The project GitLab currently identifies with `project`, a path or a
+    /// numeric ID: the old path of a renamed, moved or transferred project
+    /// answers with that project's current identity.
     async fn project(
         &self,
         project: &str,
@@ -2533,15 +2536,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project: &str,
         credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProject>, GitlabBackendError> {
-        let encoded = encoded_path_segment(project);
-        let response = self
-            .get_json(
-                "project.view",
-                self.endpoint(&format!("projects/{encoded}"))?,
-                credential,
-            )
-            .await?;
-        Ok(response.map_json(project_from_value)?)
+        project_lookup(self, project, credential).await
     }
 
     async fn upload_project(
@@ -4807,6 +4802,18 @@ pub(crate) async fn send_gitlab_request(
     validation_fields: Option<&'static [&'static str]>,
     response_byte_cap: u64,
 ) -> Result<reqwest::Response, GitlabBackendError> {
+    let response = send_gitlab_unmapped(client, credential, request, operation).await?;
+    map_gitlab_status(response, validation_fields, response_byte_cap).await
+}
+
+/// [`send_gitlab_request`] without mapping the final status, for the one
+/// caller that interprets a redirect status itself ([`project_lookup`]).
+async fn send_gitlab_unmapped(
+    client: &UpstreamClient,
+    credential: &GitlabCredential,
+    request: reqwest::RequestBuilder,
+    operation: &str,
+) -> Result<reqwest::Response, GitlabBackendError> {
     let mut request = request;
     let mut attempt = 1;
     loop {
@@ -4833,8 +4840,98 @@ pub(crate) async fn send_gitlab_request(
             continue;
         }
         complete_upstream_trace(&mut response, None);
-        return map_gitlab_status(response, validation_fields, response_byte_cap).await;
+        return Ok(response);
     }
+}
+
+/// Looks up the project GitLab currently identifies with `project`, a path
+/// or a numeric ID.
+///
+/// GitLab 16.7 and later answer a `GET` for the old path of a renamed, moved
+/// or transferred project, when the credential can read it, with `301` and a
+/// `Location` naming the project's numeric ID (`.../api/v4/projects/<id>`).
+/// The redirect is not followed: only that ID is taken from it, and the
+/// project is read again by ID through the configured API base with the same
+/// credential, so the result is the project's current identity. The
+/// location's origin, GitLab's external URL, is never contacted. Any other
+/// redirect, or one that names no project ID, fails closed.
+async fn project_lookup(
+    backend: &HttpGitlabBackend,
+    project: &str,
+    credential: &GitlabCredential,
+) -> Result<GitlabBackendResponse<GitlabProject>, GitlabBackendError> {
+    let started = Instant::now();
+    let send = |url: Url| {
+        send_gitlab_unmapped(
+            &backend.client,
+            credential,
+            backend
+                .client
+                .request(Method::GET, url)
+                .header("Accept", "application/json"),
+            "project.view",
+        )
+    };
+    let url = backend.endpoint(&format!("projects/{}", encoded_path_segment(project)))?;
+    let mut response = send(url.clone()).await?;
+    let mut moved_to = None;
+    if response.status() == reqwest::StatusCode::MOVED_PERMANENTLY {
+        let project_id = moved_project_id(&url, response.headers())?;
+        response = send(backend.endpoint(&format!("projects/{project_id}"))?).await?;
+        moved_to = Some(project_id);
+    }
+    let response =
+        map_gitlab_status(response, None, backend.limits.max_upstream_response_bytes).await?;
+    let status = response.status().as_u16();
+    let value = gitlab_response_value(response, backend.limits.max_upstream_response_bytes).await?;
+    let project = project_from_value(value)?;
+    if moved_to.is_some_and(|project_id| project_id != project.id) {
+        return Err(GitlabBackendError::Protocol(
+            "GitLab moved project lookup returned another project".to_string(),
+        ));
+    }
+    Ok(GitlabBackendResponse {
+        value: project,
+        status,
+        duration_ms: elapsed_ms(started),
+    })
+}
+
+/// The numeric project ID in a moved project's `Location`, resolved against
+/// the request URL: the path must end in `api/v4/projects/<id>`. GitLab
+/// appends the request path's extension, so a moved path whose last segment
+/// contains a dot names `<id>.<suffix>`; only the leading digits are the ID.
+fn moved_project_id(
+    request_url: &Url,
+    headers: &reqwest::header::HeaderMap,
+) -> Result<u64, GitlabBackendError> {
+    let invalid = || {
+        GitlabBackendError::Protocol(
+            "GitLab moved project response did not name a project ID".to_string(),
+        )
+    };
+    let location = headers
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(invalid)?;
+    let target = request_url.join(location).map_err(|_| invalid())?;
+    let segments = target
+        .path_segments()
+        .ok_or_else(invalid)?
+        .collect::<Vec<_>>();
+    let [.., "api", "v4", "projects", id] = segments.as_slice() else {
+        return Err(invalid());
+    };
+    let digits = id.bytes().take_while(u8::is_ascii_digit).count();
+    let (digits, suffix) = id.split_at(digits);
+    if !(suffix.is_empty() || suffix.starts_with('.')) {
+        return Err(invalid());
+    }
+    digits
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or_else(invalid)
 }
 
 pub(crate) fn gitlab_upstream_error(error: UpstreamError) -> GitlabBackendError {

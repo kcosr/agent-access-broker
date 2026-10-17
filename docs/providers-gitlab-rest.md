@@ -35,7 +35,8 @@ read_only = true
 ```
 
 The API URL must end in `/api/v4`; retain any instance context prefix in both
-URLs and allowlist. Lookup resolves the canonical project before repository
+URLs and allowlist. Lookup resolves the canonical project, including from a
+[moved project's old path](#moved-or-renamed-projects), before repository
 policy authorization. Use a separate upstream read credential for service-mode
 lookup paths: the Broker's `read_only` declaration does not alter GitLab scopes.
 Per-user-only paths use the selected principal credential for lookup instead.
@@ -668,6 +669,37 @@ normal list envelope without pretending GitLab supplied pages. The token does
 not provide snapshot isolation: concurrent draft additions, edits,
 publication, or deletion can shift the array, so a continuation can repeat or
 omit items.
+
+### Moved or renamed projects
+
+When a project, or a group or user namespace above it, is renamed, moved or
+transferred, GitLab keeps the old path as a redirect. A `project` path or web
+URL with the old path resolves to the project's current identity before
+policy: GitLab 16.7 and later answer a lookup of the old path, for a
+credential that can read the project, with a redirect naming its numeric ID.
+The Broker takes only that ID, without following the redirect or contacting
+the host it names, and reads the project by ID from `api_base_url` with the
+same lookup credential. Grants, token restrictions, results, audit and page
+tokens then use the project's current path and ID, and requests, including
+writes, address the project by ID. Earlier GitLab versions answer an old path
+with 404, reported as `scope_unresolved`; use the current path there.
+
+- **Authorization uses the current path.** Resource entries name paths, not
+  projects: after a move, update the project's entries and groups to its new
+  path. An entry for the old path no longer covers the project, but covers any
+  project that later takes that path.
+- **The current owner wins.** GitLab drops the redirect once another project,
+  group or user takes the old path or a namespace above it, and the path then
+  names that project, as in GitLab itself. The Broker authorizes and acts on
+  that project.
+- **Execution rechecks it.** Execution looks the project up again and refuses
+  it with `scope_unresolved` unless its current path is one that was
+  authorized, so a move between authorization and execution never redirects
+  an action. A move between pages invalidates a `pageToken`.
+- Results carry the project's current path and `web_url`.
+
+The [Git HTTP gateway](git-http-gateway.md#moved-or-renamed-repositories)
+authorizes the path a Git client requests instead.
 
 ### Review collection projections and exact note reads
 

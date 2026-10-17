@@ -555,10 +555,7 @@ impl Provider for GitlabProvider {
             ));
         }
         let (_, metadata) = parse_project_upload_inputs(request.inputs(), &self.config)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
-        ensure_upload_project_scope(&project, request.resource_scopes()?)?;
+        self.lookup_project_for_invoke(request).await?;
         Ok(BodyAdmission::new(vec![metadata], StateDisposition::Keep))
     }
 
@@ -759,20 +756,25 @@ impl Provider for GitlabProvider {
 }
 
 impl GitlabProvider {
+    /// Resolves the caller's project locator again for execution, to the
+    /// project GitLab identifies with it now, and requires that project's
+    /// current path to be one the host admitted. A path renamed, moved,
+    /// transferred or taken over by another project since scope resolution
+    /// is refused rather than acted on.
     async fn lookup_project_for_invoke(
         &self,
-        action: &str,
-        inputs: &Value,
-        lookup_access: Option<&LookupAccess>,
+        request: &AdmittedRequest,
     ) -> Result<GitlabProject, ProviderError> {
-        let locator = project_locator_for_action(action, inputs, &self.config)?;
-        let credential = &self.required_lookup_credential(lookup_access)?;
-        Ok(self
+        let locator = project_locator_for_action(request.action(), request.inputs(), &self.config)?;
+        let credential = &self.required_lookup_credential(request.lookup_access())?;
+        let project = self
             .backend
             .project(&locator.project, credential)
             .await
             .map_err(gitlab_lookup_backend_error)?
-            .value)
+            .value;
+        ensure_admitted_project(&project, request.resource_scopes()?)?;
+        Ok(project)
     }
 
     async fn invoke_project_upload(
@@ -783,10 +785,7 @@ impl GitlabProvider {
         let upload = prepare_project_upload(&metadata, request.body_parts())?;
         // Spooling can take time; re-confirm the project immediately before the
         // write rather than trusting the pre-spool lookup across that interval.
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
-        ensure_upload_project_scope(&project, request.resource_scopes()?)?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(json!({ "project": project.path_with_namespace }));
         let response = self
@@ -811,9 +810,7 @@ impl GitlabProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let lookup_project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let lookup_project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -837,9 +834,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_issue_view_inputs(request.inputs(), &self.config)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -866,9 +861,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_issue_search_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let page_token = inputs.page_token;
         let max_results = capped_max_results(inputs.max_results, self.config.search.max_results)?;
         let credential = &self.execution_credential(&request)?;
@@ -953,9 +946,7 @@ impl GitlabProvider {
                 attribution_audit_applied(attribution.as_ref()),
             )?;
         }
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(json!({ "project": project.path_with_namespace }));
         let response = self
@@ -1006,9 +997,7 @@ impl GitlabProvider {
                 attribution_audit_applied(attribution.as_ref()),
             )?;
         }
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
@@ -1054,9 +1043,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let mut inputs = parse_note_list_inputs(request.inputs(), self.config.search.max_results)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
@@ -1142,9 +1129,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             attribution_audit_applied(attribution.as_ref()),
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
@@ -1185,9 +1170,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_issue_note_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let issue = self
             .backend
             .issue(project.id, inputs.iid, &self.lookup_credential(&request)?)
@@ -1234,9 +1217,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             false,
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
@@ -1289,9 +1270,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_note_delete_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
@@ -1352,9 +1331,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_merge_request_view_inputs(request.inputs(), &self.config)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -1384,9 +1361,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_merge_request_search_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let page_token = inputs.page_token;
         let max_results = capped_max_results(inputs.max_results, self.config.search.max_results)?;
         let credential = &self.execution_credential(&request)?;
@@ -1479,9 +1454,7 @@ impl GitlabProvider {
                 attribution_audit_applied(attribution.as_ref()),
             )?;
         }
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         self.backend
             .branch(project.id, &inputs.source_branch, lookup_credential)
@@ -1548,9 +1521,7 @@ impl GitlabProvider {
                 attribution_audit_applied(attribution.as_ref()),
             )?;
         }
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
@@ -1605,9 +1576,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let mut inputs = parse_note_list_inputs(request.inputs(), self.config.search.max_results)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -1693,9 +1662,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             attribution_audit_applied(attribution.as_ref()),
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -1736,9 +1703,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_merge_request_note_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, &self.lookup_credential(&request)?)
@@ -1785,9 +1750,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             false,
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -1840,9 +1803,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_note_delete_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -1904,9 +1865,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let mut inputs =
             parse_discussion_list_inputs(request.inputs(), self.config.search.max_results)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -1965,9 +1924,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_discussion_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -3466,9 +3423,7 @@ impl GitlabProvider {
         approve: bool,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_approval_mutation_inputs(request.inputs(), approve)?;
-        let lookup_project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let lookup_project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let project = self
             .backend
@@ -3686,9 +3641,7 @@ impl GitlabProvider {
         )?;
         let scope_preflight =
             ProviderState::require::<GitlabSuggestionScopePreflight>(request.state())?;
-        let lookup_project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let lookup_project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
@@ -4102,9 +4055,7 @@ impl GitlabProvider {
             "diffVersionId",
             "diff version view",
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let preflight = self
             .backend
             .merge_request(project.id, inputs.iid, &self.lookup_credential(&request)?)
@@ -4148,9 +4099,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_merge_request_subresource_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -4222,9 +4171,7 @@ impl GitlabProvider {
         request: &ProviderInvocation,
         iid: u64,
     ) -> Result<(GitlabProject, GitlabMergeRequest), ProviderError> {
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let merge_request = self
             .backend
             .merge_request(project.id, iid, &self.lookup_credential(request)?)
@@ -4414,9 +4361,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             attribution_audit_applied(attribution.as_ref()),
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -4466,9 +4411,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             false,
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -4537,9 +4480,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_discussion_note_delete_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -4606,9 +4547,7 @@ impl GitlabProvider {
         change: GitlabDiscussionStateChange,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_discussion_state_change_inputs(request.inputs(), change)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
@@ -4665,9 +4604,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs =
             parse_merge_request_merge_inputs(request.inputs(), self.config.content.max_body_bytes)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
@@ -4710,9 +4647,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_branch_list_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -4746,9 +4681,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_branch_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -4773,9 +4706,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_branch_create_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         self.ensure_source_ref_exists(project.id, &inputs.ref_name, lookup_credential)
             .await?;
@@ -4817,9 +4748,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_protected_branch_list_inputs(request.inputs())?;
         let display_max = capped_max_results(inputs.max_results, self.config.search.max_results)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -4852,9 +4781,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_protected_branch_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -4879,9 +4806,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_protected_branch_verify_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -4914,9 +4839,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_file_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -4954,9 +4877,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_file_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let metadata = self
             .backend
@@ -5049,9 +4970,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             self.config.content.max_file_bytes,
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
@@ -5104,9 +5023,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
             self.config.content.max_file_bytes,
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
@@ -5163,9 +5080,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs =
             parse_file_delete_inputs(request.inputs(), self.config.content.max_body_bytes)?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
@@ -5221,9 +5136,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_commit_list_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -5260,9 +5173,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_commit_view_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -5292,9 +5203,7 @@ impl GitlabProvider {
             self.config.content.max_file_bytes,
             self.config.content.max_commit_actions,
         )?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
@@ -5349,9 +5258,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_pipeline_list_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -5390,9 +5297,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_pipeline_object_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -5416,9 +5321,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_pipeline_run_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_ci_ref_execution_allowed(&project, &inputs.ref_name, lookup_credential)
@@ -5476,9 +5379,7 @@ impl GitlabProvider {
         change: GitlabPipelineStateChange,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_pipeline_object_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
@@ -5522,9 +5423,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_job_list_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         if let Some(pipeline_id) = inputs.pipeline_id {
             let lookup_credential = &self.lookup_credential(&request)?;
             let pipeline = self
@@ -5569,9 +5468,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_job_object_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
@@ -5595,9 +5492,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_job_object_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let metadata = self
             .backend
@@ -5698,9 +5593,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_job_object_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
@@ -5761,9 +5654,7 @@ impl GitlabProvider {
         change: GitlabJobStateChange,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_job_object_inputs(request.inputs())?;
-        let project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let project = self.lookup_project_for_invoke(request.admitted()).await?;
         let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
@@ -5806,9 +5697,7 @@ impl GitlabProvider {
         &self,
         request: &ProviderInvocation,
     ) -> Result<(GitlabProject, GitlabCredential), ProviderError> {
-        let lookup_project = self
-            .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
-            .await?;
+        let lookup_project = self.lookup_project_for_invoke(request.admitted()).await?;
         let credential = self.execution_credential(request)?;
         let project = self
             .backend
@@ -7474,17 +7363,20 @@ fn parse_project_upload_inputs(
     ))
 }
 
-fn ensure_upload_project_scope(
+fn ensure_admitted_project(
     project: &GitlabProject,
     scopes: &ResourceScopes,
 ) -> Result<(), ProviderError> {
-    if &repository_scopes_from_project(project) != scopes {
-        return Err(ProviderError::deny(
-            ReasonCode::ScopeUnresolved,
-            "GitLab upload project did not match the authorized repository",
-        ));
+    if scopes
+        .get("repository")
+        .is_some_and(|paths| paths.contains(&project.path_with_namespace))
+    {
+        return Ok(());
     }
-    Ok(())
+    Err(ProviderError::deny(
+        ReasonCode::ScopeUnresolved,
+        "GitLab project did not match the authorized repository",
+    ))
 }
 
 fn prepare_project_upload(
