@@ -196,7 +196,7 @@ pub(crate) fn command_enforced_action(
             .get(service)
             .and_then(|descriptor| descriptor.action(action))
             .is_some_and(|descriptor| {
-                descriptor.search_contained || descriptor.resource_scope.is_none()
+                descriptor.search_contained || descriptor.resource_scopes.is_empty()
             })
 }
 
@@ -236,7 +236,11 @@ impl BrokerRuntime {
 
     /// The command resource type of a scoped action of a command import.
     fn command_resource_type(&self, service: &str, action: &str) -> Option<CommandResourceType> {
-        let (scope, binding) = self.services.get(service)?.action_resource_scope(action)?;
+        let scopes = self.services.get(service)?.action_resource_scopes(action)?;
+        if scopes.len() != 1 {
+            return None;
+        }
+        let (scope, binding) = scopes[0];
         Some(CommandResourceType {
             id: scope.to_owned(),
             broker_type: binding.resource_type.clone(),
@@ -288,14 +292,19 @@ impl BrokerRuntime {
         }) {
             None => None,
             Some(_) if resource_type.is_none() => return Err(CommandDenial::TokenInapplicable),
-            Some(boundary) => Some(search_scope_from_boundary(&boundary)),
+            Some(boundaries) => Some(search_scope_from_boundary(
+                &boundaries
+                    .get(&resource_type.as_ref().unwrap().id)
+                    .cloned()
+                    .unwrap_or_default(),
+            )),
         };
         let mut grants = Vec::<CommandGrantAuthority>::new();
         let mut token_emptied = false;
         let mut omitted_modes = BTreeSet::new();
         for candidate in band {
-            let granted = if resource_type.is_some() {
-                search_scope_from_boundary(&candidate.boundary)
+            let granted = if let Some(resource_type) = &resource_type {
+                search_scope_from_boundary(&candidate.scopes[&resource_type.id].boundary)
             } else {
                 SearchAuthorizationScope::AllExcept {
                     excluded_values: Vec::new(),
@@ -412,14 +421,22 @@ impl BrokerRuntime {
             mode_available,
         ) {
             Some(CommandAuthorization::Command {
-                resource_type: Some(_),
+                resource_type: Some(resource_type),
                 grants,
             }) => grants
                 .iter()
                 .map(|grant| {
-                    EffectiveAccessClause::from_boundary(search_scope_boundary(&grant.scope))
+                    EffectiveAccessClause::from_boundary(
+                        resource_type.id.clone(),
+                        resource_type.broker_type.clone(),
+                        search_scope_boundary(&grant.scope),
+                    )
                 })
                 .collect(),
+            Some(CommandAuthorization::Command {
+                resource_type: None,
+                ..
+            }) => vec![EffectiveAccessClause::action_only()],
             _ => Vec::new(),
         }
     }

@@ -132,9 +132,11 @@ export type AgentTokenServiceOption = {
   actions: AgentTokenActionOption[];
 };
 
-export type EffectiveAccessClause = { included: ResourceSelector[]; excluded: ResourceSelector[]; excludedRequests?: EffectiveAccessClause[] };
-export type EffectiveResourceAccess = { resourceType: ResourceType; clauses: EffectiveAccessClause[] };
-export type EffectiveAccessItem = { service: string; action: string; executionContext: string; resourceType: ResourceType | null; clauses: EffectiveAccessClause[] };
+export type RequiredScopes = Record<string, { resourceType: ResourceType }>;
+export type EffectiveScopeBoundary = { resourceType: ResourceType; included: ResourceSelector[]; excluded: ResourceSelector[] };
+export type EffectiveRequestBoundary = { scopes: Record<string, EffectiveScopeBoundary> };
+export type EffectiveAccessClause = EffectiveRequestBoundary & { excludedRequests: EffectiveRequestBoundary[] };
+export type EffectiveAccessItem = { service: string; action: string; executionContext: string; clauses: EffectiveAccessClause[] };
 export type EffectiveAccessResult = { policyGeneration: number; access: EffectiveAccessItem[] };
 export type GrantEffectiveAccessBody = { service: string; actions: string[]; executionContexts: string[]; resources: ResourceSelection };
 export type TokenEffectiveAccessBody = Pick<AgentTokenIssueBody, "allowedServices" | "allowedExecutionContexts" | "serviceRestrictions">;
@@ -146,9 +148,8 @@ export type AgentTokenActionOption = {
   description: string;
   /** True only when the action is explicitly classified read-only. */
   readOnly: boolean;
-  requiredScopeTypes: string[];
+  requiredScopes: RequiredScopes;
   executionContexts: string[];
-  resourceType: ResourceType | null;
   effectiveAccessByExecutionContext: Record<string, EffectiveAccessClause[]>;
 };
 
@@ -562,13 +563,27 @@ export type PolicyCatalogSubject = {
 
 export type PolicyScopeCatalog = { resourceType: ResourceType; selectors: string[] };
 
+export type AvailabilityResolution = "user" | "administrator" | "caller";
+export type LocalAvailabilityReason =
+  | "managed_identity_required"
+  | "managed_policy_required"
+  | "credential_encryption_unavailable"
+  | "reference_identity_unsupported"
+  | "token_hashing_unavailable"
+  | "finite_token_ttl_required"
+  | "reference_output_required";
+export type AvailabilityRequirement =
+  | { kind: "credential"; reason: string; credentialMode: string; resolution: AvailabilityResolution }
+  | { kind: "local_runtime"; reason: LocalAvailabilityReason; resolution: "administrator" | "caller" };
+
 export type PolicyActionCatalog = {
   available?: boolean;
   unavailableReason?: string;
+  availabilityRequirements?: AvailabilityRequirement[];
   action: string;
   readOnly: boolean;
   description: string;
-  requiredScopeTypes: string[];
+  requiredScopes: RequiredScopes;
   credentialModes: string[];
   lookupRequired: boolean;
   inputSchema: Record<string, unknown>;

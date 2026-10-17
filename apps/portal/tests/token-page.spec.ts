@@ -13,7 +13,7 @@ const stamp = { createdAt: "2026-10-14T00:00:00Z", updatedAt: "2026-10-14T00:00:
 const ttlPolicy = { defaultTtl: "1h", maxTtl: "8h", options: ["1h", "8h"] };
 const rawToken = "aab_test_one_time_token_page_secret";
 const owner = (principalId: string, status = "active") => ({ principalId, kind: "user", displayName: principalId, role: "user", selfServiceEnabled: true, status, groups: [], signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [], ...stamp });
-const action = (action: string, readOnly: boolean, executionContexts = ["internal", "external"]) => ({ action, readOnly, description: `${action} description`, executionContexts, requiredScopeTypes: ["project"], resourceType: "jira_project" as const, effectiveAccessByExecutionContext: Object.fromEntries(executionContexts.map((context) => [context, [{ included: [{ kind: "all" as const }], excluded: [] }]])) });
+const action = (action: string, readOnly: boolean, executionContexts = ["internal", "external"]) => ({ action, readOnly, description: `${action} description`, executionContexts, requiredScopes: { "project": { resourceType: "jira_project" } }, effectiveAccessByExecutionContext: Object.fromEntries(executionContexts.map((context) => [context, [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" as const }], excluded: [] } }, excludedRequests: [] }]])) });
 function tokenOptions(): AgentTokenOptions {
   return {
     policyGeneration: 1,
@@ -575,9 +575,9 @@ test("a command service restricts its typed actions to resources of its imported
   // Broker-checked and command-checked typed actions name the import's Broker type; an untyped action names none.
   const commandAction = (name: string, resourceType: string | null) => ({
     ...action(name, true),
-    requiredScopeTypes: resourceType ? [resourceType] : [],
-    resourceType,
-    effectiveAccessByExecutionContext: Object.fromEntries(contexts.map((context) => [context, resourceType ? [{ included: [{ kind: "all" as const }], excluded: [] }] : []]))
+    requiredScopes: resourceType ? { [resourceType]: { resourceType } } : {},
+
+    effectiveAccessByExecutionContext: Object.fromEntries(contexts.map((context) => [context, resourceType ? [{ scopes: { [resourceType]: { resourceType, included: [{ kind: "all" as const }], excluded: [] } }, excludedRequests: [] }] : [{ scopes: {}, excludedRequests: [] }]]))
   });
   const resource = (id: string, displayName: string, resourceType: string, value: string) => ({ id, displayName, resourceType, selector: { kind: "exact" as const, value }, allowedExecutionContexts: contexts, enabled: true });
   model.options = {
@@ -616,7 +616,7 @@ test("a command service with only untyped actions has no resource selection", as
     ...model.options,
     services: [
       ...model.options.services,
-      { service: "notes", displayName: "Notes", brokerHosts: [], executionContexts: contexts, actions: [{ ...action("note.list", true), requiredScopeTypes: [], resourceType: null, effectiveAccessByExecutionContext: { internal: [], external: [] } }] }
+      { service: "notes", displayName: "Notes", brokerHosts: [], executionContexts: contexts, actions: [{ ...action("note.list", true), requiredScopes: {},  effectiveAccessByExecutionContext: { internal: [{ scopes: {}, excludedRequests: [] }], external: [{ scopes: {}, excludedRequests: [] }] } }] }
     ]
   };
   await page.goto(`${baseUrl}/ui/tokens/new`);
@@ -762,4 +762,32 @@ test("a password-required redirect suppresses a pending issuance success and its
     expect(model.issued).toHaveLength(1);
     expect(model.errors).toEqual([]);
   } finally { releasePreview(); releaseIssue(); }
+});
+
+test("Access detail keeps multi-scope alternatives and whole-request exclusions together", async ({ page }) => {
+  const model = await fixture(page);
+  const boundary = (group: string, principal: string) => ({
+    group: { resourceType: "broker_group", included: [{ kind: "exact" as const, value: group }], excluded: [] },
+    principal: { resourceType: "broker_principal", included: [{ kind: "exact" as const, value: principal }], excluded: [] }
+  });
+  model.options.services = [{
+    service: "broker_management", displayName: "Broker management", brokerHosts: [], executionContexts: ["internal"],
+    actions: [{
+      action: "group.member.add", description: "Add a service account to a selected group", readOnly: false,
+      requiredScopes: { group: { resourceType: "broker_group" }, principal: { resourceType: "broker_principal" } },
+      executionContexts: ["internal"], effectiveAccessByExecutionContext: { internal: [
+        { scopes: boundary("review", "review-bot"), excludedRequests: [{ scopes: boundary("review-paused", "paused-bot") }] },
+        { scopes: boundary("release", "release-bot"), excludedRequests: [] }
+      ] }
+    }]
+  }];
+  await page.goto(`${baseUrl}/ui/access`);
+  await page.getByRole("link", { name: "group.member.add", exact: true }).click();
+  const detail = page.getByRole("complementary", { name: "group.member.add on Broker management", exact: true });
+  await expect(detail.getByText("Every scope in a request must fit the same alternative.", { exact: true })).toBeVisible();
+  await expect(detail.getByRole("listitem")).toHaveText([
+    "group: (review) AND principal: (review-bot)Does not apply when the complete request fits: group: (review-paused) AND principal: (paused-bot).",
+    "Or: group: (release) AND principal: (release-bot)"
+  ]);
+  expect(model.errors).toEqual([]);
 });

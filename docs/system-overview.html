@@ -630,6 +630,7 @@
     <div class="sec-body">
       <p>Each broker provider exposes a defined set of actions, such as view, search, create, update and trigger, with input and output schemas owned by the broker. An agent discovers which services, resources and actions are available to it, then invokes an action by name. All four interfaces use the same catalog, identity checks and policy checks.</p>
       <p>Discovery also checks local execution and lookup credentials. Missing or unusable credentials hide affected actions, schemas and resources, including native MCP tools. An authorized service retains an availability status and setup requirements. Discovery does not contact upstream or refresh OAuth; refresh the tool list or reconnect after credentials change. Management and setup remain available.</p>
+      <p>The core-owned <code>broker_management</code> service exposes narrowly delegated local provisioning actions. One grant must cover every required resource dimension together, such as a principal and its destination group. It can create service accounts, assign eligible access, install a caller-owned credential reference and issue a bounded invocation token as a reference. Local capability requirements are reported separately from upstream credential setup. See <a href="broker-management.md">delegated Broker administration</a> for the action and recovery contracts.</p>
       <table style="margin-top:20px">
         <thead>
           <tr><th>Interface</th><th>Runs as</th><th>Payloads</th><th>Typical use</th></tr>

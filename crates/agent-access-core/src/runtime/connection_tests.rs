@@ -167,10 +167,10 @@ fn discovery_distinguishes_an_unselected_method_from_a_missing_token() {
     assert_eq!(missing.availability.state, AvailabilityState::Unavailable);
     assert_eq!(
         missing.availability.requirements,
-        [CredentialRequirement {
+        [AvailabilityRequirement::Credential {
             reason: "credential_not_found".into(),
             credential_mode: "per_user".into(),
-            resolution: "user".into(),
+            resolution: AvailabilityResolution::User,
         }]
     );
     let unselected = discover(None);
@@ -180,10 +180,10 @@ fn discovery_distinguishes_an_unselected_method_from_a_missing_token() {
     );
     assert_eq!(
         unselected.availability.requirements,
-        [CredentialRequirement {
+        [AvailabilityRequirement::Credential {
             reason: "credential_not_provisioned".into(),
             credential_mode: "per_user".into(),
-            resolution: "administrator".into(),
+            resolution: AvailabilityResolution::Administrator,
         }]
     );
 
@@ -536,7 +536,8 @@ async fn assert_selected(
         }
         None => {
             assert_eq!(
-                service.availability.requirements[0].resolution, "administrator",
+                service.availability.requirements[0].resolution(),
+                "administrator",
                 "{ingress}"
             );
             assert_eq!(response.status, 403, "{ingress}");

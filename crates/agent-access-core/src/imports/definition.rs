@@ -242,7 +242,9 @@ impl ImportedServiceDefinition {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.service == "broker" || !is_service_name(&self.service) {
+        if crate::backends::is_reserved_service_name(&self.service)
+            || !is_service_name(&self.service)
+        {
             return Err("import service name is invalid".into());
         }
         if self.display_name.trim().is_empty()

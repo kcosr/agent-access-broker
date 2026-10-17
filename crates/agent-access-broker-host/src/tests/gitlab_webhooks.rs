@@ -68,7 +68,10 @@ async fn webhook_actions_have_caller_filtered_catalog_openapi_and_send_parity() 
             send_action["properties"]["inputs"], catalog_action["inputSchema"],
             "catalog and send schema diverged for gitlab.{action}"
         );
-        assert_eq!(catalog_action["requiredScopeTypes"], json!(["repository"]));
+        assert_eq!(
+            catalog_action["requiredScopes"],
+            json!({"repository":{"resourceType":"git_repository"}})
+        );
         assert!(catalog_action.get("upstreamResourceOwnership").is_none());
     }
 
@@ -232,14 +235,14 @@ impl agent_access_provider::test_support::DescribedProvider for BrokerWebhookCon
                     "Create a webhook",
                     schema(&["project", "url", "token"]),
                 )
-                .scope("repository")
+                .scopes(["repository"])
                 .credential_modes(["service"]),
                 ActionDescriptor::new(
                     "webhook.update",
                     "Update a webhook",
                     schema(&["project", "webhookId"]),
                 )
-                .scope("repository")
+                .scopes(["repository"])
                 .credential_modes(["service"]),
             ])
     }

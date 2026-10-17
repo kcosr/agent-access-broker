@@ -2741,11 +2741,11 @@ pub(crate) mod tests {
             crate::AvailabilityState::Unavailable
         );
         assert_eq!(
-            service.availability.requirements[0].reason,
+            service.availability.requirements[0].reason(),
             "oauth_request_rejected"
         );
         assert_eq!(
-            service.availability.requirements[0].resolution,
+            service.availability.requirements[0].resolution(),
             "administrator"
         );
         broker.deactivate_oauth();
@@ -2757,9 +2757,9 @@ pub(crate) mod tests {
             service.availability.state,
             crate::AvailabilityState::Unknown
         );
-        assert_eq!(service.availability.requirements[0].reason, "oauth_stale");
+        assert_eq!(service.availability.requirements[0].reason(), "oauth_stale");
         assert_eq!(
-            service.availability.requirements[0].resolution,
+            service.availability.requirements[0].resolution(),
             "administrator"
         );
     }
@@ -2803,11 +2803,11 @@ pub(crate) mod tests {
                 "{kind:?}"
             );
             assert_eq!(
-                service.availability.requirements[0].reason,
+                service.availability.requirements[0].reason(),
                 "credential_not_provisioned"
             );
             assert_eq!(
-                service.availability.requirements[0].resolution,
+                service.availability.requirements[0].resolution(),
                 "administrator"
             );
         }

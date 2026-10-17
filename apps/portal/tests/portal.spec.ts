@@ -483,9 +483,9 @@ test("token boundaries use live resource references and allow empty effective ac
   ];
   const options = {
     policyGeneration: 5, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
-    services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
-      internal: [{ included: [{ kind: "all" }], excluded: [] }],
-      external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }]
+    services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true,  requiredScopes: { "space": { resourceType: "confluence_space" } }, executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
+      internal: [{ scopes: { "space": { resourceType: "confluence_space", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [] }],
+      external: [{ scopes: { "space": { resourceType: "confluence_space", included: [{ kind: "exact", value: "ENG" }], excluded: [] } }, excludedRequests: [] }]
     } }] }],
     mcp: null
   };
@@ -582,7 +582,7 @@ test("scoped policy managers retain self-service navigation and only receive the
         actions: [{
           action: "widgets.read",
           description: "Read widgets",
-          requiredScopeTypes: [],
+          requiredScopes: {},
           credentialModes: ["service"],
           lookupRequired: false,
           inputSchema: {}
@@ -2472,7 +2472,7 @@ async function mockPolicyGrants(page: Page) {
         actions: [{
           action: "issue.view",
           description: "List issues",
-          requiredScopeTypes: [],
+          requiredScopes: {},
           credentialModes: ["user"],
           lookupRequired: false,
           inputSchema: {},
@@ -2539,17 +2539,17 @@ test("row menus and grant summaries work without the native Popover API", async 
 
 test("a grant's effective access merges only identical contexts into compact rows", async ({ page }) => {
   const managementResult = await mockPolicyGrants(page);
-  const all = [{ included: [{ kind: "all" }], excluded: [{ kind: "exact", value: "SECRET" }] }];
-  const eng = [{ included: [{ kind: "exact", value: "ENG" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "ENG-PRIVATE" }], excluded: [] }] }];
+  const all = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [{ kind: "exact", value: "SECRET" }] } }, excludedRequests: [] }];
+  const eng = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "ENG" }], excluded: [] } }, excludedRequests: [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "ENG-PRIVATE" }], excluded: [] } } }] }];
   await page.route("**/v1/admin/policy/effective-access", (route) =>
     route.fulfill({
       contentType: "application/json",
       body: managementResult({
         policyGeneration: 7,
         access: [
-          { service: "jira", action: "issue.view", executionContext: "default", resourceType: "jira_project", clauses: all },
-          { service: "jira", action: "issue.view", executionContext: "internal", resourceType: "jira_project", clauses: all },
-          { service: "jira", action: "issue.view", executionContext: "external", resourceType: "jira_project", clauses: eng }
+          { service: "jira", action: "issue.view", executionContext: "default",  clauses: all },
+          { service: "jira", action: "issue.view", executionContext: "internal",  clauses: all },
+          { service: "jira", action: "issue.view", executionContext: "external",  clauses: eng }
         ]
       })
     })
@@ -2566,7 +2566,7 @@ test("a grant's effective access merges only identical contexts into compact row
   await expect(rows.nth(0).getByRole("cell").nth(1)).toContainText(/All Jira projects.*except SECRET/);
   await expect(rows.nth(1).getByRole("cell").nth(0)).toHaveText("external");
   await expect(rows.nth(1).getByRole("cell").nth(1)).toContainText("ENG");
-  await expect(rows.nth(1).getByRole("cell").nth(1)).toContainText("Does not apply when every requested resource is within: ENG-PRIVATE.");
+  await expect(rows.nth(1).getByRole("cell").nth(1)).toContainText("Does not apply when the complete request fits: ENG-PRIVATE.");
 });
 
 test("effective access keeps long merged contexts inside the drawer and lists all granted actions from the keyboard", async ({ page }) => {
@@ -2592,14 +2592,14 @@ test("effective access keeps long merged contexts inside the drawer and lists al
       }]),
     })
   );
-  const clauses = [{ included: [{ kind: "all" }], excluded: [{ kind: "exact", value: "SECRET" }] }];
+  const clauses = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [{ kind: "exact", value: "SECRET" }] } }, excludedRequests: [] }];
   await page.route("**/v1/admin/policy/effective-access", (route) =>
     route.fulfill({
       contentType: "application/json",
       body: managementResult({
         policyGeneration: 7,
         access: ["issue.view", "search"].flatMap((action) =>
-          contexts.map((executionContext) => ({ service: "jira", action, executionContext, resourceType: "jira_project", clauses }))
+          contexts.map((executionContext) => ({ service: "jira", action, executionContext,  clauses }))
         )
       })
     })
@@ -2671,16 +2671,16 @@ test("access resource details disclose exclusions with their own alternative", a
     contentType: "application/json",
     body: envelope({
       policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
-      services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{
-        action: "issue.view", description: "View issues", readOnly: true, resourceType: "jira_project", executionContexts: ["internal"],
+      services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{ requiredScopes: { "project": { resourceType: "jira_project" } },
+        action: "issue.view", description: "View issues", readOnly: true, executionContexts: ["internal"],
         effectiveAccessByExecutionContext: { internal: [
-          { included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "SECRET" }], excluded: [] }] },
-          { included: [{ kind: "exact", value: "ENG" }], excluded: [] }
+          { scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "SECRET" }], excluded: [] } } }] },
+          { scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "ENG" }], excluded: [] } }, excludedRequests: [] }
         ] }
-      }] }, { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{
-        action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", executionContexts: ["external"],
+      }] }, { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{ requiredScopes: { "space": { resourceType: "confluence_space" } },
+        action: "page.view", description: "View pages", readOnly: true, executionContexts: ["external"],
         effectiveAccessByExecutionContext: { external: [
-          { included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "PRIVATE" }], excluded: [] }] }
+          { scopes: { "space": { resourceType: "confluence_space", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [{ scopes: { "space": { resourceType: "confluence_space", included: [{ kind: "exact", value: "PRIVATE" }], excluded: [] } } }] }
         ] }
       }] }]
     })
@@ -2696,9 +2696,9 @@ test("access resource details disclose exclusions with their own alternative", a
   await row.getByRole("link", { name: "issue.view", exact: true }).click();
   // Services are named from the token options.
   const details = page.getByRole("complementary", { name: "issue.view on Jira", exact: true });
-  await expect(details.getByText("Every resource in a request must fit the same alternative.", { exact: true })).toBeVisible();
+  await expect(details.getByText("Every scope in a request must fit the same alternative.", { exact: true })).toBeVisible();
   await expect(details.getByRole("listitem")).toHaveText([
-    "All Jira projectsDoes not apply when every requested resource is within: SECRET.",
+    "All Jira projectsDoes not apply when the complete request fits: SECRET.",
     "Or: ENG"
   ]);
   await details.getByRole("button", { name: "Close", exact: true }).click();
@@ -2709,7 +2709,7 @@ test("access resource details disclose exclusions with their own alternative", a
   await expect(page).not.toHaveURL(/service=/);
   await tableRow(page, "page.view").getByRole("link", { name: "page.view", exact: true }).click();
   await expect(page.getByRole("complementary", { name: "page.view on Confluence", exact: true })).toContainText(
-    /All Confluence spaces\s*Does not apply when every requested resource is within: PRIVATE\./
+    /All Confluence spaces\s*Does not apply when the complete request fits: PRIVATE\./
   );
 });
 

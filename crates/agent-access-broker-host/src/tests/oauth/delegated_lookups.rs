@@ -94,7 +94,7 @@ impl DescribedProvider for LookupRecordsProvider {
                     }),
                 )
                 .read_only()
-                .scope("collection")
+                .scopes(["collection"])
                 .credential_modes(["service", "per_user"])
                 .lookup(LookupRequirement::ScopeResolution),
             ])
@@ -576,7 +576,10 @@ async fn discovery_offers_lookup_backed_actions_once_connected() {
     let unconnected = discover();
     assert!(unconnected.actions.is_empty());
     assert_eq!(unconnected.availability.requirements.len(), 1);
-    assert_eq!(unconnected.availability.requirements[0].resolution, "user");
+    assert_eq!(
+        unconnected.availability.requirements[0].resolution(),
+        "user"
+    );
 
     fixture.connect("").await;
     let connected = discover();

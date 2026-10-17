@@ -31,7 +31,7 @@ impl agent_access_provider::test_support::DescribedProvider for ProbeJira {
             "View an issue in connection tests",
             json!({"type": "object"}),
         )
-        .scope("project")
+        .scopes(["project"])
         .credential_modes(["per_user"]);
         if self.capture_token {
             action = action.secret_output(agent_access_provider::SecretOutputDescriptor::new(
@@ -557,6 +557,16 @@ async fn credential_import_rechecks_management_token_for_literals_and_references
             format!("Bearer {}", fixture.admin).parse().unwrap(),
         );
         let admitted = runtime.resolve_identity(&headers).unwrap();
+        let authorities = (0..2)
+            .map(|_| {
+                runtime
+                    .admit_management_authority(
+                        &headers,
+                        agent_access_core::ManagementOperation::AdminCredentialPut,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
         let token_id = admitted
             .source
             .as_ref()
@@ -577,9 +587,12 @@ async fn credential_import_rechecks_management_token_for_literals_and_references
                 .revoke_broker_token(token_id, "admin")
                 .unwrap();
         }
-        for token in [reference, json!("literal-connection-token")] {
-            let result = runtime.store_connection_credential(
-                &admitted,
+        for (token, authority) in [reference, json!("literal-connection-token")]
+            .into_iter()
+            .zip(authorities)
+        {
+            let result = runtime.store_connection_credential_with_management_authority(
+                authority,
                 CredentialWriteRequest {
                     owner_principal_id: "robot".into(),
                     service: "jira".into(),
@@ -637,7 +650,12 @@ async fn secret_reference_import_rechecks_full_admin_role_after_route_admission(
         "Authorization",
         format!("Bearer {}", fixture.admin).parse().unwrap(),
     );
-    let admitted = runtime.resolve_identity(&headers).unwrap();
+    let authority = runtime
+        .admit_management_authority(
+            &headers,
+            agent_access_core::ManagementOperation::AdminCredentialPut,
+        )
+        .unwrap();
     fixture
         .store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
@@ -657,8 +675,8 @@ async fn secret_reference_import_rechecks_full_admin_role_after_route_admission(
         metadata: json!({}),
         actor: actor.into(),
     };
-    let result = runtime.store_connection_credential(
-        &admitted,
+    let result = runtime.store_connection_credential_with_management_authority(
+        authority,
         write("admin"),
         agent_access_core::CredentialManagementPurpose::Administrative,
     );
@@ -674,14 +692,12 @@ async fn secret_reference_import_rechecks_full_admin_role_after_route_admission(
         "Authorization",
         format!("Bearer {}", fixture.auditor).parse().unwrap(),
     );
-    let auditor = runtime.resolve_identity(&headers).unwrap();
     assert!(matches!(
-        runtime.store_connection_credential(
-            &auditor,
-            write("auditor"),
-            agent_access_core::CredentialManagementPurpose::Administrative,
+        runtime.admit_management_authority(
+            &headers,
+            agent_access_core::ManagementOperation::AdminCredentialPut
         ),
-        Err(agent_access_core::ManagedStoreError::RightMissing)
+        Err(agent_access_core::ManagedStoreError::ManagementDenied)
     ));
     assert!(
         fixture

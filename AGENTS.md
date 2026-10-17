@@ -870,3 +870,14 @@ pins exact originating auth and context; only the existing authorized credential
 sink has the documented cross-auth handoff. Check origin validity and install
 inside one transaction. Include retained ciphertext in key lifecycle checks and
 never revive an old attestation/caller generation after rotation and restoration.
+
+## Delegated local administration
+
+`broker_management` is core-owned typed local dispatch, not an SDK provider. Keep
+complete resource tuples inside one grant and token boundary. Local command
+capabilities are single-use and sealed; final transactional authority checks bind
+original authentication and snapshot. Credential installation retains references
+until its authorized absent-slot transaction. Token creation captures its row,
+encrypted output and receipt atomically and only delivers references. Preserve
+known rollback/commit/unknown states through cancellation and audit failures.
+See `docs/broker-management.md` for the supported action and recovery contracts.

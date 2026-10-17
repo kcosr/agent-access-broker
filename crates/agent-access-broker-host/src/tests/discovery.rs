@@ -307,6 +307,14 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
         ("?resource=TEST", json!(["echo"])),
         ("?resource=OTHER", json!([])),
         ("?prefix=z", json!([])),
+        (
+            "?targets=%7B%22project%22%3A%5B%22TEST%22%5D%7D",
+            json!(["echo"]),
+        ),
+        (
+            "?targets=%7B%22project%22%3A%5B%22OTHER%22%5D%7D",
+            json!([]),
+        ),
     ] {
         let response = governed_get(
             app.clone(),
@@ -318,6 +326,17 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
         assert_eq!(response.status(), StatusCode::OK);
         let value = response_json(response).await;
         assert_eq!(value["actions"], actions);
+        assert_eq!(
+            value["matchKind"],
+            if query.contains("targets=") {
+                "complete_targets"
+            } else if query.contains("resource=") {
+                "single_resource"
+            } else {
+                "unfiltered"
+            }
+        );
+        assert!(value["policyGeneration"].is_u64());
         assert_eq!(value.get("resource").is_some(), query.contains("resource="));
     }
     for path in [
@@ -332,6 +351,13 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
         "/v1/services/fake/actions?resource=",
         "/v1/services/fake/actions?prefix=",
         "/v1/services/fake/actions?resource=TEST&resource=TEST",
+        "/v1/services/fake/actions?targets=%7B%22project%22%3A%5B%22TEST%22%5D%7D&resource=TEST",
+        "/v1/services/fake/actions?targets=%7B%22project%22%3A%5B%22TEST%22%5D%7D&resourceType=fake_project",
+        "/v1/services/fake/actions?targets=%7B%7D",
+        "/v1/services/fake/actions?targets=%7B%22project%22%3A%5B%5D%7D",
+        "/v1/services/fake/actions?targets=%7B%22unknown%22%3A%5B%22TEST%22%5D%7D",
+        "/v1/services/fake/actions?targets=%7B%22project%22%3A%5B%22TEST%22%5D%2C%22project%22%3A%5B%22OTHER%22%5D%7D",
+        "/v1/services/fake/actions?targets=%7B%22project%22%3A%5B%22TEST%22%5D%7D&targets=%7B%22project%22%3A%5B%22TEST%22%5D%7D",
     ] {
         let response = governed_get(app.clone(), path, "discovery-invalid", &[]).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
@@ -364,6 +390,25 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
         openapi["paths"]["/v1/services/{service}/resources"]["get"]["responses"]["200"]["content"]
             ["application/json"]["schema"]["properties"]["nextCursor"]["type"],
         json!(["string", "null"])
+    );
+    let action_route = &openapi["paths"]["/v1/services/{service}/actions"]["get"];
+    assert!(
+        action_route["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|parameter| parameter["name"] == "targets")
+    );
+    let schema = &action_route["responses"]["200"]["content"]["application/json"]["schema"];
+    assert_eq!(
+        schema["properties"]["matchKind"]["enum"],
+        json!(["unfiltered", "single_resource", "complete_targets"])
+    );
+    assert!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("policyGeneration"))
     );
 }
 
@@ -431,6 +476,11 @@ async fn discovery_visibility_precedes_all_query_semantics() {
             "resources?cursor=invalid",
             "actions?resource=bad/path",
             "actions?prefix=",
+            "actions?targets=not-json",
+            "actions?targets=%7B%7D",
+            "actions?targets=%7B%22unknown%22%3A%5B%22hidden%22%5D%7D",
+            "actions?targets=%7B%7D&resource=bad/path",
+            "actions?targets=%7B%7D&targets=%7B%7D",
         ] {
             let response = governed_get(
                 app.clone(),

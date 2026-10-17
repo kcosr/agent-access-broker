@@ -976,7 +976,7 @@ fn service_record_at(
         serde_json::from_str(&definition).map_err(|_| invalid_data())?;
     // Evolving adapter/config validation must not make retained records unreadable.
     // The runtime marks unsupported records unavailable; administrators can retire them.
-    if service == "broker"
+    if crate::backends::is_reserved_service_name(service)
         || definition.service != service
         || !agent_access_provider::is_service_name(service)
     {

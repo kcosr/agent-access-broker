@@ -79,7 +79,7 @@ not a mandatory sequence before each call. They take **flat JSON arguments**:
 | Helper | Arguments | Use |
 | --- | --- | --- |
 | `services_list` | Optional `prefix` | Find canonical service IDs and action names. |
-| `actions_list` | Required `service`; optional `prefix`, `resource`, `resourceType` | Find action IDs, optionally checking policy for one resource value. |
+| `actions_list` | Required `service`; optional `prefix`, `resource`, `resourceType`, `targets` | Find action IDs, checking either one resource hint or a complete target tuple. |
 | `actions_describe` | Required `service`, `action` | Get one action's schema, extended `documentation`, and executable `mcpTool` when available. |
 | `resources_list` | Required `service`; optional `resourceType`, `prefix`, `limit`, `cursor` | List registered resources with their action `inputs`, plus your broad `coverage`. |
 | `services_describe` | Required `service` | Read the service's complete capabilities when a broader view is needed. |
@@ -159,6 +159,16 @@ when the service supports multiple resource types; find those types in
 such as an issue key or page ID; follow their schemas. A listed
 action or resource does not establish upstream existence or permission for every
 target in a compound request; invocation rechecks access.
+
+For a complete policy check, use `targets`, an object mapping each required
+scope name to a nonempty array of canonical values. For example:
+`{"service":"broker_management","targets":{"group":["review-automation"],"principal":["review-worker"]}}`.
+Read scope names and types from the action's `requiredScopes` map. Do not combine
+`targets` with `resource` or `resourceType`; at most eight scopes and 64 distinct
+values per scope are allowed. Every target must fit one complete grant and the
+token boundary. Responses identify `matchKind` and `policyGeneration`; they do
+not reserve authority or check object eligibility. A resource listed under one
+type is not necessarily compatible with every resource listed under another.
 
 For `resources_list`, pass returned `nextCursor` as `cursor` while retaining the
 same service, resource type, prefix, and limit. Pages default to 50 entries and
@@ -302,8 +312,10 @@ credential-management handoff, and never repeat issuance solely because a
 reference expired. Expiry removes only the temporary Broker copy, not the
 upstream token. MCP reconnects preserve references when origin authentication,
 trusted caller, and execution context still match. Only explicitly declared
-payload input fields accept reference objects. Management credential installation
-is outside the MCP tool catalog.
+payload input fields accept reference objects. The separately granted
+`broker_management.credential.install` action accepts only a reference for its
+authorized service-account destination; personal and administrator HTTP
+credential routes retain their own management authority.
 
 ## GitLab role selection
 
@@ -312,3 +324,9 @@ GitLab `project.access_token.create` and `service_account.member.set` require
 `security_manager`, `developer`, or `maintainer`. Use the tool's advertised enum,
 which is limited by operator `max_role`. Custom roles are unsupported.
 Numeric `accessLevel` is upstream result metadata only, not a tool input.
+For delegated service-account provisioning, discover the `broker_management`
+service and use its published action schemas. Edge changes require one grant
+covering every required target. Credential installation accepts a temporary
+reference only; child token creation returns a reference and cannot be replayed
+to recover a lost response. Use independently granted view actions to reconcile.
+See [Broker administration](../../docs/broker-management.md).

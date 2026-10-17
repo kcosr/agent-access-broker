@@ -457,7 +457,7 @@ impl agent_access_provider::test_support::DescribedProvider
                 schema,
             )
             .read_only()
-            .scope("space")
+            .scopes(["space"])
             .credential_modes(["service"])
             .presentation(backend_presentation("confluence", action))
         };

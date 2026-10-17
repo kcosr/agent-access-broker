@@ -8,7 +8,7 @@ use wiremock::{
 fn action(name: &str) -> Value {
     json!({
         "action":name,"scopedMcpName":name,"description":"Synthetic naming action","readOnly":true,
-        "requiredScopeTypes":[],"credentialModes":[],"lookupRequired":false,
+        "requiredScopes":{},"credentialModes":[],"lookupRequired":false,
         "inputSchema":{"type":"object","additionalProperties":false},
         "io":{"type":"json"},"responseKind":"response_envelope","exitPolicy":"invoke_decision"
     })

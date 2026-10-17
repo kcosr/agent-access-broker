@@ -1,6 +1,7 @@
 // Pure helpers and constants extracted from App.tsx (no JSX).
 import { canViewPolicies, canUseSelfService, hasPolicyScope } from "./capabilities";
 import { ApiError } from "../api";
+import { canGrantAction } from "./grant-actions";
 import type {
   AgentTokenOptions,
   AgentTokenServiceRestriction,
@@ -116,7 +117,7 @@ export function agentTokenServiceHasResources(options: AgentTokenOptions, servic
   // A stale action may use resources when its grant returns. Dropping that
   // explicit boundary now would broaden the token's future effective access.
   return option === undefined
-    || option.actions.some((action) => action.resourceType !== null)
+    || option.actions.some((action) => Object.keys(action.requiredScopes).length > 0)
     || selectedActions.some((selected) => !option.actions.some((action) => action.action === selected));
 }
 
@@ -280,7 +281,7 @@ export function selectedPolicyActions(service: PolicyServiceCatalog | null, acti
 export function isActionOnlyGrant(service: PolicyServiceCatalog | null, grant: { actions: string[]; resources: ResourceSelection }) {
   if (grant.resources.resourceIds.length > 0 || grant.resources.resourceGroupIds.length > 0) return false;
   const actions = selectedPolicyActions(service, grant.actions);
-  return actions.length > 0 && actions.length === grant.actions.length && actions.every((action) => action.requiredScopeTypes.length === 0);
+  return actions.length > 0 && actions.length === grant.actions.length && actions.every((action) => Object.keys(action.requiredScopes).length === 0);
 }
 
 export const ACTION_GRANT_LABEL = "Action grant";
@@ -303,7 +304,7 @@ export function commonCredentialModes(service: PolicyServiceCatalog | null, acti
 }
 
 export function requiredPolicyScopeTypes(service: PolicyServiceCatalog | null, actions: string[]) {
-  return Array.from(new Set(selectedPolicyActions(service, actions).flatMap((action) => action.requiredScopeTypes))).sort();
+  return Array.from(new Set(selectedPolicyActions(service, actions).flatMap((action) => Object.keys(action.requiredScopes)))).sort();
 }
 
 export function uniqueSortedOptions(values: string[], selected = "") {
@@ -320,13 +321,17 @@ export function compactListPreview(items: string[], previewCount = 2) {
   return remaining > 0 ? `${visible} +${remaining}` : visible;
 }
 
+export function canGrantService(service: PolicyServiceCatalog): boolean {
+  return service.available !== false || service.actions.some(canGrantAction);
+}
+
 export function policyGrantDraft(
   catalog: PolicyCatalogResult | null,
   mode: PolicyGrantDraft["mode"],
   grant?: PolicyGrantRecord | GroupPolicyReference,
   subject?: string
 ): PolicyGrantDraft {
-  const firstService = catalog?.services.find((item) => item.available !== false)?.service ?? "";
+  const firstService = catalog?.services.find(canGrantService)?.service ?? "";
   const serviceName = grant?.service ?? firstService;
   const service = policyService(catalog, serviceName);
   const actions = grant?.actions ?? [];
@@ -426,12 +431,12 @@ export function policyGrantBody(
   }
   const retainedService = draft.mode === "edit" && draft.service === draft.originalService;
   const retainedSelection = retainedService && draft.actions.every((action) => draft.originalActions?.includes(action));
-  if (service?.available === false && !retainedSelection) {
+  if (service && !canGrantService(service) && !retainedSelection) {
     messages.push({ field: "service", code: "unavailable", message: "This service is unavailable. Existing grant selections can be retained or removed." });
   }
   if (draft.actions.some((name) => {
     const action = service?.actions.find((item) => item.action === name);
-    return (!action || action.available === false) && !(retainedService && draft.originalActions?.includes(name));
+    return (!action || !canGrantAction(action)) && !(retainedService && draft.originalActions?.includes(name));
   })) {
     messages.push({ field: "actions", code: "unavailable", message: "Unavailable actions cannot be added to a grant." });
   }

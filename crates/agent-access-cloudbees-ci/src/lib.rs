@@ -596,7 +596,7 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
     ] {
         let action = ActionDescriptor::new(name, description, input::schema(name))
             .documentation(input::documentation(name))
-            .scope("job")
+            .scopes(["job"])
             .credential_modes(["service", "per_user"]);
         let action = match name {
             "job.view"
@@ -1690,7 +1690,10 @@ mod tests {
             ]
         );
         for action in &descriptor.actions {
-            assert_eq!(action.resource_scope.as_deref(), Some("job"));
+            assert_eq!(
+                action.resource_scopes.first().map(String::as_str),
+                Some("job")
+            );
             assert_eq!(
                 action.lookup,
                 agent_access_provider::LookupRequirement::None

@@ -3359,3 +3359,20 @@ name conflicts, not unsupported aggregate operations. See
 Declared secret outputs advertise their delivery mode and field metadata in runtime discovery. Existing connection credential PUT endpoints accept a literal token or `{secretRef, expiresAt?}` in `secret.token`. All connection credential PUTs recheck the admitted runtime snapshot and current actor authority before committing. If a reload or policy publication changed that snapshot, HTTP 409 `version_conflict` means no credential was installed; retry the PUT against the current configuration. A reference must still be valid, and upstream issuance must not be repeated.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Local administration and availability
+
+`/v1/invoke/broker_management/<action>` uses the ordinary invocation envelope and
+complete resource authorization. See [delegated administration](broker-management.md)
+for the action/input/result contracts. The catalog exposes fixed successful
+`resultSchema` contracts, and OpenAPI constrains successful result payloads.
+
+Availability requirements use a canonical `kind` tag. A `credential` entry has
+`reason`, `credentialMode`, and `resolution` (`user`, `administrator`, or `caller`).
+A `local_runtime` entry has only `reason` and `resolution`; it never implies an
+upstream credential setup link. The seven local reasons and their resolution
+owners are listed in the delegated-administration guide.
+
+Local write results distinguish `not_dispatched`, `not_committed` (known rollback),
+`completed` (known commit), and `unknown`, with `retrySafe:false`. A transport or
+audit failure preserves known completion and does not authorize automatic replay.

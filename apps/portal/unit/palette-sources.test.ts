@@ -8,8 +8,8 @@ import { RESOURCE_TYPES } from "./resource-types.fixture";
 
 const admin: Session = { authenticated: true, principal: "alice", role: "admin", selfServiceEnabled: true, auditQueryable: true };
 const service: PolicyServiceCatalog = {
-  service: "jira", displayName: "Issue Tracker", surface: "api", configuredCredentialModes: [], lookupCredentialConfigured: false, resourceScopes: {},
-  actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], credentialModes: [], lookupRequired: false, inputSchema: {} }]
+  service: "jira", displayName: "Issue Tracker", surface: "api", configuredCredentialModes: [], lookupCredentialConfigured: false, resourceScopes: { project: { resourceType: "jira_project", selectors: ["exact", "all"] } },
+  actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopes: { "project": { resourceType: "jira_project" } }, credentialModes: [], lookupRequired: false, inputSchema: {} }]
 };
 const imported = (id: string, status: ImportedServiceRecord["status"]): ImportedServiceRecord => ({
   definition: { service: id, displayName: `Imported ${id}`, adapterKind: "mcp_http", endpoint: "https://example.test/mcp", connectionSettings: {}, executionBindings: [], discovery: { kind: "anonymous" }, transportAuth: false },
@@ -35,7 +35,7 @@ function fixture(session = admin): PaletteEntities {
     ],
     resourceGroups: [{ id: "project-group", name: "Delivery projects", includedResourceIds: ["main-project"], excludedResourceIds: ["secret-project", "missing-id"], version: 1 }],
     imports: [imported("jira", "enabled"), imported("metrics", "draft")],
-    tokenOptions: { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], executionContexts: ["default"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} }] }], mcp: null },
+    tokenOptions: { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopes: { "project": { resourceType: "jira_project" } }, executionContexts: ["default"],  effectiveAccessByExecutionContext: {} }] }], mcp: null },
     tokens: [{ tokenId: "token-123", principalId: "alice", name: "My Agent", tokenClass: "agent", scopes: {}, createdAt: "", createdBy: "" }], credentials: { connections: [connection], retained: [] }
   };
 }

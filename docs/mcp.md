@@ -460,7 +460,7 @@ idempotent helpers.
 |---|---|---|
 | `services_list` | Optional `prefix` | `{services:[{service,displayName,surface,actions:[names]}]}` |
 | `resources_list` | Required `service`; optional `resourceType`, `prefix`, `limit`, `cursor` | `{service,resources:[{id,type,value,displayName?,inputs?}],coverage?:[{type,selector,inputs?,restricted}],nextCursor}` |
-| `actions_list` | Required `service`; optional `resource`, `resourceType`, `prefix` | `{service,resource?,actions:[names]}` |
+| `actions_list` | Required `service`; optional `resource`, `resourceType`, `targets`, `prefix` | `{service,resource?,actions:[names],matchKind,policyGeneration}` |
 | `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool` |
 | `services_describe` | Required `service` | Complete service capabilities and action schemas |
 
@@ -484,6 +484,27 @@ the cursor. No helper automatically aggregates pages.
 broker resource IDs. A broad grant can permit an unregistered locator. This is
 a single-target policy check, not proof of upstream existence or permission for
 every target in a compound request. Invocation still reauthorizes the request.
+
+For a complete policy check, pass `targets` instead of `resource`/`resourceType`:
+
+```json
+{"service":"broker_management","targets":{"group":["review-automation"],"principal":["review-worker"]}}
+```
+
+Only actions with exactly those required scope names are considered. Every
+supplied target must fit one complete grant and the token boundary; partial
+grants cannot be combined. The response includes `matchKind` (`unfiltered`,
+`single_resource`, or `complete_targets`) and `policyGeneration`. `resource`
+is present only for `single_resource`; the target tuple is not echoed. Complete
+matching checks current policy compatibility, not object eligibility, secret
+validity, or authority after policy changes. An empty list does not identify the
+failed target. The map supports at most eight scopes and 64 distinct target
+values per scope. Empty arrays, unknown scopes, invalid identifiers, duplicate
+JSON keys and simultaneous `targets`/`resource`/`resourceType` are rejected.
+HTTP exposes the same query as one JSON-encoded `targets` parameter and rejects
+repeated query parameters. Action definitions publish `requiredScopes`, a map
+from each required scope name to `{resourceType}`, including `{}` for unscoped
+actions.
 
 Aggregate stdio helpers use ordinary `/v1/services` visibility, including
 anonymous access where the broker permits it, non-invoke surfaces, and supported
@@ -760,3 +781,18 @@ Reconnecting does not invalidate a reference when its original identity, caller
 contract, and execution context still match.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Local administration tools
+
+The `broker_management` service exposes the same [delegated administration](broker-management.md)
+actions as HTTP and generic CLI invocation. Tool metadata preserves retained
+secret-input pointers, reference-only token delivery and fixed result schemas.
+The availability `kind` distinguishes upstream `credential` setup from
+`local_runtime` prerequisites. A `caller` resolution means supported invocation
+authentication is required; configuring an upstream credential cannot satisfy it.
+
+A local result's `executionState:not_committed` means the dispatched transaction
+rolled back. In the delivery-failure wrapper this is still
+`execution.completion:completed` with `dispatched:true`. That wrapper field means
+settlement, not a successful mutation; inspect the operation decision and result.
+Pre-gate cancellation remains `not_started`; an unsettled outcome remains `unknown`.

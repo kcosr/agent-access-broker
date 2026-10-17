@@ -254,7 +254,7 @@ its builder methods:
 
 | Method | Declares |
 | --- | --- |
-| `.scope(name)` | The resource scope the action is authorized against. Without one the action is action-only. |
+| `.scopes(names)` | Every required scope authorized together by one complete grant. An empty list is action-only. |
 | `.credential_modes(["service", "per_user"])` | The grant modes that may select its credentials. |
 | `.token_only()` | That the upstream accepts only a static (token) credential for the action, never delegated (OAuth) access. See [token-only actions](#token-only-actions). |
 | `.read_only()` | A reviewed read. Actions default to `read_only = false`; never infer it from a name. |
@@ -267,6 +267,15 @@ its builder methods:
 | `.secret_input(SecretInputDescriptor::new(pointer))` | A fixed string payload field under `/inputs` that accepts a literal or a secret reference. Also marks the field `writeOnly`. |
 | `.requires_stable_signing_key()` | That the action issues durable handles, so the Broker must hold a stable key. |
 | `.documentation(json)`, `.presentation(..)`, `.attribution(..)`, `.upstream_resource_ownership(..)` | Extended usage text, rich rendering, attribution footers and static ownership metadata. |
+
+Each name in `.scopes(["project", "member"])` must bind a declared, registered
+resource type. Names and types must be distinct within one action. The provider
+resolves exactly these names, each to one or more nonempty canonical targets;
+extra or missing names deny the request. One grant must authorize the entire
+map. Separate grants never supply different dimensions of the same request.
+Contained searches, scope-resolution lookups, and private-attribute execution
+require exactly one scope. Capabilities publish `requiredScopes`, a map from
+these names to `{ "resourceType": "type_id" }`.
 
 Keep the description and input schema concise; they are part of initial MCP tool
 discovery. Put grammar, limits and examples in `documentation`, which detailed
@@ -423,7 +432,7 @@ fn key_create() -> ActionDescriptor {
     let mut schema = Map::new();
     schema.insert("type".to_owned(), Value::String("object".to_owned()));
     ActionDescriptor::new("key.create", "Issue an API key", schema.into())
-        .scope("notebook")
+        .scopes(["notebook"])
         .credential_modes(["service", "per_user"])
         .token_only()
 }
@@ -435,7 +444,8 @@ A `ResourceTypeDescriptor` static defines one resource type.
 `ResourceTypeDescriptor::new(id, label, plural_label, example, canonical,
 attributes)` takes an identifier (`^[a-z][a-z0-9_]{0,63}$`), labels, an
 example, a canonical-target grammar and the type's private string attributes
-(`&[]` for none), and supports exact and all selectors.
+(`&[]` for none), and supports exact and all selectors. `.exact_only()`
+restricts a type to exact selectors, as used by Broker object resources.
 `with_namespace(NamespaceSelectorDescriptor::new(..))` adds namespace selectors
 and `with_action_inputs` adds an action-input projection. Exact selectors and every resolved target must
 satisfy the canonical grammar, which keeps namespace prefix matching sound.
@@ -664,9 +674,10 @@ sequenceDiagram
 
 `InvocationAuthority` is chosen from the action's validated contract:
 
-- `ActionOnly`: an action without a resource scope. It never inherits resources.
+- `ActionOnly`: an action with no required resource scopes. It never inherits resources.
 - `Resources(ResourceScopes)`: the canonical resources one admitted grant
-  covers. An ordinary scoped action never receives empty authority.
+  covers across every required scope. An ordinary scoped action never receives
+  empty authority.
 - `Search(SearchAuthorization)`: the complete search boundary of a
   search-contained action, a scope type with a `SearchAuthorizationScope` of
   `Finite { values }` or `AllExcept { excluded_values }`.
@@ -2083,7 +2094,7 @@ pub fn notes_descriptor() -> ServiceDescriptor {
                 }),
             )
             .read_only()
-            .scope("notebook")
+            .scopes(["notebook"])
             .credential_modes(["service", "per_user"]),
         ])
         .with_credentials(
@@ -2372,3 +2383,12 @@ its credential like any other provider; see
 base_url = "https://notes.example.com"
 allowed_upstream_hosts = ["https://notes.example.com/**"]
 ```
+
+## Core-owned management registration
+
+The Broker's `broker_management` service is internal to core and is not a native
+`BackendRegistration`. Its implementation kind and domain-reason prefix are
+`access_management` and `access_management_`. It passes the shared domain-reason
+validation but cannot be selected or impersonated by external modules. The SDK
+continues to forbid provider-owned `broker_` reasons and host admission tuples.
+The reserved service/kind names grant no dispatch or store capability.

@@ -98,6 +98,12 @@ controller alias you reach, with `restricted: true` when some resources inside
 are withheld. An empty list with `coverage` means broad access, not no access;
 coverage never enumerates resources. Pass an entry's `value` (not its `id`) or a known locator to
 `actions list --service SERVICE --resource VALUE` for single-target action names.
+Use `--targets-json '{"group":["review-automation"],"principal":["review-worker"]}'`
+instead of `--resource`/`--resource-type` to check a complete target tuple.
+The map must name exactly the action's `requiredScopes`; every target must fit
+one complete grant and the token boundary. `matchKind` and `policyGeneration`
+identify the check. It is current policy compatibility, not object eligibility
+or a reservation for later execution.
 A service that authorizes several resource types also needs `--resource-type`
 (the row's `type`) on both commands. Repeat service, resource type, prefix, and
 limit with a resource page's `nextCursor`. Use
@@ -1048,3 +1054,10 @@ not authorize mutations, secret reveals, credential verification, or import
 discovery. The caller-filtered runtime catalog distinguishes administrative
 read/write access. `self_service_disabled` means personal management is disabled;
 existing permitted invocation remains independent.
+
+For delegated service-account provisioning, discover the `broker_management`
+service and use its published action schemas. Edge changes require one grant
+covering every required target. Credential installation accepts a temporary
+reference only; child token creation returns a reference and cannot be replayed
+to recover a lost response. Use independently granted view actions to reconcile.
+See [Broker administration](../../docs/broker-management.md).

@@ -281,12 +281,12 @@ foreign cursor fails; restart without the cursor.
 
 ### `actions`
 
-`actions list --service SERVICE [--resource LOCATOR [--resource-type TYPE]] [--prefix PREFIX] [--verbose]`
+`actions list --service SERVICE [--resource LOCATOR [--resource-type TYPE] | --targets-json JSON] [--prefix PREFIX] [--verbose]`
 returns sorted canonical action-name strings (`--resource-type` is needed with
 `--resource` only when the service authorizes several resource types):
 
 ```json
-{"service":"jira","resource":"ENG","actions":["issue.view","search"]}
+{"service":"jira","resource":"ENG","actions":["issue.view","search"],"matchKind":"single_resource","policyGeneration":42}
 ```
 
 Without `--resource`, the result omits `resource` and lists service-wide visible
@@ -297,6 +297,22 @@ with no policy access returns `"actions":[]`. This does not prove upstream
 existence or authorization of a multi-target request. Local credentials are
 checked during discovery and again during invocation.
 Execution still authorizes every resolved target together.
+
+Use `--targets-json` to check a complete request boundary, for example:
+
+```bash
+agent-access actions list --service broker_management --targets-json '{"group":["review-automation"],"principal":["review-worker"]}'
+```
+
+The map keys must exactly match an action's required scope names. Every target
+must fit one complete grant and the invocation token's boundary. Results include
+`matchKind` (`unfiltered`, `single_resource`, or `complete_targets`) and the
+current `policyGeneration`. Only `single_resource` includes `resource`; targets
+are not echoed. An empty action list does not identify which target failed.
+This is current policy compatibility, not a reservation or an object-existence
+check. Targets cannot be combined with `--resource` or `--resource-type`.
+Duplicate JSON keys, unknown scopes, empty lists, invalid target identifiers,
+more than eight scopes, and more than 64 distinct values per scope are rejected.
 
 `--verbose` returns an unwrapped array of raw action definitions selected by the
 same filters. It fetches selected names first, then service details, and only

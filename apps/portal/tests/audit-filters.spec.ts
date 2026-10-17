@@ -64,7 +64,7 @@ type FixtureOptions = {
 
 async function fixture(page: Page, options: FixtureOptions = {}) {
   const tier = options.tier ?? "admin";
-  const service = { service: "jira", displayName: "Jira", actions: [{ action: "issue.view", description: "View issue", requiredScopeTypes: [], credentialModes: [] }], resourceScopes: {} };
+  const service = { service: "jira", displayName: "Jira", actions: [{ action: "issue.view", description: "View issue", requiredScopes: {}, credentialModes: [] }], resourceScopes: {} };
   const initialRecords = options.emptyHistory ? [] : [
     record("login", "broker", "auth.local.login"), record("grant", "broker", "admin.policy.grants.create", "jira"),
     record("issue", "jira", "issue.view", undefined, { identitySource: { name: "managed", type: "broker_token", tokenClass: "agent_invoke", tokenId: TOKEN_ID } }),
@@ -124,7 +124,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       // Activity suggests the caller's granted services and actions from the token options.
       body = envelope({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
         service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["default"],
-        actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [], resourceType: null, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }]
+        actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopes: {},  executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [{ scopes: {}, excludedRequests: [] }] } }]
       }] });
     } else if (endpoint === "/v1/credentials") {
       body = envelope({ connections: [], retained: [] });

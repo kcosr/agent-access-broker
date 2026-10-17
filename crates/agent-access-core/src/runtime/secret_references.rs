@@ -19,6 +19,9 @@ pub(super) struct PreparedSecretOutputs {
 }
 
 impl PreparedSecretOutputs {
+    pub(super) fn local_reservation(&self) -> Option<SecretOutputReservationBatch> {
+        self.reservation.clone()
+    }
     pub(super) fn operation_deadline(&self) -> Option<tokio::time::Instant> {
         self.operation_deadline
     }
@@ -94,18 +97,13 @@ impl PreparedSecretOutputs {
         };
         for descriptor in &self.descriptors {
             let pointer = result_pointer(descriptor.pointer());
-            if result
-                .pointer(pointer)
-                .is_some_and(|value| !is_reference_value(value))
-            {
-                remove_pointer(&mut result, pointer);
-            }
+            remove_pointer(&mut result, pointer);
         }
         self.add_receipt(&mut result);
         Some(result)
     }
 
-    fn add_receipt(&self, result: &mut Value) {
+    pub(super) fn add_receipt(&self, result: &mut Value) {
         if let Some(reservation) = &self.reservation {
             ensure_object(result).insert(
                 "secretReceipt".into(),
@@ -119,6 +117,78 @@ impl PreparedSecretOutputs {
 }
 
 impl BrokerRuntime {
+    /// Consume an already-captured local completion exactly once. The envelope
+    /// is released only after matching the opaque reservation and request pins.
+    pub(super) fn complete_local_outcome(
+        &self,
+        context: &FinalizeContext,
+        prepared: &PreparedSecretOutputs,
+        outcome: crate::LocalOperationOutcome,
+    ) -> Result<ProviderResult, ProviderError> {
+        let crate::LocalOperationOutcome { result, captured } = outcome;
+        let Some(captured) = captured else {
+            return match result {
+                Ok(result) => self.complete_secret_outputs(prepared, Ok(result)),
+                Err(error) => {
+                    let mut error = prepared.sanitize_provider_error(error);
+                    let mut evidence = error
+                        .result
+                        .take()
+                        .map(|value| *value)
+                        .unwrap_or_else(|| json!({}));
+                    for descriptor in &prepared.descriptors {
+                        remove_pointer(&mut evidence, result_pointer(descriptor.pointer()));
+                    }
+                    if let (Some(store), Some(batch)) = (&self.managed_store, &prepared.reservation)
+                        && !batch.is_completed()
+                    {
+                        let terminal = match evidence.get("executionState").and_then(Value::as_str)
+                        {
+                            Some("not_dispatched") => SecretReservationOutcome::NotDispatched,
+                            Some("not_committed") => SecretReservationOutcome::CaptureFailed,
+                            _ => SecretReservationOutcome::Unknown,
+                        };
+                        let _ = store.finish_secret_reservation(batch, terminal, evidence.clone());
+                    }
+                    prepared.add_receipt(&mut evidence);
+                    error.result = Some(Box::new(evidence));
+                    Err(error)
+                }
+            };
+        };
+        let invalid = || {
+            ProviderError::error(
+                ReasonCode::SecretCaptureFailed,
+                "committed local secret completion is invalid; do not repeat issuance",
+            )
+            .with_result(json!({"executionState":"completed","retrySafe":false}))
+        };
+        let mut result = result.map_err(|_| invalid())?;
+        let reservation = prepared.reservation.as_ref().ok_or_else(invalid)?;
+        if context.service != super::broker_management::SERVICE_ID
+            || captured.action != "token.create"
+            || context.action != captured.action
+            || context.broker_request_id != captured.broker_request_id
+            || reservation.receipt_id() != captured.reservation.receipt_id()
+            || !captured.reservation.is_completed()
+            || captured.references.len() != 1
+            || prepared.descriptors.len() != 1
+            || captured.references[0].pointer != "/result/issuedToken"
+            || prepared.descriptors[0].pointer() != "/result/issuedToken"
+            || result.result.get("issuedToken").is_some()
+            || result.stream.is_some()
+        {
+            return Err(invalid());
+        }
+        let reference = captured.references.into_iter().next().ok_or_else(invalid)?;
+        ensure_object(&mut result.result).insert(
+            "issuedToken".into(),
+            json!({"secretRef":reference.secret_ref,"expiresAt":reference.expires_at}),
+        );
+        prepared.add_receipt(&mut result.result);
+        Ok(result)
+    }
+
     /// One producer budget covers preparation and sequential upstream calls on
     /// every transport. Reference-mode configuration requires a longer TTL.
     pub(super) fn secret_output_operation_deadline(
@@ -477,14 +547,21 @@ pub(super) fn validate_reference_inputs(
     action: &ActionDescriptor,
     inputs: &Value,
 ) -> Result<(), ProviderError> {
-    reject_undeclared_references(inputs, "/inputs", action)?;
-    if action.secret_inputs.is_empty() {
+    let plan = super::registration::ReferenceInputPlan::for_provider(action)?;
+    validate_reference_plan(&plan, inputs)
+}
+
+pub(super) fn validate_reference_plan(
+    plan: &super::registration::ReferenceInputPlan,
+    inputs: &Value,
+) -> Result<(), ProviderError> {
+    let pointers = plan.pointers();
+    reject_undeclared_references(inputs, "/inputs", &pointers)?;
+    if pointers.is_empty() {
         return Ok(());
     }
-    let schema = action
-        .reference_input_schema()
-        .map_err(|_| reference_input_invalid())?;
-    let validator = jsonschema::validator_for(&schema).map_err(|_| reference_input_invalid())?;
+    let validator =
+        jsonschema::validator_for(plan.schema()).map_err(|_| reference_input_invalid())?;
     if validator.is_valid(inputs) {
         Ok(())
     } else {
@@ -495,7 +572,7 @@ pub(super) fn validate_reference_inputs(
 fn reject_undeclared_references(
     value: &Value,
     pointer: &str,
-    action: &ActionDescriptor,
+    pointers: &[&str],
 ) -> Result<(), ProviderError> {
     match value {
         Value::Object(object) => {
@@ -504,12 +581,7 @@ fn reject_undeclared_references(
                 .and_then(Value::as_str)
                 .is_some_and(is_secret_reference_capability)
             {
-                if parse_reference(value).is_err()
-                    || !action
-                        .secret_inputs
-                        .iter()
-                        .any(|input| input.pointer() == pointer)
-                {
+                if parse_reference(value).is_err() || !pointers.contains(&pointer) {
                     return Err(reference_input_invalid());
                 }
                 return Ok(());
@@ -519,12 +591,12 @@ fn reject_undeclared_references(
                     return Err(reference_input_invalid());
                 }
                 let pointer = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
-                reject_undeclared_references(value, &pointer, action)?;
+                reject_undeclared_references(value, &pointer, pointers)?;
             }
         }
         Value::Array(values) => {
             for (index, value) in values.iter().enumerate() {
-                reject_undeclared_references(value, &format!("{pointer}/{index}"), action)?;
+                reject_undeclared_references(value, &format!("{pointer}/{index}"), pointers)?;
             }
         }
         Value::String(value) if contains_secret_reference_capability(value) => {
@@ -668,7 +740,7 @@ fn contains_string(value: &Value, needle: &str) -> bool {
         _ => false,
     }
 }
-fn zeroize_json(value: &mut Value) {
+pub(super) fn zeroize_json(value: &mut Value) {
     match value {
         Value::String(value) => value.zeroize(),
         Value::Array(values) => values.iter_mut().for_each(zeroize_json),
@@ -720,6 +792,7 @@ fn input_pointer(pointer: &str) -> &str {
 fn result_pointer(pointer: &str) -> &str {
     pointer.strip_prefix("/result").unwrap_or("")
 }
+#[cfg(test)]
 fn is_reference_value(value: &Value) -> bool {
     parse_reference(value).is_ok()
 }
@@ -755,7 +828,7 @@ fn contains_secret_reference_capability(value: &str) -> bool {
                 .is_some_and(is_secret_reference_capability)
     })
 }
-fn is_secret_reference_capability(value: &str) -> bool {
+pub(super) fn is_secret_reference_capability(value: &str) -> bool {
     use base64::Engine;
     if value.len() != 46 || !value.starts_with("sr_") {
         return false;
@@ -1619,7 +1692,7 @@ mod tests {
                 .service_discovery(identity, &ExecutionContext::new("default").unwrap(), "fake")
                 .is_some_and(|service| {
                     service
-                        .actions(None, None, None)
+                        .actions(None, None, None, None)
                         .unwrap()
                         .actions
                         .contains(&"echo".into())
@@ -1647,7 +1720,16 @@ mod tests {
         assert!(visible(&runtime, &IdentityContext::anonymous()));
         Arc::make_mut(&mut runtime.config).secret_outputs.mode = crate::SecretOutputMode::Reference;
         assert!(!visible(&runtime, &IdentityContext::anonymous()));
-        assert_eq!(runtime.api_services_all()[0].actions.len(), 1);
+        assert_eq!(
+            runtime
+                .api_services_all()
+                .iter()
+                .find(|service| service.service == "fake")
+                .unwrap()
+                .actions
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

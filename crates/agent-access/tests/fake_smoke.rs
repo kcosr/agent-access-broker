@@ -5022,7 +5022,7 @@ fn fake_service_capabilities_json() -> serde_json::Value {
             "action": "echo",
             "readOnly": true,
             "description": "Echo scalar inputs after policy and credential selection",
-            "requiredScopeTypes": ["project"],
+            "requiredScopes": {"project":{"resourceType":"fake_project"}},
             "credentialModes": ["service", "per_user"],
             "lookupRequired": false,
             "inputSchema": {
@@ -5113,7 +5113,7 @@ fn download_catalog_json() -> serde_json::Value {
                     "action": "attachment.download",
                     "readOnly": true,
                     "description": "Download an attachment",
-                    "requiredScopeTypes": ["issue"],
+                    "requiredScopes": {"issue":{"resourceType":"jira_project"}},
                     "credentialModes": ["service"],
                     "lookupRequired": false,
                     "inputSchema": {
@@ -5147,7 +5147,7 @@ fn upload_catalog_json() -> serde_json::Value {
                     "action": "attachment.add",
                     "readOnly": false,
                     "description": "Upload a page attachment",
-                    "requiredScopeTypes": ["page"],
+                    "requiredScopes": {"page":{"resourceType":"confluence_space"}},
                     "credentialModes": ["service"],
                     "lookupRequired": false,
                     "inputSchema": {

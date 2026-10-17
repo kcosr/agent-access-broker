@@ -33,7 +33,7 @@ async fn issue_type_list_is_read_only_project_scoped_and_needs_no_lookup() {
         .find(|action| action.action == "issue_type.list")
         .unwrap();
     assert!(action.read_only);
-    assert_eq!(action.required_scope_types(), ["project"]);
+    assert_eq!(action.resource_scopes, ["project"]);
     assert_eq!(action.lookup, LookupRequirement::None);
     assert_eq!(action.credential_modes, ["service", "per_user"]);
     assert_eq!(action.input_schema["required"], json!(["project"]));

@@ -83,6 +83,7 @@ mod imports_publication;
 mod invocation_limits;
 mod local_login_methods;
 mod login_lockout;
+mod management_authority;
 mod management_read_audit;
 mod management_service_metadata;
 mod mcp;
@@ -2425,10 +2426,7 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
                 )
                 .unwrap(),
             },
-            ResourceScopes::from([
-                ("repository".to_string(), vec!["sip/service".to_string()]),
-                ("namespace".to_string(), vec!["sip".to_string()]),
-            ]),
+            ResourceScopes::from([("repository".to_string(), vec!["sip/service".to_string()])]),
         )
         .await
         .unwrap();
@@ -2567,10 +2565,7 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
                 )
                 .unwrap(),
             },
-            ResourceScopes::from([
-                ("repository".to_string(), vec!["sip/service".to_string()]),
-                ("namespace".to_string(), vec!["sip".to_string()]),
-            ]),
+            ResourceScopes::from([("repository".to_string(), vec!["sip/service".to_string()])]),
         )
         .await
         .unwrap();
@@ -5119,12 +5114,15 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
     );
     let echo = &alice_options["result"]["services"][0]["actions"][0];
     assert_eq!(echo["action"], "echo");
-    assert_eq!(echo["requiredScopeTypes"], json!(["project"]));
+    assert_eq!(
+        echo["requiredScopes"],
+        json!({"project":{"resourceType":"fake_project"}})
+    );
     assert_eq!(
         echo["executionContexts"],
         json!(["external", "internal", "partner"])
     );
-    assert_eq!(echo["resourceType"], "fake_project");
+    assert!(echo.get("resourceType").is_none());
     for (context, project) in [
         ("external", "TEST"),
         ("internal", "OPS"),
@@ -5132,7 +5130,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
     ] {
         assert_eq!(
             echo["effectiveAccessByExecutionContext"][context],
-            json!([{ "included": [{"kind":"exact", "value": project}], "excluded": [] }])
+            json!([{ "scopes": { "project": { "resourceType": "fake_project", "included": [{"kind":"exact", "value": project}], "excluded": [] } }, "excludedRequests": [] }])
         );
     }
 
@@ -14972,7 +14970,7 @@ fn jira_verification_descriptor(name: &str) -> ServiceDescriptor {
                 "View an issue in verification tests",
                 json!({"type": "object"}),
             )
-            .scope("project")
+            .scopes(["project"])
             .credential_modes(["per_user"]),
         ])
         .with_credentials(
@@ -15020,7 +15018,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraParentIn
                         "additionalProperties": false
                     }),
                 )
-                .scope("project")
+                .scopes(["project"])
                 .credential_modes(["service"])
                 .lookup(LookupRequirement::ScopeResolution),
                 ActionDescriptor::new(
@@ -15038,7 +15036,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraParentIn
                         "additionalProperties": false
                     }),
                 )
-                .scope("project")
+                .scopes(["project"])
                 .credential_modes(["service"])
                 .lookup(LookupRequirement::ScopeResolution),
             ])
@@ -15190,7 +15188,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraReadPres
                     "additionalProperties": false
                 }),
             )
-            .scope("project")
+            .scopes(["project"])
             .credential_modes(["service"])
             .presentation(backend_presentation("jira", action))
         };
@@ -15297,7 +15295,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestJiraNormaliz
                         "additionalProperties": false
                     }),
                 )
-                .scope("project")
+                .scopes(["project"])
                 .credential_modes(["service"]),
             ])
     }
@@ -15406,7 +15404,7 @@ impl agent_access_provider::test_support::DescribedProvider
                         "additionalProperties": false
                     }),
                 )
-                .scope("space")
+                .scopes(["space"])
                 .credential_modes(["service"]),
             ])
     }
@@ -15509,7 +15507,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabNormal
                     "additionalProperties": false
                 }),
             )
-            .scope("repository")
+            .scopes(["repository"])
             .credential_modes(["service"]),
         ])
     }
@@ -15627,7 +15625,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabReview
                         "additionalProperties": false
                     }),
                 )
-                .scope("repository")
+                .scopes(["repository"])
                 .credential_modes(["service"]),
             ])
     }
@@ -15717,7 +15715,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestGitlabSugges
                         }
                     }),
                 )
-                .scope("repository")
+                .scopes(["repository"])
                 .credential_modes(["service"]),
             ])
     }
@@ -15984,7 +15982,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestMultipartPro
                         "additionalProperties": false
                     }),
                 )
-                .scope("project")
+                .scopes(["project"])
                 .credential_modes(["service"])
                 .multipart_upload(attachment_upload_plan(&["project"], None)),
             ]).with_credentials(CredentialDescriptor::without_execution_credential())
@@ -16164,7 +16162,7 @@ impl agent_access_provider::test_support::DescribedProvider for TestDownloadProv
                         "additionalProperties": false
                     }),
                 )
-                .scope("project")
+                .scopes(["project"])
                 .credential_modes(["service"])
                 .raw_download(),
             ])

@@ -69,8 +69,8 @@ async function fixture(page: Page, search = "", catalogUnavailable = () => false
       }
       body = envelope({
         services: [
-          { service: "jira", displayName: "Jira", surface: "rest", configuredCredentialModes: ["service"], lookupCredentialConfigured: false, actions: [{ action: "issue.view", readOnly: true, requiredScopeTypes: [], ...editable }, { action: "issue.update", readOnly: false, requiredScopeTypes: [], ...editable }, { action: "unreviewed.read", requiredScopeTypes: [], ...editable }], resourceScopes: {} },
-          { service: "git", displayName: "Git", surface: "rest", configuredCredentialModes: ["service"], lookupCredentialConfigured: false, actions: [{ action: "repository.read", readOnly: true, requiredScopeTypes: [], ...editable }], resourceScopes: {} }
+          { service: "jira", displayName: "Jira", surface: "rest", configuredCredentialModes: ["service"], lookupCredentialConfigured: false, actions: [{ action: "issue.view", readOnly: true, requiredScopes: {}, ...editable }, { action: "issue.update", readOnly: false, requiredScopes: {}, ...editable }, { action: "unreviewed.read", requiredScopes: {}, ...editable }], resourceScopes: {} },
+          { service: "git", displayName: "Git", surface: "rest", configuredCredentialModes: ["service"], lookupCredentialConfigured: false, actions: [{ action: "repository.read", readOnly: true, requiredScopes: {}, ...editable }], resourceScopes: {} }
         ],
         subjects: { users: [{ principalId: "alice", displayName: "Alice" }, { principalId: "bob", displayName: "Bob" }], groups: [], anonymous: false },
         resources: [], resourceGroups: [], executionContexts: { allowedValues: ["development", "production"], contextRequired: false }

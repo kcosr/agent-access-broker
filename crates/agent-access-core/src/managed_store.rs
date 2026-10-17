@@ -1,12 +1,15 @@
 mod connection_credentials;
+pub(crate) mod management_authority;
+pub(crate) mod management_commands;
 mod secret_reference_identity;
 mod secret_references;
 pub(crate) use secret_reference_identity::AttestedSecretReferencePin;
-pub use secret_references::{SecretCredentialWriteResult, SecretReferenceUse};
 pub(crate) use secret_references::{
-    SecretOutputCapture, SecretOutputReservation, SecretOutputReservationBatch,
-    SecretReferenceLimits, SecretReservationOutcome, SecretReservationRequest,
+    CapturedSecretReference, SecretOutputCapture, SecretOutputReservation,
+    SecretOutputReservationBatch, SecretReferenceLimits, SecretReservationOutcome,
+    SecretReservationRequest,
 };
+pub use secret_references::{SecretCredentialWriteResult, SecretReferenceUse};
 mod identity_access;
 mod identity_tokens;
 pub use identity_access::{
@@ -353,6 +356,8 @@ pub struct ImportBlockingResource {
 pub enum ManagedStoreError {
     #[error("managed store is unavailable: {0}")]
     Unavailable(String),
+    #[error("management transaction commit outcome could not be established")]
+    CommitUnknown,
     #[error("managed store migration is required")]
     MigrationRequired,
     #[error("managed store schema is invalid: {0}")]
@@ -365,6 +370,8 @@ pub enum ManagedStoreError {
     CredentialEncryptFailed,
     #[error("credential decryption failed")]
     CredentialDecryptFailed,
+    #[error("management operation is not authorized")]
+    ManagementDenied,
     #[error("principal is required")]
     PrincipalRequired,
     #[error("principal was not found")]
@@ -477,6 +484,7 @@ impl ManagedStoreError {
     pub fn reason_code(&self) -> ReasonCode {
         match self {
             Self::Unavailable(_) => ReasonCode::ManagedStoreUnavailable,
+            Self::CommitUnknown => ReasonCode::OperationFailed,
             Self::MigrationRequired | Self::SchemaInvalid(_) => {
                 ReasonCode::ManagedStoreMigrationRequired
             }
@@ -484,6 +492,7 @@ impl ManagedStoreError {
             Self::EncryptionKeyInvalid(_) => ReasonCode::EncryptionKeyInvalid,
             Self::CredentialEncryptFailed => ReasonCode::CredentialEncryptFailed,
             Self::CredentialDecryptFailed => ReasonCode::CredentialDecryptFailed,
+            Self::ManagementDenied => ReasonCode::ManagementDenied,
             Self::PrincipalRequired => ReasonCode::PrincipalRequired,
             Self::PrincipalNotFound => ReasonCode::PrincipalNotFound,
             Self::PrincipalDisabled => ReasonCode::PrincipalDisabled,
@@ -728,6 +737,7 @@ impl ManagedStore {
         self.check_schema_ready()?;
         let conn = self.connection.lock().unwrap();
         identity_access::check_integrity(&conn)?;
+        principal_access::check_broker_management_assignments(&conn)?;
         check_secret_material_ready(&conn, key_ring)?;
         identity_tokens::check_ready(&conn, key_ring)?;
         oauth::check_ready(&conn, key_ring)?;
@@ -1266,20 +1276,14 @@ impl ManagedStore {
                 "deleted policy grants cannot have subjects changed",
             ));
         }
-        if current
-            .subjects
-            .iter()
-            .any(|subject| subject == &request.subject)
-        {
-            return Err(input_invalid("subject is already attached to policy grant"));
-        }
-
-        let now = normalized_now_string();
-        let mut updated = current.clone();
-        updated.subjects.push(request.subject);
-        updated.version += 1;
-        updated.updated_at = now.clone();
-        updated.updated_by = request.updated_by;
+        let updated = management_commands::mutate_grant_subject_conn(
+            current,
+            &request.subject,
+            &request.updated_by,
+            true,
+            false,
+        )?;
+        let now = updated.updated_at.clone();
 
         let active_grants =
             active_policy_grants_with_replacement(&tx, Some(updated.clone()), None)?;
@@ -1346,37 +1350,14 @@ impl ManagedStore {
                 "deleted policy grants cannot have subjects changed",
             ));
         }
-        if !current
-            .subjects
-            .iter()
-            .any(|subject| subject == &request.subject)
-        {
-            return Err(input_invalid("subject is not attached to policy grant"));
-        }
-
-        let now = normalized_now_string();
-        let mut updated = current.clone();
-        updated
-            .subjects
-            .retain(|subject| subject != &request.subject);
-        if updated.subjects.is_empty() && updated.status == "active" {
-            if request.last_subject_behavior == "disable_grant" {
-                updated.status = "disabled".to_string();
-                updated.disabled_at = Some(now.clone());
-                updated.deleted_at = None;
-            } else {
-                return Err(ManagedStoreError::PolicyValidationIssues(vec![
-                    PolicyValidationIssue {
-                        field: "subjects".to_string(),
-                        code: "empty".to_string(),
-                        message: "active policy grants must have at least one subject; use lastSubjectBehavior=disable_grant to remove the final subject".to_string(),
-                    },
-                ]));
-            }
-        }
-        updated.version += 1;
-        updated.updated_at = now.clone();
-        updated.updated_by = request.updated_by;
+        let updated = management_commands::mutate_grant_subject_conn(
+            current,
+            &request.subject,
+            &request.updated_by,
+            false,
+            request.last_subject_behavior == "disable_grant",
+        )?;
+        let now = updated.updated_at.clone();
 
         let active_grants =
             active_policy_grants_with_replacement(&tx, Some(updated.clone()), None)?;
@@ -1729,6 +1710,20 @@ impl ManagedStore {
         &self,
         request: PrincipalWriteRequest,
     ) -> Result<PrincipalRecord, ManagedStoreError> {
+        let mut connection = self.connection.lock().unwrap();
+        let conn = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let principal = self.create_principal_conn(&conn, request)?;
+        conn.commit().map_err(sql_unavailable)?;
+        Ok(principal)
+    }
+
+    fn create_principal_conn(
+        &self,
+        conn: &Connection,
+        request: PrincipalWriteRequest,
+    ) -> Result<PrincipalRecord, ManagedStoreError> {
         validate_principal_write_request(&request)?;
         let self_service_enabled = request
             .self_service_enabled
@@ -1737,10 +1732,6 @@ impl ManagedStore {
         let display_name = normalized_optional_profile_value(request.display_name.as_deref());
         let email = normalized_optional_profile_value(request.email.as_deref());
         let now = now_string();
-        let mut connection = self.connection.lock().unwrap();
-        let conn = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sql_unavailable)?;
         let exists: Option<String> = conn
             .query_row(
                 "SELECT principal_id FROM principals WHERE principal_id = ?1",
@@ -1770,9 +1761,8 @@ impl ManagedStore {
             ],
         )
         .map_err(sql_unavailable)?;
-        self.initialize_identity_token(&conn, &request.principal_id, &request.kind)?;
-        let principal = principal_by_id(&conn, &request.principal_id)?;
-        conn.commit().map_err(sql_unavailable)?;
+        self.initialize_identity_token(conn, &request.principal_id, &request.kind)?;
+        let principal = principal_by_id(conn, &request.principal_id)?;
         Ok(principal)
     }
 
@@ -2085,19 +2075,12 @@ impl ManagedStore {
         group: &str,
         actor: &str,
     ) -> Result<(), ManagedStoreError> {
-        validate_principal_id(principal_id)?;
-        validate_group_name(group)?;
-        validate_actor(actor)?;
-        let conn = self.connection.lock().unwrap();
-        principal_by_id_for_membership(&conn, principal_id)?;
-        group_by_id(&conn, group)?;
-        conn.execute(
-            "INSERT OR IGNORE INTO principal_groups
-             (principal_id, group_id, created_at, created_by)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![principal_id, group, now_string(), actor],
-        )
-        .map_err(sql_unavailable)?;
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        management_commands::add_group_conn(&tx, principal_id, group, actor)?;
+        tx.commit().map_err(sql_unavailable)?;
         Ok(())
     }
 
@@ -2117,19 +2100,12 @@ impl ManagedStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
-        principal_by_id_for_membership(&tx, principal_id)?;
-        group_by_id(&tx, group)?;
-        let removed = tx
-            .execute(
-                "DELETE FROM principal_groups WHERE principal_id = ?1 AND group_id = ?2",
-                params![principal_id, group],
-            )
-            .map_err(sql_unavailable)?;
+        let removed = management_commands::remove_group_conn(&tx, principal_id, group)?;
         let membership = effective_membership_at_conn(&tx, principal_id, &normalized_now_string())?;
         let still_effective = membership.groups.iter().any(|candidate| candidate == group);
         tx.commit().map_err(sql_unavailable)?;
         Ok(LocalGroupRemovalResult {
-            removed: removed != 0,
+            removed,
             still_effective,
         })
     }
@@ -2174,22 +2150,44 @@ impl ManagedStore {
         personal: bool,
         catalog: Option<&ManagedResourceCatalog>,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
-        validate_broker_token_issue_request(&request)?;
-        let expires_at = normalize_optional_timestamp(request.expires_at.as_deref(), "expiresAt")?;
-        let raw_token = generate_broker_token(&request.token_class);
-        let token_hash = hasher.hash(&raw_token)?;
-        let now = now_string();
-        let token_id = Uuid::new_v4().to_string();
-        let scopes_json = serde_json::to_string(&request.scopes)
-            .map_err(|_| input_invalid("token scopes must be JSON serializable"))?;
         let mut connection = self.connection.lock().unwrap();
         let conn = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
+        let (raw_token, record) = Self::issue_token_conn(
+            &conn,
+            hasher,
+            request,
+            personal,
+            catalog,
+            &Uuid::new_v4().to_string(),
+        )?;
+        conn.commit().map_err(sql_unavailable)?;
+        Ok(IssuedBrokerToken {
+            token: raw_token.to_string(),
+            record,
+        })
+    }
+
+    pub(crate) fn issue_token_conn(
+        conn: &Connection,
+        hasher: &BrokerTokenHasher,
+        request: BrokerTokenIssueRequest,
+        personal: bool,
+        catalog: Option<&ManagedResourceCatalog>,
+        token_id: &str,
+    ) -> Result<(zeroize::Zeroizing<String>, BrokerTokenRecord), ManagedStoreError> {
+        validate_broker_token_issue_request(&request)?;
+        let expires_at = normalize_optional_timestamp(request.expires_at.as_deref(), "expiresAt")?;
+        let raw_token = zeroize::Zeroizing::new(generate_broker_token(&request.token_class));
+        let token_hash = hasher.hash(&raw_token)?;
+        let now = now_string();
+        let scopes_json = serde_json::to_string(&request.scopes)
+            .map_err(|_| input_invalid("token scopes must be JSON serializable"))?;
         if request.token_class == BrokerTokenClass::AgentInvoke {
-            validate_token_resource_references(&conn, &request.scopes, catalog)?;
+            validate_token_resource_references(conn, &request.scopes, catalog)?;
         }
-        let principal = principal_by_id(&conn, &request.principal_id)?;
+        let principal = principal_by_id(conn, &request.principal_id)?;
         if principal.status == "disabled" {
             return Err(ManagedStoreError::PrincipalDisabled);
         }
@@ -2201,7 +2199,7 @@ impl ManagedStore {
             ));
         }
         if personal {
-            require_self_service(&conn, &request.principal_id)?;
+            require_self_service(conn, &request.principal_id)?;
         }
         if request.token_class == BrokerTokenClass::Admin
             && (principal.kind != "user" || !principal.role.can_read_admin())
@@ -2228,12 +2226,8 @@ impl ManagedStore {
             ],
         )
         .map_err(sql_unavailable)?;
-        let record = broker_token_by_id(&conn, &token_id)?;
-        conn.commit().map_err(sql_unavailable)?;
-        Ok(IssuedBrokerToken {
-            token: raw_token,
-            record,
-        })
+        let record = broker_token_by_id(conn, token_id)?;
+        Ok((raw_token, record))
     }
 
     /// The kind of the managed principal a configured static principal's ID
@@ -6149,7 +6143,7 @@ fn validate_policy_grant_subject_remove_request(
     Ok(())
 }
 
-fn validate_policy_grant_id(grant_id: &str) -> Result<(), ManagedStoreError> {
+pub(crate) fn validate_policy_grant_id(grant_id: &str) -> Result<(), ManagedStoreError> {
     if is_safe_identifier(grant_id) && !is_reserved_policy_grant_id(grant_id) {
         Ok(())
     } else {
@@ -6427,7 +6421,7 @@ fn validate_credential_write_request(
     Ok(())
 }
 
-fn validate_principal_id(principal_id: &str) -> Result<(), ManagedStoreError> {
+pub(crate) fn validate_principal_id(principal_id: &str) -> Result<(), ManagedStoreError> {
     if principal_id != "anonymous" && is_safe_principal(principal_id) {
         Ok(())
     } else {
@@ -6435,7 +6429,7 @@ fn validate_principal_id(principal_id: &str) -> Result<(), ManagedStoreError> {
     }
 }
 
-fn validate_group_name(group: &str) -> Result<(), ManagedStoreError> {
+pub(crate) fn validate_group_name(group: &str) -> Result<(), ManagedStoreError> {
     if group != "anonymous" && is_safe_identifier(group) {
         Ok(())
     } else {
@@ -7547,7 +7541,7 @@ where
         validate_candidate(std::slice::from_ref(grant), &revision, &subjects, &catalog)?;
     }
     let grant = persist(&tx, &revision)?;
-    tx.commit().map_err(sql_unavailable)?;
+    tx.commit().map_err(|_| ManagedStoreError::CommitUnknown)?;
     Ok(ManagedPolicyMutationResult {
         catalog,
         previous_revision,
@@ -8731,15 +8725,32 @@ fn has_credential_right_conn(
     Ok(count > 0)
 }
 
+struct ZeroizingCredentialSecret(Value);
+impl Drop for ZeroizingCredentialSecret {
+    fn drop(&mut self) {
+        fn clear(value: &mut Value) {
+            use zeroize::Zeroize;
+            match value {
+                Value::String(value) => value.zeroize(),
+                Value::Array(values) => values.iter_mut().for_each(clear),
+                Value::Object(values) => values.values_mut().for_each(clear),
+                _ => {}
+            }
+        }
+        clear(&mut self.0);
+    }
+}
+
 fn upsert_user_credential_conn(
     conn: &Connection,
     key_ring: &CredentialKeyRing,
-    request: CredentialWriteRequest,
+    mut request: CredentialWriteRequest,
     purpose: CredentialManagementPurpose,
 ) -> Result<CredentialMetadata, ManagedStoreError> {
+    let secret = ZeroizingCredentialSecret(std::mem::take(&mut request.secret));
     validate_credential_write_request(&request)?;
     validate_credential_metadata(&request.metadata)?;
-    validate_credential_secret(&request.credential_kind, &request.secret)?;
+    validate_credential_secret(&request.credential_kind, &secret.0)?;
     let now = now_string();
     purpose.check_active_owner(conn, &request.owner_principal_id)?;
     let existing: Option<(String, String, String, String)> = conn
@@ -8787,7 +8798,7 @@ fn upsert_user_credential_conn(
         material_version: material_version.clone(),
         key_id: key_id.clone(),
     };
-    let encrypted = key_ring.encrypt(&request.secret, &aad)?;
+    let encrypted = key_ring.encrypt(&secret.0, &aad)?;
     let metadata_json = serde_json::to_string(&request.metadata)
         .map_err(|_| input_invalid("metadata must be JSON serializable"))?;
     conn.execute(

@@ -1,12 +1,10 @@
 use crate::handlers::management::common::{
-    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
-    ManagementContext, agent_token_boundary_audit, agent_token_issue_scopes,
-    agent_token_list_query, append_management_audit_with_phase, credential_input_schema_query,
-    is_broker_user_manage_context, management_audit_unavailable_response, management_context,
+    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementContext,
+    agent_token_boundary_audit, agent_token_issue_scopes, agent_token_list_query,
+    credential_input_schema_query, is_broker_user_manage_context, management_context,
     management_context_error_response, management_pre_audited_success_response,
-    management_response, management_store_call, management_store_error_response,
-    management_success_envelope, management_success_response, management_write_audit_preflight,
-    self_agent_token_issue_expires_at,
+    management_store_call, management_store_error_response, management_success_response,
+    management_write_audit_preflight, self_agent_token_issue_expires_at,
 };
 use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
@@ -220,8 +218,8 @@ pub(crate) async fn user_token_issue(
     }
     let actor = context.identity.principal.clone();
     let principal_for_store = context.identity.principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        store.issue_self_agent_token_with_catalog(
+    super::common::management_authorized_store_write(&state, context, operation, target, move |store, catalog, authority| {
+        store.issue_self_agent_token_with_management_authority(
             &hasher,
             SelfAgentTokenIssueRequest {
                 principal_id: principal_for_store,
@@ -231,55 +229,12 @@ pub(crate) async fn user_token_issue(
                 created_by: actor,
             },
             catalog.as_ref(),
+            authority,
         )
-    })
-    .await
-    {
-        Ok(token) => {
-            let success_target = Some(json!({
-                "principalId": token.record.principal_id.clone(),
-                "tokenClass": "agent_invoke",
-                "tokenId": token.record.token_id.clone(),
-                "name": token.record.name.clone(),
-                "expiresAt": token.record.expires_at.clone(),
-                "boundary": agent_token_boundary_audit(&token.record.scopes),
-            }));
-            let audit_envelope = management_success_envelope(
-                &context,
-                operation,
-                success_target.clone(),
-                Value::Null,
-            );
-            if let Err(error) = append_management_audit_with_phase(
-                &context.snapshot,
-                &context.request_id,
-                &context.broker_request_id,
-                &context.identity,
-                &context.source,
-                &audit_envelope,
-                ManagementAuditExtra {
-                    catalog_change: None,
-                    phase: Some("success"),
-                    verification: None,
-                },
-            )
-            .await
-            {
-                return management_audit_unavailable_response(
-                    &context.request_id,
-                    &context.broker_request_id,
-                    operation,
-                    &context.identity.principal,
-                    error,
-                );
-            }
-            management_response(
-                StatusCode::OK,
-                management_success_envelope(&context, operation, success_target, json!(token)),
-            )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+    }, |context, operation, _target, token| {
+        let success_target = Some(json!({"principalId":token.record.principal_id,"tokenClass":"agent_invoke","tokenId":token.record.token_id,"name":token.record.name,"expiresAt":token.record.expires_at,"boundary":agent_token_boundary_audit(&token.record.scopes)}));
+        super::common::management_success_envelope(context, operation, success_target, json!(token))
+    }).await
 }
 
 pub(crate) async fn user_token_get(

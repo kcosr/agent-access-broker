@@ -573,7 +573,7 @@ rich-content format renderers live in `agent-access-content`. The catalog's
 advertised read and response formats derive from the same presentation.
 
 A descriptor declares the service's resource scopes and the resource type each
-one authorizes, and for every action its input schema, resource scope (if any),
+one authorizes, and for every action its input schema, required resource scopes,
 credential modes, lookup requirement (none, execution-time only, or before
 policy to resolve scope), whether it is search-contained, upstream resource
 ownership, JSON/multipart-upload/raw-download I/O, explicit `read_only`,
@@ -583,6 +583,17 @@ signing key. At service level it declares accepted service credential kinds,
 managed credential profiles, whether invocations need a broker-selected
 execution credential, and the embedded-body presentation limit. Responses from
 actions that declare sensitive outputs are sent with `Cache-Control: no-store`.
+
+Required scope names and their resource types are unique within an action.
+Every resolved scope must be present, nonempty and canonical, with no extra
+names. A candidate grant must cover every target across all required scopes
+before subject rank, priority and credential selection apply. Separate grants
+cannot complete each other's scope dimensions. Known unrelated types in a mixed
+selection are ignored for this action; unknown references invalidate the whole
+selection. Searches, scope-resolution lookups and private-attribute execution
+remain single-scope. Capability and catalog actions publish the typed
+`requiredScopes` map; OpenAPI and send schemas carry it as
+`x-agent-access-required-scopes`.
 
 Action `documentation` is a provider-owned JSON object for detailed usage,
 grammar, limits, and examples. Capabilities, runtime catalogs, and detailed MCP
@@ -2400,3 +2411,13 @@ the site with both products' scopes.
 The SDK declares bounded string outputs carried in a private sidecar. Core reserves storage before dispatch and captures completed outcomes before formatting. Runtime resolution and credential handoff enforce current origin validity.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Core-owned local administration
+
+The always-registered `broker_management` service is a typed core registration,
+separate from external SDK providers. It uses the same descriptor, input, limits,
+complete-grant/token authorization, discovery and result pipeline. Its private
+local dispatch retains admitted authority and temporary references until the
+managed transaction; external modules cannot construct that capability. The host
+binds execution to the admitting snapshot and owns completion through transaction,
+publication and terminal audit. See [delegated administration](broker-management.md).

@@ -17,10 +17,10 @@ const action = (name: string, readOnly: boolean) => ({
   action: name,
   description: name,
   readOnly,
-  requiredScopeTypes: [],
-  resourceType: null,
+  requiredScopes: {},
+
   executionContexts: ["internal"],
-  effectiveAccessByExecutionContext: { internal: [] }
+  effectiveAccessByExecutionContext: { internal: [{ scopes: {}, excludedRequests: [] }] }
 });
 
 // Grants only in `internal`; the session's default context has none.
@@ -100,11 +100,11 @@ describe("My access metadata", () => {
     const service = contextual.services[0]!;
     service.executionContexts = ["default", "internal"];
     const action = service.actions[0]!;
-    action.resourceType = "cloudbees_ci_job";
+    action.requiredScopes = { job: { resourceType: "cloudbees_ci_job" } };
     action.executionContexts = ["default", "internal"];
     action.effectiveAccessByExecutionContext = {
-      default: [{ included: [{ kind: "exact", value: "public/job" }], excluded: [] }],
-      internal: [{ included: [{ kind: "exact", value: "private/job" }], excluded: [] }]
+      default: [{ scopes: { "job": { resourceType: "cloudbees_ci_job", included: [{ kind: "exact", value: "public/job" }], excluded: [] } }, excludedRequests: [] }],
+      internal: [{ scopes: { "job": { resourceType: "cloudbees_ci_job", included: [{ kind: "exact", value: "private/job" }], excluded: [] } }, excludedRequests: [] }]
     };
     const rows = filterAccessRows(accessRows(contextual, null, types), { service: "cloudbees_ci", q: "build.list", effect: ["read"] }, contextual.services);
     expect(rows.map((row) => [row.contexts, row.resourceLabels])).toEqual([

@@ -17,6 +17,15 @@ the built portal available at `/ui`. Start from the
 TOML-authority deployments can inspect their policy in the portal, but must edit
 configuration and reload to change it. Do not mix TOML grants with managed policy.
 
+For agent-led provisioning, a full administrator can grant selected
+`broker_management` actions over exact principal, group, grant and connection
+resources. Each grant must cover every required resource dimension together.
+Recipients can create service accounts, assign eligible access, install a held
+GitLab credential reference and issue a bounded invocation token as a reference.
+The administrator role alone gives an agent invocation no bypass. Follow
+[delegated Broker administration](broker-management.md) for eligibility,
+reference handoff, finite TTL configuration and lost-response recovery.
+
 ## First administrator
 
 1. Start one broker with an empty managed store and

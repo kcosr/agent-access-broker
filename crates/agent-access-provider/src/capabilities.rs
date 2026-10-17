@@ -44,6 +44,20 @@ impl ResourceScopeCapabilities {
     }
 }
 
+/// The registered resource type required by one named action scope.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequiredResourceScope {
+    pub resource_type: ResourceType,
+}
+
+impl RequiredResourceScope {
+    pub fn new(resource_type: ResourceType) -> Self {
+        Self { resource_type }
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -63,7 +77,7 @@ pub struct ActionCapabilities {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<Value>,
-    pub required_scope_types: Vec<String>,
+    pub required_scopes: BTreeMap<String, RequiredResourceScope>,
     pub credential_modes: Vec<String>,
     #[serde(default)]
     pub lookup_required: bool,

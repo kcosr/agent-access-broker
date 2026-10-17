@@ -3,7 +3,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { brokerApi } from "../api";
-import type { EffectiveAccessClause, EffectiveAccessResult, GrantEffectiveAccessBody, ResourceType, TokenEffectiveAccessBody } from "../types";
+import type { EffectiveAccessClause, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "../types";
 import { ACTION_GRANT_LABEL } from "../lib/helpers";
 import { mergeEffectiveAccess } from "../lib/access";
 import { ActionName } from "./action-name";
@@ -15,17 +15,17 @@ import { useSession } from "../app/session";
 import { EmptyState, ErrorState, Icon, SkeletonBlock } from "../workbench";
 
 /** One clause: its inclusions minus exclusions, and whole-request conditions. */
-export function AccessClause({ type, clause, alternative = false }: { type: ResourceType; clause: EffectiveAccessClause; alternative?: boolean }) {
+export function AccessClause({ clause, alternative = false }: { clause: EffectiveAccessClause; alternative?: boolean }) {
   const types = useResourceTypes();
   return (
     <li>
       <span>
         {alternative ? "Or: " : ""}
-        {clauseLabel(types, type, clause)}
+        {clauseLabel(types, clause)}
       </span>
-      {clause.excludedRequests?.map((boundary, index) => (
+      {clause.excludedRequests.map((boundary, index) => (
         <div className="pt-clause-note" key={index}>
-          Does not apply when every requested resource is within: {clauseLabel(types, type, boundary)}.
+          Does not apply when the complete request fits: {clauseLabel(types, boundary)}.
         </div>
       ))}
     </li>
@@ -33,14 +33,14 @@ export function AccessClause({ type, clause, alternative = false }: { type: Reso
 }
 
 /** Every alternative clause an action allows (or "Action grant" for actions without resources). */
-export function AccessClauses({ type, clauses }: { type: ResourceType | null; clauses: EffectiveAccessClause[] }) {
-  if (type === null) return <span>{ACTION_GRANT_LABEL}</span>;
+export function AccessClauses({ clauses }: { clauses: EffectiveAccessClause[] }) {
+  if (clauses.length === 1 && Object.keys(clauses[0].scopes).length === 0 && clauses[0].excludedRequests.length === 0) return <span>{ACTION_GRANT_LABEL}</span>;
   return (
     <>
-      {clauses.length > 1 ? <div className="pt-clause-note">Every resource in a request must fit the same alternative.</div> : null}
+      {clauses.length > 1 ? <div className="pt-clause-note">Every scope in a request must fit the same alternative.</div> : null}
       <ul className="pt-clauses">
         {clauses.map((clause, index) => (
-          <AccessClause type={type} clause={clause} alternative={index > 0} key={index} />
+          <AccessClause clause={clause} alternative={index > 0} key={index} />
         ))}
       </ul>
     </>
@@ -134,7 +134,7 @@ export function EffectiveAccessSummary({
                       ))}
                     </td>
                     <td>
-                      <AccessClauses type={row.resourceType} clauses={row.clauses} />
+                      <AccessClauses clauses={row.clauses} />
                     </td>
                   </tr>
                 ))}

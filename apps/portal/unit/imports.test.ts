@@ -118,7 +118,7 @@ describe("import review", () => {
 
 const policyCatalog: PolicyCatalogResult = {
   resources: [], resourceGroups: [], subjects: { users: [], groups: [], anonymous: false }, executionContexts: { allowedValues: ["internal"], defaultContext: "internal", contextRequired: false },
-  services: [{ service: "metrics", displayName: "Metrics", surface: "api", available: false, actions: [{ action: "read", readOnly: true, available: false, description: "Read", requiredScopeTypes: [], credentialModes: ["service"], lookupRequired: false, inputSchema: {} }, { action: "new", readOnly: false, available: false, description: "New", requiredScopeTypes: [], credentialModes: ["service"], lookupRequired: false, inputSchema: {} }], resourceScopes: {}, configuredCredentialModes: [], lookupCredentialConfigured: false }],
+  services: [{ service: "metrics", displayName: "Metrics", surface: "api", available: false, actions: [{ action: "read", readOnly: true, available: false, description: "Read", requiredScopes: {}, credentialModes: ["service"], lookupRequired: false, inputSchema: {} }, { action: "new", readOnly: false, available: false, description: "New", requiredScopes: {}, credentialModes: ["service"], lookupRequired: false, inputSchema: {} }], resourceScopes: {}, configuredCredentialModes: [], lookupCredentialConfigured: false }],
 };
 const grant = { grantRef: "g", version: 1, writable: true, service: "metrics", subjects: ["user:alice"], actions: ["read"], credentialMode: "service", status: "active", executionContexts: ["internal"], resources: { resourceIds: [], resourceGroupIds: [] } } as PolicyGrantRecord;
 test("retained unavailable selections can be maintained, but not added or duplicated", () => {

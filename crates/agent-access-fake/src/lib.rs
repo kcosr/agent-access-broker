@@ -159,7 +159,7 @@ pub fn fake_descriptor() -> ServiceDescriptor {
                 }),
             )
             .read_only()
-            .scope("project")
+            .scopes(["project"])
             .credential_modes(["service", "per_user"]),
         ])
         .with_credentials(CredentialDescriptor::without_execution_credential())

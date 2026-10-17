@@ -89,7 +89,7 @@ export function entityPaletteSources(data: PaletteEntities, go: Go): PaletteSour
     add("service-actions", "Service actions", services.flatMap((service) => service.actions.map((action) => ({
       id: `service-action-${service.service}/${action.action}`, label: action.action, icon: "list" as const,
       hint: `${service.displayName} · ${action.readOnly ? "Read-only" : "Write-capable"}`,
-      keywords: [service.service, service.displayName, action.description, "service action", ...action.requiredScopeTypes, action.readOnly ? "read only" : "write capable"],
+      keywords: [service.service, service.displayName, action.description, "service action", ...Object.keys(action.requiredScopes), action.readOnly ? "read only" : "write capable"],
       onSelect: go(admin ? paths.catalogAction(service.service, action.action) : policy ? paths.policies({ service: service.service, action: action.action }) : paths.accessAction(service.service, action.action))
     }))));
   }

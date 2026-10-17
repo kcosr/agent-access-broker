@@ -25,7 +25,7 @@ struct RegistryState {
     closing: bool,
     controls: BTreeMap<u64, InvocationControl>,
 }
-struct Registration {
+pub(crate) struct Registration {
     registry: Arc<OperationRegistry>,
     id: u64,
 }
@@ -41,7 +41,7 @@ impl Drop for Registration {
     }
 }
 impl OperationRegistry {
-    fn register(self: &Arc<Self>, control: InvocationControl) -> Option<Registration> {
+    pub(crate) fn register(self: &Arc<Self>, control: InvocationControl) -> Option<Registration> {
         let mut state = self.inner.lock().unwrap();
         if state.closing {
             return None;
@@ -103,7 +103,14 @@ pub(crate) async fn invoke(
     request: InvokeRequest,
     control: InvocationControl,
 ) -> BrokerResponse<Value> {
-    let control = control.with_identity_proof(admitted.identity_proof.clone());
+    let local_host = crate::management_operations::SnapshotLocalOperations::new(
+        state.reloadable.clone(),
+        admitted.snapshot.clone(),
+        control.clone(),
+    );
+    let control = control
+        .with_identity_proof(admitted.identity_proof.clone())
+        .with_local_operation_host(Arc::new(local_host));
     let context = admitted.context.clone();
     let failed = || supervisor_failure(&context);
     let Some(registration) = state.reloadable.operations.register(control.clone()) else {

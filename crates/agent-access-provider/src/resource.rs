@@ -264,6 +264,7 @@ pub struct ResourceTypeDescriptor {
     plural_label: Cow<'static, str>,
     example: Cow<'static, str>,
     canonical: ValueGrammar,
+    all_selector: bool,
     namespace: Option<NamespaceSelectorDescriptor>,
     attributes: Cow<'static, [ResourceAttributeDescriptor]>,
     action_inputs: Option<ResourceActionInputs>,
@@ -484,6 +485,7 @@ impl ResourceTypeDescriptor {
             plural_label: Cow::Borrowed(plural_label),
             example: Cow::Borrowed(example),
             canonical: ValueGrammar::Function(canonical),
+            all_selector: true,
             namespace: None,
             attributes: Cow::Borrowed(attributes),
             action_inputs: None,
@@ -542,10 +544,19 @@ impl ResourceTypeDescriptor {
             plural_label: Cow::Owned(plural_label.into()),
             example: Cow::Owned(example.into()),
             canonical: ValueGrammar::Pattern(pattern),
+            all_selector: true,
             namespace: None,
             attributes: Cow::Owned(attributes),
             action_inputs: None,
         }
+    }
+
+    /// Restrict this type to exact selectors. This removes both broad selector
+    /// forms; policy catalogs and client metadata use the same restriction.
+    pub const fn exact_only(mut self) -> Self {
+        self.all_selector = false;
+        self.namespace = None;
+        self
     }
 
     /// Adds namespace selectors: a prefix that covers every canonical target
@@ -649,13 +660,15 @@ impl ResourceTypeDescriptor {
         if self.namespace.is_some() {
             kinds.push("namespace");
         }
-        kinds.push("all");
+        if self.all_selector {
+            kinds.push("all");
+        }
         kinds
     }
 
     pub fn accepts(&self, selector: &ResourceSelector) -> bool {
         match selector {
-            ResourceSelector::All => true,
+            ResourceSelector::All => self.all_selector,
             ResourceSelector::Exact { value } => self.is_canonical_target(value),
             ResourceSelector::Namespace { value } => self
                 .namespace
@@ -1108,6 +1121,18 @@ mod tests {
             format!("{:?}", ResourcePattern::new("[a-z]+", 3).unwrap()),
             r#"ResourcePattern { source: "[a-z]+", max_length: 3 }"#
         );
+    }
+
+    #[test]
+    fn exact_only_types_reject_broad_selectors_in_validation_and_metadata() {
+        let resource = GIT_REPOSITORY_RESOURCE.clone().exact_only();
+        assert_eq!(resource.selector_kinds(), ["exact"]);
+        assert!(resource.accepts(&exact("team/project")));
+        assert!(!resource.accepts(&ResourceSelector::All));
+        assert!(!resource.accepts(&ResourceSelector::Namespace {
+            value: "team".into()
+        }));
+        assert_eq!(resource.metadata().selectors, ["exact"]);
     }
 
     #[test]

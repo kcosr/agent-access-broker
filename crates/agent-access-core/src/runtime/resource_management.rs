@@ -637,7 +637,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(preview.access.len(), 1);
-        assert!(!preview.access[0].clauses[0].matches("PRIVATE"));
+        assert!(!preview.access[0].clauses[0].matches_partial_target("project", "PRIVATE"));
         assert!(
             runtime
                 .policy_resource_catalog_for_scope(&PolicyReadScope::Services {

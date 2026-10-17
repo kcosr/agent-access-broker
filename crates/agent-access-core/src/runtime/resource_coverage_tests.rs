@@ -81,7 +81,7 @@ impl BackendConfig for FixtureConfig {
                     .into_iter()
                     .map(|action| {
                         ActionDescriptor::new(action, "Fixture action", schema.clone())
-                            .scope("job")
+                            .scopes(["job"])
                             .credential_modes(["service", "per_user"])
                     })
                     .collect(),
@@ -463,7 +463,7 @@ fn precedence_conditions_withhold_single_targets_until_another_clause_serves_the
         runtime
             .service_discovery(&IdentityContext::anonymous(), &default_context(), SERVICE)
             .unwrap()
-            .actions(Some("other-ci/x/y"), None, None)
+            .actions(Some("other-ci/x/y"), None, None, None)
             .unwrap()
             .actions
             .is_empty()

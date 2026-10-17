@@ -1,7 +1,7 @@
 //! Scoped MCP readiness belongs to the immutable runtime publication. It never
 //! rejects an otherwise valid aggregate catalog or resolves credentials.
 use super::*;
-use crate::mcp::{ScopedMcpReadiness, evaluate_scoped_mcp_readiness};
+use crate::mcp::{ScopedMcpReadiness, evaluate_projected_scoped_mcp_readiness};
 
 impl BrokerRuntime {
     pub fn scoped_mcp_diagnostics(&self, service: &str) -> ScopedMcpReadiness {
@@ -36,7 +36,9 @@ impl BrokerRuntime {
         let Some(descriptor) = self.services.get(service) else {
             return ScopedMcpReadiness::unavailable();
         };
-        if descriptor.surface != ServiceSurface::Invoke || !self.providers.contains_key(service) {
+        if descriptor.surface != ServiceSurface::Invoke
+            || self.service_registration(service).is_none()
+        {
             return ScopedMcpReadiness::unavailable();
         }
         let mut descriptor = (**descriptor).clone();
@@ -46,7 +48,14 @@ impl BrokerRuntime {
         if descriptor.actions.is_empty() {
             return ScopedMcpReadiness::unavailable();
         }
-        evaluate_scoped_mcp_readiness(&descriptor, self.config.mcp.max_catalog_bytes)
+        let Some(projected) = self.project_service_spec(&descriptor) else {
+            return ScopedMcpReadiness::unavailable();
+        };
+        evaluate_projected_scoped_mcp_readiness(
+            &descriptor,
+            projected,
+            self.config.mcp.max_catalog_bytes,
+        )
     }
 
     /// A prepared import mutation proves every other record/provider unchanged,
@@ -81,16 +90,25 @@ mod tests {
         assert!(!config.mcp.enabled);
         let runtime = BrokerRuntime::new(config).unwrap();
         assert!(runtime.scoped_mcp_diagnostics("fake").ready);
+        assert!(runtime.scoped_mcp_diagnostics("broker_management").ready);
         assert!(!runtime.scoped_mcp_diagnostics("unknown").ready);
-        assert!(runtime.api_services_all()[0].scoped_mcp_ready);
+        let all = runtime.api_services_all();
+        let fake = all
+            .iter()
+            .find(|service| service.service == "fake")
+            .unwrap();
+        assert!(fake.scoped_mcp_ready);
         let visible = runtime.api_services_for_identity(
             &IdentityContext::anonymous(),
             &ExecutionContext::new(DEFAULT_EXECUTION_CONTEXT).unwrap(),
         );
-        assert!(visible[0].scoped_mcp_ready);
+        let fake = visible
+            .iter()
+            .find(|service| service.service == "fake")
+            .unwrap();
+        assert!(fake.scoped_mcp_ready);
         assert!(
-            visible[0]
-                .actions
+            fake.actions
                 .iter()
                 .all(|a| a.scoped_mcp_name.as_deref() == Some(&a.action))
         );
@@ -108,6 +126,11 @@ mod tests {
             serde_json::to_value(&state).unwrap()["issues"][0]["code"],
             "projection_budget"
         );
-        assert!(!runtime.api_services_all()[0].actions.is_empty());
+        let all = runtime.api_services_all();
+        let fake = all
+            .iter()
+            .find(|service| service.service == "fake")
+            .unwrap();
+        assert!(!fake.actions.is_empty());
     }
 }

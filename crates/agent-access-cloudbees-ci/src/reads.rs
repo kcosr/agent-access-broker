@@ -45,7 +45,7 @@ pub(super) fn descriptors() -> Vec<ActionDescriptor> {
             let descriptor = ActionDescriptor::new(*name, *description, input::schema(name))
                 .documentation(input::documentation(name))
                 .read_only()
-                .scope("job")
+                .scopes(["job"])
                 .credential_modes(["service", "per_user"]);
             if name.ends_with(".download") {
                 descriptor.raw_download()

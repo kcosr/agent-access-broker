@@ -18,7 +18,7 @@ const excludedResource = { ...resource, id: "private-repository", displayName: "
 const resourceGroups = Array.from({ length: 8 }, (_, i) => ({ id: `portfolio-${i + 1}`, name: `Portfolio ${i + 1}`, includedResourceIds: [resource.id], excludedResourceIds: [excludedResource.id], version: 1, ...stamp }));
 const userGroup = { groupId: "engineering-team", displayName: "Platform operators", description: "Incident response staff", status: "active", memberCount: 1, ...stamp };
 const principal = { principalId: "viewer", kind: "user", role: "admin", selfServiceEnabled: true, displayName: "Morgan Example", email: "morgan@example.test", groups: [userGroup.groupId], status: "active", signInMethods: { localPassword: "active", microsoft: "absent" }, ...stamp };
-const action = { action: "issue.inspect", description: "Inspect issue details", readOnly: true, requiredScopeTypes: [], credentialModes: ["service"], lookupRequired: false, inputSchema: { type: "object", properties: {} } };
+const action = { action: "issue.inspect", description: "Inspect issue details", readOnly: true, requiredScopes: {}, credentialModes: ["service"], lookupRequired: false, inputSchema: { type: "object", properties: {} } };
 const service = { service: "jira", displayName: "Jira", surface: "http", actions: [action], resourceScopes: {}, configuredCredentialModes: ["service"], lookupCredentialConfigured: false };
 const catalog = { services: [service], subjects: { users: [principal], groups: [userGroup], anonymous: false }, resources: [resource, excludedResource], resourceGroups, executionContexts: { allowedValues: ["default"], defaultContext: "default", contextRequired: false } };
 const config = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
@@ -69,7 +69,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEna
     else if (pathname === "/v1/admin/policy/resources") result = [resource, excludedResource];
     else if (pathname === "/v1/admin/policy/resource-groups") result = resourceGroups;
     else if (pathname.endsWith("/effective-access")) result = { policyGeneration: 1, access: [] };
-    else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
+    else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ requiredScopes: { "project": { resourceType: "jira_project" } }, ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [{ scopes: {}, excludedRequests: [] }] } }] }], resources: [resource], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = [target];
     else if (pathname === "/v1/credentials") result = credentialList;
     else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [draftImport] };

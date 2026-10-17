@@ -21,88 +21,194 @@ pub struct EffectiveAccessEntry {
     pub service: String,
     pub action: String,
     pub execution_context: ExecutionContext,
-    pub resource_type: Option<ResourceType>,
     pub clauses: Vec<EffectiveAccessClause>,
 }
 
-/// A complete request must fit one clause. `excluded_requests` are precedence
-/// conditions on the whole request, distinct from per-resource exclusions.
+/// One typed dimension of an effective request boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EffectiveAccessClause {
+pub struct EffectiveAccessScope {
+    pub resource_type: ResourceType,
     pub included: Vec<ResourceSelector>,
     pub excluded: Vec<ResourceSelector>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub excluded_requests: Vec<ResourceBoundary>,
 }
 
-impl EffectiveAccessClause {
-    pub(super) fn from_boundary(boundary: ResourceBoundary) -> Self {
+impl EffectiveAccessScope {
+    fn new(resource_type: ResourceType, boundary: ResourceBoundary) -> Self {
         Self {
+            resource_type,
             included: boundary.included,
             excluded: boundary.excluded,
-            excluded_requests: Vec::new(),
         }
     }
-
     fn boundary(&self) -> ResourceBoundary {
         ResourceBoundary {
             included: self.included.clone(),
             excluded: self.excluded.clone(),
         }
     }
+}
 
-    pub fn matches_request(&self, targets: &[&str]) -> bool {
-        !targets.is_empty()
-            && targets.iter().all(|target| self.boundary().matches(target))
-            && !self
-                .excluded_requests
-                .iter()
-                .any(|boundary| targets.iter().all(|target| boundary.matches(target)))
-    }
+/// A precedence exclusion applies to one complete request, retaining all
+/// scope dimensions together rather than denying their independent projections.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EffectiveRequestBoundary {
+    pub scopes: BTreeMap<String, EffectiveAccessScope>,
+}
 
-    pub fn matches(&self, target: &str) -> bool {
-        self.matches_request(&[target])
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EffectiveAccessClause {
+    pub scopes: BTreeMap<String, EffectiveAccessScope>,
+    pub excluded_requests: Vec<EffectiveRequestBoundary>,
+}
 
-    fn is_empty(&self) -> bool {
-        let allowed = self.boundary();
-        allowed.is_empty()
-            || self
-                .excluded_requests
-                .iter()
-                .any(|forbidden| subtract_boundary(&allowed, forbidden).is_empty())
-    }
+fn scope_boundaries_match(
+    scopes: &BTreeMap<String, EffectiveAccessScope>,
+    targets: &ResourceScopes,
+) -> bool {
+    scopes.len() == targets.len()
+        && scopes.iter().all(|(name, scope)| {
+            targets.get(name).is_some_and(|values| {
+                !values.is_empty() && values.iter().all(|value| scope.boundary().matches(value))
+            })
+        })
+}
 
-    fn intersection(&self, restriction: &ResourceBoundary) -> Self {
-        let allowed = self.boundary().intersection(restriction);
+impl EffectiveAccessClause {
+    pub(super) fn from_boundary(
+        name: String,
+        resource_type: ResourceType,
+        boundary: ResourceBoundary,
+    ) -> Self {
         Self {
-            included: allowed.included,
-            excluded: allowed.excluded,
-            excluded_requests: self.excluded_requests.clone(),
+            scopes: BTreeMap::from([(name, EffectiveAccessScope::new(resource_type, boundary))]),
+            excluded_requests: Vec::new(),
         }
     }
 
-    fn intersects(&self, boundary: &ResourceBoundary) -> bool {
-        !self.intersection(boundary).is_empty()
+    fn from_candidate(candidate: &PolicyCandidate) -> Self {
+        Self {
+            scopes: candidate
+                .scopes
+                .iter()
+                .map(|(name, scope)| {
+                    (
+                        name.clone(),
+                        EffectiveAccessScope::new(
+                            scope.resource_type.id().clone(),
+                            scope.boundary.clone(),
+                        ),
+                    )
+                })
+                .collect(),
+            excluded_requests: Vec::new(),
+        }
     }
 
-    /// The targets a single-resource request reaches under this clause: the
-    /// allowed boundary minus every precedence condition. Unlike
-    /// [`Self::intersects`], which admits a request spanning several
-    /// conditions, one target is withheld by any condition that contains it.
-    pub(super) fn single_target_reach(&self) -> Vec<ResourceBoundary> {
-        self.excluded_requests.iter().fold(
-            deduplicate_boundaries(vec![self.boundary()]),
-            |parts, forbidden| {
-                deduplicate_boundaries(
-                    parts
-                        .iter()
-                        .flat_map(|part| subtract_boundary(part, forbidden))
-                        .collect(),
-                )
-            },
-        )
+    pub(super) fn action_only() -> Self {
+        Self {
+            scopes: BTreeMap::new(),
+            excluded_requests: Vec::new(),
+        }
+    }
+
+    pub fn matches_request(&self, targets: &ResourceScopes) -> bool {
+        scope_boundaries_match(&self.scopes, targets)
+            && !self
+                .excluded_requests
+                .iter()
+                .any(|request| scope_boundaries_match(&request.scopes, targets))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.scopes
+            .values()
+            .any(|scope| scope.boundary().is_empty())
+            || self.excluded_requests.iter().any(|request| {
+                request.scopes.len() == self.scopes.len()
+                    && self.scopes.iter().all(|(name, allowed)| {
+                        request.scopes.get(name).is_some_and(|forbidden| {
+                            forbidden.resource_type == allowed.resource_type
+                                && subtract_boundary(&allowed.boundary(), &forbidden.boundary())
+                                    .is_empty()
+                        })
+                    })
+            })
+    }
+
+    fn intersection(&self, restriction: &BTreeMap<String, ResourceBoundary>) -> Self {
+        let mut result = self.clone();
+        for (name, scope) in &mut result.scopes {
+            *scope = EffectiveAccessScope::new(
+                scope.resource_type.clone(),
+                scope
+                    .boundary()
+                    .intersection(&restriction.get(name).cloned().unwrap_or_default()),
+            );
+        }
+        result
+    }
+
+    fn intersects_scope(&self, name: &str, boundary: &ResourceBoundary) -> bool {
+        let Some(scope) = self.scopes.get(name) else {
+            return false;
+        };
+        let mut narrowed = self.clone();
+        narrowed.scopes.insert(
+            name.to_owned(),
+            EffectiveAccessScope::new(
+                scope.resource_type.clone(),
+                scope.boundary().intersection(boundary),
+            ),
+        );
+        !narrowed.is_empty()
+    }
+
+    /// Existential projection of a complete clause to one named scope. Each
+    /// other scope must retain a viable partner request in this same clause.
+    pub(super) fn single_target_reach(&self, name: &str) -> Vec<ResourceBoundary> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let Some(scope) = self.scopes.get(name) else {
+            return Vec::new();
+        };
+        self.excluded_requests
+            .iter()
+            .filter(|request| {
+                self.scopes
+                    .iter()
+                    .filter(|(other, _)| other.as_str() != name)
+                    .all(|(other, allowed)| {
+                        request.scopes.get(other).is_some_and(|forbidden| {
+                            forbidden.resource_type == allowed.resource_type
+                                && subtract_boundary(&allowed.boundary(), &forbidden.boundary())
+                                    .is_empty()
+                        })
+                    })
+            })
+            .fold(
+                deduplicate_boundaries(vec![scope.boundary()]),
+                |parts, request| {
+                    let Some(forbidden) = request.scopes.get(name) else {
+                        return parts;
+                    };
+                    deduplicate_boundaries(
+                        parts
+                            .iter()
+                            .flat_map(|part| subtract_boundary(part, &forbidden.boundary()))
+                            .collect(),
+                    )
+                },
+            )
+    }
+
+    pub(super) fn matches_partial_target(&self, name: &str, target: &str) -> bool {
+        self.single_target_reach(name)
+            .iter()
+            .any(|boundary| boundary.matches(target))
     }
 }
 
@@ -223,38 +329,40 @@ impl BrokerRuntime {
                     "preview service/action is not supported".into(),
                 ));
             }
-            let Some(resource_type) = self.action_resource_type(service, action) else {
-                if !resources.is_empty() {
-                    return Err(ManagedStoreError::PolicyValidationFailed(
-                        "resource selections are unsupported for this action".into(),
-                    ));
-                }
-                access.extend(
-                    execution_contexts
-                        .iter()
-                        .map(|context| EffectiveAccessEntry {
-                            service: service.into(),
-                            action: action.clone(),
-                            execution_context: context.clone(),
-                            resource_type: None,
-                            clauses: Vec::new(),
-                        }),
-                );
-                continue;
-            };
-            for context in execution_contexts {
-                let boundary = normalize_boundary(snapshot.resources.resolve(
-                    resources,
-                    &resource_type,
-                    context.as_str(),
+            let required = self
+                .action_resource_scopes(service, action)
+                .unwrap_or_default();
+            if required.is_empty() && !resources.is_empty() {
+                return Err(ManagedStoreError::PolicyValidationFailed(
+                    "resource selections are unsupported for this action".into(),
                 ));
-                if !boundary.is_empty() {
+            }
+            for context in execution_contexts {
+                let clause = EffectiveAccessClause {
+                    scopes: required
+                        .iter()
+                        .map(|scope| {
+                            (
+                                scope.scope.clone(),
+                                EffectiveAccessScope::new(
+                                    scope.resource_type.id().clone(),
+                                    normalize_boundary(snapshot.resources.resolve(
+                                        resources,
+                                        scope.resource_type.id(),
+                                        context.as_str(),
+                                    )),
+                                ),
+                            )
+                        })
+                        .collect(),
+                    excluded_requests: Vec::new(),
+                };
+                if !clause.is_empty() {
                     access.push(EffectiveAccessEntry {
-                        service: service.to_string(),
+                        service: service.into(),
                         action: action.clone(),
                         execution_context: context.clone(),
-                        resource_type: Some(resource_type.clone()),
-                        clauses: vec![EffectiveAccessClause::from_boundary(boundary)],
+                        clauses: vec![clause],
                     });
                 }
             }
@@ -287,31 +395,6 @@ impl BrokerRuntime {
         let mut access = Vec::new();
         for service in self.services.values() {
             for action in &service.actions {
-                let Some(resource_type) =
-                    self.action_resource_type(&service.service, &action.action)
-                else {
-                    for context in &configured_contexts {
-                        if caveats_permit_action(caveats, context, &service.service, &action.action)
-                            && self.action_has_effective_access(
-                                &snapshot,
-                                identity,
-                                context,
-                                &service.service,
-                                &action.action,
-                                Some(caveats),
-                            )
-                        {
-                            access.push(EffectiveAccessEntry {
-                                service: service.service.clone(),
-                                action: action.action.clone(),
-                                execution_context: context.clone(),
-                                resource_type: None,
-                                clauses: Vec::new(),
-                            });
-                        }
-                    }
-                    continue;
-                };
                 for context in &configured_contexts {
                     let clauses = self.effective_resource_clauses(
                         &snapshot,
@@ -326,7 +409,6 @@ impl BrokerRuntime {
                             service: service.service.clone(),
                             action: action.action.clone(),
                             execution_context: context.clone(),
-                            resource_type: Some(resource_type.clone()),
                             clauses,
                         });
                     }
@@ -429,11 +511,16 @@ impl BrokerRuntime {
             .is_some_and(|descriptor| descriptor.search_contained);
         let mut clauses = if search_contained {
             match self.plan_search_authorization(snapshot, identity, context, service, action) {
-                Ok(search) if mode_available(&search.credential_mode) => {
-                    vec![EffectiveAccessClause::from_boundary(
-                        super::search_scope_boundary(&search.scope),
-                    )]
-                }
+                Ok(search) if mode_available(&search.credential_mode) => self
+                    .action_resource_type(service, action)
+                    .map(|resource_type| {
+                        vec![EffectiveAccessClause::from_boundary(
+                            search.scope_type.clone(),
+                            resource_type,
+                            super::search_scope_boundary(&search.scope),
+                        )]
+                    })
+                    .unwrap_or_default(),
                 _ => Vec::new(),
             }
         } else {
@@ -456,8 +543,12 @@ impl BrokerRuntime {
         if let Some(boundary) = token.and_then(|caveats| {
             self.token_resource_boundary(snapshot, context, caveats, service, action)
         }) {
+            if boundary.is_empty() {
+                return Vec::new();
+            }
             clauses = clauses
                 .into_iter()
+                .filter(|clause| clause.scopes.keys().eq(boundary.keys()))
                 .map(|clause| normalize_clause(clause.intersection(&boundary)))
                 .filter(|clause| !clause.is_empty())
                 .collect();
@@ -511,7 +602,10 @@ impl BrokerRuntime {
                         .resources
                         .get(&id)
                         .is_some_and(|resource| {
-                            action.resource_type.as_ref() == Some(&resource.resource_type)
+                            action
+                                .required_scopes
+                                .values()
+                                .any(|scope| scope.resource_type == resource.resource_type)
                         })
                     {
                         authored_resources.insert(id);
@@ -537,7 +631,12 @@ impl BrokerRuntime {
                 services
                     .iter()
                     .flat_map(|service| &service.actions)
-                    .filter(|action| action.resource_type.as_ref() == Some(&resource.resource_type))
+                    .filter(|action| {
+                        action
+                            .required_scopes
+                            .values()
+                            .any(|scope| scope.resource_type == resource.resource_type)
+                    })
                     .any(|action| {
                         action.effective_access_by_execution_context.iter().any(
                             |(context, clauses)| {
@@ -545,7 +644,12 @@ impl BrokerRuntime {
                                     .allowed_execution_contexts
                                     .iter()
                                     .any(|allowed| allowed == context.as_str())
-                                    && clauses.iter().any(|clause| clause.intersects(&entry))
+                                    && clauses.iter().any(|clause| {
+                                        clause.scopes.iter().any(|(name, scope)| {
+                                            scope.resource_type == resource.resource_type
+                                                && clause.intersects_scope(name, &entry)
+                                        })
+                                    })
                             },
                         )
                     })
@@ -568,15 +672,16 @@ impl BrokerRuntime {
                         .any(|action| {
                             action.effective_access_by_execution_context.iter().any(
                                 |(context, clauses)| {
-                                    let Some(resource_type) = action.resource_type.as_ref() else {
-                                        return false;
-                                    };
-                                    let boundary = snapshot.resources.resolve(
-                                        &selection,
-                                        resource_type,
-                                        context.as_str(),
-                                    );
-                                    clauses.iter().any(|clause| clause.intersects(&boundary))
+                                    action.required_scopes.iter().any(|(name, scope)| {
+                                        let boundary = snapshot.resources.resolve(
+                                            &selection,
+                                            &scope.resource_type,
+                                            context.as_str(),
+                                        );
+                                        clauses
+                                            .iter()
+                                            .any(|clause| clause.intersects_scope(name, &boundary))
+                                    })
                                 },
                             )
                         });
@@ -683,16 +788,39 @@ fn subtract_boundary(left: &ResourceBoundary, right: &ResourceBoundary) -> Vec<R
 }
 
 fn normalize_clause(mut clause: EffectiveAccessClause) -> EffectiveAccessClause {
-    let allowed = normalize_boundary(clause.boundary());
-    clause.included = allowed.included.clone();
-    clause.excluded = allowed.excluded.clone();
-    clause.excluded_requests = deduplicate_boundaries(
-        clause
-            .excluded_requests
-            .iter()
-            .map(|boundary| boundary.intersection(&allowed))
-            .collect(),
-    );
+    for scope in clause.scopes.values_mut() {
+        *scope = EffectiveAccessScope::new(
+            scope.resource_type.clone(),
+            normalize_boundary(scope.boundary()),
+        );
+    }
+    let mut exclusions = Vec::new();
+    for request in clause.excluded_requests {
+        if !request.scopes.keys().eq(clause.scopes.keys()) {
+            continue;
+        }
+        let mut scopes = BTreeMap::new();
+        for (name, forbidden) in request.scopes {
+            let allowed = &clause.scopes[&name];
+            if forbidden.resource_type != allowed.resource_type {
+                break;
+            }
+            let boundary =
+                normalize_boundary(forbidden.boundary().intersection(&allowed.boundary()));
+            if boundary.is_empty() {
+                break;
+            }
+            scopes.insert(
+                name,
+                EffectiveAccessScope::new(forbidden.resource_type, boundary),
+            );
+        }
+        let request = EffectiveRequestBoundary { scopes };
+        if request.scopes.len() == clause.scopes.len() && !exclusions.contains(&request) {
+            exclusions.push(request);
+        }
+    }
+    clause.excluded_requests = exclusions;
     clause
 }
 
@@ -732,14 +860,16 @@ fn candidate_clauses_for_modes(
             continue;
         }
         let candidate_band = (candidate.subject_rank, candidate.priority);
-        let mut clause = EffectiveAccessClause::from_boundary(candidate.boundary.clone());
+        let mut clause = EffectiveAccessClause::from_candidate(candidate);
         for other in candidates {
             let other_band = (other.subject_rank, other.priority);
             if other_band > candidate_band
                 || other_band == candidate_band
                     && other.credential_mode != candidate.credential_mode
             {
-                clause.excluded_requests.push(other.boundary.clone());
+                clause.excluded_requests.push(EffectiveRequestBoundary {
+                    scopes: EffectiveAccessClause::from_candidate(other).scopes,
+                });
             }
         }
         result.push(clause);
@@ -786,11 +916,13 @@ mod tests {
             grant_version: None,
             resources: ResourceSelection::default(),
             execution_contexts: vec![ExecutionContext::new("default").unwrap()],
-            resource_scope: Some(ActionResourceScope {
-                scope: "repository".to_string(),
-                resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
-            }),
-            boundary,
+            scopes: BTreeMap::from([(
+                "repository".into(),
+                PolicyCandidateScope {
+                    resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
+                    boundary,
+                },
+            )]),
         }
     }
 
@@ -877,13 +1009,15 @@ mod tests {
         ] {
             let matches = candidates
                 .iter()
-                .filter(|candidate| candidate.boundary.matches(path))
+                .filter(|candidate| candidate.scopes["repository"].boundary.matches(path))
                 .cloned()
                 .collect::<Vec<_>>();
             let expected = single_policy_credential_mode(&top_policy_band(matches))
                 .is_ok_and(|mode| crate::credential_mode_configured(&credentials, "gitlab", &mode));
             assert_eq!(
-                preview.iter().any(|clause| clause.matches(path)),
+                preview
+                    .iter()
+                    .any(|clause| clause.matches_partial_target("repository", path)),
                 expected,
                 "preview diverged at {path}"
             );
@@ -891,13 +1025,15 @@ mod tests {
         assert!(
             !preview
                 .iter()
-                .any(|clause| clause.matches("engineering/platform/api")),
+                .any(|clause| clause
+                    .matches_partial_target("repository", "engineering/platform/api")),
             "same winning band conflicts must be hidden"
         );
         assert!(
             preview
                 .iter()
-                .any(|clause| clause.matches("engineering/private/repo")),
+                .any(|clause| clause
+                    .matches_partial_target("repository", "engineering/private/repo")),
             "higher grant exclusion does not suppress an eligible lower grant"
         );
     }
@@ -938,10 +1074,14 @@ mod tests {
                 candidate("per_user", 1, 1, boundary(vec![exact(second)], vec![])),
             ];
             for (index, candidate) in candidates.iter_mut().enumerate() {
-                candidate.resource_scope = Some(ActionResourceScope {
-                    scope: scope.into(),
-                    resource_type: Arc::new(resource_type.clone()),
-                });
+                let boundary = candidate.scopes.remove("repository").unwrap().boundary;
+                candidate.scopes.insert(
+                    scope.into(),
+                    PolicyCandidateScope {
+                        resource_type: Arc::new(resource_type.clone()),
+                        boundary,
+                    },
+                );
                 candidate.subject = format!("group:group-{index}");
             }
             let clauses = usable_candidate_clauses(&candidates, &credentials, "test", None);
@@ -957,19 +1097,24 @@ mod tests {
                     .collect::<Vec<_>>();
                 let expected = single_policy_credential_mode(&top_policy_band(matching)).is_ok();
                 assert_eq!(
-                    clauses
-                        .iter()
-                        .any(|clause| clause.matches_request(&targets)),
+                    clauses.iter().any(|clause| clause.matches_request(&scopes)),
                     expected,
                     "whole-request preview diverged for {} {targets:?}",
                     resource_type.id()
                 );
             }
-            assert!(!clauses.iter().any(|clause| clause.matches(first)));
+            assert!(
+                !clauses
+                    .iter()
+                    .any(|clause| clause.matches_partial_target(scope, first))
+            );
             assert!(
                 clauses
                     .iter()
-                    .any(|clause| clause.matches_request(&[first, second])),
+                    .any(|clause| clause.matches_request(&ResourceScopes::from([(
+                        scope.into(),
+                        vec![first.into(), second.into()]
+                    )]))),
                 "narrow high grants do not match a cross-resource request"
             );
             assert!(
@@ -982,13 +1127,124 @@ mod tests {
                 deduplicate_clauses(
                     clauses
                         .iter()
-                        .map(|clause| clause.intersection(&token))
+                        .map(|clause| clause
+                            .intersection(&BTreeMap::from([(scope.into(), token.clone())])))
                         .collect()
                 )
                 .is_empty(),
                 "token narrowing retains the whole-request precedence condition"
             );
         }
+    }
+
+    #[test]
+    fn plural_precedence_exclusions_retain_the_whole_request_conjunction() {
+        let make = |mode: &str, priority, repos: &[&str], spaces: &[&str]| {
+            let mut grant = candidate(
+                mode,
+                1,
+                priority,
+                boundary(repos.iter().map(|value| exact(value)).collect(), vec![]),
+            );
+            grant.scopes.insert(
+                "space".into(),
+                PolicyCandidateScope {
+                    resource_type: Arc::new(
+                        agent_access_confluence::CONFLUENCE_SPACE_RESOURCE.clone(),
+                    ),
+                    boundary: boundary(spaces.iter().map(|value| exact(value)).collect(), vec![]),
+                },
+            );
+            grant
+        };
+        let candidates = vec![
+            make("service", 0, &["team/a", "team/b"], &["ENG", "OPS"]),
+            make("service", 1, &["team/a"], &["ENG"]),
+            make("per_user", 1, &["team/a"], &["ENG"]),
+            make("per_user", 1, &["team/b"], &["ENG"]),
+            make("unavailable", 1, &["team/b"], &["OPS"]),
+        ];
+        let clauses = candidate_clauses_for_modes(&candidates, |mode| mode != "unavailable");
+        for repositories in [vec!["team/a"], vec!["team/b"], vec!["team/a", "team/b"]] {
+            for spaces in [vec!["ENG"], vec!["OPS"], vec!["ENG", "OPS"]] {
+                let request = ResourceScopes::from([
+                    (
+                        "repository".into(),
+                        repositories.iter().map(|value| (*value).into()).collect(),
+                    ),
+                    (
+                        "space".into(),
+                        spaces.iter().map(|value| (*value).into()).collect(),
+                    ),
+                ]);
+                let matching = candidates
+                    .iter()
+                    .filter(|grant| candidate_authorizes_scopes(grant, &request))
+                    .cloned()
+                    .collect();
+                let expected = single_policy_credential_mode(&top_policy_band(matching))
+                    .is_ok_and(|mode| mode != "unavailable");
+                assert_eq!(
+                    clauses
+                        .iter()
+                        .any(|clause| clause.matches_request(&request)),
+                    expected,
+                    "{request:?}"
+                );
+            }
+        }
+        let lower = clauses
+            .iter()
+            .find(|clause| !clause.excluded_requests.is_empty())
+            .unwrap();
+        assert!(
+            lower.matches_partial_target("repository", "team/a"),
+            "OPS remains a partner even though (a,ENG) is excluded"
+        );
+        assert!(
+            lower.matches_partial_target("space", "OPS"),
+            "a remains a partner even though (b,OPS) is excluded"
+        );
+        assert!(
+            lower.matches_partial_target("repository", "team/b"),
+            "a multi-target partner spanning both narrow higher grants still reaches the lower grant"
+        );
+        let wire = serde_json::to_value(lower).unwrap();
+        assert_eq!(
+            wire["excludedRequests"][0]["scopes"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+        let restriction = BTreeMap::from([
+            ("repository".into(), boundary(vec![exact("team/a")], vec![])),
+            ("space".into(), boundary(vec![exact("ENG")], vec![])),
+        ]);
+        assert!(
+            deduplicate_clauses(
+                clauses
+                    .iter()
+                    .map(|clause| clause.intersection(&restriction))
+                    .collect()
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn action_only_clauses_are_explicit_and_reject_extra_dimensions() {
+        let clause = EffectiveAccessClause::action_only();
+        assert!(clause.matches_request(&ResourceScopes::new()));
+        assert!(!clause.matches_request(&ResourceScopes::from([(
+            "project".into(),
+            vec!["ENG".into()]
+        )])));
+        assert_eq!(
+            serde_json::to_value(&clause).unwrap(),
+            json!({"scopes":{},"excludedRequests":[]})
+        );
+        assert_eq!(deduplicate_clauses(vec![clause]).len(), 1);
     }
 
     #[test]
@@ -1021,22 +1277,37 @@ mod tests {
 
     #[test]
     fn single_target_reach_withholds_targets_inside_any_precedence_condition() {
-        let clause = EffectiveAccessClause {
-            included: vec![ResourceSelector::All],
-            excluded: vec![],
-            excluded_requests: vec![
-                boundary(vec![namespace("team")], vec![namespace("team/open")]),
-                boundary(vec![namespace("team/open")], vec![]),
-            ],
-        };
+        let mut clause = EffectiveAccessClause::from_boundary(
+            "repository".into(),
+            agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
+            boundary(vec![ResourceSelector::All], vec![]),
+        );
+        clause.excluded_requests = vec![
+            boundary(vec![namespace("team")], vec![namespace("team/open")]),
+            boundary(vec![namespace("team/open")], vec![]),
+        ]
+        .into_iter()
+        .map(|boundary| EffectiveRequestBoundary {
+            scopes: EffectiveAccessClause::from_boundary(
+                "repository".into(),
+                agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
+                boundary,
+            )
+            .scopes,
+        })
+        .collect();
         let team = boundary(vec![namespace("team")], vec![]);
         assert!(
-            clause.intersects(&team) && clause.matches_request(&["team/open/a", "team/b"]),
+            clause.intersects_scope("repository", &team)
+                && clause.matches_request(&ResourceScopes::from([(
+                    "repository".into(),
+                    vec!["team/open/a".into(), "team/b".into()]
+                )])),
             "a request spanning both conditions remains admitted"
         );
-        let reach = clause.single_target_reach();
+        let reach = clause.single_target_reach("repository");
         for target in ["team/open/a", "team/b"] {
-            assert!(!clause.matches(target));
+            assert!(!clause.matches_partial_target("repository", target));
             assert!(!reach.iter().any(|part| part.matches(target)));
         }
         assert!(!reach.iter().any(|part| part.intersects(&team)));
