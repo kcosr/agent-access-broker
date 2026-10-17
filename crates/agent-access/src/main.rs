@@ -10363,9 +10363,17 @@ fn strict_secret_reference(value: &Value) -> bool {
 fn secret_reference_capability(value: &str) -> bool {
     value.strip_prefix("sr_").is_some_and(|value| {
         value.len() == 43
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            && base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(value)
+                .is_ok_and(|bytes| bytes.len() == 32)
+    })
+}
+
+fn contains_secret_reference_capability(value: &str) -> bool {
+    value.match_indices("sr_").any(|(start, _)| {
+        value
+            .get(start..start + 46)
+            .is_some_and(secret_reference_capability)
     })
 }
 
@@ -10391,7 +10399,7 @@ fn validate_inline_secret_references(
                 return Ok(());
             }
             for (name, value) in object {
-                if secret_reference_capability(name) {
+                if contains_secret_reference_capability(name) {
                     anyhow::bail!(
                         "secret references require a strict reference object at a catalog-declared secret input"
                     );
@@ -10405,7 +10413,7 @@ fn validate_inline_secret_references(
                 validate_inline_secret_references(value, &format!("{pointer}/{index}"), declared)?;
             }
         }
-        Value::String(value) if secret_reference_capability(value) => {
+        Value::String(value) if contains_secret_reference_capability(value) => {
             anyhow::bail!(
                 "secret references require a strict reference object at a catalog-declared secret input"
             );
@@ -22224,6 +22232,8 @@ upload_spool_dir = "upload-spool"
             serde_json::json!({"other":reference["secretRef"]}),
             serde_json::json!({"ordinary":{"values":[reference["secretRef"]]}}),
             serde_json::json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
+            serde_json::json!({"other":format!("Bearer {}", reference["secretRef"].as_str().unwrap())}),
+            serde_json::json!({(format!("TOKEN={}", reference["secretRef"].as_str().unwrap())):"ordinary-value"}),
         ] {
             assert!(
                 reject_inline_sensitive_values(
@@ -22254,6 +22264,12 @@ upload_spool_dir = "upload-spool"
         .unwrap();
         reject_inline_sensitive_values(
             &serde_json::json!({"inputs":{"secretRef":"vault:application-name"}}),
+            &sensitive,
+            &declared,
+        )
+        .unwrap();
+        reject_inline_sensitive_values(
+            &serde_json::json!({"inputs":{"other":format!("not-canonical=sr_{}", "B".repeat(43))}}),
             &sensitive,
             &declared,
         )

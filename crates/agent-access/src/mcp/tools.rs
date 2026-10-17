@@ -987,6 +987,8 @@ mod tests {
             json!({"other":reference["secretRef"]}),
             json!({"ordinary":{"values":[reference["secretRef"]]}}),
             json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
+            json!({"other":format!("Bearer {}", reference["secretRef"].as_str().unwrap())}),
+            json!({(format!("TOKEN={}", reference["secretRef"].as_str().unwrap())):"ordinary-value"}),
             json!({"token":{"secretRef":reference["secretRef"],"extra":"literal"}}),
         ] {
             assert!(resolve_inputs(&args(json!({"inputs":inputs})), &action).is_err());

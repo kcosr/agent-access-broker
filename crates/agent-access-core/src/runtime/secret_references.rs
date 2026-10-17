@@ -515,7 +515,7 @@ fn reject_undeclared_references(
                 return Ok(());
             }
             for (key, value) in object {
-                if is_secret_reference_capability(key) {
+                if contains_secret_reference_capability(key) {
                     return Err(reference_input_invalid());
                 }
                 let pointer = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
@@ -527,7 +527,7 @@ fn reject_undeclared_references(
                 reject_undeclared_references(value, &format!("{pointer}/{index}"), action)?;
             }
         }
-        Value::String(value) if is_secret_reference_capability(value) => {
+        Value::String(value) if contains_secret_reference_capability(value) => {
             return Err(reference_input_invalid());
         }
         _ => {}
@@ -743,12 +743,23 @@ fn parse_reference(value: &Value) -> Result<&str, ProviderError> {
     }
     Ok(reference)
 }
+fn contains_secret_reference_capability(value: &str) -> bool {
+    value.match_indices("sr_").any(|(start, _)| {
+        value
+            .get(start..start + 46)
+            .is_some_and(is_secret_reference_capability)
+    })
+}
 fn is_secret_reference_capability(value: &str) -> bool {
-    value.len() == 46
-        && value.starts_with("sr_")
-        && value[3..]
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    use base64::Engine;
+    if value.len() != 46 || !value.starts_with("sr_") {
+        return false;
+    }
+    let encoded = &value[3..];
+    let encoding = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    encoding
+        .decode(encoded)
+        .is_ok_and(|bytes| bytes.len() == 32 && encoding.encode(&bytes) == encoded)
 }
 fn clear_resolved_inputs(inputs: &mut Value, resolved: &[(String, Zeroizing<String>)]) {
     for (pointer, _) in resolved {
@@ -1433,7 +1444,7 @@ mod tests {
     async fn undeclared_reference_input_never_reaches_provider() {
         let (_dir, runtime, identity, provider) = fixture(crate::SecretOutputMode::Raw, 128, false);
         let request = InvokeRequest::new(
-            json!({"project":{"secretRef":format!("sr_{}","a".repeat(43))},"message":"literal"}),
+            json!({"project":{"secretRef":format!("sr_{}","A".repeat(43))},"message":"literal"}),
         );
         let response = runtime
             .invoke_owned_json(context(identity), request, InvocationControl::default())
@@ -1679,7 +1690,7 @@ mod tests {
         assert!(
             validate_reference_inputs(
                 &action,
-                &json!({"anything":[{"secretRef":format!("sr_{}","a".repeat(43))}]})
+                &json!({"anything":[{"secretRef":format!("sr_{}","A".repeat(43))}]})
             )
             .is_err()
         );
@@ -1695,7 +1706,7 @@ mod tests {
         assert!(
             validate_reference_inputs(
                 &action,
-                &json!({"secretRef":format!("sr_{}","a".repeat(43)),"extra":"field"})
+                &json!({"secretRef":format!("sr_{}","A".repeat(43)),"extra":"field"})
             )
             .is_err()
         );
@@ -1704,16 +1715,39 @@ mod tests {
     #[test]
     fn bare_capabilities_are_rejected_everywhere_except_strict_declared_objects() {
         let action = ActionDescriptor::new("send", "Send", json!({"type":"object"}));
-        let handle = format!("sr_{}", "a".repeat(43));
+        let handle = format!("sr_{}", "A".repeat(43));
         for input in [
             json!({"ordinary": &handle}),
             json!({"nested": [{"ordinary": &handle}]}),
             json!({"nested": [&handle]}),
             json!({handle.clone(): "ordinary"}),
+            json!({"authorization": format!("Bearer {handle}")}),
+            json!({"nested": [format!("TOKEN={handle};other=value")]}),
+            json!({format!("TOKEN={handle}"): "ordinary"}),
+            json!({"unicode": format!("前置 {handle} suffix")}),
         ] {
             assert!(validate_reference_inputs(&action, &input).is_err());
         }
-        assert!(validate_reference_inputs(&action, &json!({"ordinary":"sr_short"})).is_ok());
+        for text in [
+            "sr_short",
+            "Bearer ordinary-upstream-token",
+            "TOKEN=sr_not-a-broker-capability",
+            "前置 sr_截断 suffix",
+        ] {
+            assert!(
+                validate_reference_inputs(&action, &json!({"ordinary":text, text:"ordinary"}))
+                    .is_ok()
+            );
+        }
+        // A lookalike with noncanonical base64 trailing bits is not a Broker
+        // capability, even when embedded in provider data.
+        assert!(
+            validate_reference_inputs(
+                &action,
+                &json!({"ordinary":format!("Bearer sr_{}", "a".repeat(43))})
+            )
+            .is_ok()
+        );
         let action = ActionDescriptor::new(
             "send",
             "Send",
@@ -1746,7 +1780,7 @@ mod tests {
             .invoke_owned_json(
                 context(identity),
                 InvokeRequest::new(
-                    json!({"project":format!("sr_{}", "a".repeat(43)),"message":"literal"}),
+                    json!({"project":format!("sr_{}", "A".repeat(43)),"message":"literal"}),
                 ),
                 InvocationControl::default(),
             )
@@ -1764,7 +1798,7 @@ mod tests {
         let response = runtime
             .invoke_owned_json(
                 context(identity),
-                request(json!(format!("sr_{}", "a".repeat(43)))),
+                request(json!(format!("sr_{}", "A".repeat(43)))),
                 InvocationControl::default(),
             )
             .await;

@@ -349,9 +349,10 @@ optional `expiresAt`. Unknown reference-object properties are rejected. The
 reference ID is `sr_` followed by 43 base64url characters. An output's visible
 expiry can be copied with its reference, but the stored deadline is authoritative;
 supplying a later expiry cannot renew the reference.
-Bare strings matching that capability format are rejected anywhere in action
-inputs, including object keys, arrays and undeclared fields. A capability is
-accepted only inside the strict reference object at a declared secret input.
+Canonical capability strings are rejected anywhere in action inputs, including
+when embedded in longer strings or object keys, arrays and undeclared fields.
+A capability is accepted only inside the strict reference object at a declared
+secret input.
 Ordinary upstream fields named `secretRef` remain valid when they do not contain
 a Broker capability.
 

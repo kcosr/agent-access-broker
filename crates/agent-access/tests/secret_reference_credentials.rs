@@ -686,6 +686,8 @@ credential_mode = "per_user"
         consume("X-Send-Reference", json!(ISSUED)),
         consume("X-Send-Reference", json!(reference)),
         consume(&reference, protected.clone()),
+        consume(&format!("TOKEN={reference}"), protected.clone()),
+        consume("X-Send-Reference", json!(format!("Bearer {reference}"))),
         consume(
             "X-Send-Reference",
             json!({"secretRef":reference,"extra":true}),

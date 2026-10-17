@@ -116,12 +116,13 @@ position. The runtime authorizes the consuming action and resources before
 resolution, then validates the resolved string against the original field schema.
 Secret fields cannot determine resource scope. Objects containing a Broker-shaped
 `secretRef` capability are rejected in undeclared positions. Ordinary upstream
-fields such as Kubernetes `secretRef: {name: "db"}` remain valid. A bare Broker
-capability string (`sr_` followed by 43 base64url characters) is rejected anywhere
-in action inputs, including object keys, nested objects, arrays and undeclared
-payload fields. Pass it only as the `secretRef` member of a strict reference
-object at a declared secret input, so it cannot be forwarded upstream as a literal
-string.
+fields such as Kubernetes `secretRef: {name: "db"}` remain valid. A Broker
+capability (`sr_` followed by the canonical base64url encoding of 32 bytes) is
+rejected anywhere in action inputs, including object keys, nested objects,
+arrays and undeclared payload fields. This also rejects a capability embedded
+in text such as `Bearer sr_...` or `TOKEN=sr_...`. Pass it only as the `secretRef`
+member of a strict reference object at a declared secret input, so it cannot be
+forwarded upstream as a literal string.
 
 Ordinary invocation use requires the same principal, original Broker token or
 exact trusted-human identity binding, trusted caller contract, and execution
