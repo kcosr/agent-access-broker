@@ -8,6 +8,64 @@ use crate::managed_store::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+/// Only declared pointers and source categories survive admission. Neither the
+/// reference envelope nor the literal value enters this private audit context.
+#[derive(Clone, Default)]
+pub(super) struct SecretInputProvenance(Vec<SecretInputSource>);
+
+#[derive(Clone, serde::Serialize)]
+struct SecretInputSource {
+    pointer: String,
+    kind: SecretInputKind,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SecretInputKind {
+    Reference,
+    Literal,
+    Absent,
+}
+
+impl SecretInputProvenance {
+    /// `pointers` come from a validated action or a private host receiver plan,
+    /// never from request-controlled field names.
+    pub(super) fn capture<'a>(pointers: impl IntoIterator<Item = &'a str>, inputs: &Value) -> Self {
+        Self(
+            pointers
+                .into_iter()
+                .map(|pointer| SecretInputSource {
+                    pointer: pointer.to_owned(),
+                    kind: match inputs.pointer(input_pointer(pointer)) {
+                        Some(value) if is_reference_value(value) => SecretInputKind::Reference,
+                        Some(_) => SecretInputKind::Literal,
+                        None => SecretInputKind::Absent,
+                    },
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn add_to_audit(&self, audit: Option<Value>) -> Option<Value> {
+        let mut audit = audit.or_else(|| (!self.0.is_empty()).then(|| json!({})))?;
+        if self.0.is_empty() {
+            // This is a host-owned key; a provider cannot invent provenance.
+            if let Some(fields) = audit.as_object_mut() {
+                fields.remove("secretInputs");
+            }
+            return Some(audit);
+        }
+        if !audit.is_object() {
+            audit = json!({"providerAudit": audit});
+        }
+        audit
+            .as_object_mut()
+            .expect("audit object")
+            .insert("secretInputs".into(), json!(&self.0));
+        Some(audit)
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct PreparedSecretOutputs {
     descriptors: Vec<SecretOutputDescriptor>,
@@ -187,6 +245,25 @@ impl BrokerRuntime {
         );
         prepared.add_receipt(&mut result.result);
         Ok(result)
+    }
+
+    pub(super) fn secret_input_provenance(
+        &self,
+        service: &str,
+        action: &str,
+        inputs: &Value,
+    ) -> SecretInputProvenance {
+        self.action_descriptor(service, action)
+            .map(|action| {
+                SecretInputProvenance::capture(
+                    action
+                        .secret_inputs
+                        .iter()
+                        .map(SecretInputDescriptor::pointer),
+                    inputs,
+                )
+            })
+            .unwrap_or_default()
     }
 
     /// One producer budget covers preparation and sequential upstream calls on
@@ -1325,7 +1402,7 @@ mod tests {
     #[tokio::test]
     async fn producer_budget_includes_scope_preparation_on_owned_and_direct_paths() {
         for direct in [false, true] {
-            let (_dir, mut runtime, identity, provider) =
+            let (dir, mut runtime, identity, provider) =
                 fixture(crate::SecretOutputMode::Reference, 128, false);
             Arc::make_mut(&mut runtime.config).mcp.operation_timeout_ms = 100;
             provider.scope_delay_ms.store(300, Ordering::SeqCst);
@@ -1350,6 +1427,12 @@ mod tests {
             assert_eq!(
                 response.envelope.result.unwrap()["executionState"],
                 "not_dispatched"
+            );
+            let audit = fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+            let record: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+            assert_eq!(
+                record["providerAudit"]["secretInputs"],
+                json!([{"pointer":"/inputs/message", "kind":"literal"}])
             );
         }
     }
@@ -1461,14 +1544,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn secret_input_audit_provenance_is_owned_by_the_host() {
+        let action = ActionDescriptor::new(
+            "receive",
+            "Receive",
+            json!({
+                "type":"object", "properties":{"value":{"type":"string"}},
+            }),
+        )
+        .secret_input(SecretInputDescriptor::new("/inputs/value"));
+        let provenance = SecretInputProvenance::capture(
+            action
+                .secret_inputs
+                .iter()
+                .map(SecretInputDescriptor::pointer),
+            &json!({"value":"private-value"}),
+        );
+        let spoofed = json!({"safeProviderFact":true,"secretInputs":[{"pointer":"/spoofed","kind":"reference","secretRef":"private-handle"}]});
+        assert_eq!(
+            provenance.add_to_audit(Some(spoofed.clone())).unwrap(),
+            json!({
+                "safeProviderFact":true,
+                "secretInputs":[{"pointer":"/inputs/value","kind":"literal"}],
+            })
+        );
+        assert_eq!(
+            SecretInputProvenance::default()
+                .add_to_audit(Some(spoofed))
+                .unwrap(),
+            json!({"safeProviderFact":true})
+        );
+    }
+
     #[tokio::test]
     async fn native_reference_input_resolves_after_policy_and_revalidates_literal_schema() {
-        let (_dir, mut runtime, identity, provider) =
+        let (dir, mut runtime, identity, provider) =
             fixture(crate::SecretOutputMode::Reference, 128, false);
+        let action = &mut Arc::make_mut(
+            Arc::make_mut(&mut runtime.services)
+                .get_mut("fake")
+                .unwrap(),
+        )
+        .actions[0];
+        action.input_schema["properties"]["optionalToken"] = json!({"type":"string"});
+        *action = action
+            .clone()
+            .secret_input(SecretInputDescriptor::new("/inputs/optionalToken"));
+        let literal = "synthetic-literal-payload";
         let response = runtime
             .invoke_owned_json(
                 context(identity.clone()),
-                request(json!("literal")),
+                request(json!(literal)),
                 InvocationControl::default(),
             )
             .await;
@@ -1487,7 +1614,7 @@ mod tests {
         assert_eq!(response.status, 200, "{:?}", response.envelope);
         assert_eq!(
             provider.inputs.lock().unwrap().as_slice(),
-            &["literal", provider.token.as_str()]
+            &[literal, provider.token.as_str()]
         );
         let descriptor = Arc::make_mut(
             Arc::make_mut(&mut runtime.services)
@@ -1524,6 +1651,28 @@ mod tests {
             Some(ReasonCode::ServiceActionDenied.into())
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        let audit = fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+        let records = audit
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|record| record["service"] == "fake" && record["action"] == "echo")
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 4);
+        for (record, kind) in records
+            .iter()
+            .zip(["literal", "reference", "reference", "reference"])
+        {
+            assert_eq!(
+                record["providerAudit"]["secretInputs"],
+                json!([
+                    {"pointer":"/inputs/message", "kind":kind},
+                    {"pointer":"/inputs/optionalToken", "kind":"absent"},
+                ])
+            );
+        }
+        assert!(!audit.contains(literal));
+        assert!(!audit.contains(&provider.token));
+        assert!(!audit.contains("sr_"));
     }
 
     #[tokio::test]

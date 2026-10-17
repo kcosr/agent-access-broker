@@ -1488,14 +1488,15 @@ pub(super) fn validate_secret_inputs_structure(conn: &Connection) -> Result<(), 
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
 fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {
+    let through = MANAGED_STORE_MIGRATIONS
+        .iter()
+        .position(|migration| migration.version == version)
+        .ok_or_else(invalid_data)?;
     let expected = Connection::open_in_memory().map_err(sql_unavailable)?;
-    for migration in MANAGED_STORE_MIGRATIONS {
+    for migration in &MANAGED_STORE_MIGRATIONS[..=through] {
         expected
             .execute_batch(migration.sql)
             .map_err(sql_unavailable)?;
-        if migration.version == version {
-            break;
-        }
     }
     compare_schema(conn, &expected)?;
     run_foreign_key_check(conn)?;
@@ -1503,15 +1504,24 @@ fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), Ma
     identity_access::check_integrity(conn)?;
     check_secret_material_ready(conn, None)?;
     check_policy_revision_ready(conn)?;
-    catalog_at(
-        conn,
-        if version == MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION {
-            ImportSchema::SecretInputs
-        } else {
-            ImportSchema::CommandImports
-        },
-    )?;
+    catalog_at(conn, import_schema_through(through))?;
     Ok(())
+}
+/// Select by the applied migration prefix, so later migrations retain every
+/// previously introduced imported-record field.
+fn import_schema_through(through: usize) -> ImportSchema {
+    let includes = |version| {
+        MANAGED_STORE_MIGRATIONS[..=through]
+            .iter()
+            .any(|migration| migration.version == version)
+    };
+    if includes(MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION) {
+        ImportSchema::SecretInputs
+    } else if includes(MANAGED_STORE_COMMAND_IMPORTS_VERSION) {
+        ImportSchema::CommandImports
+    } else {
+        ImportSchema::BeforeCommandImports
+    }
 }
 pub(super) fn validate_structure_with_extension(
     conn: &Connection,

@@ -1349,11 +1349,15 @@ mod tests {
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         };
+        let before_references = MANAGED_STORE_MIGRATIONS
+            .iter()
+            .position(|migration| migration.version == MANAGED_STORE_SECRET_REFERENCES_VERSION)
+            .unwrap();
         let previous = ManagedStore::open_with_catalog(
             &config,
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
-                migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS.len() - 1],
+                migrations: &MANAGED_STORE_MIGRATIONS[..before_references],
             },
         )
         .unwrap();
@@ -1395,7 +1399,7 @@ mod tests {
         migrated.check_ready(Some(&ring)).unwrap();
         assert_eq!(
             migrated.status().unwrap().schema_version,
-            MANAGED_STORE_SECRET_REFERENCES_VERSION
+            MANAGED_STORE_SCHEMA_VERSION
         );
     }
 

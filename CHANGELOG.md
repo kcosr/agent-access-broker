@@ -475,6 +475,9 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Invocation audit records retain safe source categories for native and imported
+  secret receiver fields: declared pointer plus reference, literal, or absent.
+
 - The standard reason `broker_provider_contract_failed` (HTTP 500,
   `decision = error`) identifies a provider outcome that its contract does
   not allow. It also reports a provider whose own operation state is missing

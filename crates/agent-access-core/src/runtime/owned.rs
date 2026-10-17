@@ -161,6 +161,11 @@ impl BrokerRuntime {
             .min();
         *control.inner.local_deadline.lock().unwrap() = deadline;
         let fallback = FinalizeContext {
+            secret_input_provenance: self.secret_input_provenance(
+                &context.operation.service,
+                &context.operation.action,
+                &request.inputs,
+            ),
             search_authorization: None,
             command: None,
             agent_request_id: context.operation.agent_request_id.clone(),
