@@ -439,7 +439,7 @@ async fn preview_response(
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
         let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
-        let candidates = secret_input_candidates(record, preview.as_ref())?;
+        let candidates = secret_input_candidates(&runtime, record, preview.as_ref())?;
         let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings,"secretInputCandidates":candidates});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
@@ -456,18 +456,41 @@ async fn preview_response(
 }
 
 fn secret_input_candidates(
+    runtime: &BrokerRuntime,
     record: &ImportedServiceRecord,
     preview: Option<&ImportedPreview>,
 ) -> Result<Value, ManagedStoreError> {
     let Some(preview) = preview else {
         return Ok(json!([]));
     };
-    if record.definition.adapter_kind != "mcp_http" {
+    let Some(adapter) = runtime
+        .config()
+        .providers
+        .registry()
+        .imported_adapter(&record.definition.adapter_kind)
+    else {
         return Ok(json!([]));
-    }
+    };
     let manifest: ImportedDiscovery = serde_json::from_value(preview.manifest.clone())
         .map_err(|_| invalid("stored discovery preview is invalid"))?;
-    Ok(json!(manifest.tools.iter().enumerate().map(|(index, tool)| json!({"toolIndex":index,"pointers":if tool.unsupported_reason.is_none() { agent_access_core::imports::receiver_candidates(&tool.definition) } else { Vec::new() }})).collect::<Vec<_>>()))
+    Ok(json!(manifest.tools.iter().enumerate().map(|(index, tool)| json!({"toolIndex":index,"pointers":if tool.unsupported_reason.is_none() { receiver_candidate_pointers(adapter, &tool.definition) } else { Vec::new() }})).collect::<Vec<_>>()))
+}
+
+fn receiver_candidate_pointers(
+    adapter: &dyn agent_access_core::imports::ImportedAdapter,
+    definition: &ImportedActionDefinition,
+) -> Vec<String> {
+    agent_access_core::imports::receiver_candidates(definition)
+        .into_iter()
+        .filter(|pointer| {
+            adapter
+                .validate_secret_inputs(
+                    definition,
+                    &[agent_access_provider::SecretInputDescriptor::new(pointer)],
+                )
+                .is_ok()
+        })
+        .collect()
 }
 
 enum Change {
@@ -1354,7 +1377,7 @@ pub(crate) async fn discover(
                         preview.as_ref(),
                     )?;
                     response["secretInputCandidates"] =
-                        secret_input_candidates(record, preview.as_ref())?;
+                        secret_input_candidates(&mutation.value, record, preview.as_ref())?;
                     response["preview"] = json!(preview);
                     response["affectedGrants"] = json!(affected);
                     response["affectedGrantsByAction"] = json!(by_action);
@@ -1400,6 +1423,26 @@ pub(crate) async fn discover(
 mod tests {
     use super::*;
     use agent_access_core::imports::ImportedDiscoveredTool;
+
+    #[test]
+    fn receiver_candidates_follow_the_adapter_validation_hook() {
+        let mut action = crate::tests::conformance_import::conformance_import_action();
+        action.input_schema["properties"]["header"] =
+            json!({"type":"string", "x-mcp-header":"Region"});
+        let registry = crate::backend_registry();
+        let mcp = registry.imported_adapter("mcp_http").unwrap();
+        assert_eq!(
+            receiver_candidate_pointers(mcp, &action),
+            vec!["/inputs/message"]
+        );
+        assert!(
+            receiver_candidate_pointers(
+                &crate::tests::conformance_import::CONFORMANCE_IMPORT_ADAPTER,
+                &action
+            )
+            .is_empty()
+        );
+    }
 
     #[test]
     fn scoped_preview_warnings_are_provisional_and_do_not_change_the_manifest() {

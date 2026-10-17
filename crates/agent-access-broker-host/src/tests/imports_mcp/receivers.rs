@@ -350,6 +350,27 @@ async fn receiver_resolves_exact_owner_reference_and_suppresses_all_remote_outpu
     assert!(!audit.contains(TOKEN));
     assert!(!audit.contains("sr_"));
     assert!(!audit.contains(&base64::engine::general_purpose::STANDARD.encode(TOKEN)));
+    let records = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| {
+            record["service"] == "one"
+                && ["update", "inspect"]
+                    .iter()
+                    .any(|action| record["action"] == *action)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 5);
+    for (record, kind) in
+        records
+            .iter()
+            .zip(["literal", "reference", "reference", "literal", "literal"])
+    {
+        assert_eq!(
+            record["providerAudit"]["secretInputs"],
+            json!([{"pointer":"/inputs/message", "kind":kind}])
+        );
+    }
 }
 
 #[tokio::test]
@@ -372,6 +393,19 @@ async fn receiver_optional_absence_still_suppresses_and_malformed_result_is_fixe
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{error}");
         assert_eq!(error["result"]["mutationStatus"], "unknown");
         assert!(!error.to_string().contains(TOKEN));
+    }
+    let audit = std::fs::read_to_string(&fixture.audit_path).unwrap();
+    let calls = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["service"] == "one" && record["action"] == "update")
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 4);
+    for call in calls {
+        assert_eq!(
+            call["providerAudit"]["secretInputs"],
+            json!([{"pointer":"/inputs/message", "kind":"absent"}])
+        );
     }
 }
 

@@ -3353,7 +3353,11 @@ Mutations use expected service/catalog versions and normal browser CSRF checks;
 token input is marked sensitive and plaintext is never returned. These routes are
 excluded from agent MCP tools. Restoring retained grants requires confirmation.
 Preview results include grant IDs by action, so reviewing one changed action need
-not confirm unrelated grants on the same service.
+not confirm unrelated grants on the same service. They also include
+`secretInputCandidates: [{toolIndex, pointers}]`, derived from the saved source
+schema and the adapter's receiver rules. Every acceptance selection requires
+`secretInputs: [{pointer}]`; use `[]` for no receivers. Setting or clearing a
+receiver field requires fresh preview/version pins and affected-grant confirmation.
 
 Approved OAuth registrations returned by `GET /v1/admin/imports` include
 `scopeMode` on each `permissionProfiles` entry, alongside its `id` and `scopes`
@@ -3362,9 +3366,17 @@ array. Server-default profiles have an empty array and must be presented as
 through import management routes.
 
 Use the caller-filtered catalog for the service/action names and accepted schemas of
-imported MCP tools. These are action-only grants without resource scopes. Results
-preserve MCP content as JSON under `result.upstreamMcp`; images/audio remain bounded
-JSON and resource links are not fetched. The entire opaque payload is catalog-marked
+imported MCP tools. These are action-only grants without resource scopes. Actions
+with selected secret receiver fields always return a fixed completion receipt,
+including literal inputs and omitted optional fields. They expose no
+`result.upstreamMcp` content. A successful write returns
+`{receiverOutcome:"reported_success",responseSuppressed:true,mutationStatus:"applied_unverified",retrySafe:false}`;
+read-only receipts omit the mutation fields. Remote tool errors return
+`upstream_failed`, `receiverOutcome:"reported_error"`, and an uncertain write
+outcome. See [receiver fields](imported-services.md#secret-receiver-fields).
+
+Actions without receiver fields preserve MCP content as JSON under
+`result.upstreamMcp`; images/audio remain bounded JSON and resource links are not fetched. The entire opaque payload is catalog-marked
 sensitive, including reads, so output markers cover private data as well as secret
 exports. Writes are reported as applied but unverified on upstream success; failures
 after dispatch may be uncertain and are never automatically replayed. Saving a local

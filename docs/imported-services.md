@@ -303,6 +303,11 @@ an authorized reference and sends a string to the accepted upstream endpoint.
 This does not grant secret reveal rights, authorize another user's reference, or
 add resource scope to an imported MCP action.
 
+Invocation audit records include only each declared receiver pointer and its
+submitted source kind (`reference`, `literal`, or `absent`) in
+`providerAudit.secretInputs`. This host-owned metadata is captured before
+reference resolution and contains no secret value or reference capability.
+
 Every call to a marked action returns a completion receipt only, including calls
 using a literal or omitting an optional receiver field. Upstream text, structured
 data, images, audio, resources, links, metadata, error details and identifiers are

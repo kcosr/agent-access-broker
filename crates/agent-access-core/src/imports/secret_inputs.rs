@@ -85,9 +85,7 @@ pub fn receiver_candidates(action: &super::ImportedActionDefinition) -> Vec<Stri
             return;
         }
         if schema.get("type").and_then(Value::as_str) == Some("string") {
-            if schema.get("x-mcp-header").is_none() {
-                paths.push(pointer);
-            }
+            paths.push(pointer);
             return;
         }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
@@ -160,7 +158,7 @@ mod tests {
         }
     }
     #[test]
-    fn receiver_candidates_use_sdk_fixed_string_contract_and_exclude_headers() {
+    fn receiver_candidates_use_sdk_contract_before_adapter_specific_validation() {
         let source = action(serde_json::json!({"type":"object","properties":{
             "plain":{"type":"string","minLength":3},
             "credentials":{"type":"object","properties":{"a/b~c":{"type":"string"}}},
@@ -172,7 +170,11 @@ mod tests {
         },"$defs":{"token":{"type":"string"}}}));
         assert_eq!(
             receiver_candidates(&source),
-            ["/inputs/credentials/a~1b~0c", "/inputs/plain"]
+            [
+                "/inputs/credentials/a~1b~0c",
+                "/inputs/plain",
+                "/inputs/region"
+            ]
         );
         let input = SecretInputDescriptor::new("/inputs/plain");
         let descriptor = receiver_descriptor(&source, &[input]).unwrap();

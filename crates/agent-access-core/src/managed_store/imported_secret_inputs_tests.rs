@@ -133,3 +133,42 @@ fn receiver_overlay_persists_versions_without_changing_source_hash_and_rejects_c
         assert!(reopened.imported_catalog().is_err(), "{corrupt}");
     }
 }
+
+#[test]
+fn every_known_migration_prefix_reads_the_import_fields_it_introduced() {
+    let (_temp, _config, store, _ring) = fixture();
+    let draft = store
+        .create_imported_service(definition(), "admin", accept)
+        .unwrap()
+        .catalog;
+    let mut request = update(&draft);
+    let mut receiver = action();
+    receiver.secret_inputs = vec![agent_access_provider::SecretInputDescriptor::new(
+        "/inputs/query",
+    )];
+    request.actions = vec![receiver];
+    let accepted = store
+        .update_imported_service(request, accept)
+        .unwrap()
+        .catalog;
+    let conn = store.connection.lock().unwrap();
+    let receiver_migration = MANAGED_STORE_MIGRATIONS
+        .iter()
+        .position(|migration| migration.version == MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION)
+        .unwrap();
+    // A fully migrated database can serve each historical projection. Iterating
+    // every catalog entry also checks migrations added after the receiver column.
+    for (index, migration) in MANAGED_STORE_MIGRATIONS.iter().enumerate() {
+        let loaded = catalog_at(&conn, import_schema_through(index)).unwrap();
+        let overlay = &loaded.services[0].actions[0].secret_inputs;
+        if index >= receiver_migration {
+            assert_eq!(
+                overlay, &accepted.services[0].actions[0].secret_inputs,
+                "{}",
+                migration.version
+            );
+        } else {
+            assert!(overlay.is_empty(), "{}", migration.version);
+        }
+    }
+}
