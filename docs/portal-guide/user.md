@@ -6,8 +6,10 @@ with Jira access to the `DEMO` project. Ask your administrator for the broker UR
 your sign-in method, and the services and execution contexts you should use.
 
 The screenshots use synthetic accounts and credentials in the local managed
-demo. The demo's Atlassian configuration uses an example host and fake
-credentials. Run the CLI invocation below only against a configured deployment
+demo. The credential verification success and failure screenshots illustrate
+browser-only simulated responses; they do not demonstrate a connection to a real
+upstream service. The demo's Atlassian configuration uses an example host and
+fake credentials. Run the CLI invocation below only against a configured deployment
 with a real issue you are allowed to read.
 
 For the complete credential, OAuth, and client setup reference, see the
@@ -81,15 +83,26 @@ the upstream credential; give your agent only its Broker invocation token.
    GitLab REST and Git, needs one token.
 2. Check its profile and the services in **Used by**. Use the fields requested
    by the connection; for example, the `atlassian-api-token` profile asks for
-   your Atlassian account email and API token.
+   an Atlassian username, which is your Atlassian account email, and an API
+   token.
 3. Enter your upstream values and choose **Save credential** for an empty connection.
    If a credential already exists, the drawer shows **Replace secret** and the
    button is **Replace credential**. Supply the required replacement fields.
 4. After saving, check the status and verify it as described below.
 
-Credential connections come from the broker's configuration and your permitted
-personal credential access. Stored plaintext is never loaded into the
-replacement form.
+![Credentials list with the shared Atlassian and GitLab connections](../images/portal/guide-annotated/user-credentials-light.png)
+
+*Each row is one credential connection. Atlassian serves Jira and Confluence,
+and GitLab serves GitLab REST and GitLab Git, each with one stored token. A saved
+credential stays Not verified until you verify it. Credential connections come
+from the broker's configuration and your permitted personal credential access.*
+
+![Atlassian connection drawer with a masked replacement API token](../images/portal/guide-annotated/user-credential-input-light.png)
+
+*Replacing the Atlassian connection's token. The `atlassian-api-token` profile
+asks for an Atlassian username (your account email) and API token, and one saved
+token serves Jira and Confluence. The values are synthetic, and the draft is not
+saved. Stored plaintext is never loaded into the replacement form.*
 
 Expected result: the broker saves its encrypted copy and the form clears the
 entered fields. Saving does not create service access or prove that the upstream
@@ -129,6 +142,24 @@ if **Connect** or **Reconnect** is unavailable.
    choose that section's **Verify**.
 3. Read **Status**, **Last checked**, **Last verified**, and any **Last error**.
    The last successful verification time and the latest attempt time are separate.
+
+![Simulated successful verification of the Atlassian connection](../images/portal/guide-annotated/user-credential-test-success-light.png)
+
+*A simulated verification success, using a browser-only fixture: no request
+reached the Broker or Atlassian. Status shows Upstream verified, with the check
+and verification times.*
+
+![Simulated failed verification with the upstream_unauthorized error](../images/portal/guide-annotated/user-credential-test-failure-light.png)
+
+*A simulated verification failure, using a browser-only fixture. Status shows
+Verification failed, Last error shows `upstream_unauthorized`, and the notice
+explains how to recover.*
+
+![GitLab connection drawer with a repository entered under Verify through Git](../images/portal/guide-annotated/user-credential-test-repository-light.png)
+
+*The shared GitLab connection serves GitLab REST and GitLab Git. Verifying
+through the Git gateway needs a repository the token should reach. The draft
+`demo/app` is not submitted.*
 
 Expected result: the status reflects the latest supported verification outcome.
 An upstream verification establishes the tested credential's access at that time;

@@ -194,35 +194,35 @@
       "theme": "light",
       "viewport": "1440x960",
       "description": "User credential inventory without exposing credential values",
-      "sha256": "9bcaf44909468ea1ca32f091cd74435208b9f9263053794e2d5bcc2c5b75237a"
+      "sha256": "3293fb0908c069026a0751ae56824776238ccbe4e3845df8be26bce66c94ba45"
     },
     {
       "file": "guide/user-credential-input-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Jira credential entry with a synthetic username and masked token; replacement draft is not saved",
-      "sha256": "0ec39552a960bc51998b77086051a08374b7198b7500f00173277a5f88b2077a"
+      "description": "Atlassian credential entry, shared by Jira and Confluence, with a synthetic username and masked token; replacement draft is not saved",
+      "sha256": "af851d3777791180ed28ab3d12e937e45f7b0f72d738f1d3b7ba31603048ef62"
     },
     {
       "file": "guide/user-credential-test-success-light.png",
       "theme": "light",
       "viewport": "1440x960",
       "description": "SIMULATED upstream verification success using browser-only response fixtures; no credential verification reaches the broker",
-      "sha256": "6c71de6587b40f5ed451bee3dc7f7b163450439032f4fe0f339ecec5795a777f"
+      "sha256": "97dffd7932c0c5f0f1b7224d9207adde6bd56de172ea841b2b0d8c9cd2cb4583"
     },
     {
       "file": "guide/user-credential-test-failure-light.png",
       "theme": "light",
       "viewport": "1440x960",
       "description": "SIMULATED upstream verification failure with status, error code, and recovery message; browser-only response fixtures",
-      "sha256": "ae04eac6a0ecc431fce581b003c43ed55feaa34cf0ccf36b9d22280858c916d9"
+      "sha256": "ff7ba9f45bbc30231ad7386aa2dd47c166cbd68ae7ff95c75ff6f95ed9e1cd07"
     },
     {
       "file": "guide/user-credential-test-repository-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Git HTTP credential verification requires a repository; populated draft without submitting verification",
-      "sha256": "1628afa281f0f84e644e060f25d42ec652911e6ac32098e968f363ef0c80da36"
+      "description": "Verifying the shared GitLab credential through the Git gateway requires a repository; populated draft without submitting verification",
+      "sha256": "01f2dc8fccc94f89e22a21ae36bb42f2c3b74eff612748671321ae71cde89b16"
     },
     {
       "file": "guide/user-tokens-light.png",
