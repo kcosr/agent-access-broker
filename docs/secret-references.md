@@ -72,8 +72,9 @@ For a bearer-token connection, omit the username. Personal self-service uses
 the existing credential-management authority. It can import only references
 owned by that same principal. Administrator import requires full administrator
 credential-write authority; auditors and service policy managers cannot use it.
-The reference alone grants no management authority. A bare Broker handle in a
-literal token field is rejected; use `--field-ref` or the structured object below.
+The reference alone grants no management authority. Canonical Broker handles
+are rejected in literal credential fields and metadata, including when embedded
+in longer text; use `--field-ref` or the structured object below.
 
 The existing connection credential PUT endpoints accept the same field:
 

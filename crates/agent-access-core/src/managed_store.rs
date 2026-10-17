@@ -6696,6 +6696,11 @@ fn validate_credential_metadata(metadata: &Value) -> Result<(), ManagedStoreErro
     let Some(object) = metadata.as_object() else {
         return Err(input_invalid("metadata must be a JSON object"));
     };
+    if secret_references::contains_reference_capability(metadata) {
+        return Err(input_invalid(
+            "metadata must not contain secret reference handles",
+        ));
+    }
     reject_secret_like_metadata_keys(metadata)?;
     let encoded = serde_json::to_vec(metadata)
         .map_err(|_| input_invalid("metadata must be JSON serializable"))?;

@@ -446,13 +446,26 @@ impl ManagedStore {
             .ok_or_else(|| input_invalid("credential secret must be an object"))?;
         let reference = match object.get("token") {
             Some(Value::Object(reference)) => Some(parse_reference_input(reference)?),
-            Some(Value::String(token)) if reference_hash(token).is_ok() => {
-                return Err(input_invalid(
-                    "secret reference handles must use a secretRef object",
-                ));
-            }
             _ => None,
         };
+        if object.iter().any(|(name, value)| {
+            contains_capability(name)
+                || if name == "token" && reference.is_some() {
+                    // Only the validated reference slot may contain a handle;
+                    // informational fields remain ordinary non-secret input.
+                    value.as_object().is_some_and(|reference| {
+                        reference.iter().any(|(key, value)| {
+                            key != "secretRef" && contains_reference_capability(value)
+                        })
+                    })
+                } else {
+                    contains_reference_capability(value)
+                }
+        }) {
+            return Err(input_invalid(
+                "secret reference handles must use a secretRef object",
+            ));
+        }
         // Unsupported fields cannot hide nested reference envelopes. The
         // ordinary credential validator checks required and unknown fields.
         if object
@@ -611,27 +624,30 @@ fn metadata_contains_secret(value: &Value, secret: &str) -> bool {
     }
 }
 
+fn contains_capability(value: &str) -> bool {
+    value.match_indices("sr_").any(|(start, _)| {
+        value
+            .get(start..start + 46)
+            .is_some_and(|candidate| reference_hash(candidate).is_ok())
+    })
+}
+
+pub(super) fn contains_reference_capability(value: &Value) -> bool {
+    match value {
+        Value::String(value) => contains_capability(value),
+        Value::Object(object) => object
+            .iter()
+            .any(|(key, value)| contains_capability(key) || contains_reference_capability(value)),
+        Value::Array(array) => array.iter().any(contains_reference_capability),
+        _ => false,
+    }
+}
+
 fn metadata_json(value: &Value) -> Result<String, ManagedStoreError> {
-    fn contains_capability(value: &str) -> bool {
-        value.match_indices("sr_").any(|(start, _)| {
-            value
-                .get(start..start + 46)
-                .is_some_and(|candidate| reference_hash(candidate).is_ok())
-        })
-    }
-    fn contains_reference(value: &Value) -> bool {
-        match value {
-            Value::String(value) => contains_capability(value),
-            Value::Object(object) => object
-                .iter()
-                .any(|(key, value)| contains_capability(key) || contains_reference(value)),
-            Value::Array(array) => array.iter().any(contains_reference),
-            _ => false,
-        }
-    }
     let raw =
         serde_json::to_string(value).map_err(|_| input_invalid("receipt metadata is invalid"))?;
-    if !value.is_object() || raw.len() > MAX_METADATA_BYTES || contains_reference(value) {
+    if !value.is_object() || raw.len() > MAX_METADATA_BYTES || contains_reference_capability(value)
+    {
         return Err(input_invalid(
             "receipt metadata is invalid or exceeds its limit",
         ));
@@ -1911,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_capabilities_cannot_be_installed_as_literal_credentials() {
+    fn capabilities_cannot_be_installed_in_literal_credentials_or_public_metadata() {
         let (_temp, store, ring) = fixture();
         let batch = store
             .reserve_secret_outputs(&ring, request("alice"), &limits(), |_, _| Ok(()))
@@ -1919,23 +1935,60 @@ mod tests {
         let live = capture(&store, &ring, &batch);
         let absent = format!("sr_{}", URL_SAFE_NO_PAD.encode([42_u8; 32]));
         for handle in [&live.secret_ref, &absent] {
-            let mut write = credential(handle, "destination");
-            write.secret = json!({"token":handle});
-            let error = store
-                .upsert_user_credential_with_secret_references(
-                    &ring,
-                    write,
-                    CredentialManagementPurpose::Administrative,
-                    |_| Ok(()),
-                    |_, _| panic!("bare capabilities must fail before reference resolution"),
-                )
-                .unwrap_err();
-            assert!(matches!(error, ManagedStoreError::InputInvalid(message)
-                if message == "secret reference handles must use a secretRef object"));
-            assert!(matches!(
-                store.credential_by_tuple("destination", "gitlab-connection", "default"),
-                Err(ManagedStoreError::CredentialNotFound)
-            ));
+            for secret in [
+                json!({"token":handle}),
+                json!({"token":format!("Bearer {handle}")}),
+                json!({"username":format!("prefix {handle} suffix"),"token":"ordinary-token"}),
+                json!({"other":format!("prefix {handle} suffix"),"token":"ordinary-token"}),
+                json!({"token":{"secretRef":handle,"expiresAt":format!("prefix {handle}")}}),
+            ] {
+                let mut write = credential(handle, "destination");
+                if secret.get("username").is_some() {
+                    write.credential_kind = "basic_api_token".into();
+                }
+                write.secret = secret;
+                let error = store
+                    .upsert_user_credential_with_secret_references(
+                        &ring,
+                        write,
+                        CredentialManagementPurpose::Administrative,
+                        |_| Ok(()),
+                        |_, _| panic!("literal capabilities must fail before reference resolution"),
+                    )
+                    .unwrap_err();
+                assert!(matches!(error, ManagedStoreError::InputInvalid(message)
+                    if message == "secret reference handles must use a secretRef object"));
+                assert!(matches!(
+                    store.credential_by_tuple("destination", "gitlab-connection", "default"),
+                    Err(ManagedStoreError::CredentialNotFound)
+                ));
+            }
+            for metadata in [
+                json!({"description":format!("Bearer {handle}")}),
+                json!({"source":{"locator":format!("prefix {handle} suffix")}}),
+                json!({(format!("prefix {handle}")):"capability in a property name"}),
+            ] {
+                let mut write = credential(handle, "destination");
+                write.secret = json!({"token":"ordinary-token"});
+                write.metadata = metadata;
+                let error = store
+                    .upsert_user_credential_with_secret_references(
+                        &ring,
+                        write,
+                        CredentialManagementPurpose::Administrative,
+                        |_| Ok(()),
+                        |_, _| {
+                            panic!("metadata capabilities must fail before reference resolution")
+                        },
+                    )
+                    .unwrap_err();
+                assert!(matches!(error, ManagedStoreError::InputInvalid(message)
+                    if message == "metadata must not contain secret reference handles"));
+                assert!(matches!(
+                    store.credential_by_tuple("destination", "gitlab-connection", "default"),
+                    Err(ManagedStoreError::CredentialNotFound)
+                ));
+            }
         }
         for literal in ["ordinary-token", "sr_not-a-broker-capability"] {
             let mut write = credential("unused", "destination");
