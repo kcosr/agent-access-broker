@@ -113,13 +113,15 @@ pub(crate) struct PolicyServiceCatalog {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PolicyActionCatalog {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    availability_requirements: Vec<agent_access_core::AvailabilityRequirement>,
     available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     unavailable_reason: Option<String>,
     action: String,
     read_only: bool,
     description: String,
-    required_scope_types: Vec<String>,
+    required_scopes: BTreeMap<String, agent_access_provider::RequiredResourceScope>,
     credential_modes: Vec<String>,
     lookup_required: bool,
     input_schema: Value,
@@ -540,6 +542,19 @@ pub(crate) async fn admin_policy_catalog(
                     .as_ref()
                     .map(|descriptor| &descriptor.credentials),
             );
+            let mut local = false;
+            for action in &mut catalog.actions {
+                if let Some(requirements) = runtime.local_action_requirements(&context.identity, &catalog.service, &action.action) {
+                    local = true;
+                    action.available = requirements.is_empty();
+                    action.unavailable_reason = (!action.available).then(|| "Local management prerequisites are not satisfied; retained grants can be maintained.".into());
+                    action.availability_requirements = requirements;
+                }
+            }
+            if local {
+                catalog.available = catalog.actions.iter().any(|action| action.available);
+                catalog.unavailable_reason = (!catalog.available).then(|| "Local management prerequisites are not satisfied; retained grants can be maintained.".into());
+            }
             if runtime
                 .imported_catalog()
                 .service(&catalog.service)
@@ -1138,27 +1153,27 @@ pub(crate) async fn admin_policy_grants_subject_add(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    let scope = policy_write_scope(&context).clone();
-    match state
-        .reloadable
-        .managed_policy_mutation_from_snapshot(context.snapshot.clone(), move |runtime| {
-            runtime.add_managed_policy_grant_subject_authorized(
+    super::common::management_authorized_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |runtime, authority| {
+            runtime.add_managed_policy_grant_subject_with_management_authority(
                 ManagedPolicyGrantSubjectAddRequest {
                     grant_id,
                     expected_version,
                     subject: body.subject,
                     updated_by: actor,
                 },
-                &scope,
+                authority,
             )
-        })
-        .await
-    {
-        Ok(result) => {
-            management_pre_audited_success_response(&context, operation, target, json!(result))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+        |context, operation, target, result| {
+            super::common::management_success_envelope(context, operation, target, json!(result))
+        },
+    )
+    .await
 }
 
 pub(crate) async fn admin_policy_grants_subject_remove(
@@ -1211,11 +1226,13 @@ pub(crate) async fn admin_policy_grants_subject_remove(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    let scope = policy_write_scope(&context).clone();
-    match state
-        .reloadable
-        .managed_policy_mutation_from_snapshot(context.snapshot.clone(), move |runtime| {
-            runtime.remove_managed_policy_grant_subject_authorized(
+    super::common::management_authorized_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |runtime, authority| {
+            runtime.remove_managed_policy_grant_subject_with_management_authority(
                 ManagedPolicyGrantSubjectRemoveRequest {
                     grant_id,
                     expected_version,
@@ -1223,16 +1240,14 @@ pub(crate) async fn admin_policy_grants_subject_remove(
                     last_subject_behavior: body.last_subject_behavior,
                     updated_by: actor,
                 },
-                &scope,
+                authority,
             )
-        })
-        .await
-    {
-        Ok(result) => {
-            management_pre_audited_success_response(&context, operation, target, json!(result))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+        |context, operation, target, result| {
+            super::common::management_success_envelope(context, operation, target, json!(result))
+        },
+    )
+    .await
 }
 
 pub(crate) async fn admin_policy_grants_enable(
@@ -1745,12 +1760,13 @@ pub(crate) fn service_catalog(
 
 fn action_catalog(action: ActionCapabilities) -> PolicyActionCatalog {
     PolicyActionCatalog {
+        availability_requirements: Vec::new(),
         available: true,
         unavailable_reason: None,
         action: action.action,
         read_only: action.read_only,
         description: action.description,
-        required_scope_types: action.required_scope_types,
+        required_scopes: action.required_scopes,
         credential_modes: action.credential_modes,
         lookup_required: action.lookup_required,
         input_schema: action.input_schema,

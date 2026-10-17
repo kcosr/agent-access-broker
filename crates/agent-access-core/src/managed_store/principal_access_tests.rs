@@ -52,6 +52,85 @@ fn access_token(
     )
 }
 #[test]
+fn broker_management_assignment_is_never_service_manager_authority() {
+    let temp = TempDir::new().unwrap();
+    let store = ManagedStore::open(
+        &store_config(&temp.path().join("store.sqlite")),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
+    access_principal(
+        &store,
+        "manager",
+        "user",
+        PrincipalRole::ServicePolicyManager,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        store.put_service_policy_management_assignment(
+            ServicePolicyManagementAssignmentPutRequest {
+                service: "broker_management".into(),
+                principal_id: "manager".into(),
+                created_by: "test".into(),
+            }
+        ),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    let services = BTreeSet::from(["broker_management".into(), "jira".into()]);
+    let read = PolicyReadScope::Services {
+        services: services.clone(),
+    };
+    let write = PolicyWriteScope::Services { services };
+    assert!(read.authorizes_service("jira"));
+    assert!(write.authorizes_service("jira"));
+    assert!(!read.authorizes_service("broker_management"));
+    assert!(!write.authorizes_service("broker_management"));
+
+    store
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO service_policy_management_assignments (assignment_id, service, principal_id, created_at, created_by) VALUES (?1, 'broker_management', 'manager', ?2, 'test')",
+            params![Uuid::new_v4().to_string(), normalized_now_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.management_authority("manager"),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    assert!(matches!(
+        store.validate_broker_management_assignments(),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    store.set_principal_enabled("manager", false).unwrap();
+    assert!(matches!(
+        store.validate_broker_management_assignments(),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    // A legacy retained row must fail readiness regardless of the current role.
+    store
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE principals SET role='user' WHERE principal_id='manager'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.validate_broker_management_assignments(),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    assert!(
+        store
+            .delete_service_policy_management_assignment("broker_management", "manager")
+            .unwrap()
+    );
+    store.validate_broker_management_assignments().unwrap();
+}
+#[test]
 fn principal_access_roles_and_personal_permission_are_independent() {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(

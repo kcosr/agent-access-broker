@@ -10,6 +10,7 @@ import {
   buildPolicySubject,
   commonCredentialModes,
   commonSupportedCredentialModes,
+  canGrantService,
   errorMessage,
   policyGrantBody,
   policyGrantDraft,
@@ -312,6 +313,7 @@ function GrantEditor({
                     onChange={(resources) => update({ ...draft, resources })}
                     disabled={readonly}
                   />
+                  {service?.actions.some((action) => draft.actions.includes(action.action) && Object.keys(action.requiredScopes).length > 1) ? <p className="pt-prose">All required scopes must be covered by this one grant. Selecting several values of each resource type permits every combination within this grant. Use separate grants to restrict specific pairings.</p> : null}
                   <SectionMessages messages={shownMessages} section="resources" />
                 </div>
               </Card>
@@ -495,7 +497,7 @@ function ServiceSection({ draft, catalog, readonly, lockService, update, message
             <option value="">Choose a service</option>
             {draft.service && !service ? <option value={draft.service}>{draft.service} (not configured)</option> : null}
             {catalog?.services.map((item) => (
-              <option value={item.service} key={item.service} disabled={item.available === false && item.service !== draft.service}>
+              <option value={item.service} key={item.service} disabled={!canGrantService(item) && item.service !== draft.service}>
                 {item.displayName} ({item.service}){item.available === false ? " · unavailable" : ""}
               </option>
             ))}

@@ -228,7 +228,8 @@ pub use backend::{
     ValidationContext, parse_backend_config,
 };
 pub use capabilities::{
-    ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
+    ActionCapabilities, RequiredResourceScope, ResourceScopeCapabilities, ServiceCapabilities,
+    UpstreamResourceOwnership,
 };
 pub use config::{
     AttachmentLimitsConfig, ProviderLimits, SearchLimitsConfig, UrlPatternPolicy,

@@ -147,6 +147,7 @@ pub(crate) async fn actions_list(
     service: &str,
     resource: Option<&str>,
     resource_type: Option<&str>,
+    targets_json: Option<&str>,
     prefix: Option<&str>,
     verbose: bool,
 ) -> Result<Value> {
@@ -154,10 +155,22 @@ pub(crate) async fn actions_list(
     input(crate::validate_discovery_prefix(prefix))?;
     nonempty("resource", resource)?;
     nonempty("resource type", resource_type)?;
+    if targets_json.is_some() && (resource.is_some() || resource_type.is_some()) {
+        return Err(
+            InputError("targets cannot be combined with resource or resource type".into()).into(),
+        );
+    }
+    let targets = targets_json
+        .map(agent_access_core::parse_action_targets_json)
+        .transpose()
+        .map_err(|message| InputError(message.into()))?;
     if resource_type.is_some() && resource.is_none() {
         return Err(InputError("resource type requires a resource".into()).into());
     }
     let mut query = Vec::new();
+    if let Some(targets) = targets {
+        query.push(("targets", serde_json::to_string(&targets)?));
+    }
     if let Some(resource_type) = resource_type {
         query.push(("resourceType", resource_type.to_owned()));
     }
@@ -176,7 +189,17 @@ pub(crate) async fn actions_list(
     .await?;
     let selected: ActionList = serde_json::from_value(value.clone())
         .map_err(|_| anyhow::anyhow!("invalid broker action list"))?;
-    if selected.service != service || selected.resource.as_deref() != resource {
+    let expected_match = if targets_json.is_some() {
+        agent_access_core::ActionMatchKind::CompleteTargets
+    } else if resource.is_some() {
+        agent_access_core::ActionMatchKind::SingleResource
+    } else {
+        agent_access_core::ActionMatchKind::Unfiltered
+    };
+    if selected.service != service
+        || selected.resource.as_deref() != resource
+        || selected.match_kind != expected_match
+    {
         bail!("broker returned a different discovery query");
     }
     if selected
@@ -296,7 +319,7 @@ mod tests {
     }
     fn service(surface: &str) -> Value {
         json!({"service":"gitlab","displayName":"GitLab","surface":surface,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[{
-            "action":"repo.fetch","readOnly":true,"description":"Fetch repository","requiredScopeTypes":["repository"],"credentialModes":["service"],"lookupRequired":false,
+            "action":"repo.fetch","readOnly":true,"description":"Fetch repository","requiredScopes":{"repository":{"resourceType":"git_repository"}},"credentialModes":["service"],"lookupRequired":false,
             "documentation":{"examples":["extended usage detail"]},
             "inputSchema":{"type":"object","properties":{"project":{"type":"string"}},"additionalProperties":false},"futureField":"preserved"
         }]})
@@ -565,7 +588,7 @@ mod tests {
             .and(query_param("resource", "team/repo"))
             .and(query_param("prefix", "repo."))
             .respond_with(ResponseTemplate::new(200).set_body_json(
-                json!({"service":"gitlab","resource":"team/repo","actions":["repo.missing"]}),
+                json!({"service":"gitlab","resource":"team/repo","actions":["repo.missing"],"matchKind":"single_resource","policyGeneration":1}),
             ))
             .mount(&server)
             .await;
@@ -575,6 +598,7 @@ mod tests {
                 &settings(&server),
                 "gitlab",
                 Some("team/repo"),
+                None,
                 None,
                 Some("repo."),
                 true
@@ -588,14 +612,87 @@ mod tests {
             &server,
             "/v1/services/gitlab/actions",
             200,
-            json!({"service":"gitlab","actions":["repo.fetch"]}),
+            json!({"service":"gitlab","actions":["repo.fetch"],"matchKind":"unfiltered","policyGeneration":1}),
         )
         .await;
         mount(&server, "/v1/services/gitlab", 403, denial()).await;
-        let error = actions_list(&settings(&server), "gitlab", None, None, None, true)
+        let error = actions_list(&settings(&server), "gitlab", None, None, None, None, true)
             .await
             .unwrap_err();
         assert_eq!(error.downcast_ref::<BrokerFailure>().unwrap().status, 403);
+    }
+
+    #[tokio::test]
+    async fn complete_action_targets_are_encoded_and_response_match_kind_is_checked() {
+        let server = MockServer::start().await;
+        let targets = r#"{"principal":["review-worker"],"group":["review-automation"]}"#;
+        Mock::given(method("GET"))
+            .and(path("/v1/services/broker_management/actions"))
+            .and(query_param(
+                "targets",
+                r#"{"group":["review-automation"],"principal":["review-worker"]}"#,
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "service":"broker_management", "actions":["group.member.add"],
+                "matchKind":"complete_targets", "policyGeneration":42
+            })))
+            .mount(&server)
+            .await;
+        let value = actions_list(
+            &settings(&server),
+            "broker_management",
+            None,
+            None,
+            Some(targets),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["matchKind"], "complete_targets");
+        assert!(value.get("resource").is_none());
+        server.reset().await;
+        mount(
+            &server,
+            "/v1/services/broker_management/actions",
+            200,
+            json!({
+                "service":"broker_management", "actions":["group.member.add"],
+                "matchKind":"unfiltered", "policyGeneration":42
+            }),
+        )
+        .await;
+        assert!(
+            actions_list(
+                &settings(&server),
+                "broker_management",
+                None,
+                None,
+                Some(targets),
+                None,
+                false
+            )
+            .await
+            .is_err()
+        );
+        server.reset().await;
+        for invalid in [r#"{"group":[]}"#, r#"{"group":["one"],"group":["two"]}"#] {
+            assert!(
+                actions_list(
+                    &settings(&server),
+                    "broker_management",
+                    None,
+                    None,
+                    Some(invalid),
+                    None,
+                    false
+                )
+                .await
+                .unwrap_err()
+                .is::<InputError>()
+            );
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

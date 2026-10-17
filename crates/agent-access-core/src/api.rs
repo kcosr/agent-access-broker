@@ -73,13 +73,16 @@ pub struct ApiActionSpec {
     /// Extended usage details, omitted from MCP tools/list definitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<Value>,
-    pub required_scope_types: Vec<String>,
+    pub required_scopes: BTreeMap<String, agent_access_provider::RequiredResourceScope>,
     pub credential_modes: Vec<String>,
     #[serde(default)]
     pub lookup_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_resource_ownership: Option<agent_access_provider::UpstreamResourceOwnership>,
     pub input_schema: Value,
+    /// Fixed successful result contract when the runtime owns that contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive_input_pointers: Vec<String>,
     /// JSON pointers into sensitive values, including secret exports and opaque imported payloads.
@@ -265,7 +268,7 @@ pub fn api_service_spec(
     let actions = descriptor
         .actions
         .iter()
-        .filter_map(|action| api_action_spec(&descriptor.service, action, secret_output_mode))
+        .filter_map(|action| api_action_spec(descriptor, action, secret_output_mode))
         .collect::<Vec<_>>();
     Some(ApiServiceSpec {
         availability: None,
@@ -292,10 +295,11 @@ pub fn api_service_spec(
 }
 
 fn api_action_spec(
-    service: &str,
+    descriptor: &ServiceDescriptor,
     action: &ActionDescriptor,
     secret_output_mode: crate::SecretOutputMode,
 ) -> Option<ApiActionSpec> {
+    let service = descriptor.service.as_str();
     if !is_service_name(service) || !is_action_name(&action.action) {
         return None;
     }
@@ -339,11 +343,12 @@ fn api_action_spec(
         read_only: action.read_only,
         description: action.description.clone(),
         documentation: action.documentation.clone(),
-        required_scope_types: action.required_scope_types(),
+        required_scopes: action.required_scopes(&descriptor.resource_scopes),
         credential_modes: action.credential_modes.clone(),
         lookup_required: action.lookup.credential_required(),
         upstream_resource_ownership: action.upstream_resource_ownership,
         input_schema: action.reference_input_schema().ok()?,
+        result_schema: None,
         secret_outputs: action.secret_outputs.clone(),
         secret_input_pointers: action
             .secret_inputs
@@ -501,7 +506,7 @@ pub fn openapi_from_catalog(
                     "description": "Broker response",
                     "content": {
                         "application/json": {
-                            "schema": envelope_schema(action.response_kind)
+                            "schema": action_response_schema(action)
                         }
                     }
                 }
@@ -536,6 +541,7 @@ pub fn openapi_from_catalog(
                 "post": {
                     "operationId": format!("invoke.{}.{}", service.service, action.action),
                     "x-agent-access-read-only": action.read_only,
+                    "x-agent-access-required-scopes": action.required_scopes,
                     "x-agent-access-sensitive-output-pointers": action.sensitive_output_pointers,
                     "x-agent-access-secret-outputs": action.secret_outputs,
                     "x-agent-access-secret-input-pointers": action.secret_input_pointers,
@@ -689,6 +695,19 @@ pub fn openapi_from_catalog(
         "components": components,
         "security": security
     })
+}
+
+fn action_response_schema(action: &ApiActionSpec) -> Value {
+    let mut schema = envelope_schema(action.response_kind);
+    if let Some(result) = &action.result_schema {
+        // The same transport also returns denial/error envelopes. Constrain
+        // only successful payloads; their receipts have a different contract.
+        schema["allOf"] = json!([{
+            "if": {"properties":{"decision":{"const":"allow"}},"required":["decision"]},
+            "then": {"properties":{"result":result},"required":["result"]}
+        }]);
+    }
+    schema
 }
 
 fn action_request_body_content(action: &ApiActionSpec) -> Value {
@@ -958,12 +977,17 @@ fn discovery_route_specs() -> Vec<HttpRouteSpec> {
                 RouteParamSpec {
                     name: "resource".into(),
                     required: false,
-                    schema: json!({"type":"string", "minLength":1, "description":"Concrete canonical locator, not a broker resource ID. Performs a singleton policy check, not full request authorization."}),
+                    schema: json!({"type":"string", "minLength":1, "description":"Concrete canonical locator, not a broker resource ID. Projects effective access onto this locator; other required scopes must retain an authorized partner."}),
                 },
                 RouteParamSpec {
                     name: "resourceType".into(),
                     required: false,
                     schema: json!({"type":"string", "minLength":1, "description":"Resource type of the locator. Requires resource; required when the service authorizes more than one resource type."}),
+                },
+                RouteParamSpec {
+                    name: "targets".into(),
+                    required: false,
+                    schema: json!({"type":"string","contentMediaType":"application/json","description":"Complete scope-to-targets object: 1–8 unique scope names, each with 1–64 distinct nonempty canonical values. Cannot combine with resource or resourceType. One grant must cover every target across all scopes."}),
                 },
                 RouteParamSpec {
                     name: "prefix".into(),
@@ -1043,9 +1067,10 @@ fn route_response_schema(route: &HttpRouteSpec, resource_type_ids: &[String]) ->
             }
         }),
         "actions.list" => json!({
-            "type":"object","additionalProperties":false,"required":["service","actions"],
-            "description":"Caller-visible actions; optional resource filtering checks one locator against effective policy. Actual execution reauthorizes all targets and credentials.",
-            "properties":{"service":{"type":"string"},"resource":{"type":"string"},"actions":{"type":"array","items":{"type":"string"}}}
+            "type":"object","additionalProperties":false,"required":["service","actions","matchKind","policyGeneration"],
+            "description":"Caller-visible actions. Single-resource filtering projects complete effective clauses; complete targets require one grant covering every named scope. Actual execution reauthorizes all targets and credentials.",
+            "properties":{"service":{"type":"string"},"resource":{"type":"string","minLength":1},"matchKind":{"type":"string","enum":["unfiltered","single_resource","complete_targets"]},"policyGeneration":{"type":"integer","minimum":0},"actions":{"type":"array","items":{"type":"string"}}},
+            "allOf":[{"if":{"properties":{"matchKind":{"const":"single_resource"}}},"then":{"required":["resource"]},"else":{"not":{"required":["resource"]}}}]
         }),
         _ => match (&route.result_schema, route.response_kind) {
             (Some(result), ResponseKind::ManagementEnvelope) => {
@@ -1755,7 +1780,7 @@ fn resource_mutation_schema(
         for descriptor in resource_types.descriptors() {
             conditions.push(json!({
                 "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id().as_str()}}},
-                "then":{"properties":{"attributes":attribute_schema(descriptor)}}
+                "then":{"properties":{"attributes":attribute_schema(descriptor),"selector":{"properties":{"kind":{"enum":descriptor.selector_kinds()}}}}}
             }));
             let required = descriptor
                 .attributes()
@@ -3350,6 +3375,7 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
         "properties": properties,
         "dependentRequired": { "metadataOutput": ["output"] },
         "x-agent-access-read-only": action.read_only,
+        "x-agent-access-required-scopes": action.required_scopes,
         "x-agent-access-response-kind": action.response_kind,
         "x-agent-access-exit-policy": action.exit_policy,
         "x-agent-access-io": action.io,
@@ -3359,6 +3385,9 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
         "x-agent-access-secret-input-pointers": action.secret_input_pointers,
         "x-agent-access-secret-output-mode": action.secret_output_mode
     });
+    if let Some(result_schema) = &action.result_schema {
+        schema["x-agent-access-result-schema"] = result_schema.clone();
+    }
     if let Some(documentation) = &action.documentation {
         schema["x-agent-access-documentation"] = documentation.clone();
     }

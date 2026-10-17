@@ -2161,3 +2161,20 @@ handoff permissions, and the real Broker/CLI GitLab-to-connection workflow in
 exercise all four secret producers and the independent project-member read.
 The boundary check reserves `host::take_secret_outputs` and `SecretOutputValue`
 for the host; provider tests use `test_support::secret_outputs_match`.
+
+## Delegated Broker administration
+
+The core suite covers complete multi-resource grants and token caveats, local
+command authorization against current identity and policy, narrow metadata,
+absent-slot credential installation, and atomic token/reference creation.
+The host's `tests::management_authority` suite covers transactional management
+authority, cancellation before commit, retained completion after disconnect,
+runtime replacement, and preflight/completion audit behavior.
+
+`crates/agent-access/tests/mcp_stdio/broker_management.rs` runs the fourteen
+`broker_management` actions through an isolated real Broker and the real CLI,
+HTTP invoke, HTTP MCP and stdio MCP interfaces. Its GitLab upstream is a
+synthetic fixture. It checks discovery, complete target queries, reference-only
+handoffs, safe reconciliation reads and denial without delegated authority.
+It runs as part of `cargo test --locked -p agent-access --test mcp_stdio`.
+These product tests require no external provisioning application or live GitLab.

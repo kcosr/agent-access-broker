@@ -110,3 +110,11 @@ For supported schema upgrades, assignment preconditions, and preservation of
 account data, see [database account authority](database.md#admin-roles-and-browser-login-state).
 Back up the managed database and encryption keys before upgrading; see
 [backup and recovery](database.md#backup-and-recovery).
+
+## Delegating narrow Broker operations
+
+Only an administrator can author grants for `broker_management`. Service policy
+manager assignment cannot select that service, and service policy managers cannot
+edit its grants. A caller's ordinary invocation grant authorizes only its selected
+complete principal/group/grant/connection tuples. It does not confer portal or
+management-API authority. See [delegated administration](broker-management.md).

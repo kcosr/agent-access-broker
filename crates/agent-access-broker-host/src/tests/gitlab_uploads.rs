@@ -58,7 +58,10 @@ async fn project_upload_catalog_and_transport_are_filtered_by_token_actions() {
         );
         if included {
             let action = catalog_action(&catalog, "gitlab", "project.upload");
-            assert_eq!(action["requiredScopeTypes"], json!(["repository"]));
+            assert_eq!(
+                action["requiredScopes"],
+                json!({"repository":{"resourceType":"git_repository"}})
+            );
             assert_eq!(action["io"]["type"], "multipart_upload");
             assert_eq!(action["io"]["plan"]["maxFiles"], 1);
             assert!(openapi["paths"]["/v1/invoke/gitlab/project.upload"]["post"]["requestBody"]["content"].get("multipart/form-data").is_some());

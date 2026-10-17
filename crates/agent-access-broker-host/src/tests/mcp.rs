@@ -305,6 +305,27 @@ async fn mcp_discovery_and_native_calls_use_real_policy_and_shared_definitions()
         )
         .await;
     assert_eq!(structured(&actions)["actions"], json!(["echo"]));
+    assert_eq!(structured(&actions)["matchKind"], "single_resource");
+    assert!(structured(&actions)["policyGeneration"].is_u64());
+    let complete = fixture
+        .call(
+            &session,
+            501,
+            "actions_list",
+            json!({"service":"fake","targets":{"project":["TEST"]}}),
+        )
+        .await;
+    assert_eq!(structured(&complete)["actions"], json!(["echo"]));
+    assert_eq!(structured(&complete)["matchKind"], "complete_targets");
+    assert!(structured(&complete).get("resource").is_none());
+    assert!(structured(&complete).get("targets").is_none());
+    for invalid in [
+        json!({"service":"fake","targets":{"project":["TEST"]},"resource":"TEST"}),
+        json!({"service":"fake","targets":{"project":[]}}),
+    ] {
+        let failed = fixture.call(&session, 502, "actions_list", invalid).await;
+        assert_eq!(failed["result"]["isError"], true, "{failed}");
+    }
     let denied_actions = fixture
         .call(
             &session,
@@ -1867,5 +1888,21 @@ async fn post_dispatch_reasons_never_become_admission_proofs_on_http_or_mcp() {
             assert!(records.iter().all(|record| record["service"] == "fake"
                 && record["reasonCode"] == "broker_provider_contract_failed"));
         }
+    }
+}
+
+#[tokio::test]
+async fn duplicate_json_object_keys_fail_before_mcp_tool_dispatch() {
+    let fixture = Fixture::new(|_| {}).await;
+    let session = fixture.initialize().await;
+    for body in [
+        r#"{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"actions_list","arguments":{"service":"fake","targets":{"project":["TEST"],"project":["OTHER"]}}}}"#,
+        r#"{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"actions_list","arguments":{"service":"fake","targets":{"project":["TEST"],"\u0070roject":["OTHER"]}}}}"#,
+    ] {
+        let mut request = request(Method::POST, Some(TOKEN_A), Some(&session), None);
+        *request.body_mut() = Body::from(body);
+        let response = fixture.send(request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(rpc_body(response).await["error"]["code"], -32700);
     }
 }

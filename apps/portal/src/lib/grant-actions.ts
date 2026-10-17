@@ -1,7 +1,12 @@
-import type { ResourcesCheckedBy } from "../types";
+import type { AvailabilityRequirement, ResourcesCheckedBy } from "../types";
 
 /** Classification describes upstream effects; it never changes a grant's actions. */
-export type ClassifiedAction = { action: string; description?: string; readOnly?: boolean; available?: boolean; unavailableReason?: string; resourcesCheckedBy?: ResourcesCheckedBy };
+export type ClassifiedAction = { action: string; description?: string; readOnly?: boolean; available?: boolean; unavailableReason?: string; resourcesCheckedBy?: ResourcesCheckedBy; availabilityRequirements?: AvailabilityRequirement[] };
+
+/** Setup prerequisites do not prevent authoring a defined local permission. */
+export function canGrantAction(action: ClassifiedAction): boolean {
+  return action.available !== false || Boolean(action.availabilityRequirements?.some((requirement) => requirement.kind === "local_runtime"));
+}
 
 export function actionSelectionCounts(available: readonly ClassifiedAction[], selected: readonly string[]) {
   const reviewedReads = new Set(available.filter((action) => action.readOnly === true).map((action) => action.action));

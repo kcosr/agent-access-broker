@@ -71,6 +71,11 @@ pub(crate) fn validate(config: &crate::BrokerConfig, errors: &mut Vec<String>) {
     }
     let needs_store = crate::configured_service_descriptors(config)
         .values()
+        // Always-registered local operations report their prerequisites through
+        // action availability. Only configured native providers impose this
+        // startup requirement; missing local prerequisites must not prevent
+        // unrelated services from starting.
+        .filter(|service| config.providers.registry().get(&service.service).is_some())
         .flat_map(|service| &service.actions)
         .any(|action| {
             !action.secret_inputs.is_empty()

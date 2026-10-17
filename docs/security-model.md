@@ -1152,3 +1152,18 @@ other ways. Stderr is not logged unless the operator enables
 New provider secrets may be captured in encrypted temporary storage. Ordinary reuse is bound to origin authentication and execution context; a narrow authorized credential-management handoff can install the secret into a named connection.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Local delegated administration
+
+The core-owned `broker_management` service does not expose a management facade to
+providers. Private, single-use admitted commands bind the original identity,
+authentication, selected complete grant, canonical targets, policy generation and
+runtime snapshot. The final transaction rechecks current authority before target
+eligibility or secret installation. Existing management endpoints independently
+seal and recheck their own authority; neither path retries denial through the other.
+
+Membership and grant delegation selects live policy objects, so administrators
+must consider future changes to those objects. All edge operations need one grant
+covering every required resource dimension. Reference installation and token
+issuance retain encrypted ownership/capture boundaries; safe metadata reads never
+recover a one-time secret. See [delegated administration](broker-management.md).

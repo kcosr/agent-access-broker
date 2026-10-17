@@ -246,7 +246,7 @@ mod admitted_authority {
 
     #[test]
     fn scoped_actions_receive_their_resources_and_never_empty_authority() {
-        let scoped = action().scope("project");
+        let scoped = action().scopes(["project"]);
         let authority = admitted_authority(&scoped, &scopes(&["ENG"]), None).unwrap();
         assert_eq!(authority.resources(), Some(&scopes(&["ENG"])));
         for empty in [ResourceScopes::new(), scopes(&[])] {
@@ -265,7 +265,7 @@ mod admitted_authority {
 
     #[test]
     fn search_actions_receive_the_complete_boundary() {
-        let search = action().scope("project").search_contained();
+        let search = action().scopes(["project"]).search_contained();
         let boundary = SearchAuthorization::new(
             "project".to_string(),
             SearchAuthorizationScope::AllExcept {
@@ -280,7 +280,7 @@ mod admitted_authority {
         assert!(admitted_authority(&search, &scopes(&["*"]), None).is_err());
         assert!(
             admitted_authority(
-                &action().scope("project"),
+                &action().scopes(["project"]),
                 &scopes(&["ENG"]),
                 Some(boundary)
             )

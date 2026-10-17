@@ -13,12 +13,12 @@ const types = indexResourceTypes(RESOURCE_TYPES);
 const options: AgentTokenOptions = {
   policyGeneration: 4, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
   services: [{ service: "gitlab", displayName: "Gitlab", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{
-    action: "repository.tree", description: "Read files", readOnly: true, resourceType: "git_repository", requiredScopeTypes: ["repository"], executionContexts: ["internal", "external"],
+    action: "repository.tree", description: "Read files", readOnly: true,  requiredScopes: { "repository": { resourceType: "git_repository" } }, executionContexts: ["internal", "external"],
     effectiveAccessByExecutionContext: {
-      internal: [{ included: [{ kind: "all" }], excluded: [] }],
+      internal: [{ scopes: { "repository": { resourceType: "git_repository", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [] }],
       external: [
-        { included: [{ kind: "all" }], excluded: [{ kind: "namespace", value: "private" }] },
-        { included: [{ kind: "exact", value: "private/approved" }], excluded: [] }
+        { scopes: { "repository": { resourceType: "git_repository", included: [{ kind: "all" }], excluded: [{ kind: "namespace", value: "private" }] } }, excludedRequests: [] },
+        { scopes: { "repository": { resourceType: "git_repository", included: [{ kind: "exact", value: "private/approved" }], excluded: [] } }, excludedRequests: [] }
       ]
     }
   }] }],
@@ -29,7 +29,7 @@ describe("effective access presentation", () => {
   test("preserves separate grant clauses instead of applying exclusions globally", () => {
     const external = buildAccessSummary(options, "external")[0].actions[0];
     expect(external.clauses).toEqual(options.services[0].actions[0].effectiveAccessByExecutionContext.external);
-    expect(external.clauses.map((clause) => clauseLabel(types, external.resourceType!, clause))).toEqual([
+    expect(external.clauses.map((clause) => clauseLabel(types, clause))).toEqual([
       "All Git repositories except Repositories under private", "private/approved"
     ]);
   });
@@ -44,12 +44,12 @@ describe("effective access presentation", () => {
   test("retains whole-request conditions separately from resource exclusions", () => {
     const conditional = structuredClone(options);
     const clause = conditional.services[0].actions[0].effectiveAccessByExecutionContext.external[0];
-    clause.excludedRequests = [{ included: [{ kind: "namespace", value: "engineering" }], excluded: [] }];
+    clause.excludedRequests = [{ scopes: { repository: { resourceType: "git_repository", included: [{ kind: "namespace", value: "engineering" }], excluded: [] } } }];
     const displayed = buildAccessSummary(conditional, "external")[0].actions[0].clauses[0];
     expect(displayed.excludedRequests).toEqual(clause.excludedRequests);
-    expect(displayed.excluded).toEqual([{ kind: "namespace", value: "private" }]);
-    const markup = renderToStaticMarkup(createElement(ResourceTypesProvider, { value: types }, createElement(AccessClause, { type: "git_repository", clause: displayed })));
-    expect(markup).toContain("Does not apply when every requested resource is within:");
+    expect(displayed.scopes.repository.excluded).toEqual([{ kind: "namespace", value: "private" }]);
+    const markup = renderToStaticMarkup(createElement(ResourceTypesProvider, { value: types }, createElement(AccessClause, { clause: displayed })));
+    expect(markup).toContain("Does not apply when the complete request fits:");
     expect(markup).toContain("Repositories under engineering");
   });
 
@@ -99,6 +99,6 @@ describe("resource type metadata", () => {
 });
 
 test("scope-free actions remain visible with explicit action grants", () => {
-  const gmail: AgentTokenOptions = {policyGeneration:1,resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],resourceType:null,executionContexts:["default"],effectiveAccessByExecutionContext:{default:[]}}]}],mcp:null};
-  expect(buildAccessSummary(gmail)[0].actions[0]).toMatchObject({action:"thread.trash",resourceType:null,contexts:["default"]});
+  const gmail: AgentTokenOptions = {policyGeneration:1,resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopes: {},executionContexts:["default"],effectiveAccessByExecutionContext:{default:[{scopes:{},excludedRequests:[]}]}}]}],mcp:null};
+  expect(buildAccessSummary(gmail)[0].actions[0]).toMatchObject({action:"thread.trash",contexts:["default"]});
 });

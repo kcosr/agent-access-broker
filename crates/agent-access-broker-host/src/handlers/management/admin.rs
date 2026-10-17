@@ -1,14 +1,12 @@
 use crate::handlers::management::common::{
-    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
-    admin_agent_token_issue_expires_at, agent_token_boundary_audit, agent_token_issue_scopes,
-    agent_token_list_query, append_management_audit_with_phase, credential_input_schema_query,
-    default_token_ttl_seconds, management_audit_unavailable_response,
+    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, admin_agent_token_issue_expires_at,
+    agent_token_boundary_audit, agent_token_issue_scopes, agent_token_list_query,
+    credential_input_schema_query, default_token_ttl_seconds,
     management_committed_write_audit_completion, management_context,
     management_context_error_response, management_pre_audited_success_response,
-    management_response, management_store_call, management_store_error_response,
-    management_success_envelope, management_success_response, management_token_store_call,
-    management_write_audit_preflight, parse_and_validate_agent_token_issue_scopes,
-    timestamp_after_seconds_checked,
+    management_store_call, management_store_error_response, management_success_response,
+    management_token_store_call, management_write_audit_preflight,
+    parse_and_validate_agent_token_issue_scopes, timestamp_after_seconds_checked,
 };
 use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
@@ -1154,19 +1152,29 @@ pub(crate) async fn admin_group_member_add(
     let group_for_store = group.clone();
     let principal_for_store = principal.clone();
     let actor = context.identity.principal.clone();
-    match management_store_call(&context, move |store| {
-        store.add_group(&principal_for_store, &group_for_store, &actor)
-    })
+    super::common::management_authorized_store_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |store, _catalog, authority| {
+            store.add_group_with_management_authority(
+                &principal_for_store,
+                &group_for_store,
+                &actor,
+                authority,
+            )
+        },
+        |context, operation, target, ()| {
+            super::common::management_success_envelope(
+                context,
+                operation,
+                target,
+                json!({"ok": true}),
+            )
+        },
+    )
     .await
-    {
-        Ok(()) => management_pre_audited_success_response(
-            &context,
-            operation,
-            target,
-            json!({"ok": true}),
-        ),
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_group_member_delete(
@@ -1207,22 +1215,9 @@ pub(crate) async fn admin_group_member_delete(
     }
     let group_for_store = group.clone();
     let principal_for_store = principal.clone();
-    match management_store_call(&context, move |store| {
-        store.remove_local_group_with_effect(&principal_for_store, &group_for_store)
-    })
-    .await
-    {
-        Ok(result) => management_pre_audited_success_response(
-            &context,
-            operation,
-            target,
-            json!({
-                "removed": result.removed,
-                "effectiveMembershipRemains": result.still_effective,
-            }),
-        ),
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+    super::common::management_authorized_store_write(&state, context, operation, target, move |store, _catalog, authority| {
+        store.remove_local_group_with_management_authority(&principal_for_store, &group_for_store, authority)
+    }, |context, operation, target, result| super::common::management_success_envelope(context, operation, target, json!({"removed":result.removed,"effectiveMembershipRemains":result.still_effective}))).await
 }
 
 pub(crate) async fn admin_external_group_bindings_list(
@@ -1442,25 +1437,31 @@ pub(crate) async fn admin_principals_create(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    match management_token_store_call(&state, &context, move |store, _catalog| {
-        store.create_principal(PrincipalWriteRequest {
-            principal_id: body.principal_id,
-            kind: body.kind,
-            display_name: body.display_name,
-            email: body.email,
-            external_subject: body.external_subject,
-            role: body.role,
-            self_service_enabled: body.self_service_enabled,
-            created_by: actor,
-        })
-    })
+    super::common::management_authorized_store_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |store, _catalog, authority| {
+            store.create_principal_with_management_authority(
+                PrincipalWriteRequest {
+                    principal_id: body.principal_id,
+                    kind: body.kind,
+                    display_name: body.display_name,
+                    email: body.email,
+                    external_subject: body.external_subject,
+                    role: body.role,
+                    self_service_enabled: body.self_service_enabled,
+                    created_by: actor,
+                },
+                authority,
+            )
+        },
+        |context, operation, target, principal| {
+            super::common::management_success_envelope(context, operation, target, json!(principal))
+        },
+    )
     .await
-    {
-        Ok(principal) => {
-            management_pre_audited_success_response(&context, operation, target, json!(principal))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_principals_get(
@@ -1862,19 +1863,29 @@ pub(crate) async fn admin_principal_group_add(
     let principal_for_store = principal.clone();
     let group_for_store = group.clone();
     let actor = context.identity.principal.clone();
-    match management_store_call(&context, move |store| {
-        store.add_group(&principal_for_store, &group_for_store, &actor)
-    })
+    super::common::management_authorized_store_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |store, _catalog, authority| {
+            store.add_group_with_management_authority(
+                &principal_for_store,
+                &group_for_store,
+                &actor,
+                authority,
+            )
+        },
+        |context, operation, target, ()| {
+            super::common::management_success_envelope(
+                context,
+                operation,
+                target,
+                json!({"ok": true}),
+            )
+        },
+    )
     .await
-    {
-        Ok(()) => management_pre_audited_success_response(
-            &context,
-            operation,
-            target,
-            json!({"ok": true}),
-        ),
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_principal_group_delete(
@@ -1915,22 +1926,9 @@ pub(crate) async fn admin_principal_group_delete(
     }
     let principal_for_store = principal.clone();
     let group_for_store = group.clone();
-    match management_store_call(&context, move |store| {
-        store.remove_local_group_with_effect(&principal_for_store, &group_for_store)
-    })
-    .await
-    {
-        Ok(result) => management_pre_audited_success_response(
-            &context,
-            operation,
-            target,
-            json!({
-                "removed": result.removed,
-                "effectiveMembershipRemains": result.still_effective,
-            }),
-        ),
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+    super::common::management_authorized_store_write(&state, context, operation, target, move |store, _catalog, authority| {
+        store.remove_local_group_with_management_authority(&principal_for_store, &group_for_store, authority)
+    }, |context, operation, target, result| super::common::management_success_envelope(context, operation, target, json!({"removed":result.removed,"effectiveMembershipRemains":result.still_effective}))).await
 }
 
 pub(crate) async fn admin_principal_login_methods_list(
@@ -2562,58 +2560,39 @@ pub(crate) async fn admin_principal_token_issue(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        let issue_request = BrokerTokenIssueRequest {
-            principal_id: principal,
-            name: body.name,
-            token_class: body.token_class,
-            scopes,
-            expires_at,
-            created_by: actor,
-        };
-        store.issue_broker_token_with_catalog(&hasher, issue_request, catalog.as_ref())
-    })
-    .await
-    {
-        Ok(token) => {
+    super::common::management_authorized_store_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |store, catalog, authority| {
+            let issue_request = BrokerTokenIssueRequest {
+                principal_id: principal,
+                name: body.name,
+                token_class: body.token_class,
+                scopes,
+                expires_at,
+                created_by: actor,
+            };
+            store.issue_broker_token_with_management_authority(
+                &hasher,
+                issue_request,
+                catalog.as_ref(),
+                authority,
+            )
+        },
+        |context, operation, _target, token| {
             let success_target = admin_token_success_audit_target(&token.record);
-            let audit_envelope = management_success_envelope(
-                &context,
-                operation,
-                success_target.clone(),
-                Value::Null,
-            );
-            if let Err(error) = append_management_audit_with_phase(
-                &context.snapshot,
-                &context.request_id,
-                &context.broker_request_id,
-                &context.identity,
-                &context.source,
-                &audit_envelope,
-                ManagementAuditExtra {
-                    catalog_change: None,
-                    phase: Some("success"),
-                    verification: None,
-                },
-            )
-            .await
-            {
-                return management_audit_unavailable_response(
-                    &context.request_id,
-                    &context.broker_request_id,
-                    operation,
-                    &context.identity.principal,
-                    error,
-                );
-            }
             let token = admin_issued_token(token.token, token.record, false);
-            management_response(
-                StatusCode::OK,
-                management_success_envelope(&context, operation, success_target, json!(token)),
+            super::common::management_success_envelope(
+                context,
+                operation,
+                success_target,
+                json!(token),
             )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+    )
+    .await
 }
 
 pub(crate) async fn admin_principal_agent_tokens_list(
@@ -2849,60 +2828,37 @@ pub(crate) async fn admin_principal_agent_token_issue(
     }
     let actor = context.identity.principal.clone();
     let principal_for_store = principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        store.issue_broker_token_with_catalog(
-            &hasher,
-            BrokerTokenIssueRequest {
-                principal_id: principal_for_store,
-                name: body.name,
-                token_class: BrokerTokenClass::AgentInvoke,
-                scopes,
-                expires_at,
-                created_by: actor,
-            },
-            catalog.as_ref(),
-        )
-    })
-    .await
-    {
-        Ok(token) => {
-            let success_target = admin_token_success_audit_target(&token.record);
-            let audit_envelope = management_success_envelope(
-                &context,
-                operation,
-                success_target.clone(),
-                Value::Null,
-            );
-            if let Err(error) = append_management_audit_with_phase(
-                &context.snapshot,
-                &context.request_id,
-                &context.broker_request_id,
-                &context.identity,
-                &context.source,
-                &audit_envelope,
-                ManagementAuditExtra {
-                    catalog_change: None,
-                    phase: Some("success"),
-                    verification: None,
+    super::common::management_authorized_store_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |store, catalog, authority| {
+            store.issue_broker_token_with_management_authority(
+                &hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: principal_for_store,
+                    name: body.name,
+                    token_class: BrokerTokenClass::AgentInvoke,
+                    scopes,
+                    expires_at,
+                    created_by: actor,
                 },
+                catalog.as_ref(),
+                authority,
             )
-            .await
-            {
-                return management_audit_unavailable_response(
-                    &context.request_id,
-                    &context.broker_request_id,
-                    operation,
-                    &context.identity.principal,
-                    error,
-                );
-            }
-            management_response(
-                StatusCode::OK,
-                management_success_envelope(&context, operation, success_target, json!(token)),
+        },
+        |context, operation, _target, token| {
+            let success_target = admin_token_success_audit_target(&token.record);
+            super::common::management_success_envelope(
+                context,
+                operation,
+                success_target,
+                json!(token),
             )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+    )
+    .await
 }
 
 pub(crate) async fn admin_principal_agent_token_get(

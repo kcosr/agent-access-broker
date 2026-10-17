@@ -1,5 +1,7 @@
-//! Ownership of the domain reasons native backends declare.
-use agent_access_provider::{BackendRegistration, ReasonCode, domain_reason_prefix};
+//! Shared ownership checks for native and core-owned domain reasons.
+use agent_access_provider::{
+    BackendRegistration, ProviderReasonDefinition, ReasonCode, domain_reason_prefix,
+};
 use std::collections::BTreeMap;
 
 /// The namespace standard reasons added by the Broker use.
@@ -13,26 +15,69 @@ const RESERVED_PREFIX: &str = "broker_";
 /// whose prefixes overlap or normalize equally coexist while their codes
 /// differ. A kind that cannot fit a prefix and name in the 64-byte cap, or
 /// whose prefix is reserved, registers only without domain reasons.
-pub(super) fn validate(registrations: &[&'static BackendRegistration]) -> Vec<String> {
+/// Internal ownership record. A core built-in does not pretend to be a linked
+/// native backend: only its domain definitions participate in these checks.
+pub(super) struct DomainReasonOwner {
+    kind: &'static str,
+    reasons: &'static [&'static ProviderReasonDefinition],
+    core: bool,
+}
+
+impl DomainReasonOwner {
+    pub(super) fn native(registration: &'static BackendRegistration) -> Self {
+        Self {
+            kind: registration.kind(),
+            reasons: registration.domain_reasons(),
+            core: false,
+        }
+    }
+
+    pub(super) const fn core(
+        kind: &'static str,
+        reasons: &'static [&'static ProviderReasonDefinition],
+    ) -> Self {
+        Self {
+            kind,
+            reasons,
+            core: true,
+        }
+    }
+
+    fn label(&self) -> String {
+        format!(
+            "{} {}",
+            if self.core {
+                "core built-in owner"
+            } else {
+                "backend kind"
+            },
+            self.kind
+        )
+    }
+}
+
+pub(super) fn validate_owners(owners: impl IntoIterator<Item = DomainReasonOwner>) -> Vec<String> {
     let mut errors = Vec::new();
-    let mut owners = BTreeMap::<&'static str, &'static str>::new();
-    for registration in registrations {
-        let kind = registration.kind();
-        let reasons = registration.domain_reasons();
+    let mut registered = BTreeMap::<&'static str, (&'static str, bool)>::new();
+    for owner in owners {
+        let core = owner.core;
+        let kind = owner.kind;
+        let reasons = owner.reasons;
+        let label = owner.label();
         if reasons.is_empty() {
             continue;
         }
         let prefix = domain_reason_prefix(kind);
         if prefix.starts_with(RESERVED_PREFIX) {
             errors.push(format!(
-                "backend kind {kind} cannot declare domain reasons: the {RESERVED_PREFIX} \
+                "{label} cannot declare domain reasons: the {RESERVED_PREFIX} \
                  reason namespace is reserved for the Broker"
             ));
             continue;
         }
         if prefix.len() >= agent_access_provider::ReasonCodeId::MAX_LEN {
             errors.push(format!(
-                "backend kind {kind} is too long to declare domain reasons: a code must fit \
+                "{label} is too long to declare domain reasons: a code must fit \
                  {prefix} and a name in {} bytes",
                 agent_access_provider::ReasonCodeId::MAX_LEN
             ));
@@ -42,7 +87,7 @@ pub(super) fn validate(registrations: &[&'static BackendRegistration]) -> Vec<St
             let code = definition.code();
             if code.len() <= prefix.len() || !code.starts_with(&prefix) {
                 errors.push(format!(
-                    "domain reason {code} of backend kind {kind} must start with {prefix} \
+                    "domain reason {code} of {label} must start with {prefix} \
                      followed by a name"
                 ));
             } else if ReasonCode::all()
@@ -50,20 +95,28 @@ pub(super) fn validate(registrations: &[&'static BackendRegistration]) -> Vec<St
                 .any(|standard| standard.as_str() == code)
             {
                 errors.push(format!(
-                    "domain reason {code} of backend kind {kind} is a standard reason"
+                    "domain reason {code} of {label} is a standard reason"
                 ));
-            } else if let Some(owner) = owners.insert(code, kind) {
-                errors.push(if owner == kind {
+            } else if let Some(owner) = registered.insert(code, (kind, core)) {
+                errors.push(if owner == (kind, core) {
+                    format!("domain reason {code} is declared more than once by {label}")
+                } else if !owner.1 && !core {
                     format!(
-                        "domain reason {code} is declared more than once by backend kind {kind}"
+                        "domain reason {code} is declared by backend kinds {} and {kind}",
+                        owner.0
                     )
                 } else {
-                    format!("domain reason {code} is declared by backend kinds {owner} and {kind}")
+                    format!("domain reason {code} is declared by multiple owners including {label}")
                 });
             }
         }
     }
     errors
+}
+
+#[cfg(test)]
+fn validate(registrations: &[&'static BackendRegistration]) -> Vec<String> {
+    validate_owners(registrations.iter().copied().map(DomainReasonOwner::native))
 }
 
 #[cfg(test)]
@@ -103,6 +156,35 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         )
+    }
+
+    #[test]
+    fn core_owners_obey_the_same_namespace_and_uniqueness_rules() {
+        assert!(
+            validate_owners([DomainReasonOwner::core(
+                "access_management",
+                reasons(&["access_management_target_exists"])
+            )])
+            .is_empty()
+        );
+        let errors = validate_owners([
+            DomainReasonOwner::core(
+                "access_management",
+                reasons(&["access_management_target_exists"]),
+            ),
+            DomainReasonOwner::native(registration(
+                "access-management",
+                reasons(&["access_management_target_exists"]),
+            )),
+        ]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("multiple owners"));
+        let errors = validate_owners([DomainReasonOwner::core(
+            "broker_management",
+            reasons(&["broker_management_exists"]),
+        )]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("reserved"));
     }
 
     #[test]

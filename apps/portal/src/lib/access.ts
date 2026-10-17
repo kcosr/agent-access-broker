@@ -1,4 +1,4 @@
-import type { AgentTokenOptions, ConnectionConsumer, EffectiveAccessClause, EffectiveAccessItem, ResourceType } from "../types";
+import type { AgentTokenOptions, ConnectionConsumer, EffectiveAccessClause, EffectiveAccessItem } from "../types";
 
 /**
  * Service display names from the services consuming the principal's credential
@@ -23,7 +23,6 @@ export type AccessActionSummary = {
   /** Explicitly classified read-only; anything else may write. */
   readOnly: boolean;
   contexts: string[];
-  resourceType: ResourceType | null;
   clauses: EffectiveAccessClause[];
 };
 export type AccessServiceSummary = { service: string; actions: AccessActionSummary[] };
@@ -37,11 +36,11 @@ export function buildAccessSummary(options: AgentTokenOptions, executionContext:
         if (executionContext !== null && context !== executionContext) continue;
         if (!options.executionContexts.includes(context) || !service.executionContexts.includes(context)) continue;
         const clauses = action.effectiveAccessByExecutionContext[context] ?? [];
-        if (action.resourceType !== null && clauses.length === 0) continue;
+        if (clauses.length === 0) continue;
         const key = JSON.stringify(clauses);
         const existing = grouped.get(key);
         if (existing) existing.contexts.push(context);
-        else grouped.set(key, { action: action.action, description: action.description, readOnly: action.readOnly === true, contexts: [context], resourceType: action.resourceType, clauses });
+        else grouped.set(key, { action: action.action, description: action.description, readOnly: action.readOnly === true, contexts: [context], clauses });
       }
       return [...grouped.values()];
     });
@@ -57,21 +56,20 @@ export type EffectiveAccessRow = {
   service: string;
   actions: string[];
   contexts: string[];
-  resourceType: ResourceType | null;
   clauses: EffectiveAccessClause[];
 };
 
 /**
  * Merges the broker's per-(action, context) effective access into compact
  * rows without losing or blurring anything: an action's contexts merge only
- * when their resource type and clauses are identical, and actions merge only
+ * when their complete clauses are identical, and actions merge only
  * when their merged contexts and clauses are identical, so each row states
  * the exact access of every action × context pair it covers, and each pair
  * appears in exactly one row. Services, actions, and contexts keep the
  * broker's order.
  */
 export function mergeEffectiveAccess(items: EffectiveAccessItem[]): EffectiveAccessRow[] {
-  const signature = (item: Pick<EffectiveAccessItem, "resourceType" | "clauses">) => JSON.stringify([item.resourceType, item.clauses]);
+  const signature = (item: Pick<EffectiveAccessItem, "clauses">) => JSON.stringify(item.clauses);
   // service -> action -> clause signature -> contexts (insertion-ordered maps)
   const services = new Map<string, Map<string, Map<string, { contexts: string[]; item: EffectiveAccessItem }>>>();
   for (const item of items) {
@@ -93,7 +91,7 @@ export function mergeEffectiveAccess(items: EffectiveAccessItem[]): EffectiveAcc
         const rowKey = JSON.stringify([contexts, key]);
         const row = merged.get(rowKey);
         if (row) row.actions.push(action);
-        else merged.set(rowKey, { service, actions: [action], contexts, resourceType: item.resourceType, clauses: item.clauses });
+        else merged.set(rowKey, { service, actions: [action], contexts, clauses: item.clauses });
       }
     }
     rows.push(...merged.values());

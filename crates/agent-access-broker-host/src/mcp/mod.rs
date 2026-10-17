@@ -790,7 +790,7 @@ pub(crate) async fn handle(
         }
     };
     let message: Value = if method == Method::POST {
-        match serde_json::from_slice::<Value>(&bytes) {
+        match agent_access_core::mcp::parse_json_unique_keys(&bytes) {
             Ok(v) if v.is_object() => v,
             Ok(_) => {
                 return protocol_failure(

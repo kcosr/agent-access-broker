@@ -9,13 +9,13 @@ import { indexResourceTypes, ResourceTypesProvider } from "../src/lib/resource-t
 import type { EffectiveAccessClause, EffectiveAccessItem } from "../src/types";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 
-const sbc: EffectiveAccessClause[] = [{ included: [{ kind: "exact", value: "SBC" }], excluded: [] }];
-const eng: EffectiveAccessClause[] = [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }];
+const sbc: EffectiveAccessClause[] = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "SBC" }], excluded: [] } }, excludedRequests: [] }];
+const eng: EffectiveAccessClause[] = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "ENG" }], excluded: [] } }, excludedRequests: [] }];
 const item = (action: string, executionContext: string, clauses: EffectiveAccessClause[], service = "jira"): EffectiveAccessItem => ({
   service,
   action,
   executionContext,
-  resourceType: "jira_project",
+
   clauses
 });
 
@@ -29,7 +29,7 @@ function expand(rows: ReturnType<typeof mergeEffectiveAccess>) {
 describe("merged effective access", () => {
   it("merges an action's contexts with identical clauses", () => {
     const rows = mergeEffectiveAccess([item("attachment.add", "internal", sbc), item("attachment.add", "external", sbc)]);
-    expect(rows).toEqual([{ service: "jira", actions: ["attachment.add"], contexts: ["internal", "external"], resourceType: "jira_project", clauses: sbc }]);
+    expect(rows).toEqual([{ service: "jira", actions: ["attachment.add"], contexts: ["internal", "external"],  clauses: sbc }]);
   });
 
   it("keeps contexts apart when their clauses differ", () => {
@@ -61,14 +61,14 @@ describe("merged effective access", () => {
   });
 
   it("treats a different resource type or exclusion as different access", () => {
-    const withExclusion: EffectiveAccessClause[] = [{ included: [{ kind: "all" }], excluded: [{ kind: "exact", value: "SECRET" }] }];
-    const withRequestExclusion: EffectiveAccessClause[] = [{ included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "SECRET" }], excluded: [] }] }];
-    const plain: EffectiveAccessClause[] = [{ included: [{ kind: "all" }], excluded: [] }];
+    const withExclusion: EffectiveAccessClause[] = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [{ kind: "exact", value: "SECRET" }] } }, excludedRequests: [] }];
+    const withRequestExclusion: EffectiveAccessClause[] = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "exact", value: "SECRET" }], excluded: [] } } }] }];
+    const plain: EffectiveAccessClause[] = [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [] }];
     const rows = mergeEffectiveAccess([
       item("a", "default", plain),
       item("a", "internal", withExclusion),
       item("a", "external", withRequestExclusion),
-      { ...item("b", "default", plain), resourceType: null }
+      { ...item("b", "default", plain), clauses: [{ scopes: {}, excludedRequests: [] }] }
     ]);
     expect(rows).toHaveLength(4);
   });
@@ -115,5 +115,32 @@ describe("merged effective access", () => {
     const split = render([item("issue.view", "default", sbc), item("search", "default", eng)], ["issue.view", "search"]);
     expect(split).not.toContain("granted actions");
     expect(split).toContain("issue.<wbr/>view");
+  });
+});
+
+describe("complete request boundaries", () => {
+  const scope = (resourceType: string, value: string) => ({ resourceType, included: [{ kind: "exact" as const, value }], excluded: [] });
+  const pair = (group: string, principal: string): EffectiveAccessClause => ({
+    scopes: { group: scope("broker_group", group), principal: scope("broker_principal", principal) },
+    excludedRequests: []
+  });
+
+  it("preserves alternative pairings and renders each complete conjunction", () => {
+    const clauses = [pair("review", "review-bot"), pair("release", "release-bot")];
+    const rows = mergeEffectiveAccess([{ service: "broker_management", action: "group.member.add", executionContext: "internal", clauses }]);
+    expect(rows[0].clauses).toEqual(clauses);
+    const markup = renderToStaticMarkup(createElement(EffectiveAccessSummary, { result: { policyGeneration: 9, access: [{ service: "broker_management", action: "group.member.add", executionContext: "internal", clauses }] } }));
+    expect(markup).toContain("group: (review) AND principal: (review-bot)");
+    expect(markup).toContain("Or: group: (release) AND principal: (release-bot)");
+    expect(markup).toContain("Every scope in a request must fit the same alternative.");
+  });
+
+  it("renders priority exclusions as complete request conditions", () => {
+    const allowed = pair("review", "review-bot");
+    allowed.excludedRequests = [{ scopes: pair("release", "release-bot").scopes }];
+    const markup = renderToStaticMarkup(createElement(EffectiveAccessSummary, { result: { policyGeneration: 9, access: [{ service: "broker_management", action: "group.member.add", executionContext: "internal", clauses: [allowed] }] } }));
+    expect(markup).toContain("Does not apply when the complete request fits:");
+    expect(markup).toContain("group: (release) AND principal: (release-bot)");
+    expect(mergeEffectiveAccess([item("same", "internal", [allowed]), item("same", "external", [pair("review", "review-bot")])])).toHaveLength(2);
   });
 });

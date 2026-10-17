@@ -16,6 +16,8 @@ const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub(super) struct BoundedStdioRead<R> {
     inner: R,
     frame_bytes: usize,
+    frame: Vec<u8>,
+    duplicate_keys: bool,
     maximum: usize,
     oversized: Arc<AtomicBool>,
 }
@@ -27,6 +29,8 @@ impl<R> BoundedStdioRead<R> {
             Self {
                 inner,
                 frame_bytes: 0,
+                frame: Vec::new(),
+                duplicate_keys: false,
                 maximum: MAX_FRAME_BYTES,
                 oversized: oversized.clone(),
             },
@@ -50,6 +54,12 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedStdioRead<R> {
         if this.oversized.load(Ordering::Relaxed) {
             return Poll::Ready(Err(too_large()));
         }
+        if this.duplicate_keys {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate MCP JSON object key",
+            )));
+        }
         // The fixed scratch buffer bounds reads even when the SDK requests a
         // large chunk. Newline accounting persists across Pending/split reads.
         let mut bytes = [0; 8192];
@@ -61,11 +71,37 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedStdioRead<R> {
             Poll::Ready(Ok(())) => {}
         }
         let input = input.filled();
+        if input.is_empty()
+            && agent_access_core::mcp::parse_json_unique_keys(&this.frame)
+                .is_err_and(|error| error.0 == "duplicate JSON object key")
+        {
+            this.duplicate_keys = true;
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate MCP JSON object key",
+            )));
+        }
         for (index, byte) in input.iter().enumerate() {
             if *byte == b'\n' {
+                if agent_access_core::mcp::parse_json_unique_keys(&this.frame)
+                    .is_err_and(|error| error.0 == "duplicate JSON object key")
+                {
+                    this.duplicate_keys = true;
+                    // Withhold this frame's newline so the SDK cannot dispatch it.
+                    if index > 0 {
+                        output.put_slice(&input[..index]);
+                        return Poll::Ready(Ok(()));
+                    }
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "duplicate MCP JSON object key",
+                    )));
+                }
+                this.frame.clear();
                 this.frame_bytes = 0;
             } else {
                 this.frame_bytes += 1;
+                this.frame.push(*byte);
                 if this.frame_bytes > this.maximum {
                     this.oversized.store(true, Ordering::Relaxed);
                     // Deliver earlier complete frames in the same read before
@@ -88,6 +124,46 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedStdioRead<R> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn duplicate_json_keys_never_reach_sdk_as_a_complete_frame() {
+        for frame in [
+            br#"{"params":{"arguments":{"targets":{"group":["first"],"group":["second"]}}}}"#
+                .as_slice(),
+            br#"{"params":{"arguments":{"targets":{"group":["first"],"\u0067roup":["second"]}}}}"#
+                .as_slice(),
+        ] {
+            let bytes = [b"{}\n".as_slice(), frame, b"\n"].concat();
+            let (bounded, oversized) = BoundedStdioRead::new(bytes.as_slice());
+            let mut reader = BufReader::new(bounded);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "{}\n");
+            line.clear();
+            assert_eq!(
+                reader.read_line(&mut line).await.unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert!(!line.ends_with('\n'));
+            assert!(!oversized.load(Ordering::Relaxed));
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_key_detection_survives_split_reads_and_unterminated_eof() {
+        for suffix in [b"\n".as_slice(), b""] {
+            let bytes = [br#"{"target":1,"\u0074arget":2}"#.as_slice(), suffix].concat();
+            let (bounded, oversized) = BoundedStdioRead::new(bytes.as_slice());
+            let mut reader = BufReader::with_capacity(3, bounded);
+            let mut line = String::new();
+            assert_eq!(
+                reader.read_line(&mut line).await.unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert!(!line.ends_with('\n'));
+            assert!(!oversized.load(Ordering::Relaxed));
+        }
+    }
 
     #[tokio::test]
     async fn frame_bound_survives_split_reads_and_resets_at_newlines() {

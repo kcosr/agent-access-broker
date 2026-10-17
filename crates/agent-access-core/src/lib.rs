@@ -69,6 +69,10 @@ pub use network::{
 pub use node_identity::*;
 pub use oauth::*;
 pub use resource_policy::*;
+mod management;
+pub use management::{
+    AdmittedManagementCommand, LocalOperationHost, LocalOperationOutcome, ManagementMutation,
+};
 pub use runtime::*;
 pub use secret_outputs_config::{SecretOutputMode, SecretOutputsConfig};
 pub use state_lock::*;
@@ -3242,7 +3246,7 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
         .collect::<BTreeSet<_>>();
     let mut broker_hosts = BTreeMap::<String, String>::new();
     for (service, gateway) in &config.gateways {
-        if service == "broker" || !is_service_name(service) {
+        if backends::is_reserved_service_name(service) || !is_service_name(service) {
             errors.push(format!("gateways.{service} uses an invalid service name"));
         }
         // Every selected native kind stays reserved even while unconfigured,
@@ -3514,6 +3518,11 @@ fn validate_policy(
     if config.policy.default_decision != "deny" {
         errors.push("policy.default_decision must be deny".to_string());
     }
+    for (index, grant) in config.policy.grants.iter().enumerate() {
+        if grant.service == "broker_management" {
+            errors.push(format!("policy.grants[{index}].service broker_management requires administrator-authored managed policy"));
+        }
+    }
     if config.policy.authority == "managed" {
         if config.managed_store.is_none() {
             errors.push("policy.authority managed requires managed_store".to_string());
@@ -3740,8 +3749,7 @@ struct PolicyValidationContainmentGrant {
     subject: String,
     service: String,
     action: String,
-    scope_type: String,
-    boundary: ResourceBoundary,
+    scopes: BTreeMap<String, ResourceBoundary>,
     execution_contexts: Vec<String>,
     credential_mode: String,
     priority: i32,
@@ -3932,7 +3940,7 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                 ));
                 continue;
             };
-            if action_spec.resource_scope.is_none() && !grant.resources.is_empty() {
+            if action_spec.resource_scopes.is_empty() && !grant.resources.is_empty() {
                 issues.push(normalized_policy_issue(
                     NormalizedPolicyGrantIssueField::Resources,
                     "resource_selection_unsupported",
@@ -3942,8 +3950,10 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                     ),
                 ));
             }
-            if let Some(scope) = &action_spec.resource_scope
-                && !service.resource_scopes.contains_key(scope)
+            if let Some(scope) = action_spec
+                .resource_scopes
+                .iter()
+                .find(|scope| !service.resource_scopes.contains_key(*scope))
             {
                 issues.push(normalized_policy_issue(
                     NormalizedPolicyGrantIssueField::Resources,
@@ -4028,19 +4038,30 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                 credential_mode: grant.credential_mode.to_string(),
                 priority: grant.priority.unwrap_or(0),
             });
-            if let Some((scope_type, binding)) = service.action_resource_scope(action) {
-                let resource_type = &binding.resource_type;
+            if let Some(scopes) = service.action_resource_scopes(action)
+                && !scopes.is_empty()
+            {
                 for context in &grant.execution_contexts {
-                    let boundary =
-                        resource_catalog.resolve(grant.resources, resource_type, context);
+                    let scopes = scopes
+                        .iter()
+                        .map(|(name, binding)| {
+                            (
+                                name.to_string(),
+                                resource_catalog.resolve(
+                                    grant.resources,
+                                    &binding.resource_type,
+                                    context,
+                                ),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
                     containment_grants.push(PolicyValidationContainmentGrant {
                         label: grant.label.clone(),
                         subject_field: grant.subject_field.clone(),
                         subject: grant.subject.to_string(),
                         service: grant.service.to_string(),
                         action: action.clone(),
-                        scope_type: scope_type.to_string(),
-                        boundary,
+                        scopes,
                         execution_contexts: vec![context.clone()],
                         credential_mode: grant.credential_mode.to_string(),
                         priority: grant.priority.unwrap_or(0),
@@ -4176,7 +4197,7 @@ fn validate_policy_containment_overlaps(
             if left.subject != right.subject
                 || left.service != right.service
                 || left.action != right.action
-                || left.scope_type != right.scope_type
+                || !left.scopes.keys().eq(right.scopes.keys())
                 || left.priority != right.priority
                 || left.credential_mode == right.credential_mode
                 || left.command_enforced
@@ -4187,21 +4208,26 @@ fn validate_policy_containment_overlaps(
             {
                 continue;
             }
-            let left_is_wildcard = left.boundary.is_universe();
-            let right_is_wildcard = right.boundary.is_universe();
+            let left_is_wildcard = left.scopes.values().all(ResourceBoundary::is_universe);
+            let right_is_wildcard = right.scopes.values().all(ResourceBoundary::is_universe);
             if left.lookup_required
                 && right.lookup_required
                 && left_is_wildcard != right_is_wildcard
             {
                 continue;
             }
-            if left.boundary.intersects(&right.boundary) {
+            if left.scopes.iter().all(|(name, boundary)| {
+                right
+                    .scopes
+                    .get(name)
+                    .is_some_and(|other| boundary.intersects(other))
+            }) {
                 issues.push(normalized_policy_subject_issue(
                     right.subject_field.clone(),
                     "credential_mode_ambiguous",
                     format!(
                         "{} has ambiguous credential mode precedence for overlapping {} scope values",
-                        right.label, right.scope_type
+                        right.label, right.scopes.keys().cloned().collect::<Vec<_>>().join(", ")
                     ),
                 ));
             }
@@ -4338,6 +4364,8 @@ pub(crate) fn configured_service_descriptors(
         .into_iter()
         .map(|descriptor| (descriptor.service.clone(), Arc::new(descriptor)))
         .collect::<BTreeMap<_, _>>();
+    let local = runtime::broker_management::descriptor::descriptor(config);
+    services.insert(local.service.clone(), Arc::new(local));
     // A gateway colliding with a provider service is a validation error; keep
     // the provider's descriptor so the error is the only effect.
     for (service, gateway) in &config.gateways {
@@ -4458,8 +4486,8 @@ fn validate_private_resource_consumers(
             .filter(|action| action.requires_resource_attributes)
         {
             let resource_type = action
-                .resource_scope
-                .as_ref()
+                .resource_scopes
+                .first()
                 .and_then(|scope| service.resource_scopes.get(scope))
                 .map(|scope| &scope.resource_type);
             if !resource_type.is_some_and(|resource_type| {

@@ -27,6 +27,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 use url::form_urlencoded;
 
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +52,7 @@ pub(crate) struct ManagementContext {
     pub(crate) principal_role: Option<PrincipalRole>,
     pub(crate) credential_purpose: agent_access_core::CredentialManagementPurpose,
     pub(crate) policy_management_authorities: Vec<EffectiveServicePolicyManagementAuthority>,
+    authority: Option<agent_access_core::ManagementAuthority>,
     _permits: RequestPermits,
 }
 
@@ -530,6 +533,264 @@ where
         .await
 }
 
+/// Execute an admitted write under the runtime publication fence. Registration,
+/// permits, transaction completion and terminal audit belong to the owner, not
+/// to the HTTP response waiter. Call only after mandatory audit preflight.
+pub(crate) async fn management_authorized_write<T, F, R>(
+    state: &AppState,
+    mut context: ManagementContext,
+    operation: &str,
+    target: Option<Value>,
+    mutate: F,
+    render: R,
+) -> axum::response::Response
+where
+    T: Send + 'static,
+    F: FnOnce(
+            BrokerRuntime,
+            agent_access_core::ManagementAuthority,
+        ) -> Result<
+            agent_access_core::ManagementMutation<T>,
+            agent_access_core::ManagedStoreError,
+        > + Send
+        + 'static,
+    R: FnOnce(&ManagementContext, &str, Option<Value>, T) -> ManagementEnvelope + Send + 'static,
+{
+    let Some(authority) = context.authority.take() else {
+        return management_store_error_response(
+            &context,
+            operation,
+            target,
+            agent_access_core::ManagedStoreError::ManagementDenied,
+        )
+        .await;
+    };
+    let control = agent_access_core::InvocationControl::default();
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_millis(
+            context.snapshot.runtime.config().limits.request_timeout_ms,
+        );
+    let Some(registration) = state.reloadable.operations.register(control.clone()) else {
+        return management_context_error_response(
+            &context,
+            StatusCode::SERVICE_UNAVAILABLE,
+            operation,
+            ReasonCode::ConcurrencyLimited,
+            "broker is shutting down",
+            target,
+        )
+        .await;
+    };
+    struct Waiter(agent_access_core::InvocationControl);
+    impl Drop for Waiter {
+        fn drop(&mut self) {
+            self.0.cancel();
+        }
+    }
+    let _waiter = Waiter(control.clone());
+    let request_id = context.request_id.clone();
+    let broker_request_id = context.broker_request_id.clone();
+    let principal = context.identity.principal.clone();
+    let response_operation = operation.to_string();
+    let operation = operation.to_string();
+    let state = state.reloadable.clone();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let _registration = registration;
+        let guard = tokio::select! {
+            biased;
+            _ = control.local_interrupted() => {
+                let response = management_undispatched_response(&context, &operation, ReasonCode::OperationCancelled, "management write canceled before commit", target).await;
+                let _ = send.send(response);
+                return;
+            },
+            _ = tokio::time::sleep_until(deadline) => {
+                let response = management_undispatched_response(&context, &operation, ReasonCode::OperationTimeout, "management write deadline elapsed before commit", target).await;
+                let _ = send.send(response);
+                return;
+            },
+            guard = state.policy_mutation_lock.lock() => guard,
+        };
+        if !Arc::ptr_eq(&state.current(), &context.snapshot) {
+            drop(guard);
+            let response = management_store_error_response(
+                &context,
+                &operation,
+                target,
+                agent_access_core::ManagedStoreError::VersionConflict,
+            )
+            .await;
+            let _ = send.send(response);
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline || !control.begin_local_commit() {
+            drop(guard);
+            let (reason, message) = if tokio::time::Instant::now() >= deadline {
+                (
+                    ReasonCode::OperationTimeout,
+                    "management write deadline elapsed before commit",
+                )
+            } else {
+                (
+                    ReasonCode::OperationCancelled,
+                    "management write canceled before commit",
+                )
+            };
+            let response =
+                management_undispatched_response(&context, &operation, reason, message, target)
+                    .await;
+            let _ = send.send(response);
+            return;
+        }
+        let runtime = context.snapshot.runtime.clone();
+        let span = tracing::Span::current();
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        let result = tokio::task::spawn_blocking(move || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(|| {
+                    runtime.check_management_authority_runtime(&authority)?;
+                    mutate(runtime, authority)
+                })
+            })
+        })
+        .await;
+        // The transaction and any policy publication have settled. Retain the
+        // completion owner, but do not serialize other writes behind its audit.
+        drop(guard);
+        let response = match result {
+            Ok(Ok(result)) => {
+                let envelope = render(&context, &operation, target, result.value);
+                let mut completion_target = envelope.target.clone();
+                // Keep the established target shape. Reference provenance was
+                // already an audit-only target extension for credential puts.
+                if let Some(references) =
+                    result.audit.get("secretReferences").filter(|references| {
+                        references
+                            .as_array()
+                            .is_some_and(|values| !values.is_empty())
+                    })
+                {
+                    let target = completion_target.get_or_insert_with(|| json!({}));
+                    target["secretReferences"] = references.clone();
+                }
+                management_committed_command_audit_completion(
+                    &context,
+                    &operation,
+                    completion_target,
+                    &result.audit,
+                )
+                .await;
+                management_response(StatusCode::OK, envelope)
+            }
+            Ok(Err(agent_access_core::ManagedStoreError::CommitUnknown)) | Err(_) => {
+                let mut envelope = management_error_envelope(
+                    &context.request_id,
+                    &context.broker_request_id,
+                    &operation,
+                    &context.identity.principal,
+                    ReasonCode::OperationFailed,
+                    "management write outcome is unknown; reconcile before retrying",
+                    target,
+                );
+                envelope.decision = Decision::Error;
+                envelope.result = Some(json!({"executionState":"unknown", "retrySafe":false}));
+                let _ = append_management_audit_with_phase(
+                    &context.snapshot,
+                    &context.request_id,
+                    &context.broker_request_id,
+                    &context.identity,
+                    &context.source,
+                    &envelope,
+                    ManagementAuditExtra {
+                        catalog_change: envelope.result.as_ref(),
+                        phase: Some("error"),
+                        verification: None,
+                    },
+                )
+                .await;
+                management_response(StatusCode::INTERNAL_SERVER_ERROR, envelope)
+            }
+            Ok(Err(error)) => {
+                management_store_error_response(&context, &operation, target, error).await
+            }
+        };
+        let _ = send.send(response);
+    }.in_current_span().with_current_subscriber());
+    receive.await.unwrap_or_else(|_| {
+        let mut envelope = management_error_envelope(
+            &request_id,
+            &broker_request_id,
+            &response_operation,
+            &principal,
+            ReasonCode::OperationFailed,
+            "management write outcome is unknown; reconcile before retrying",
+            None,
+        );
+        envelope.decision = Decision::Error;
+        envelope.result = Some(json!({"executionState":"unknown", "retrySafe":false}));
+        management_response(StatusCode::INTERNAL_SERVER_ERROR, envelope)
+    })
+}
+
+async fn management_undispatched_response(
+    context: &ManagementContext,
+    operation: &str,
+    reason: ReasonCode,
+    message: &str,
+    target: Option<Value>,
+) -> axum::response::Response {
+    let mut envelope =
+        management_failure_envelope(context, operation, Decision::Error, reason, message, target);
+    envelope.result = Some(json!({"executionState":"not_dispatched","retrySafe":false}));
+    management_audited_response(
+        context,
+        StatusCode::from_u16(reason.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        envelope,
+    )
+    .await
+}
+
+pub(super) async fn management_authorized_store_write<T, F, R>(
+    state: &AppState,
+    context: ManagementContext,
+    operation: &str,
+    target: Option<Value>,
+    mutate: F,
+    render: R,
+) -> axum::response::Response
+where
+    T: Send + 'static,
+    F: FnOnce(
+            agent_access_core::ManagedStore,
+            Option<agent_access_core::ManagedResourceCatalog>,
+            agent_access_core::ManagementAuthority,
+        ) -> Result<
+            agent_access_core::ManagementMutation<T>,
+            agent_access_core::ManagedStoreError,
+        > + Send
+        + 'static,
+    R: FnOnce(&ManagementContext, &str, Option<Value>, T) -> ManagementEnvelope + Send + 'static,
+{
+    management_authorized_write(
+        state,
+        context,
+        operation,
+        target,
+        move |runtime, authority| {
+            let store = runtime.managed_store().cloned().ok_or_else(|| {
+                agent_access_core::ManagedStoreError::Unavailable(
+                    "managed store is unavailable".into(),
+                )
+            })?;
+            let catalog = (runtime.config().policy.authority != "managed")
+                .then(|| runtime.policy_resource_catalog_for_scope(&PolicyReadScope::Global));
+            mutate(store, catalog, authority)
+        },
+        render,
+    )
+    .await
+}
+
 pub(super) async fn management_store_call<T, F>(
     context: &ManagementContext,
     operation: F,
@@ -894,7 +1155,44 @@ pub(crate) async fn management_context(
             .await,
         ));
     }
+    let authority = if let Some(command) = management_operation(operation) {
+        let runtime = snapshot.runtime.clone();
+        let request_headers = headers.clone();
+        match run_managed_store_blocking(move || {
+            runtime.admit_management_authority(&request_headers, command)
+        })
+        .await
+        {
+            Ok(authority) if authority.principal() == identity.principal => Some(authority),
+            result => {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => agent_access_core::ManagedStoreError::ManagementDenied,
+                };
+                let reason = error.reason_code();
+                let message = management_store_public_error_message(operation, &error);
+                return Err(Box::new(
+                    management_pre_context_error_response(ManagementPreContextError {
+                        snapshot: &snapshot,
+                        request_id: &request_id,
+                        broker_request_id: &broker_request_id,
+                        operation,
+                        identity: &identity,
+                        source: &source,
+                        status: StatusCode::from_u16(reason.http_status())
+                            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        reason_code: reason,
+                        message: &message,
+                    })
+                    .await,
+                ));
+            }
+        }
+    } else {
+        None
+    };
     Ok(ManagementContext {
+        authority,
         snapshot,
         request_id,
         broker_request_id,
@@ -913,6 +1211,23 @@ pub(crate) async fn management_context(
             _global: global_permit,
             _principal: principal_permit,
         },
+    })
+}
+
+fn management_operation(operation: &str) -> Option<agent_access_core::ManagementOperation> {
+    use agent_access_core::ManagementOperation::*;
+    Some(match operation {
+        "admin.principals.create" => PrincipalCreate,
+        "admin.groups.members.add" | "admin.principals.groups.add" => GroupMemberAdd,
+        "admin.groups.members.delete" | "admin.principals.groups.delete" => GroupMemberRemove,
+        super::audit_actions::ADMIN_TOKENS_ISSUE
+        | super::audit_actions::ADMIN_TOKENS_ISSUE_PRINCIPAL_AGENT => AdminTokenIssue,
+        "tokens.issue" => PersonalTokenIssue,
+        super::audit_actions::ADMIN_POLICY_GRANTS_SUBJECTS_ADD => GrantSubjectAdd,
+        super::audit_actions::ADMIN_POLICY_GRANTS_SUBJECTS_REMOVE => GrantSubjectRemove,
+        super::audit_actions::ADMIN_CREDENTIALS_PUT => AdminCredentialPut,
+        "credentials.put" => PersonalCredentialPut,
+        _ => return None,
     })
 }
 
@@ -1368,6 +1683,47 @@ pub(super) async fn management_committed_write_audit_completion(
             brokerRequestId = context.broker_request_id.as_str(),
             reasonCode = ReasonCode::AuditUnavailable.as_str(),
             "committed management write succeeded; completion audit is unavailable",
+        );
+    }
+}
+
+/// Preserve the established audit target while recording the transaction's
+/// safe before/after facts in the management change receipt.
+async fn management_committed_command_audit_completion(
+    context: &ManagementContext,
+    operation: &str,
+    target: Option<Value>,
+    change: &Value,
+) {
+    let envelope = management_success_envelope(context, operation, target, Value::Null);
+    if append_management_audit_with_details(
+        ManagementAuditContext {
+            snapshot: &context.snapshot,
+            request_id: &context.request_id,
+            broker_request_id: &context.broker_request_id,
+            identity: &context.identity,
+            source: &context.source,
+        },
+        &envelope,
+        ManagementAuditExtra {
+            catalog_change: Some(change),
+            phase: Some("success"),
+            verification: None,
+        },
+        context.policy_management_scope.as_ref(),
+        context.principal_role,
+        &context.policy_management_authorities,
+    )
+    .await
+    .is_err()
+    {
+        tracing::error!(
+            event = "management_committed_write_audit_append_failed",
+            operation,
+            agentRequestId = context.request_id.as_str(),
+            brokerRequestId = context.broker_request_id.as_str(),
+            reasonCode = ReasonCode::AuditUnavailable.as_str(),
+            "committed management write succeeded; completion audit is unavailable"
         );
     }
 }
@@ -2224,8 +2580,12 @@ mod tests {
                     action: "issue.view".to_string(),
                     description: "View issue".to_string(),
                     read_only: true,
-                    required_scope_types: vec!["project".to_string()],
-                    resource_type: Some(agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone()),
+                    required_scopes: BTreeMap::from([(
+                        "project".to_string(),
+                        agent_access_provider::RequiredResourceScope::new(
+                            agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+                        ),
+                    )]),
                     execution_contexts: vec![internal, external],
                     effective_access_by_execution_context: BTreeMap::new(),
                 }],

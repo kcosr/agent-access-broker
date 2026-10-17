@@ -512,7 +512,7 @@ fn confluence_action(
     let action = action.into();
     let lookup = confluence_lookup_requirement(&action);
     ActionDescriptor::new(action, description, input_schema)
-        .scope("space")
+        .scopes(["space"])
         .credential_modes(["service", "per_user"])
         .lookup(lookup)
 }

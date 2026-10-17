@@ -92,7 +92,10 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
         .unwrap();
     assert_eq!(action["readOnly"], true);
     assert_eq!(action["lookupRequired"], false);
-    assert_eq!(action["requiredScopeTypes"], json!(["project"]));
+    assert_eq!(
+        action["requiredScopes"],
+        json!({"project":{"resourceType":"jira_project"}})
+    );
     assert_eq!(action["inputSchema"]["required"], json!(["project"]));
     let typed_catalog: agent_access_core::ApiCatalog = serde_json::from_value(catalog).unwrap();
     for mode in [

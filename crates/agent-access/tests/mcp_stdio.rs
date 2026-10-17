@@ -1,5 +1,7 @@
 //! Exercise the published stdio command through a real broker, including its
 //! caller-filtered catalog and resource authorization (not a mock MCP handler).
+#[path = "mcp_stdio/broker_management.rs"]
+mod broker_management;
 #[path = "mcp_stdio/imported_oauth.rs"]
 mod imported_oauth;
 #[path = "mcp_stdio/imports.rs"]
@@ -288,9 +290,62 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
     assert!(cli_page["nextCursor"].is_string());
     let cli_actions = cli_call(&["actions", "list", "--service", "fake", "--resource", "TEST"]);
     assert!(cli_actions.status.success());
-    assert_eq!(
-        serde_json::from_slice::<Value>(&cli_actions.stdout).unwrap(),
-        json!({"service":"fake","resource":"TEST","actions":["echo"]})
+    let cli_actions: Value = serde_json::from_slice(&cli_actions.stdout).unwrap();
+    assert_eq!(cli_actions["actions"], json!(["echo"]));
+    assert_eq!(cli_actions["resource"], "TEST");
+    assert_eq!(cli_actions["matchKind"], "single_resource");
+    assert!(cli_actions["policyGeneration"].is_u64());
+    let targets = r#"{"project":["TEST"]}"#;
+    let complete = cli_call(&[
+        "actions",
+        "list",
+        "--service",
+        "fake",
+        "--targets-json",
+        targets,
+    ]);
+    assert!(
+        complete.status.success(),
+        "{}",
+        String::from_utf8_lossy(&complete.stderr)
+    );
+    let complete: Value = serde_json::from_slice(&complete.stdout).unwrap();
+    assert_eq!(complete["actions"], json!(["echo"]));
+    assert_eq!(complete["matchKind"], "complete_targets");
+    assert!(complete.get("resource").is_none());
+    assert!(complete.get("targets").is_none());
+    let mcp_complete = client.request("tools/call", json!({"name":"actions_list","arguments":{"service":"fake","targets":{"project":["TEST"]}}})).await;
+    assert_eq!(mcp_complete["result"]["structuredContent"], complete);
+    for invalid in [
+        r#"{"project":[]}"#,
+        r#"{"project":["TEST"],"project":["OTHER"]}"#,
+    ] {
+        assert!(
+            !cli_call(&[
+                "actions",
+                "list",
+                "--service",
+                "fake",
+                "--targets-json",
+                invalid
+            ])
+            .status
+            .success()
+        );
+    }
+    assert!(
+        !cli_call(&[
+            "actions",
+            "list",
+            "--service",
+            "fake",
+            "--targets-json",
+            targets,
+            "--resource",
+            "TEST"
+        ])
+        .status
+        .success()
     );
     let cli_verbose = cli_call(&[
         "actions",
@@ -674,7 +729,7 @@ async fn fixed_helpers_describe_noninvoke_services_without_exposing_execution_to
     };
     let broker = MockServer::start().await;
     let service = json!({"service":"git","displayName":"Git gateway","surface":"gateway","gatewayKind":"git_http","availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[{
-        "action":"repo.fetch", "scopedMcpName":"repo.fetch","readOnly":true,"description":"Fetch repository","requiredScopeTypes":["repository"],"credentialModes":["service"],"lookupRequired":false,"inputSchema":{"type":"object"}
+        "action":"repo.fetch", "scopedMcpName":"repo.fetch","readOnly":true,"description":"Fetch repository","requiredScopes":{"repository":{"resourceType":"git_repository"}},"credentialModes":["service"],"lookupRequired":false,"inputSchema":{"type":"object"}
     }]});
     Mock::given(method("GET"))
         .and(path("/v1/spec/catalog"))
@@ -748,7 +803,7 @@ async fn mutation_output_failure_is_structured_and_does_not_repeat_the_operation
         "version":"agent-access.catalog.v2","identity":{},"routes":[],
         "send":{"version":"agent-access.send.v1","catalogRequired":true},
         "services":[{"service":"jira","displayName":"Jira","surface":"invoke", "scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],"actions":[{
-            "action":"issue.update", "scopedMcpName":"issue.update","readOnly":false,"description":"Update an issue","requiredScopeTypes":[],"credentialModes":[],
+            "action":"issue.update", "scopedMcpName":"issue.update","readOnly":false,"description":"Update an issue","requiredScopes":{},"credentialModes":[],
             "inputSchema":{"type":"object"},"io":{"type":"json"},"responseKind":"response_envelope","exitPolicy":"invoke_decision",
             "sensitiveOutputPointers":["/result/secret"]
         }]}]

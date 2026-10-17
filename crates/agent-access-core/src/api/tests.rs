@@ -11,11 +11,15 @@ fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
     )
     .documentation(documentation.clone());
     assert_eq!(
-        descriptor.capabilities().documentation,
+        descriptor.capabilities(&BTreeMap::new()).documentation,
         Some(documentation.clone())
     );
-    let action =
-        api_action_spec("example", &descriptor, crate::SecretOutputMode::Reference).unwrap();
+    let action = api_action_spec(
+        &ServiceDescriptor::new("example", "example"),
+        &descriptor,
+        crate::SecretOutputMode::Reference,
+    )
+    .unwrap();
     let mut catalog = empty_catalog(json!({}));
     catalog.services.push(ApiServiceSpec {
         availability: None,
@@ -101,13 +105,13 @@ fn imported_local_schema_refs_remain_scoped_in_send_openapi_and_mcp() {
         resource_scopes: Default::default(),
         actions: vec![
             api_action_spec(
-                "imported",
+                &ServiceDescriptor::new("imported", "imported"),
                 &ActionDescriptor::new("small", "Small", schema(2)),
                 crate::SecretOutputMode::Reference,
             )
             .unwrap(),
             api_action_spec(
-                "imported",
+                &ServiceDescriptor::new("imported", "imported"),
                 &ActionDescriptor::new("large", "Large", schema(10)),
                 crate::SecretOutputMode::Reference,
             )
@@ -352,12 +356,16 @@ fn action_projection_preserves_optional_upstream_resource_ownership() {
         "List acting-user resources",
         json!({ "type": "object" }),
     )
-    .scope("repository")
+    .scopes(["repository"])
     .credential_modes(["per_user"])
     .lookup(agent_access_provider::LookupRequirement::ScopeResolution)
     .upstream_resource_ownership(agent_access_provider::UpstreamResourceOwnership::ActingUser);
-    let projected = api_action_spec("gitlab", &action, crate::SecretOutputMode::Reference)
-        .expect("action is valid");
+    let projected = api_action_spec(
+        &ServiceDescriptor::new("gitlab", "gitlab"),
+        &action,
+        crate::SecretOutputMode::Reference,
+    )
+    .expect("action is valid");
     let value = serde_json::to_value(projected).unwrap();
     assert_eq!(value["upstreamResourceOwnership"], "acting_user");
 
@@ -374,7 +382,7 @@ fn action_projection_preserves_optional_upstream_resource_ownership() {
 #[test]
 fn gitlab_project_upload_projects_single_file_transport_contract() {
     let action = api_action_spec(
-        "gitlab",
+        &ServiceDescriptor::new("gitlab", "gitlab"),
         &agent_access_provider::ActionDescriptor::new(
             "project.upload",
             "Upload a project attachment",
@@ -389,7 +397,7 @@ fn gitlab_project_upload_projects_single_file_transport_contract() {
                 "oneOf": [{"required": ["project"]}, {"required": ["url"]}]
             }),
         )
-        .scope("repository")
+        .scopes(["repository"])
         .credential_modes(["service"])
         .lookup(agent_access_provider::LookupRequirement::ScopeResolution)
         .multipart_upload(agent_access_provider::attachment_upload_plan(
@@ -525,6 +533,64 @@ fn descriptors_mark_current_upload_and_download_actions() {
             "gitlab.{action} must use the JSON invoke contract"
         );
     }
+}
+
+#[test]
+fn plural_scope_contract_reaches_catalog_openapi_and_send() {
+    let descriptor = ServiceDescriptor::new("example", "Example")
+        .with_resource_scopes(BTreeMap::from([
+            (
+                "project".into(),
+                agent_access_provider::ResourceScopeCapabilities::new(
+                    agent_access_provider::ResourceType::new("example_project").unwrap(),
+                    vec!["exact".into()],
+                ),
+            ),
+            (
+                "member".into(),
+                agent_access_provider::ResourceScopeCapabilities::new(
+                    agent_access_provider::ResourceType::new("example_member").unwrap(),
+                    vec!["exact".into()],
+                ),
+            ),
+        ]))
+        .with_actions(vec![
+            ActionDescriptor::new("pair", "Pair", json!({"type":"object"}))
+                .scopes(["project", "member"])
+                .credential_modes(["service"]),
+        ]);
+    let service = api_service_spec(&descriptor, true, crate::SecretOutputMode::Reference).unwrap();
+    let expected = json!({"project":{"resourceType":"example_project"},"member":{"resourceType":"example_member"}});
+    assert_eq!(
+        serde_json::to_value(&service.actions[0]).unwrap()["requiredScopes"],
+        expected
+    );
+    assert_eq!(
+        invoke_send_variant("example", &service.actions[0])["x-agent-access-required-scopes"],
+        expected
+    );
+    let mut catalog = empty_catalog(json!({}));
+    catalog.services.push(service);
+    let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "session");
+    assert_eq!(
+        openapi["paths"]["/v1/invoke/example/pair"]["post"]["x-agent-access-required-scopes"],
+        expected
+    );
+    let actions = discovery_route_specs()
+        .into_iter()
+        .find(|route| route.operation == "actions.list")
+        .unwrap();
+    assert!(
+        actions
+            .query_params
+            .iter()
+            .any(|parameter| parameter.name == "targets")
+    );
+    let response = route_response_schema(&actions, &[]);
+    assert_eq!(
+        response["properties"]["matchKind"]["enum"],
+        json!(["unfiltered", "single_resource", "complete_targets"])
+    );
 }
 
 #[test]
@@ -700,7 +766,12 @@ fn invoke_formats_project_into_openapi_and_send_schema() {
         read_only: false,
         action: "issue.view".to_string(),
         description: "View issue".to_string(),
-        required_scope_types: vec!["project".to_string()],
+        required_scopes: BTreeMap::from([(
+            "project".into(),
+            agent_access_provider::RequiredResourceScope::new(
+                agent_access_provider::ResourceType::new("jira_project").unwrap(),
+            ),
+        )]),
         credential_modes: vec!["service".to_string()],
         lookup_required: false,
         upstream_resource_ownership: None,
@@ -714,6 +785,7 @@ fn invoke_formats_project_into_openapi_and_send_schema() {
         secret_outputs: Vec::new(),
         secret_input_pointers: Vec::new(),
         secret_output_mode: None,
+        result_schema: None,
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
@@ -770,7 +842,12 @@ fn non_advertising_actions_accept_only_explicit_default_response_formats() {
         read_only: false,
         action: "issue.delete".to_string(),
         description: "Delete issue".to_string(),
-        required_scope_types: vec!["project".to_string()],
+        required_scopes: BTreeMap::from([(
+            "project".into(),
+            agent_access_provider::RequiredResourceScope::new(
+                agent_access_provider::ResourceType::new("jira_project").unwrap(),
+            ),
+        )]),
         credential_modes: vec!["service".to_string()],
         lookup_required: false,
         upstream_resource_ownership: None,
@@ -784,6 +861,7 @@ fn non_advertising_actions_accept_only_explicit_default_response_formats() {
         secret_outputs: Vec::new(),
         secret_input_pointers: Vec::new(),
         secret_output_mode: None,
+        result_schema: None,
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
@@ -863,7 +941,12 @@ fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_action
         read_only: false,
         action: "echo".to_string(),
         description: "Echo".to_string(),
-        required_scope_types: vec!["project".to_string()],
+        required_scopes: BTreeMap::from([(
+            "project".into(),
+            agent_access_provider::RequiredResourceScope::new(
+                agent_access_provider::ResourceType::new("jira_project").unwrap(),
+            ),
+        )]),
         credential_modes: vec!["service".to_string()],
         lookup_required: false,
         upstream_resource_ownership: None,
@@ -873,6 +956,7 @@ fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_action
         secret_outputs: Vec::new(),
         secret_input_pointers: Vec::new(),
         secret_output_mode: None,
+        result_schema: None,
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
@@ -963,7 +1047,12 @@ fn generated_specs_describe_multipart_uploads() {
             read_only: false,
             action: "attachment.add".to_string(),
             description: "Upload".to_string(),
-            required_scope_types: vec!["space".to_string()],
+            required_scopes: BTreeMap::from([(
+                "space".into(),
+                agent_access_provider::RequiredResourceScope::new(
+                    agent_access_provider::ResourceType::new("confluence_space").unwrap(),
+                ),
+            )]),
             credential_modes: vec!["service".to_string()],
             lookup_required: false,
             upstream_resource_ownership: None,
@@ -984,6 +1073,7 @@ fn generated_specs_describe_multipart_uploads() {
             secret_outputs: Vec::new(),
             secret_input_pointers: Vec::new(),
             secret_output_mode: None,
+            result_schema: None,
             io: descriptor_io("confluence", "attachment.add"),
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
@@ -1066,7 +1156,12 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             read_only: false,
             action: "asset.add".to_string(),
             description: "Upload".to_string(),
-            required_scope_types: vec!["file".to_string()],
+            required_scopes: BTreeMap::from([(
+                "file".into(),
+                agent_access_provider::RequiredResourceScope::new(
+                    agent_access_provider::ResourceType::new("file").unwrap(),
+                ),
+            )]),
             credential_modes: vec!["service".to_string()],
             lookup_required: false,
             upstream_resource_ownership: None,
@@ -1076,6 +1171,7 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             secret_outputs: Vec::new(),
             secret_input_pointers: Vec::new(),
             secret_output_mode: None,
+            result_schema: None,
             io: ActionIo::MultipartUpload {
                 plan: MultipartUploadSpec::new(
                     "asset".to_string(),
@@ -1118,7 +1214,12 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             read_only: false,
             action: "asset.add".to_string(),
             description: "Upload".to_string(),
-            required_scope_types: vec!["file".to_string()],
+            required_scopes: BTreeMap::from([(
+                "file".into(),
+                agent_access_provider::RequiredResourceScope::new(
+                    agent_access_provider::ResourceType::new("file").unwrap(),
+                ),
+            )]),
             credential_modes: vec!["service".to_string()],
             lookup_required: false,
             upstream_resource_ownership: None,
@@ -1144,6 +1245,7 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             secret_outputs: Vec::new(),
             secret_input_pointers: Vec::new(),
             secret_output_mode: None,
+            result_schema: None,
             io: ActionIo::MultipartUpload {
                 plan: MultipartUploadSpec::new(
                     "asset".to_string(),
@@ -2222,7 +2324,10 @@ fn discovery_routes_project_queries_and_typed_responses() {
             "resources",
             vec!["resourceType", "prefix", "limit", "cursor"],
         ),
-        ("actions", vec!["resource", "resourceType", "prefix"]),
+        (
+            "actions",
+            vec!["resource", "resourceType", "targets", "prefix"],
+        ),
     ] {
         let route = routes
             .iter()
@@ -2247,7 +2352,7 @@ fn discovery_routes_project_queries_and_typed_responses() {
         let response = if kind == "resources" {
             json!({"service":"fake", "resources":[{"id":"project-test", "type":"fake_project", "value":"TEST"}], "nextCursor":null})
         } else {
-            json!({"service":"fake", "resource":"TEST", "actions":["echo"]})
+            json!({"service":"fake", "resource":"TEST", "actions":["echo"], "matchKind":"single_resource", "policyGeneration":1})
         };
         assert!(validator.is_valid(&response));
         assert!(!validator.is_valid(&json!([])));
@@ -2303,11 +2408,16 @@ fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
         "Read-shaped name",
         json!({"type":"object"}),
     );
-    let unreviewed = api_action_spec("files", &base, crate::SecretOutputMode::Reference).unwrap();
+    let unreviewed = api_action_spec(
+        &ServiceDescriptor::new("files", "files"),
+        &base,
+        crate::SecretOutputMode::Reference,
+    )
+    .unwrap();
     assert!(!unreviewed.read_only);
     assert!(unreviewed.supports_json_file_output());
     let read = api_action_spec(
-        "files",
+        &ServiceDescriptor::new("files", "files"),
         &base.clone().read_only(),
         crate::SecretOutputMode::Reference,
     )
@@ -2318,7 +2428,7 @@ fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
     wire_read.as_object_mut().unwrap().remove("readOnly");
     assert!(serde_json::from_value::<ApiActionSpec>(wire_read).is_err());
     let download = api_action_spec(
-        "files",
+        &ServiceDescriptor::new("files", "files"),
         &base.clone().raw_download(),
         crate::SecretOutputMode::Reference,
     )
@@ -2326,7 +2436,7 @@ fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
     assert!(download.supports_file_output());
     assert!(!download.supports_json_file_output());
     let upload = api_action_spec(
-        "files",
+        &ServiceDescriptor::new("files", "files"),
         &base.multipart_upload(agent_access_provider::attachment_upload_plan(&[], None)),
         crate::SecretOutputMode::Reference,
     )
@@ -2371,7 +2481,7 @@ fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
 fn read_only_projection_does_not_advertise_broker_local_paths() {
     let mut catalog = empty_catalog(json!({}));
     let action = api_action_spec(
-        "files",
+        &ServiceDescriptor::new("files", "files"),
         &agent_access_provider::ActionDescriptor::new(
             "item.view",
             "Read",
@@ -2404,7 +2514,7 @@ fn read_only_projection_does_not_advertise_broker_local_paths() {
 #[test]
 fn send_output_requires_explicit_stdout_and_preserves_literal_dash_paths() {
     let read = api_action_spec(
-        "files",
+        &ServiceDescriptor::new("files", "files"),
         &agent_access_provider::ActionDescriptor::new(
             "item.view",
             "Read",
@@ -2683,16 +2793,25 @@ fn audit_query_routes_have_catalog_openapi_and_send_parity() {
 #[test]
 fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
     let mut action = ActionDescriptor::new("accepted.action", "Read", json!({"type":"object"}));
-    let builtin = api_action_spec("imported", &action, crate::SecretOutputMode::Reference).unwrap();
+    let builtin = api_action_spec(
+        &ServiceDescriptor::new("imported", "imported"),
+        &action,
+        crate::SecretOutputMode::Reference,
+    )
+    .unwrap();
     assert_eq!(builtin.scoped_mcp_name.as_deref(), Some("accepted.action"));
     action.scoped_mcp_name_source = agent_access_provider::ScopedMcpNameSource::Imported {
         name: Some("Raw.Tool-Name".into()),
     };
     assert_eq!(
-        api_action_spec("imported", &action, crate::SecretOutputMode::Reference)
-            .unwrap()
-            .scoped_mcp_name
-            .as_deref(),
+        api_action_spec(
+            &ServiceDescriptor::new("imported", "imported"),
+            &action,
+            crate::SecretOutputMode::Reference
+        )
+        .unwrap()
+        .scoped_mcp_name
+        .as_deref(),
         Some("Raw.Tool-Name")
     );
     for name in [
@@ -2702,8 +2821,12 @@ fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
     ] {
         action.scoped_mcp_name_source =
             agent_access_provider::ScopedMcpNameSource::Imported { name };
-        let projected =
-            api_action_spec("imported", &action, crate::SecretOutputMode::Reference).unwrap();
+        let projected = api_action_spec(
+            &ServiceDescriptor::new("imported", "imported"),
+            &action,
+            crate::SecretOutputMode::Reference,
+        )
+        .unwrap();
         assert_eq!(projected.scoped_mcp_name, None);
         let mut wire = serde_json::to_value(&projected).unwrap();
         assert!(wire.get("scopedMcpName").unwrap().is_null());
@@ -2799,8 +2922,12 @@ fn every_supported_io_kind_is_published_with_its_response_shape() {
         ),
     ] {
         assert!(supported_action_io(&descriptor.io));
-        let spec = api_action_spec("example", &descriptor, crate::SecretOutputMode::Reference)
-            .expect("supported I/O is published");
+        let spec = api_action_spec(
+            &ServiceDescriptor::new("example", "example"),
+            &descriptor,
+            crate::SecretOutputMode::Reference,
+        )
+        .expect("supported I/O is published");
         assert_eq!(spec.response_kind, response_kind);
         assert_eq!(spec.exit_policy, exit_policy);
     }

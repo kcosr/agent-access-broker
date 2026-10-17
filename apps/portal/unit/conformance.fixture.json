@@ -59,9 +59,11 @@
         },
         "lookupRequired": false,
         "readOnly": true,
-        "requiredScopeTypes": [
-          "item"
-        ]
+        "requiredScopes": {
+          "item": {
+            "resourceType": "conformance_item"
+          }
+        }
       },
       {
         "action": "item.download",
@@ -86,9 +88,11 @@
         },
         "lookupRequired": false,
         "readOnly": true,
-        "requiredScopeTypes": [
-          "item"
-        ]
+        "requiredScopes": {
+          "item": {
+            "resourceType": "conformance_item"
+          }
+        }
       },
       {
         "action": "item.upload",
@@ -150,9 +154,11 @@
         },
         "lookupRequired": false,
         "readOnly": false,
-        "requiredScopeTypes": [
-          "item"
-        ]
+        "requiredScopes": {
+          "item": {
+            "resourceType": "conformance_item"
+          }
+        }
       }
     ],
     "available": true,

@@ -310,13 +310,9 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
     let services = options["result"]["services"].as_array().unwrap();
     let gmail = services.iter().find(|s| s["service"] == "gmail").unwrap();
     assert_eq!(gmail["actions"].as_array().unwrap().len(), 11);
-    assert!(
-        gmail["actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|a| a["resourceType"].is_null())
-    );
+    assert!(gmail["actions"].as_array().unwrap().iter().all(|action| {
+        action.get("resourceType").is_none() && action["requiredScopes"] == json!({})
+    }));
     let identity = agent_access_core::IdentityContext {
         caller_id: None,
         principal: "alice".into(),
@@ -334,7 +330,16 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
         .unwrap();
     assert_eq!(preview.access.len(), 1);
     assert_eq!(preview.access[0].action, "thread.trash");
-    assert!(preview.access[0].resource_type.is_none());
+    assert_eq!(
+        serde_json::to_value(&preview.access[0].clauses).unwrap(),
+        json!([{"scopes":{},"excludedRequests":[]}])
+    );
+    assert!(
+        serde_json::to_value(&preview.access[0])
+            .unwrap()
+            .get("resourceType")
+            .is_none()
+    );
     let restricted=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}}})).unwrap();
     assert!(
         runtime

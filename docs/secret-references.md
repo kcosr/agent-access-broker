@@ -219,3 +219,17 @@ configuration `env:`/`file:` references.
 See [provider SDK](provider-sdk.md) for declaration and sidecar contracts,
 [GitLab provisioning](gitlab-bot-provisioning.md) for upstream behavior, and
 [database operations](database.md) for migration and key handling.
+
+## Delegated local handoffs
+
+[Broker administration](broker-management.md) adds a reference-only
+`credential.install` sink. The caller must own the reference under its exact
+invocation authentication, caller and context. Full principal/connection
+authorization precedes reference lookup. Origin validation and absent-slot
+installation share one transaction; no plaintext reaches an SDK provider.
+
+Its `token.create` action commits the child invocation-token row, encrypted
+reference and capture receipt together. Delivery is always by reference and
+creation is unavailable when global output mode is raw. Existing references can
+still be installed in raw mode. A token's own expiry is independent of reference
+expiry; losing the reference cannot be repaired by reading token metadata.

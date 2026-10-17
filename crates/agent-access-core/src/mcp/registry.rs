@@ -272,6 +272,9 @@ impl ToolRegistry {
                 if let Some(mode) = action.secret_output_mode {
                     definition["_meta"]["agent-access/secret-output-mode"] = json!(mode);
                 }
+                if let Some(result_schema) = &action.result_schema {
+                    definition["_meta"]["agent-access/result-schema"] = result_schema.clone();
+                }
                 let target = ToolTarget::Action {
                     service: service.service.clone(),
                     action: action.action.clone(),
@@ -465,6 +468,14 @@ pub fn evaluate_scoped_mcp_readiness(
     else {
         return ScopedMcpReadiness::unavailable();
     };
+    evaluate_projected_scoped_mcp_readiness(descriptor, service, max_bytes)
+}
+
+pub(crate) fn evaluate_projected_scoped_mcp_readiness(
+    descriptor: &agent_access_provider::ServiceDescriptor,
+    service: crate::ApiServiceSpec,
+    max_bytes: usize,
+) -> ScopedMcpReadiness {
     let mut result = ScopedMcpReadiness {
         ready: true,
         issues: Vec::new(),

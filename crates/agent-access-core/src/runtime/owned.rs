@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 pub struct InvocationControl {
     inner: Arc<ControlState>,
     identity_proof: Option<crate::AttestedIdentityProof>,
+    local_operation_host: Option<Arc<dyn crate::LocalOperationHost>>,
 }
 struct ControlState {
     gate: AtomicU8, // 0 preparation, 1 canceled before dispatch, 2 dispatched
@@ -18,6 +19,7 @@ struct ControlState {
     cancel: CancellationToken,
     forced: CancellationToken,
     deadline: Option<tokio::time::Instant>,
+    local_deadline: Mutex<Option<tokio::time::Instant>>,
 }
 impl Default for InvocationControl {
     fn default() -> Self {
@@ -33,8 +35,10 @@ impl InvocationControl {
                 cancel: CancellationToken::new(),
                 forced: CancellationToken::new(),
                 deadline: timeout.map(|duration| tokio::time::Instant::now() + duration),
+                local_deadline: Mutex::new(None),
             }),
             identity_proof: None,
+            local_operation_host: None,
         }
     }
     /// Carry the private proof accepted at final host identity admission. The
@@ -42,6 +46,33 @@ impl InvocationControl {
     pub fn with_identity_proof(mut self, proof: Option<crate::AttestedIdentityProof>) -> Self {
         self.identity_proof = proof;
         self
+    }
+
+    /// Supply the application-internal host fence. External providers never
+    /// receive this port or the sealed commands it consumes.
+    pub fn with_local_operation_host(mut self, host: Arc<dyn crate::LocalOperationHost>) -> Self {
+        self.local_operation_host = Some(host);
+        self
+    }
+
+    /// The snapshot-bound host calls this exactly once while holding its
+    /// publication fence, immediately before starting the local transaction.
+    pub fn begin_local_commit(&self) -> bool {
+        let deadline = *self.inner.local_deadline.lock().unwrap();
+        if self.inner.cancel.is_cancelled()
+            || self.inner.forced.is_cancelled()
+            || deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+        {
+            return false;
+        }
+        self.dispatch()
+    }
+
+    /// Race this only before the local commit gate. After admission the owner
+    /// must retain the transaction, publication and terminal audit to settlement.
+    pub async fn local_interrupted(&self) -> ProviderError {
+        let deadline = *self.inner.local_deadline.lock().unwrap();
+        interrupted_error(self.interrupted(true, deadline).await, self.dispatched())
     }
 
     /// Explicit cancellation prevents dispatch only when it wins this atomic gate.
@@ -128,6 +159,7 @@ impl BrokerRuntime {
                 &context.operation.action,
             ))
             .min();
+        *control.inner.local_deadline.lock().unwrap() = deadline;
         let fallback = FinalizeContext {
             search_authorization: None,
             command: None,
@@ -170,6 +202,7 @@ impl BrokerRuntime {
             context,
             request,
             control.identity_proof.as_ref(),
+            control.local_operation_host.clone(),
         ))
         .catch_unwind();
         let prepared = tokio::select! {
@@ -182,23 +215,51 @@ impl BrokerRuntime {
         };
         let mut secret_outputs = secret_references::PreparedSecretOutputs::default();
         let mut response_options = agent_access_provider::presentation::ResponseOptions::default();
+        let mut local_operation = false;
         let (finalize_context, result) = match prepared {
-            Err(failure) => (failure.context, failure.result),
+            Err(failure) => (failure.context, InvocationOutcome::Provider(failure.result)),
             Ok(mut prepared) => {
                 prepared.secret_outputs.bound_operation_deadline(deadline);
                 secret_outputs = prepared.secret_outputs.clone();
                 response_options = prepared.response_options;
                 let finalize_context = prepared.finalize_context.clone();
-                if !control.dispatch() {
+                local_operation = prepared.is_local();
+                if prepared.is_local_write() {
+                    // The host races cancellation while waiting for its fence,
+                    // then enters the shared gate. From that point this owner
+                    // awaits settlement even after deadline/disconnect/shutdown.
+                    let body_parts = std::mem::take(&mut prepared.body_parts);
+                    match AssertUnwindSafe(self.execute_prepared_invoke(prepared, body_parts))
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(result) => {
+                            if control.dispatched() {
+                                control.inner.completed.store(true, Ordering::SeqCst);
+                            }
+                            result
+                        }
+                        Err(_) => (
+                            finalize_context,
+                            InvocationOutcome::Provider(Err(interrupted_error(
+                                (
+                                    ReasonCode::OperationFailed,
+                                    "local operation outcome could not be established",
+                                ),
+                                control.dispatched(),
+                            ))),
+                        ),
+                    }
+                } else if !control.dispatch() {
                     (
                         finalize_context,
-                        Err(interrupted_error(
+                        InvocationOutcome::Provider(Err(interrupted_error(
                             (
                                 ReasonCode::OperationCancelled,
                                 "operation canceled before provider dispatch",
                             ),
                             false,
-                        )),
+                        ))),
                     )
                 } else {
                     let body_parts = std::mem::take(&mut prepared.body_parts);
@@ -235,15 +296,18 @@ impl BrokerRuntime {
                         }
                         Ok(Err(_)) => (
                             finalize_context,
-                            Err(interrupted_error(
+                            InvocationOutcome::Provider(Err(interrupted_error(
                                 (
                                     ReasonCode::OperationFailed,
                                     "provider operation failed unexpectedly; outcome is unknown",
                                 ),
                                 true,
-                            )),
+                            ))),
                         ),
-                        Err(message) => (finalize_context, Err(interrupted_error(message, true))),
+                        Err(message) => (
+                            finalize_context,
+                            InvocationOutcome::Provider(Err(interrupted_error(message, true))),
+                        ),
                     }
                 }
             }
@@ -256,6 +320,9 @@ impl BrokerRuntime {
             result,
         );
         let secret_evidence = secret_outputs.audit_failure_evidence(&result);
+        let local_execution_state = local_operation
+            .then(|| local_completion_state(&result))
+            .flatten();
         // No cancellation select around finalization: the reserved terminal append
         // is acknowledged before success and cannot race a second outcome record.
         let applied_unverified = result.as_ref().err().is_some_and(|error| {
@@ -278,8 +345,8 @@ impl BrokerRuntime {
             // A failure to acknowledge audit is not proof that the provider did
             // nothing. Preserve safe completion evidence without copying results.
             let mut evidence = json!({
-                "executionState": if control.completed() { "completed" }
-                    else if control.dispatched() { "unknown" } else { "not_dispatched" },
+                "executionState": local_execution_state.unwrap_or_else(|| if control.completed() { "completed" }
+                    else if control.dispatched() { "unknown" } else { "not_dispatched" }),
                 "retrySafe": false,
             });
             if applied_unverified {
@@ -304,6 +371,20 @@ impl BrokerRuntime {
     }
 }
 
+fn local_completion_state(result: &Result<ProviderResult, ProviderError>) -> Option<&'static str> {
+    let value = match result {
+        Ok(result) => Some(&result.result),
+        Err(error) => error.result.as_deref(),
+    }?;
+    match value.get("executionState").and_then(Value::as_str) {
+        Some("not_dispatched") => Some("not_dispatched"),
+        Some("not_committed") => Some("not_committed"),
+        Some("completed" | "read") => Some("completed"),
+        Some("unknown") => Some("unknown"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +392,22 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use tempfile::TempDir;
     use tokio::sync::Semaphore;
+
+    #[test]
+    fn local_audit_failure_retains_rollback_and_unknown_states() {
+        for state in ["not_dispatched", "not_committed", "completed", "unknown"] {
+            let result = Err(
+                ProviderError::error(ReasonCode::OperationFailed, "local failure")
+                    .with_result(json!({"executionState":state,"private":"discarded"})),
+            );
+            assert_eq!(local_completion_state(&result), Some(state));
+        }
+        let malformed = Err(
+            ProviderError::error(ReasonCode::OperationFailed, "local failure")
+                .with_result(json!({"executionState":"private-untrusted-value"})),
+        );
+        assert_eq!(local_completion_state(&malformed), None);
+    }
 
     #[derive(Clone, Copy)]
     enum FinalizationMode {

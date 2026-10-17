@@ -13,14 +13,14 @@ const options: AgentTokenOptions = {
     {
       service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal", "external"],
       actions: [
-        { action: "issue.view", description: "View an issue", readOnly: true, executionContexts: ["internal"], requiredScopeTypes: ["project"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} },
-        { action: "issue.search", description: "Search issues", readOnly: true, executionContexts: ["internal"], requiredScopeTypes: ["project"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} },
-        { action: "issue.update", description: "Update an issue", readOnly: false, executionContexts: ["external"], requiredScopeTypes: ["project"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} },
+        { action: "issue.view", description: "View an issue", readOnly: true, executionContexts: ["internal"], requiredScopes: { "project": { resourceType: "jira_project" } }, effectiveAccessByExecutionContext: {} },
+        { action: "issue.search", description: "Search issues", readOnly: true, executionContexts: ["internal"], requiredScopes: { "project": { resourceType: "jira_project" } }, effectiveAccessByExecutionContext: {} },
+        { action: "issue.update", description: "Update an issue", readOnly: false, executionContexts: ["external"], requiredScopes: { "project": { resourceType: "jira_project" } }, effectiveAccessByExecutionContext: {} },
       ],
     },
     {
       service: "mail", displayName: "Mail", brokerHosts: [], executionContexts: ["internal"],
-      actions: [{ action: "message.view", description: "View a message", readOnly: true, executionContexts: ["internal"], requiredScopeTypes: [], resourceType: null, effectiveAccessByExecutionContext: {} }],
+      actions: [{ action: "message.view", description: "View a message", readOnly: true, executionContexts: ["internal"], requiredScopes: {},  effectiveAccessByExecutionContext: {} }],
     },
   ],
 };

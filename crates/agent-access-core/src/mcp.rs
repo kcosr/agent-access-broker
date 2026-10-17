@@ -16,6 +16,84 @@ pub enum ProjectionMode {
 #[error("{0}")]
 pub struct ProjectionError(pub &'static str);
 
+/// Decode a transport JSON value without silently replacing duplicate object keys.
+/// Errors are fixed diagnostics and never contain client-provided values.
+pub fn parse_json_unique_keys(bytes: &[u8]) -> Result<Value, ProjectionError> {
+    use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+    struct UniqueValue(Value);
+    impl<'de> Deserialize<'de> for UniqueValue {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct UniqueVisitor;
+            impl<'de> Visitor<'de> for UniqueVisitor {
+                type Value = UniqueValue;
+                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    formatter.write_str("a JSON value with unique object keys")
+                }
+                fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                    Ok(UniqueValue(Value::Bool(value)))
+                }
+                fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                    Ok(UniqueValue(value.into()))
+                }
+                fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                    Ok(UniqueValue(value.into()))
+                }
+                fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                    serde_json::Number::from_f64(value)
+                        .map(|value| UniqueValue(Value::Number(value)))
+                        .ok_or_else(|| E::custom("invalid JSON number"))
+                }
+                fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                    Ok(UniqueValue(Value::String(value.into())))
+                }
+                fn visit_string<E: serde::de::Error>(
+                    self,
+                    value: String,
+                ) -> Result<Self::Value, E> {
+                    Ok(UniqueValue(Value::String(value)))
+                }
+                fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                    Ok(UniqueValue(Value::Null))
+                }
+                fn visit_seq<A: SeqAccess<'de>>(
+                    self,
+                    mut sequence: A,
+                ) -> Result<Self::Value, A::Error> {
+                    let mut values = Vec::new();
+                    while let Some(UniqueValue(value)) = sequence.next_element()? {
+                        values.push(value);
+                    }
+                    Ok(UniqueValue(Value::Array(values)))
+                }
+                fn visit_map<A: MapAccess<'de>>(
+                    self,
+                    mut object: A,
+                ) -> Result<Self::Value, A::Error> {
+                    let mut values = Map::new();
+                    while let Some(key) = object.next_key::<String>()? {
+                        if values.contains_key(&key) {
+                            return Err(serde::de::Error::custom("duplicate JSON object key"));
+                        }
+                        let UniqueValue(value) = object.next_value()?;
+                        values.insert(key, value);
+                    }
+                    Ok(UniqueValue(Value::Object(values)))
+                }
+            }
+            deserializer.deserialize_any(UniqueVisitor)
+        }
+    }
+    serde_json::from_slice::<UniqueValue>(bytes)
+        .map(|value| value.0)
+        .map_err(|error| {
+            if error.to_string().starts_with("duplicate JSON object key") {
+                ProjectionError("duplicate JSON object key")
+            } else {
+                ProjectionError("invalid JSON")
+            }
+        })
+}
+
 /// Whether `mode` can serve the action: HTTP serves JSON I/O only, and stdio
 /// also stages multipart uploads and raw downloads locally. An I/O kind this
 /// build does not know is never served.
@@ -261,8 +339,8 @@ pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
         ),
         (
             "actions_list",
-            "List canonical action names for one visible service, optionally filtered to a concrete resource value (project key, space key, or repository path, not a broker resource ID). With a resource on a service that authorizes several resource types, also pass resourceType. A resource filter checks single-target policy and local credentials; invocation still checks upstream access and the complete multi-resource request. Broad grants shown as resources_list coverage can permit values absent from its resources. Use actions_describe for a selected action's schema.",
-            json!({"service":service,"resource":string,"resourceType":string,"prefix":string}),
+            "List canonical action names for one visible service. Use resource (and resourceType on multi-type services) as a partial policy hint, or targets as a complete scope-name to target-values map. targets must name exactly the required scopes of an action; every target must fit one complete grant and token boundary. These filters check current policy and local availability, not object eligibility or future authority. targets cannot be combined with resource or resourceType. Returns matchKind and policyGeneration. Use actions_describe for a selected action's schema.",
+            json!({"service":service,"resource":string,"resourceType":string,"prefix":string,"targets":{"type":"object","minProperties":1,"maxProperties":8,"additionalProperties":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1}},"description":"Complete request targets keyed by required scope name; at most eight scopes and 64 distinct values per scope."}}),
             json!(["service"]),
         ),
         (
@@ -282,9 +360,14 @@ pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
         if mode == ProjectionMode::Stdio {
             properties["outputPath"] = json_output_path_schema();
         }
+        let mut input_schema = json!({"type":"object","additionalProperties":false,"properties":properties,"required":required});
+        if name == "actions_list" {
+            input_schema["not"] = json!({"anyOf":[{"required":["targets","resource"]},{"required":["targets","resourceType"]}]});
+            input_schema["dependentRequired"] = json!({"resourceType":["resource"]});
+        }
         json!({
             "name":name,"description":helper_description(name, description, mode),
-            "inputSchema":{"type":"object","additionalProperties":false,"properties":properties,"required":required},
+            "inputSchema":input_schema,
             // Stdio callers may overwrite a local file through outputPath. Tool hints
             // cover every supported argument combination, including that side effect.
             "annotations":{"readOnlyHint":mode == ProjectionMode::Http,"destructiveHint":mode == ProjectionMode::Stdio,"idempotentHint":true,"openWorldHint":false}
@@ -362,9 +445,24 @@ pub fn validate_helper_arguments(
             {
                 return Err(ProjectionError("limit must be between 1 and 100"));
             }
+        } else if key == "targets" {
+            crate::parse_action_targets_json(&value.to_string()).map_err(ProjectionError)?;
         } else if !value.is_string() {
             return Err(ProjectionError("invalid tool arguments: expected a string"));
         }
+    }
+    if arguments.contains_key("targets")
+        && (arguments.contains_key("resource") || arguments.contains_key("resourceType"))
+    {
+        return Err(ProjectionError(
+            "targets cannot be combined with resource or resourceType",
+        ));
+    }
+    if name == "actions_list"
+        && arguments.contains_key("resourceType")
+        && !arguments.contains_key("resource")
+    {
+        return Err(ProjectionError("resourceType requires resource"));
     }
     if arguments
         .get("service")
@@ -504,7 +602,7 @@ mod tests {
 
     fn action(name: &str, io: Value) -> ApiActionSpec {
         serde_json::from_value(json!({
-            "action":name,"scopedMcpName":name,"description":"Read or change project data","readOnly":false,"requiredScopeTypes":["project"],"credentialModes":["service"],
+            "action":name,"scopedMcpName":name,"description":"Read or change project data","readOnly":false,"requiredScopes":{"project":{"resourceType":"git_repository"}},"credentialModes":["service"],
             "inputSchema":{"type":"object","additionalProperties":false,"required":["project","secret"],"$defs":{"Secret":{"type":"string","minLength":1}},"properties":{"project":{"type":"string"},"secret":{"$ref":"#/$defs/Secret","writeOnly":true}}},
             "sensitiveInputPointers":["/inputs/secret"],"sensitiveOutputPointers":["/result/issuedToken"],
             "io":io,"responseKind":"response_envelope","exitPolicy":"invoke_decision", "responseFormats":["json"]
@@ -524,6 +622,58 @@ mod tests {
             ],
         });
         catalog
+    }
+
+    #[test]
+    fn transport_json_rejects_duplicate_keys_before_helper_decoding() {
+        for bytes in [
+            br#"{"targets":{"group":["first"],"group":["second"]}}"#.as_slice(),
+            br#"{"targets":{"group":["first"],"\u0067roup":["second"]}}"#.as_slice(),
+            br#"{"params":{"arguments":{"targets":{},"targets":{}}}}"#.as_slice(),
+        ] {
+            assert_eq!(
+                parse_json_unique_keys(bytes).unwrap_err().0,
+                "duplicate JSON object key"
+            );
+        }
+        assert_eq!(
+            parse_json_unique_keys(br#"{"targets":{"group":["one"],"principal":["two"]}}"#)
+                .unwrap(),
+            json!({"targets":{"group":["one"],"principal":["two"]}})
+        );
+    }
+
+    #[test]
+    fn complete_targets_helper_schema_and_validation_are_shared_by_transports() {
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            let valid = json!({"service":"broker_management","targets":{"group":["review"],"principal":["worker"]}});
+            validate_helper_arguments("actions_list", valid.as_object().unwrap(), mode).unwrap();
+            for invalid in [
+                json!({"service":"broker_management","targets":{}}),
+                json!({"service":"broker_management","targets":{"group":[]}}),
+                json!({"service":"broker_management","targets":{"group":["review","review"]}}),
+                json!({"service":"broker_management","targets":{"group":["review"]},"resource":"review"}),
+                json!({"service":"broker_management","targets":{"group":["review"]},"resourceType":"broker_group"}),
+                json!({"service":"broker_management","targets":{"group":[7]}}),
+            ] {
+                assert!(
+                    validate_helper_arguments("actions_list", invalid.as_object().unwrap(), mode)
+                        .is_err()
+                );
+            }
+            let definition = helper_definitions(mode)
+                .into_iter()
+                .find(|tool| tool["name"] == "actions_list")
+                .unwrap();
+            assert_eq!(
+                definition["inputSchema"]["properties"]["targets"]["maxProperties"],
+                8
+            );
+            assert_eq!(
+                definition["inputSchema"]["properties"]["targets"]["additionalProperties"]["maxItems"],
+                64
+            );
+        }
     }
 
     #[test]
@@ -712,7 +862,7 @@ mod tests {
     #[test]
     fn discovery_projection_preserves_raw_metadata_but_keeps_compact_results_small() {
         let service = json!({"service":"gitlab","displayName":"GitLab","surface":"invoke","scopeTypes":["project"],"availability":{"state":"available","requirements":[],"message":"Locally available"},"futureServiceField":42,"actions":[{
-            "action":"file.write","readOnly":false,"description":"Write content","requiredScopeTypes":[],"credentialModes":[],"lookupRequired":false,"inputSchema":{"type":"object"},"futureField":"preserved"
+            "action":"file.write","readOnly":false,"description":"Write content","requiredScopes":{},"credentialModes":[],"lookupRequired":false,"inputSchema":{"type":"object"},"futureField":"preserved"
         }]});
         assert_eq!(
             project_service_list(json!([service.clone()]), None, false).unwrap(),

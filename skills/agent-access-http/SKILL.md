@@ -115,13 +115,23 @@ resources inside are withheld. An empty list with `coverage` means broad access,
 not no access, and coverage never enumerates resources.
 
 `/v1/services/{service}/actions?resource=VALUE` returns
-`{service,resource,actions:[names]}`. Omit `resource` for service-wide names; an
+`{service,resource,actions:[names],matchKind,policyGeneration}`. Omit `resource` for service-wide names; an
 optional `prefix` filters action names. URL-encode query values and use project
 keys, space keys, or repository paths, not catalog IDs. This checks single-target
 policy without querying upstream inventory or proving full-request authority.
 Hidden/missing services receive the same 403; visible-service invalid inputs
 receive 400. Discovery success bodies are not execution envelopes, and the send
 schema does not introduce invocation actions for these read-only operations.
+For a complete request, use one URL-encoded JSON `targets` parameter instead of
+`resource`/`resourceType`, such as `{"group":["review-automation"],"principal":["review-worker"]}`.
+Keys must match the action's `requiredScopes` map. All targets must fit one
+complete grant and the token boundary. `matchKind` is `unfiltered`,
+`single_resource`, or `complete_targets`; `policyGeneration` identifies the
+policy snapshot. Only `single_resource` echoes `resource`. Target checks do not
+prove object eligibility or reserve authority for later execution. Duplicate
+query parameters/JSON keys, empty arrays, unknown scopes, invalid target values,
+more than eight scopes, or more than 64 distinct values in one scope are rejected.
+
 
 Use runtime specs from the running broker:
 
@@ -1028,3 +1038,10 @@ command refuses for a resource outside your access arrives as
 locators when it applied the write, and `unknown` when the outcome is
 uncertain; never replay a write whose outcome is unknown. See
 `docs/command-imports.md`.
+
+For delegated service-account provisioning, discover the `broker_management`
+service and use its published action schemas. Edge changes require one grant
+covering every required target. Credential installation accepts a temporary
+reference only; child token creation returns a reference and cannot be replayed
+to recover a lost response. Use independently granted view actions to reconcile.
+See [Broker administration](../../docs/broker-management.md).

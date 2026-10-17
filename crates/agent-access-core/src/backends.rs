@@ -13,6 +13,13 @@ use std::sync::Arc;
 use toml::de::{DeValue, ValueDeserializer};
 
 mod domain_reasons;
+pub(crate) mod management_resources;
+
+/// Core service and implementation namespaces cannot be claimed by plugins,
+/// imported integrations, gateways or credential connections.
+pub(crate) fn is_reserved_service_name(name: &str) -> bool {
+    matches!(name, "broker" | "broker_management" | "access_management")
+}
 
 /// The resource type the broker itself defines, independent of any backend:
 /// the Git gateway's repositories.
@@ -42,11 +49,12 @@ impl BackendRegistry {
                     "backend kind {} is not a valid service name",
                     registration.kind()
                 ));
-            } else if registration.kind() == "broker" {
+            } else if is_reserved_service_name(registration.kind()) {
                 // Reserved even when selected but never configured.
-                errors.push(
-                    "backend kind broker is reserved for the Broker control-plane namespace".into(),
-                );
+                errors.push(format!(
+                    "backend kind {} is reserved for the Broker control-plane namespace",
+                    registration.kind()
+                ));
             }
             if kinds.insert(registration.kind(), ()).is_some() {
                 errors.push(format!(
@@ -55,15 +63,30 @@ impl BackendRegistry {
                 ));
             }
         }
-        errors.extend(domain_reasons::validate(&registrations));
-        let types = std::iter::once(HOST_RESOURCE_TYPE).chain(
+        errors.extend(domain_reasons::validate_owners(
             registrations
                 .iter()
-                .flat_map(|registration| registration.resource_types().iter().copied()),
-        );
+                .copied()
+                .map(domain_reasons::DomainReasonOwner::native)
+                .chain(std::iter::once(domain_reasons::DomainReasonOwner::core(
+                    crate::runtime::broker_management::KIND,
+                    crate::runtime::broker_management::DOMAIN_REASONS,
+                ))),
+        ));
+        let types = std::iter::once(HOST_RESOURCE_TYPE)
+            .chain(management_resources::TYPES.iter().copied())
+            .chain(
+                registrations
+                    .iter()
+                    .flat_map(|registration| registration.resource_types().iter().copied()),
+            );
         let resource_types = ResourceTypeRegistry::new(types).unwrap_or_else(|type_errors| {
             errors.extend(type_errors);
-            ResourceTypeRegistry::new([HOST_RESOURCE_TYPE]).expect("host resource types are valid")
+            ResourceTypeRegistry::new(
+                std::iter::once(HOST_RESOURCE_TYPE)
+                    .chain(management_resources::TYPES.iter().copied()),
+            )
+            .expect("host resource types are valid")
         });
         if errors.is_empty() {
             Ok(Self {
@@ -90,6 +113,10 @@ impl BackendRegistry {
             if !is_service_name(kind) {
                 errors.push(format!(
                     "import adapter kind {kind} is not a valid service name"
+                ));
+            } else if is_reserved_service_name(kind) {
+                errors.push(format!(
+                    "import adapter kind {kind} is reserved for the Broker"
                 ));
             } else if self.imported_adapter(kind).is_some() {
                 errors.push(format!(
@@ -499,7 +526,13 @@ mod tests {
                 .ids()
                 .map(|id| id.as_str())
                 .collect::<Vec<_>>(),
-            ["git_repository"]
+            [
+                "git_repository",
+                "broker_principal",
+                "broker_group",
+                "broker_grant",
+                "broker_connection"
+            ]
         );
     }
 

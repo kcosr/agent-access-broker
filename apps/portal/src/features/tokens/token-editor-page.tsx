@@ -277,7 +277,7 @@ function TokenDetails({ draft, options, ttlPolicy, disabled, update }: {
 /** The resource types a service's actions use, or undefined when the service is no longer offered. */
 function serviceResourceTypes(options: AgentTokenOptions, service: string): ResourceType[] | undefined {
   const option = options.services.find((item) => item.service === service);
-  return option ? [...new Set(option.actions.flatMap((action) => action.resourceType === null ? [] : [action.resourceType]))] : undefined;
+  return option ? [...new Set(option.actions.flatMap((action) => Object.values(action.requiredScopes).map((scope) => scope.resourceType)))] : undefined;
 }
 
 /** A selected service's action and resource counts for its card and the summary. */
@@ -385,6 +385,7 @@ function TokenServiceCard({ service, name, draft, options, disabled, update, ope
               <FieldGroup label="Resources" hint="Group membership stays live. Selections can only narrow current grants.">
                 <Seg label={`${service} resources`} value={selection === undefined ? "grants" : "selected"} onChange={(value) => update({ ...draft, resourceSelections: { ...draft.resourceSelections, [service]: value === "grants" ? undefined : { resourceIds: [], resourceGroupIds: [] } } })} options={[{ value: "grants", label: "Follow available grants", disabled }, { value: "selected", label: "Selected resources and groups", disabled }]} />
               </FieldGroup>
+              {selection !== undefined && (serviceResourceTypes(options, service)?.length ?? 0) > 1 ? <p className="pt-prose">This resource selection restricts each scope independently. It cannot express specific pairings; the underlying grants must authorize each complete request.</p> : null}
               {selection !== undefined ? <ResourcePicker selection={selection} catalog={options} resourceTypes={serviceResourceTypes(options, service)} disabled={disabled} onChange={(resources) => update({ ...draft, resourceSelections: { ...draft.resourceSelections, [service]: resources } })} /> : null}
             </>
           ) : <p className="pt-prose">Access is controlled by action grants; this service has no resource selections.</p>}

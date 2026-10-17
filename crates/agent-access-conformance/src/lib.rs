@@ -246,7 +246,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     });
     let action = |name: &str, description: &str, schema: &Value| {
         ActionDescriptor::new(name, description, schema.clone())
-            .scope("item")
+            .scopes(["item"])
             .credential_modes(["service", "per_user"])
     };
     let mut resource_scopes = BTreeMap::from([(
@@ -294,7 +294,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
                     "additionalProperties": false
                 }),
             )
-            .scope("endpoint")
+            .scopes(["endpoint"])
             .credential_modes(["service"])
             .resource_attributes(),
         );

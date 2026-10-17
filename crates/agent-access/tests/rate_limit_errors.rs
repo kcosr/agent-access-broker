@@ -21,7 +21,7 @@ fn catalog() -> Value {
             "service":"jira", "displayName":"Jira", "surface":"invoke", "scopedMcpReady":true,
             "scopeTypes":[], "actions":[{
                 "action":"issue.view", "scopedMcpName":"issue.view", "readOnly":true, "description":"View an issue",
-                "requiredScopeTypes":[], "credentialModes":[],
+                "requiredScopes":{}, "credentialModes":[],
                 "inputSchema":{"type":"object"}, "io":{"type":"json"},
                 "responseKind":"response_envelope", "exitPolicy":"invoke_decision",
                 "responseFormats":["json", "markdown"]

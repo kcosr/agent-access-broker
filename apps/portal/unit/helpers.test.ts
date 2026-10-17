@@ -47,7 +47,7 @@ const catalog: PolicyCatalogResult = {
           action: "issues.list",
           readOnly: true,
           description: "List issues",
-          requiredScopeTypes: ["repository"],
+          requiredScopes: { "repository": { resourceType: "git_repository" } },
           credentialModes: ["user", "service"],
           lookupRequired: false,
           inputSchema: {},
@@ -87,16 +87,16 @@ const tokenOptions: AgentTokenOptions = {
   policyGeneration: 1, resources: [], resourceGroups: [],
   executionContexts: ["workstation", "internal", "external"],
   services: [
-    { service: "github", displayName: "Github", brokerHosts: [], executionContexts: ["workstation", "internal"], actions: [{ action: "issues.list", readOnly: false, description: "List issues", requiredScopeTypes: ["project"], resourceType: "jira_project", executionContexts: ["workstation", "internal"], effectiveAccessByExecutionContext: { internal: [{ included: [{ kind: "all" }], excluded: [] }] } }] },
-    { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{ action: "page.view", readOnly: false, description: "View pages", requiredScopeTypes: ["space"], resourceType: "confluence_space", executionContexts: ["external"], effectiveAccessByExecutionContext: { external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }] } }] },
-    { service: "shared", displayName: "Shared", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "read", readOnly: false, description: "Read shared data", requiredScopeTypes: ["project"], resourceType: "jira_project", executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: { internal: [{ included: [{ kind: "all" }], excluded: [] }] } }] }
+    { service: "github", displayName: "Github", brokerHosts: [], executionContexts: ["workstation", "internal"], actions: [{ action: "issues.list", readOnly: false, description: "List issues", requiredScopes: { "project": { resourceType: "jira_project" } }, executionContexts: ["workstation", "internal"], effectiveAccessByExecutionContext: { internal: [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [] }] } }] },
+    { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{ action: "page.view", readOnly: false, description: "View pages", requiredScopes: { "space": { resourceType: "confluence_space" } }, executionContexts: ["external"], effectiveAccessByExecutionContext: { external: [{ scopes: { "space": { resourceType: "confluence_space", included: [{ kind: "exact", value: "ENG" }], excluded: [] } }, excludedRequests: [] }] } }] },
+    { service: "shared", displayName: "Shared", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "read", readOnly: false, description: "Read shared data", requiredScopes: { "project": { resourceType: "jira_project" } }, executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: { internal: [{ scopes: { "project": { resourceType: "jira_project", included: [{ kind: "all" }], excluded: [] } }, excludedRequests: [] }] } }] }
   ],
   mcp: null
 };
 
 describe("portal helper policy logic", () => {
   test("recognizes grants whose actions take no resources", () => {
-    const action = (name: string, requiredScopeTypes: string[]) => ({ action: name, readOnly: true, description: name, requiredScopeTypes, credentialModes: ["per_user"], lookupRequired: false, inputSchema: {} });
+    const action = (name: string, scopes: string[]) => ({ action: name, readOnly: true, description: name, requiredScopes: Object.fromEntries(scopes.map((scope) => [scope, { resourceType: scope }])), credentialModes: ["per_user"], lookupRequired: false, inputSchema: {} });
     const service = {
       service: "mail", displayName: "Mail", surface: "invoke", actions: [action("message.view", []), action("record.list", ["collection"])],
       resourceScopes: { collection: { resourceType: "collection", selectors: ["exact"] } }, configuredCredentialModes: ["per_user"], lookupCredentialConfigured: false
@@ -291,7 +291,7 @@ describe("portal helper status and shell logic", () => {
   });
 
   test("drops meaningless resource restrictions for mailbox-wide actions", () => {
-    const options: AgentTokenOptions = { ...tokenOptions, services: [{ service: "gmail", displayName: "Gmail", brokerHosts: [], executionContexts: ["internal"], actions: [{ action: "message.trash", readOnly: false, description: "Trash", resourceType: null, executionContexts: ["internal"], requiredScopeTypes: [], effectiveAccessByExecutionContext: {} }] }] };
+    const options: AgentTokenOptions = { ...tokenOptions, services: [{ service: "gmail", displayName: "Gmail", brokerHosts: [], executionContexts: ["internal"], actions: [{ action: "message.trash", readOnly: false, description: "Trash",  executionContexts: ["internal"], requiredScopes: {}, effectiveAccessByExecutionContext: {} }] }] };
     const restrictions = buildAgentTokenServiceRestrictions(["gmail"], { gmail: ["message.trash"] }, { gmail: { resourceIds: [], resourceGroupIds: ["empty"] } }, options);
     expect(restrictions.gmail).toEqual({ actions: ["message.trash"] });
   });

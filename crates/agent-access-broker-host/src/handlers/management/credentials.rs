@@ -10,11 +10,10 @@
 //! owner, through a consumer the owner holds a `per_user` grant on.
 use crate::handlers::management::common::{
     CredentialInputSchemaQuery, CredentialPutBody, ManagementContext, VerificationAudit,
-    management_committed_write_audit_completion, management_context_error_response,
-    management_pre_audited_success_response, management_provider_error_response,
-    management_store_call, management_store_error_response, management_success_response,
-    management_verification_error_response, management_write_audit_preflight,
-    management_write_audit_upstream_verification,
+    management_context_error_response, management_pre_audited_success_response,
+    management_provider_error_response, management_store_call, management_store_error_response,
+    management_success_response, management_verification_error_response,
+    management_write_audit_preflight, management_write_audit_upstream_verification,
 };
 use crate::handlers::management::connections::{self, audit_target, connection_credential};
 use agent_access_core::{
@@ -419,74 +418,39 @@ pub(super) async fn put_connection_credential(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    let identity = context.identity.clone();
     let owner_principal_id = request.principal.clone();
     let connection = request.connection.clone();
-    let operation = operation.to_string();
-    let response_operation = operation.clone();
-    let request_id = context.request_id.clone();
-    let broker_request_id = context.broker_request_id.clone();
-    let response_actor = actor.clone();
-    // Own commit and supplemental completion audit past HTTP cancellation.
-    let mutation = tokio::spawn(async move {
-        let result = state
-            .reloadable
-            .token_store_call_from_snapshot(context.snapshot.clone(), move |runtime| {
-                runtime.store_connection_credential(
-                    &identity,
-                    CredentialWriteRequest {
-                        owner_principal_id,
-                        service: connection,
-                        name: CONNECTION_CREDENTIAL_NAME.to_string(),
-                        profile: admitted.profile,
-                        credential_kind: admitted.credential_kind,
-                        secret: body.secret,
-                        metadata: body.metadata,
-                        actor,
-                    },
-                    purpose,
-                )
-            })
-            .await;
-        match result {
-            Ok(result) => {
-                let mut completion_target = target.clone().unwrap_or_else(|| json!({}));
-                if !result.references.is_empty() {
-                    completion_target["secretReferences"] = json!(result.references);
-                    management_committed_write_audit_completion(
-                        &context,
-                        &operation,
-                        Some(completion_target),
-                    )
-                    .await;
-                }
-                management_pre_audited_success_response(
-                    &context,
-                    &operation,
-                    target,
-                    connection_credential(result.credential),
-                )
-            }
-            Err(error) => {
-                management_store_error_response(&context, &operation, target, error).await
-            }
-        }
-    });
-    match mutation.await {
-        Ok(response) => response,
-        Err(_) => super::common::management_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            super::common::management_error_envelope(
-                &request_id,
-                &broker_request_id,
-                &response_operation,
-                &response_actor,
-                ReasonCode::ManagedStoreUnavailable,
-                "credential write outcome is unavailable; inspect the stored credential before retrying",
-                None,
-            ),
-        ),
-    }
+    super::common::management_authorized_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |runtime, authority| {
+            runtime.store_connection_credential_with_management_authority(
+                authority,
+                CredentialWriteRequest {
+                    owner_principal_id,
+                    service: connection,
+                    name: CONNECTION_CREDENTIAL_NAME.to_string(),
+                    profile: admitted.profile,
+                    credential_kind: admitted.credential_kind,
+                    secret: body.secret,
+                    metadata: body.metadata,
+                    actor,
+                },
+                purpose,
+            )
+        },
+        |context, operation, target, result| {
+            super::common::management_success_envelope(
+                context,
+                operation,
+                target,
+                connection_credential(result.credential),
+            )
+        },
+    )
+    .await
 }
 
 /// Whether a failed verification reached the upstream and found the

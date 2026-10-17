@@ -64,7 +64,7 @@ type FixtureOptions = {
 
 async function fixture(page: Page, options: FixtureOptions = {}) {
   const tier = options.tier ?? "admin";
-  const service = { service: "jira", displayName: "Jira", actions: [{ action: "issue.view", description: "View issue", requiredScopeTypes: [], credentialModes: [] }], resourceScopes: {} };
+  const service = { service: "jira", displayName: "Jira", actions: [{ action: "issue.view", description: "View issue", requiredScopes: {}, credentialModes: [] }], resourceScopes: {} };
   const initialRecords = options.emptyHistory ? [] : [
     record("login", "broker", "auth.local.login"), record("grant", "broker", "admin.policy.grants.create", "jira"),
     record("issue", "jira", "issue.view", undefined, { identitySource: { name: "managed", type: "broker_token", tokenClass: "agent_invoke", tokenId: TOKEN_ID } }),
@@ -124,7 +124,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       // Activity suggests the caller's granted services and actions from the token options.
       body = envelope({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
         service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["default"],
-        actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [], resourceType: null, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }]
+        actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopes: {},  executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [{ scopes: {}, excludedRequests: [] }] } }]
       }] });
     } else if (endpoint === "/v1/credentials") {
       body = envelope({ connections: [], retained: [] });
@@ -179,7 +179,7 @@ for (const tier of ["admin", "manager", "self"] as const) {
     const service = page.getByRole("combobox", { name: "Service", exact: true });
     await service.click();
     const list = page.getByRole("listbox", { name: "Service", exact: true });
-    expect((await list.getByRole("option").allTextContents())[0]).toMatch(/^broker/);
+    await expect(list.getByRole("option").first()).toHaveAccessibleName(/^broker(?:\s|$)/);
     await expectAligned(service, list);
     const request = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/audit/events") && new URL(request.url()).searchParams.get("service") === "broker");
     await service.press("Enter");
@@ -203,7 +203,7 @@ test("editable suggestions preserve raw service and principal identifiers during
   await expect(service).toHaveValue("");
   await service.press("Escape");
 
-  await choose(page, "Service", /^broker/);
+  await choose(page, "Service", /^broker(?:\s|$)/);
   await expect(service).toHaveValue("broker");
   await service.click();
   await service.press("End");
@@ -275,7 +275,7 @@ test("canonical suggestions exclude arbitrary history while manual historical fi
   await expect(options.getByRole("option", { name: "unsupported.junk", exact: true })).toHaveCount(0);
   await expect(options.getByRole("option", { name: "historical.read", exact: true })).toHaveCount(0);
   await action.press("Escape");
-  await choose(page, "Service", /^broker/);
+  await choose(page, "Service", /^broker(?:\s|$)/);
   await action.click();
   await expect(page.getByRole("listbox", { name: "Action", exact: true }).getByRole("option", { name: "auth.logout", exact: true })).toBeVisible();
   await action.fill("auth.*");
@@ -294,7 +294,7 @@ test("canonical suggestions exclude arbitrary history while manual historical fi
   // …but keeps actions nobody suggested.
   await action.fill("unobserved.operation");
   await action.press("Enter");
-  await choose(page, "Service", /^broker/);
+  await choose(page, "Service", /^broker(?:\s|$)/);
   await expect(action).toHaveValue("unobserved.operation");
   await expect(page).toHaveURL(/action=unobserved\.operation/);
   await expect(page.getByText("No matching records", { exact: true })).toBeVisible();
@@ -342,7 +342,7 @@ for (const theme of ["light", "dark"] as const) {
 test("canonical broker suggestions remain available with empty audit history", async ({ page }) => {
   await fixture(page, { emptyHistory: true });
   await expect(page.getByText("No records in this time range. Try a longer range.", { exact: true })).toBeVisible();
-  await choose(page, "Service", /^broker/);
+  await choose(page, "Service", /^broker(?:\s|$)/);
   await expect(page.getByText("No matching records", { exact: true })).toBeVisible();
   const action = page.getByRole("combobox", { name: "Action", exact: true });
   await action.click();
@@ -357,7 +357,7 @@ test("canonical broker suggestions remain available with empty audit history", a
 test("filters remain editable when metadata is unavailable", async ({ page }) => {
   await fixture(page, { failed: true });
   await expect(page.getByText("Audit suggestions are unavailable. You can still enter filters.", { exact: true })).toBeVisible();
-  await choose(page, "Service", /^broker/);
+  await choose(page, "Service", /^broker(?:\s|$)/);
   const action = page.getByRole("combobox", { name: "Action", exact: true });
   await action.fill("auth.*");
   await action.press("Enter");

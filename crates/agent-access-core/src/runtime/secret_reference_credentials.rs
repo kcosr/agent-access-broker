@@ -19,16 +19,35 @@ impl BrokerRuntime {
         }
     }
 
-    /// Store a connection token, resolving a structured `secret.token` reference
-    /// only inside the credential write transaction. The host must admit the
-    /// corresponding personal or administrator route and hold its runtime
-    /// publication fence for the call. Returned metadata never contains a
-    /// reference capability or the resolved token.
-    pub fn store_connection_credential(
+    /// Existing HTTP routes supply the sealed original credential. It is
+    /// checked again within the same transaction that installs the credential.
+    pub fn store_connection_credential_with_management_authority(
+        &self,
+        authority: crate::ManagementAuthority,
+        request: CredentialWriteRequest,
+        purpose: CredentialManagementPurpose,
+    ) -> Result<crate::ManagementMutation<SecretCredentialWriteResult>, ManagedStoreError> {
+        authority.check_runtime(self)?;
+        let result = self.store_connection_credential_checked(
+            authority.identity(),
+            request,
+            purpose,
+            &authority,
+        )?;
+        let credential = &result.credential;
+        let audit = serde_json::json!({"credentialId":credential.credential_id,"ownerPrincipal":credential.owner_principal,"connection":credential.service,"profile":credential.profile,"credentialKind":credential.credential_kind,"status":credential.status,"secretReferences":result.references,"changed":true});
+        Ok(crate::ManagementMutation {
+            value: result,
+            audit,
+        })
+    }
+
+    fn store_connection_credential_checked(
         &self,
         identity: &IdentityContext,
         request: CredentialWriteRequest,
         purpose: CredentialManagementPurpose,
+        authority: &crate::ManagementAuthority,
     ) -> Result<SecretCredentialWriteResult, ManagedStoreError> {
         let store = self.managed_store().ok_or_else(|| {
             ManagedStoreError::Unavailable("managed store is not configured".into())
@@ -55,6 +74,17 @@ impl BrokerRuntime {
             request,
             purpose,
             |conn| {
+                authority.check_conn(
+                    conn,
+                    match purpose {
+                        CredentialManagementPurpose::Personal => {
+                            crate::ManagementOperation::PersonalCredentialPut
+                        }
+                        CredentialManagementPurpose::Administrative => {
+                            crate::ManagementOperation::AdminCredentialPut
+                        }
+                    },
+                )?;
                 self.check_credential_import_actor(conn, identity, &owner, &connection, purpose)?;
                 let owner_kind = crate::managed_store::principal_kind_at_conn(conn, &owner)?;
                 let configured = self

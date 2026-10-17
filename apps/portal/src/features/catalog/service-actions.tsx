@@ -7,6 +7,7 @@ import { useMemo, type ReactNode } from "react";
 import type { ImportActionRecord, ImportActionStatus, ImportPreviewResult, ImportResourceTypeDeclaration } from "../../import-types";
 import type { PolicyActionCatalog } from "../../types";
 import { ACTION_GRANT_LABEL } from "../../lib/helpers";
+import { availabilityRequirementText } from "../../lib/availability";
 import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
 import { COMMAND_CHECK_CAVEAT, COMMAND_KIND, commandResourceCheck, resourceCheckParts, resourceCheckText } from "../../lib/import-command";
 import { groupRows, sortRows } from "../../lib/table-sort";
@@ -93,7 +94,7 @@ function filterRows(rows: ActionRow[], state: { effect: string; q: string }, typ
     if (!query) return true;
     const operation = row.record ? openApiOperation(row.record.definition) : null;
     const checked = row.record && types ? resourceCheckText(actionResourceCheck(row), types) : null;
-    return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, checked, ...(row.catalog?.requiredScopeTypes ?? [])]
+    return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, checked, ...Object.keys(row.catalog?.requiredScopes ?? {})]
       .filter(Boolean)
       .join(" ")
       .toLowerCase()
@@ -219,7 +220,7 @@ export function actionTransitions(row: ActionRow, data: ImportPreviewResult | nu
 const TRANSITION_ICON = { enabled: "play", disabled: "pause", retired: "ban" } as const;
 
 function scopeCell(row: ActionRow) {
-  const scopes = row.catalog?.requiredScopeTypes ?? [];
+  const scopes = Object.keys(row.catalog?.requiredScopes ?? {});
   if (scopes.length) return scopes.join(", ");
   return row.catalog ? <span className="wb-muted">{ACTION_GRANT_LABEL}</span> : <span className="wb-muted">—</span>;
 }
@@ -507,6 +508,11 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
         <DrawerSection title="Availability">
           <Banner tone="warning" slim>
             {open.catalog.unavailableReason ?? "This action cannot currently execute."}
+            {open.catalog.availabilityRequirements?.length ? (
+              <ul>{open.catalog.availabilityRequirements.map((requirement) => (
+                <li key={`${requirement.kind}:${requirement.reason}`}>{availabilityRequirementText(requirement)}</li>
+              ))}</ul>
+            ) : null}
           </Banner>
         </DrawerSection>
       ) : null}
@@ -525,7 +531,7 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
             open.catalog
               ? {
                   label: "Required scopes",
-                  value: open.catalog.requiredScopeTypes.length ? <span className="wb-mono">{open.catalog.requiredScopeTypes.join(", ")}</span> : ACTION_GRANT_LABEL
+                  value: Object.keys(open.catalog.requiredScopes).length ? <span className="wb-mono">{Object.entries(open.catalog.requiredScopes).map(([name, scope]) => `${name}: ${scope.resourceType}`).join(", ")}</span> : ACTION_GRANT_LABEL
                 }
               : null,
             open.catalog ? { label: "Credential modes", value: <span className="wb-mono">{open.catalog.credentialModes.join(", ") || "none"}</span> } : null,

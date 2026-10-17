@@ -4,7 +4,7 @@
 import { useId, useMemo } from "react";
 import type { AgentTokenOptions, CredentialConnection } from "../../types";
 import { buildAccessSummary, serviceDisplayNames } from "../../lib/access";
-import { ACTION_GRANT_LABEL, credentialStatus, credentialTone } from "../../lib/helpers";
+import { credentialStatus, credentialTone } from "../../lib/helpers";
 import { connectionForService, oauthRowKey } from "../../lib/credentials";
 import { clauseLabel } from "../../lib/resource-labels";
 import { useResourceTypes } from "../../lib/resource-types";
@@ -62,7 +62,6 @@ export type AccessRow = {
   action: string;
   description: string;
   contexts: string[];
-  resourceType: string | null;
   clauses: ReturnType<typeof buildAccessSummary>[number]["actions"][number]["clauses"];
   resourceLabels: string[];
   /** Explicitly classified read-only (from the token options); anything else may write. */
@@ -88,9 +87,8 @@ export function accessRows(options: AgentTokenOptions | null, context: string | 
       action: action.action,
       description: action.description,
       contexts: action.contexts,
-      resourceType: action.resourceType,
       clauses: action.clauses,
-      resourceLabels: action.resourceType === null ? [ACTION_GRANT_LABEL] : action.clauses.map((clause) => clauseLabel(types, action.resourceType!, clause)),
+      resourceLabels: action.clauses.map((clause) => clauseLabel(types, clause)),
       readOnly: action.readOnly
     }))
   );
@@ -441,7 +439,7 @@ export function AccessDrawer({ model }: { model: AccessListModel }) {
       </DrawerSection>
       <DrawerSection title="Resources">
         <div className="wb-small wb-fg-2">
-          <AccessClauses type={open.resourceType} clauses={open.clauses} />
+          <AccessClauses clauses={open.clauses} />
         </div>
       </DrawerSection>
       <DrawerSection title="Service">

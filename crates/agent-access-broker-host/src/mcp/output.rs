@@ -274,6 +274,37 @@ upload_spool_dir={spool:?}
         (response, control)
     }
     #[tokio::test]
+    async fn settled_local_rollback_does_not_redefine_mcp_delivery_completion() {
+        let (mut response, control) = outcome(false).await;
+        response.status = 409;
+        response.envelope.service = "broker_management".into();
+        response.envelope.action = "principal.create".into();
+        response.envelope.result = Some(json!({
+            "executionState":"not_committed", "retrySafe":false,
+            "body":"x".repeat(32_000),
+        }));
+        let normal = broker(response.clone(), &control, 128 * 1024, &[]);
+        assert_eq!(normal.is_error, Some(true));
+        assert_eq!(
+            normal.structured_content.as_ref().unwrap()["result"]["executionState"],
+            "not_committed"
+        );
+        assert_eq!(
+            normal.structured_content.as_ref().unwrap()["result"]["retrySafe"],
+            false
+        );
+        let limited = broker(response, &control, 16_384, &[]);
+        let receipt = limited.structured_content.as_ref().unwrap();
+        assert_eq!(receipt["error"]["code"], "mcp_response_too_large");
+        assert_eq!(
+            receipt["execution"],
+            json!({"dispatched":true,"completion":"completed"})
+        );
+        assert_eq!(receipt["retrySafe"], false);
+        assert!(receipt.get("executionState").is_none());
+    }
+
+    #[tokio::test]
     async fn oversized_completed_outcome_keeps_only_proven_status_and_no_secret() {
         let (mut response, control) = outcome(false).await;
         for status in [
