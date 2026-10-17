@@ -491,7 +491,9 @@ key and project. The Broker handles these references as follows:
 - **Project-key inputs.** `issue_type.list`, `issue.create`,
   `issue.child.create`, and explicit search `projects` are authorized by the
   project key as written. With finite grants for `NEW`, `OLD` is denied before
-  any Jira request. If a grant still names `OLD` and Jira creates the issue as
+  any Jira request, except that `issue.child.create` first looks up the parent
+  issue, so that metadata request reaches Jira before the denial; the create
+  request itself is never sent. If a grant still names `OLD` and Jira creates the issue as
   `NEW-5`, the create fails with `scope_unresolved` and an
   `applied_unverified` receipt (see [`issue.create`](#issuecreate)).
 - **Operator action.** Project resource entries name project keys. After a key
