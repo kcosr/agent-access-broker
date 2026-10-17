@@ -78,7 +78,7 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
             "unsupported": ["IS EMPTY", "IS NOT EMPTY", "!~", "prefix NOT"],
             "orderBy": {"fields": cql_sort_names(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_CONFLUENCE_ORDER_TERMS},
             "emptyFilter": "Empty or whitespace-only CQL and ORDER BY alone search the effective authorized spaces; the broker always adds the action content type.",
-            "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it. The broker groups caller filters and injects space inclusion/exclusion and content type predicates, then checks returned content.",
+            "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it. The broker groups caller filters and injects space inclusion/exclusion and content type predicates, then checks returned content against the authorized space keys, not against named spaces: Confluence may resolve a space URL alias to its key.",
             "contentType": kind.cql_type(),
             "limits": {
                 "queryBytes": MAX_CONFLUENCE_RAW_QUERY_BYTES,
@@ -168,7 +168,6 @@ pub(crate) struct BuiltConfluenceSearchQuery {
     pub(crate) kind: &'static str,
     pub(crate) injected_space_predicate: &'static str,
     pub(crate) injected_type_predicate: &'static str,
-    pub(crate) response_scope: EffectiveSearchScope,
     /// The caller's query, canonically re-emitted; continuations bind it.
     pub(crate) canonical_caller_cql: String,
     pub(crate) canonical_caller_cql_hash: String,
@@ -188,9 +187,13 @@ pub(crate) fn search_authorization(
     })
 }
 
-pub(crate) fn effective_search_scope(
+/// The authorized space boundary: the finite space keys or the all-except
+/// exclusions the host admitted, with token restrictions already applied.
+/// Returned content is checked against it, never against the space names a
+/// caller wrote in `spaces` or CQL: Confluence may resolve a space's URL alias
+/// to the space, whose content carries its key.
+pub(crate) fn authorized_search_scope(
     authorization: &SearchAuthorization,
-    requested: &BTreeSet<String>,
 ) -> Result<EffectiveSearchScope, ProviderError> {
     if authorization.scope_type != "space" {
         return Err(ProviderError::error(
@@ -207,32 +210,34 @@ pub(crate) fn effective_search_scope(
                     "Confluence search policy scope is empty",
                 ));
             }
-            if requested.is_empty() {
-                return Ok(EffectiveSearchScope::Finite(allowed));
-            }
-            if !requested.is_subset(&allowed) {
-                return Err(ProviderError::deny(
-                    ReasonCode::ServiceActionDenied,
-                    "requested Confluence spaces are not authorized",
-                ));
-            }
-            Ok(EffectiveSearchScope::Finite(requested.clone()))
+            Ok(EffectiveSearchScope::Finite(allowed))
         }
-        SearchAuthorizationScope::AllExcept { excluded_values } => {
-            let excluded = excluded_values.iter().cloned().collect::<BTreeSet<_>>();
-            if !requested.is_disjoint(&excluded) {
-                return Err(ProviderError::deny(
-                    ReasonCode::ServiceActionDenied,
-                    "requested Confluence spaces are not authorized",
-                ));
-            }
-            if requested.is_empty() {
-                Ok(EffectiveSearchScope::AllExcept(excluded))
-            } else {
-                Ok(EffectiveSearchScope::Finite(requested.clone()))
-            }
-        }
+        SearchAuthorizationScope::AllExcept { excluded_values } => Ok(
+            EffectiveSearchScope::AllExcept(excluded_values.iter().cloned().collect()),
+        ),
     }
+}
+
+/// The scope the upstream query is composed with: the authorized boundary,
+/// narrowed to explicit `spaces`, which must each be authorized.
+pub(crate) fn effective_search_scope(
+    authorization: &SearchAuthorization,
+    requested: &BTreeSet<String>,
+) -> Result<EffectiveSearchScope, ProviderError> {
+    let authorized = authorized_search_scope(authorization)?;
+    if requested.is_empty() {
+        return Ok(authorized);
+    }
+    if !requested
+        .iter()
+        .all(|space| authorized.authorizes_value(space))
+    {
+        return Err(ProviderError::deny(
+            ReasonCode::ServiceActionDenied,
+            "requested Confluence spaces are not authorized",
+        ));
+    }
+    Ok(EffectiveSearchScope::Finite(requested.clone()))
 }
 
 pub(crate) fn build_confluence_search_query(
@@ -313,20 +318,10 @@ pub(crate) fn build_confluence_search_query_for_kind(
     let query_shape = ast.query_shape();
     let text_operand_hashes = ast.text_operand_hashes();
     let sort_fields = ast.sort_fields();
-    let response_scope = match effective_scope {
-        EffectiveSearchScope::Finite(spaces) => EffectiveSearchScope::Finite(spaces.clone()),
-        EffectiveSearchScope::AllExcept(excluded) => ast
-            .space_scope()
-            .map(|values| {
-                EffectiveSearchScope::Finite(values.difference(excluded).cloned().collect())
-            })
-            .unwrap_or_else(|| EffectiveSearchScope::AllExcept(excluded.clone())),
-    };
     Ok(BuiltConfluenceSearchQuery {
         cql,
         kind,
         injected_space_predicate,
-        response_scope,
         canonical_caller_cql_hash: sha256_hex(caller_cql.as_bytes()),
         canonical_caller_cql: caller_cql,
         query_shape,
@@ -482,10 +477,6 @@ impl CqlQueryAst {
         spaces
     }
 
-    pub(crate) fn space_scope(&self) -> Option<BTreeSet<String>> {
-        self.filter.as_ref().and_then(CqlExpr::space_scope)
-    }
-
     pub(crate) fn query_shape(&self) -> Value {
         json!({
             "filter": self.filter.as_ref().map(CqlExpr::shape),
@@ -553,33 +544,6 @@ impl CqlExpr {
                 for child in children {
                     child.collect_spaces(spaces);
                 }
-            }
-        }
-    }
-
-    pub(crate) fn space_scope(&self) -> Option<BTreeSet<String>> {
-        match self {
-            Self::Clause(clause) => clause.space_scope(),
-            Self::And(children) => {
-                let mut bounded: Option<BTreeSet<String>> = None;
-                for child in children {
-                    let Some(child_scope) = child.space_scope() else {
-                        continue;
-                    };
-                    bounded = Some(match bounded {
-                        Some(current) => current.intersection(&child_scope).cloned().collect(),
-                        None => child_scope,
-                    });
-                }
-                bounded
-            }
-            Self::Or(children) => {
-                let mut bounded = BTreeSet::new();
-                for child in children {
-                    let child_scope = child.space_scope()?;
-                    bounded.extend(child_scope);
-                }
-                Some(bounded)
             }
         }
     }
@@ -658,22 +622,6 @@ impl CqlClause {
                 );
             }
             _ => {}
-        }
-    }
-
-    pub(crate) fn space_scope(&self) -> Option<BTreeSet<String>> {
-        match (&self.field, &self.operator, &self.operand) {
-            (CqlField::Space, CqlOperator::Eq, CqlOperand::Single(value)) => value
-                .identifier()
-                .map(|space| [space.to_string()].into_iter().collect()),
-            (CqlField::Space, CqlOperator::In, CqlOperand::List(values)) => Some(
-                values
-                    .iter()
-                    .filter_map(CqlValue::identifier)
-                    .map(str::to_string)
-                    .collect(),
-            ),
-            _ => None,
         }
     }
 
@@ -896,6 +844,7 @@ impl CqlValue {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn identifier(&self) -> Option<&str> {
         match self {
             Self::Identifier(value) => Some(value),

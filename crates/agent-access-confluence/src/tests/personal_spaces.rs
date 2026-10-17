@@ -62,14 +62,14 @@ fn personal_space_url_locators_and_projections_preserve_literal_keys() {
         assert_eq!(
             page_locator_from_url(&page_url, &config)
                 .unwrap()
-                .candidate_space
+                .url_space
                 .as_deref(),
             Some(*key)
         );
         assert_eq!(
             blog_locator_from_url(&blog_url, &config)
                 .unwrap()
-                .candidate_space
+                .url_space
                 .as_deref(),
             Some(*key)
         );
@@ -77,21 +77,37 @@ fn personal_space_url_locators_and_projections_preserve_literal_keys() {
             (&page_url, ConfluenceBrowserContentKind::Page, "123456"),
             (&blog_url, ConfluenceBrowserContentKind::Blog, "7777"),
         ] {
+            let mut fallbacks = BrowserUrlFallbacks::default();
             assert_eq!(
-                content_browser_url(Some(url), kind, id, key, &config).unwrap(),
+                content_browser_url(Some(url), kind, id, &key_only(key), &config, &mut fallbacks)
+                    .unwrap(),
                 *url
             );
-            assert!(content_browser_url(Some(url), kind, id, "~bob", &config).is_err());
+            assert_eq!(fallbacks.count, 0);
+            assert_space_mismatch_replaced(
+                content_browser_url(
+                    Some(url),
+                    kind,
+                    id,
+                    &key_only("~bob"),
+                    &config,
+                    &mut fallbacks,
+                ),
+                &format!("https://example.atlassian.net/wiki/pages/viewpage.action?pageId={id}"),
+                fallbacks,
+            );
         }
+        let mut fallbacks = BrowserUrlFallbacks::default();
         assert_eq!(
-            space_browser_url(None, key, &config).unwrap(),
+            space_browser_url(None, &key_only(key), &config, &mut fallbacks).unwrap(),
             format!("https://example.atlassian.net/wiki/spaces/{key}")
         );
         let overview = format!("/spaces/{key}/overview");
         assert_eq!(
-            space_browser_url(Some(&overview), key, &config).unwrap(),
+            space_browser_url(Some(&overview), &key_only(key), &config, &mut fallbacks).unwrap(),
             format!("https://example.atlassian.net/wiki{overview}")
         );
+        assert_eq!(fallbacks.count, 0);
     }
     // Percent escapes are not aliases for literal resource keys, including a
     // double-encoded escape or an encoded path/query delimiter.
@@ -110,19 +126,53 @@ fn personal_space_url_locators_and_projections_preserve_literal_keys() {
         let blog_url = format!("https://example.atlassian.net/wiki/spaces/{key}/blog/7777/Notes");
         assert!(page_locator_from_url(&page_url, &config).is_err(), "{key}");
         assert!(blog_locator_from_url(&blog_url, &config).is_err(), "{key}");
-        assert!(
+        let mut fallbacks = BrowserUrlFallbacks::default();
+        assert_space_mismatch_replaced(
             content_browser_url(
                 Some(&page_url),
                 ConfluenceBrowserContentKind::Page,
                 "123456",
-                "~alice",
-                &config
-            )
-            .is_err()
+                &key_only("~alice"),
+                &config,
+                &mut fallbacks,
+            ),
+            "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456",
+            fallbacks,
         );
-        assert!(space_browser_url(Some(&format!("/spaces/{key}")), "~alice", &config).is_err());
+        // An escaped key in the space's own link is not its URL alias.
+        let space_link = format!("/spaces/{key}");
+        let names = ConfluenceSpaceUrlNames::new("~alice", None, Some(&space_link), &config);
+        assert_eq!(names.alias, None, "{key}");
+        let mut fallbacks = BrowserUrlFallbacks::default();
+        assert_space_mismatch_replaced(
+            space_browser_url(Some(&space_link), &names, &config, &mut fallbacks),
+            "https://example.atlassian.net/wiki/spaces/~alice",
+            fallbacks,
+        );
     }
-    assert!(space_browser_url(Some("/spaces/~Alice"), "~alice", &config).is_err());
+    // Nor is a case variant of a personal key.
+    let names = ConfluenceSpaceUrlNames::new("~alice", None, Some("/spaces/~Alice"), &config);
+    assert_eq!(names.alias, None);
+    let mut fallbacks = BrowserUrlFallbacks::default();
+    assert_space_mismatch_replaced(
+        space_browser_url(Some("/spaces/~Alice"), &names, &config, &mut fallbacks),
+        "https://example.atlassian.net/wiki/spaces/~alice",
+        fallbacks,
+    );
+}
+
+fn assert_space_mismatch_replaced(
+    url: Result<String, ProviderError>,
+    constructed: &str,
+    fallbacks: BrowserUrlFallbacks,
+) {
+    assert_eq!(url.unwrap(), constructed);
+    let audit = fallbacks.into_audit(json!({}));
+    assert_eq!(audit["browserUrlFallbacks"]["count"], 1);
+    assert_eq!(
+        audit["browserUrlFallbacks"]["entries"][0]["rule"],
+        "space_mismatch"
+    );
 }
 
 #[test]
@@ -200,6 +250,7 @@ async fn personal_space_http_lookup_encodes_keys_and_parses_authoritative_metada
             &page,
             &confluence_config().content.page_formats,
             &confluence_config(),
+            &mut BrowserUrlFallbacks::default(),
         )
         .unwrap();
         assert_eq!(page_result["space"], *key);

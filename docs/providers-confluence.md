@@ -536,26 +536,56 @@ when upstream provides it: `createdAt`, `updatedAt`, `createdBy`, and
 broker normalizes URLs as absolute HTTPS
 browser URLs on `providers.confluence.tenant_host`; it never returns REST API,
 download, media, edit, attachment, cross-host, non-HTTPS, fragment-bearing, or
-userinfo/explicit-port URLs. Query-bearing URLs are rejected except for the
-exact `viewpage.action?pageId=...` browser page family. The fields are mandatory
-for those actions, so malformed upstream `_links.webui` values fail closed
-rather than returning relative, unsafe, or null URLs in those fields. When a safe
-upstream `_links.webui` proves the expected content ID or space key, the broker
-returns that browser URL. Relative upstream web links are interpreted under the
-tenant `/wiki` base, so both `/wiki/spaces/...` and `/spaces/...` normalize to
-tenant browser URLs. When the upstream content link is missing or is a
-same-tenant browser shape that does not prove the content ID, the broker returns
-the safe fallback
+userinfo/explicit-port URLs. Query-bearing URLs are refused except for the
+exact `viewpage.action?pageId=...` browser page family. When a safe upstream
+`_links.webui` proves the expected content ID and names the result's space, the
+broker returns that browser URL. Relative upstream web links are interpreted
+under the tenant `/wiki` base, so both `/wiki/spaces/...` and `/spaces/...`
+normalize to tenant browser URLs. Draft results always use the constructed
+content URL.
+
+The fields are never null and a link never fails the operation. When the
+upstream content link is missing, does not prove the content ID, or fails any of
+these checks, the broker returns the constructed
 `https://<tenant_host>/wiki/pages/viewpage.action?pageId=<id>`. Space URLs fall
-back to `https://<tenant_host>/wiki/spaces/<space>` when the upstream space link
-is missing or is an unrecognized same-space browser path.
+back to `https://<tenant_host>/wiki/spaces/<key>` in the same cases. One bad link
+therefore replaces only that result's field: the rest of a search page, and the
+other field, are unaffected. Each replaced link that failed a check is recorded
+in the operation's audit under `browserUrlFallbacks`: the total `count` and up to
+10 `entries`, each with the `field` (`webUrl` or `spaceUrl`), the `rule` it
+failed (`unparseable`, `authority_mismatch`, `fragment`, `forbidden_path`,
+`query_not_allowed`, `unrecognized_shape`, `space_mismatch`,
+`content_id_mismatch`, or `invalid_blog_date`), and a masked `linkShape`. The
+shape keeps structural segments such as `spaces` and `pages`, shows digit runs
+as `{n}`, every other segment (space names, title slugs) as `{s}`, and the
+origin as `https://{site}` or `{origin}`; it omits query and fragment contents.
+A missing link or one that proves no content ID is replaced without an entry.
+`browserUrlFallbacks` is absent when nothing failed.
+
+### Space URL aliases
+
+Confluence Cloud lets an administrator change a space's URL. The API keeps the
+space key, for example `RAILS`, while browser links use the URL alias, for
+example `/spaces/VLABS/pages/...`. A browser link's space segment is accepted
+when it equals the result's space key or that space's alias. The alias is the
+v2 space object's `currentActiveAlias` where the broker already reads that
+object (page create, blog, blog draft, and page draft results), and otherwise
+the `/spaces/<alias>` or `/spaces/<alias>/overview` path of the space object's
+own `_links.webui` on the configured site. A write result whose upstream
+response names no space link takes the space object the broker resolved before
+the write. An alias must be one ASCII letter or
+digit followed by letters, digits, `_`, or `-`, up to 255 characters, and
+matches exactly, including case. Resolving an alias needs no extra upstream
+request. Results, scopes, grants, exclusions, and audit records always carry the
+space key; the alias appears only inside returned browser URLs.
 
 `blog.view` and `blog.attachment.list` accept either `blogId` or `url`. The URL
 locator accepts `https://<tenant_host>/wiki/pages/viewpage.action?pageId=<numeric-id>`
 and modern blog browser paths of the form
 `https://<tenant_host>/wiki/spaces/{space}/blog/.../{numeric-id}/...`, with no
-userinfo, explicit port, extra query parameters, or fragment. Modern blog URL
-space segments are checked against the authoritative blog space. For modern blog
+userinfo, explicit port, extra query parameters, or fragment. A modern blog
+URL's space segment must be the looked-up blog's space key or URL alias,
+otherwise the locator is `locator_invalid`. For modern blog
 paths, the numeric content ID must be the first path segment after the optional
 `YYYY/MM/DD` date prefix; later title-slug segments may be numeric text but are
 not treated as content IDs. Date/title-only blog URLs are rejected because they
@@ -567,19 +597,28 @@ do not carry a stable numeric content ID.
 - **Space key** is 2–255 ASCII characters. Team-space keys match
   `^[A-Z][A-Z0-9_-]{1,254}$`; personal-space keys match
   `^~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253}$`. Keys retain their exact spelling and
-  case. A bare `~`, whitespace, slashes, and percent-encoded aliases are invalid.
+  case. A bare `~`, whitespace, slashes, and percent-encoded spellings are
+  invalid.
+- **Space URL alias** matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$`. It is accepted
+  only as the space segment of a browser link or URL locator, never as a `space`
+  input or a resource.
 - **Attachment ID** matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
 
 A page may be supplied as a page ID or as a URL. The URL locator
 (`page_locator_from_url`) requires `https`, a host equal to `tenant_host`, no
 userinfo, no explicit port, and no fragment, and accepts two shapes:
 
-- `/wiki/spaces/{SPACE}/pages/{pageId}/...` — carries a candidate space, and must
-  carry no query parameters.
+- `/wiki/spaces/{space}/pages/{pageId}/...` — must carry no query parameters. The
+  space segment may be a space key or a [URL alias](#space-url-aliases); a
+  segment that is neither shape is `input_invalid`.
 - `/wiki/pages/viewpage.action?pageId={id}` — a single `pageId` query parameter and
-  no candidate space.
+  no space segment.
 
-Any other shape is `locator_invalid`. A caller-supplied `space` field is rejected
+Any other shape is `locator_invalid`. Every URL locator carries a page or blog
+ID: a space-only URL such as `/wiki/spaces/{space}` or its `overview` is not a
+locator. The URL's space segment never becomes a scope. The broker looks up the
+page and authorizes its space key; the segment must name that space by its key
+or URL alias, otherwise scope resolution is denied with `scope_unresolved`. A caller-supplied `space` field is rejected
 by `deny_unknown_fields` on every action except `page.create`, which requires it.
 All page-id actions except `page.create` confirm page→space by lookup before
 authorization. Attachment downloads confirm the parent page space first, then
@@ -669,9 +708,13 @@ expected upstream incompatibility when present.
 
 Scope composition adds `space IN (...)` for finite space coverage or
 `space NOT IN (...)` for all-except coverage, grouped with the caller query,
-and always injects `type = page`. Positive caller space predicates narrow the
-authorized boundary without losing exclusions. Every returned page is validated
-against the effective space boundary. Backend search
+and always injects `type = page`. Explicit `spaces` and caller space predicates
+narrow the query without losing all-except exclusions. Every returned page is
+validated against the authorization boundary, the granted space keys or the
+all-except exclusions, not against the space names the caller wrote: Confluence
+may resolve a [space URL alias](#space-url-aliases) to its key, so a caller who
+names `VLABS` receives content of space `RAILS` when that space is authorized,
+and an excluded `RAILS` stays excluded whichever name the caller used. Backend search
 GETs `content/search` with `cql=<composed>`, `limit=<max>`,
 `expand=space,version,history`, and an optional `cursor`. As with Jira, `<max>` (the
 caller's `maxResults`) defaults to `providers.confluence.search.max_results`
@@ -679,7 +722,8 @@ caller's `maxResults`) defaults to `providers.confluence.search.max_results`
 is bounded by `limits.max_upstream_response_bytes`. Page status is read from the
 base content item. Every result must be a current page in an authorized space;
 otherwise the request denies with `scope_unresolved` and returns no partial
-results.
+results. `spaces` accepts only space keys; with a finite boundary each must be
+a granted key, so an alias there is denied with `service_action_denied`.
 
 Personal-space keys are also quoted in injected scope constraints. For example,
 `--space '~alice' --cql ''` emits `space IN ("~alice") AND type = page`.

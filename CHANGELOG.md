@@ -1242,6 +1242,28 @@ All notable changes to this project are documented in this file.
   cause, such as `upstream_protocol_failed`, without a receipt or a probe. A
   readback the Broker could not prepare after an accepted write still reports
   the write as `applied_unverified`.
+- Confluence search, blog search, and page and blog reads failed with
+  `upstream_protocol_failed` ("Confluence browser URL failed validation")
+  whenever a result lived in a space whose URL an administrator had changed:
+  Confluence keeps the key, such as `RAILS`, in the API but links under the
+  alias, such as `/spaces/VLABS/pages/...`. One such result failed its whole
+  search page. A link's space segment now matches the space key or the space's
+  URL alias, taken from the v2 space object's `currentActiveAlias` where the
+  Broker already reads it, otherwise from the space object's own
+  `_links.webui`, with no extra upstream request. Page and blog URL locators
+  naming the alias resolve to the content's space key; a URL's space segment is
+  never a scope. A link that still fails a check is replaced by the constructed
+  `viewpage.action?pageId=` or `/spaces/<key>` URL instead of failing the
+  operation, and is recorded in its audit under `browserUrlFallbacks` with the
+  rule it failed and a masked link shape.
+- Confluence search and blog search checked returned content against the space
+  names the caller wrote rather than the authorization boundary. With
+  all-space access, `space = VLABS` in CQL, or `spaces: ["VLABS"]`, narrowed
+  the check to `VLABS`. A result that Confluence resolved to the space's key,
+  such as `RAILS`, then failed the whole search with `scope_unresolved`.
+  Returned content is now checked against the granted space keys or all-except
+  exclusions, as `docs/design.md` describes. A caller-written name still
+  narrows the query, but cannot widen access or lift an exclusion.
 
 ### Removed
 
