@@ -9484,15 +9484,27 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert!(!audit.contains(&self_agent_token));
     let mut literal_credential_receipts = 0;
     for line in audit.lines() {
-        let record: Value = serde_json::from_str(line).unwrap();
+        let mut record: Value = serde_json::from_str(line).unwrap();
         assert_no_secret_storage_fields(&record);
-        if let Some(references) =
-            record.pointer("/providerAudit/management/change/secretReferences")
+        if let Some(references) = record
+            .pointer_mut("/providerAudit/management/change")
+            .and_then(Value::as_object_mut)
+            .and_then(|change| change.remove("secretReferences"))
         {
-            // This smoke stores literal credentials. Its safe provenance array
-            // is empty and must not be confused with a secretRef capability.
-            assert_eq!(references, &json!([]));
+            // This smoke stores literal credentials. Remove only the verified
+            // empty provenance field before checking every other key and value.
+            assert_eq!(references, json!([]));
             literal_credential_receipts += 1;
+        }
+        let without_provenance = record.to_string();
+        for forbidden in [
+            "secretBackend",
+            "secretRef",
+            "materialVersion",
+            "secretCiphertext",
+            "secretNonce",
+        ] {
+            assert!(!without_provenance.contains(forbidden));
         }
     }
     assert!(literal_credential_receipts > 0);
