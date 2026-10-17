@@ -352,7 +352,8 @@ supplying a later expiry cannot renew the reference.
 Canonical capability strings are rejected anywhere in action inputs, including
 when embedded in longer strings or object keys, arrays and undeclared fields.
 A capability is accepted only inside the strict reference object at a declared
-secret input.
+secret input. Matches require boundaries outside `[A-Za-z0-9_-]` on both sides,
+preserving longer base64url arguments such as continuation tokens and JWTs.
 Ordinary upstream fields named `secretRef` remain valid when they do not contain
 a Broker capability.
 

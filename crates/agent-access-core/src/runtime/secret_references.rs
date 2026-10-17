@@ -744,10 +744,15 @@ fn parse_reference(value: &Value) -> Result<&str, ProviderError> {
     Ok(reference)
 }
 fn contains_secret_reference_capability(value: &str) -> bool {
+    let token_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-';
+    let bytes = value.as_bytes();
     value.match_indices("sr_").any(|(start, _)| {
-        value
-            .get(start..start + 46)
-            .is_some_and(is_secret_reference_capability)
+        let end = start + 46;
+        (start == 0 || !token_byte(bytes[start - 1]))
+            && bytes.get(end).is_none_or(|byte| !token_byte(*byte))
+            && value
+                .get(start..end)
+                .is_some_and(is_secret_reference_capability)
     })
 }
 fn is_secret_reference_capability(value: &str) -> bool {
@@ -1724,7 +1729,8 @@ mod tests {
             json!({"authorization": format!("Bearer {handle}")}),
             json!({"nested": [format!("TOKEN={handle};other=value")]}),
             json!({format!("TOKEN={handle}"): "ordinary"}),
-            json!({"unicode": format!("前置 {handle} suffix")}),
+            json!({"unicode": format!("前置{handle}後置")}),
+            json!({"quoted": format!("\"{handle}\"")}),
         ] {
             assert!(validate_reference_inputs(&action, &input).is_err());
         }
@@ -1737,6 +1743,25 @@ mod tests {
             assert!(
                 validate_reference_inputs(&action, &json!({"ordinary":text, text:"ordinary"}))
                     .is_ok()
+            );
+        }
+        // A canonical-sized window inside another token is ordinary provider
+        // data. Both token boundaries are required, including map keys.
+        for text in [
+            format!("x{handle}"),
+            format!("{handle}x"),
+            format!("_{handle}"),
+            format!("{handle}-"),
+            format!("continuation_{handle}_next"),
+            format!("eyJhbGciOiJIUzI1NiJ9.e30{handle}c2ln.signature"),
+            format!("{}{}{}", "A".repeat(96), handle, "B".repeat(96)),
+        ] {
+            assert!(
+                validate_reference_inputs(
+                    &action,
+                    &json!({"pageToken":&text, text.clone():"ordinary"})
+                )
+                .is_ok()
             );
         }
         // A lookalike with noncanonical base64 trailing bits is not a Broker

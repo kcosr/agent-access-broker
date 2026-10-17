@@ -625,10 +625,14 @@ fn metadata_contains_secret(value: &Value, secret: &str) -> bool {
 }
 
 fn contains_capability(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let token_byte = |byte: &u8| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-');
     value.match_indices("sr_").any(|(start, _)| {
-        value
-            .get(start..start + 46)
-            .is_some_and(|candidate| reference_hash(candidate).is_ok())
+        (start == 0 || !token_byte(&bytes[start - 1]))
+            && !bytes.get(start + 46).is_some_and(token_byte)
+            && value
+                .get(start..start + 46)
+                .is_some_and(|candidate| reference_hash(candidate).is_ok())
     })
 }
 
@@ -1938,6 +1942,9 @@ mod tests {
             for secret in [
                 json!({"token":handle}),
                 json!({"token":format!("Bearer {handle}")}),
+                json!({"token":format!("TOKEN={handle}")}),
+                json!({"token":format!("\"{handle}\"")}),
+                json!({"token":format!("漢{handle}字")}),
                 json!({"username":format!("prefix {handle} suffix"),"token":"ordinary-token"}),
                 json!({"other":format!("prefix {handle} suffix"),"token":"ordinary-token"}),
                 json!({"token":{"secretRef":handle,"expiresAt":format!("prefix {handle}")}}),
@@ -1990,9 +1997,25 @@ mod tests {
                 ));
             }
         }
-        for literal in ["ordinary-token", "sr_not-a-broker-capability"] {
+        for literal in [
+            "ordinary-token".to_owned(),
+            "sr_not-a-broker-capability".to_owned(),
+            format!("{}a", live.secret_ref),
+            format!("a{}", live.secret_ref),
+            format!("{}_-", live.secret_ref),
+            format!("_-{}", live.secret_ref),
+            format!(
+                "eyJhbGciOiJIUzI1NiJ9.{}continuation.signature",
+                live.secret_ref
+            ),
+            format!(
+                "eyJhbGciOiJIUzI1NiJ9.continuation{}.signature",
+                live.secret_ref
+            ),
+        ] {
             let mut write = credential("unused", "destination");
             write.secret = json!({"token":literal});
+            write.metadata = json!({"description":literal});
             let installed = store
                 .upsert_user_credential_with_secret_references(
                     &ring,
@@ -2003,6 +2026,8 @@ mod tests {
                 )
                 .unwrap();
             assert!(installed.references.is_empty());
+            assert_eq!(installed.credential.metadata["description"], literal);
+            assert!(metadata_json(&json!({"locator":literal})).is_ok());
         }
     }
 

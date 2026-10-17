@@ -10370,10 +10370,16 @@ fn secret_reference_capability(value: &str) -> bool {
 }
 
 fn contains_secret_reference_capability(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let boundary = |byte: Option<&u8>| {
+        byte.is_none_or(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'_' | b'-'))
+    };
     value.match_indices("sr_").any(|(start, _)| {
-        value
-            .get(start..start + 46)
-            .is_some_and(secret_reference_capability)
+        boundary(start.checked_sub(1).and_then(|index| bytes.get(index)))
+            && boundary(bytes.get(start + 46))
+            && value
+                .get(start..start + 46)
+                .is_some_and(secret_reference_capability)
     })
 }
 
@@ -22234,6 +22240,8 @@ upload_spool_dir = "upload-spool"
             serde_json::json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
             serde_json::json!({"other":format!("Bearer {}", reference["secretRef"].as_str().unwrap())}),
             serde_json::json!({(format!("TOKEN={}", reference["secretRef"].as_str().unwrap())):"ordinary-value"}),
+            serde_json::json!({"other":format!("\"{}\"", reference["secretRef"].as_str().unwrap())}),
+            serde_json::json!({"other":format!("日本{}語", reference["secretRef"].as_str().unwrap())}),
         ] {
             assert!(
                 reject_inline_sensitive_values(
@@ -22274,6 +22282,27 @@ upload_spool_dir = "upload-spool"
             &declared,
         )
         .unwrap();
+        let capability = reference["secretRef"].as_str().unwrap();
+        for continuation in [
+            format!("prefix{capability}"),
+            format!("{capability}suffix"),
+            format!("_{capability}"),
+            format!("{capability}-"),
+            format!("eyJhbGciOiJIUzI1NiJ9.eyJ{capability}aWQiOjF9.signature"),
+        ] {
+            reject_inline_sensitive_values(
+                &serde_json::json!({"inputs":{"other":continuation}}),
+                &sensitive,
+                &declared,
+            )
+            .unwrap();
+            reject_inline_sensitive_values(
+                &serde_json::json!({"inputs":{(continuation):"ordinary-value"}}),
+                &sensitive,
+                &declared,
+            )
+            .unwrap();
+        }
     }
 
     #[test]

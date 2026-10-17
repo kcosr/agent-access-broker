@@ -123,7 +123,9 @@ rejected anywhere in action inputs, including object keys, nested objects,
 arrays and undeclared payload fields. This also rejects a capability embedded
 in text such as `Bearer sr_...` or `TOKEN=sr_...`. Pass it only as the `secretRef`
 member of a strict reference object at a declared secret input, so it cannot be
-forwarded upstream as a literal string.
+forwarded upstream as a literal string. Recognition requires boundaries outside
+the base64url alphabet on both sides, preserving ordinary continuation tokens,
+JWTs, and longer encoded values that happen to contain the same character pattern.
 
 Ordinary invocation use requires the same principal, original Broker token or
 exact trusted-human identity binding, trusted caller contract, and execution

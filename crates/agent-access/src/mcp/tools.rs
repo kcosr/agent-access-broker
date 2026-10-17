@@ -989,9 +989,26 @@ mod tests {
             json!({(reference["secretRef"].as_str().unwrap()):"ordinary-value"}),
             json!({"other":format!("Bearer {}", reference["secretRef"].as_str().unwrap())}),
             json!({(format!("TOKEN={}", reference["secretRef"].as_str().unwrap())):"ordinary-value"}),
+            json!({"other":format!("\"{}\"", reference["secretRef"].as_str().unwrap())}),
+            json!({"other":format!("日本{}語", reference["secretRef"].as_str().unwrap())}),
             json!({"token":{"secretRef":reference["secretRef"],"extra":"literal"}}),
         ] {
             assert!(resolve_inputs(&args(json!({"inputs":inputs})), &action).is_err());
+        }
+        let capability = reference["secretRef"].as_str().unwrap();
+        for continuation in [
+            format!("prefix{capability}"),
+            format!("{capability}suffix"),
+            format!("_{capability}"),
+            format!("{capability}-"),
+            format!("eyJhbGciOiJIUzI1NiJ9.eyJ{capability}aWQiOjF9.signature"),
+        ] {
+            resolve_inputs(&args(json!({"inputs":{"other":continuation}})), &action).unwrap();
+            resolve_inputs(
+                &args(json!({"inputs":{(continuation):"ordinary-value"}})),
+                &action,
+            )
+            .unwrap();
         }
         action.secret_input_pointers.clear();
         assert!(resolve_inputs(&arguments, &action).is_err());
