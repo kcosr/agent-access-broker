@@ -8041,3 +8041,63 @@ async fn an_old_path_another_project_now_owns_resolves_to_its_current_owner() {
             .any(|request| request.contains("/projects/42"))
     );
 }
+
+#[tokio::test]
+async fn execution_follows_an_authorized_path_to_the_project_that_took_it_over() {
+    // Scope resolution sees project 42 at `team/repo`; before execution,
+    // project 42 moves away and project 99 takes `team/repo`. Admission is by
+    // path, so execution proceeds against the path's current owner.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/team%2Frepo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42, "path_with_namespace": "team/repo"
+        })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/team%2Frepo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 99, "path_with_namespace": "team/repo"
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    mount_get(
+        &server,
+        "/api/v4/projects/99/issues/5",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": 990, "iid": 5, "project_id": 99
+        })),
+    )
+    .await;
+    let provider = provider_for_server(&server);
+    let inputs = json!({ "project": "team/repo", "iid": 5 });
+    let scopes = scopes_for(&provider, "issue.view", inputs.clone()).await;
+    assert_eq!(scopes, repository_scopes_from_path("team/repo"));
+
+    let viewed = provider
+        .invoke(
+            InvocationBuilder::new("gitlab", "issue.view")
+                .inputs(inputs)
+                .resources(scopes)
+                .credential(test_credential())
+                .lookup_credential(test_credential())
+                .build(),
+        )
+        .await
+        .unwrap();
+    let audit = &viewed.audit.as_ref().unwrap()["gitlab"];
+    assert_eq!(audit["project"], "team/repo");
+    assert_eq!(audit["projectId"], 99);
+    assert_eq!(
+        received_requests(&server).await,
+        [
+            "GET /api/v4/projects/team%2Frepo",
+            "GET /api/v4/projects/team%2Frepo",
+            "GET /api/v4/projects/99/issues/5"
+        ]
+    );
+}

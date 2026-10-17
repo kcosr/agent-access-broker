@@ -758,9 +758,11 @@ impl Provider for GitlabProvider {
 impl GitlabProvider {
     /// Resolves the caller's project locator again for execution, to the
     /// project GitLab identifies with it now, and requires that project's
-    /// current path to be one the host admitted. A path renamed, moved,
-    /// transferred or taken over by another project since scope resolution
-    /// is refused rather than acted on.
+    /// current path to be one the host admitted. A project renamed, moved or
+    /// transferred since scope resolution to a path the host did not admit is
+    /// refused rather than acted on. Admission is by path, not project ID, so
+    /// a project that took over an admitted path in between passes, as any
+    /// project at that path does.
     async fn lookup_project_for_invoke(
         &self,
         request: &AdmittedRequest,

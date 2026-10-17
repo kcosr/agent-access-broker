@@ -1164,9 +1164,10 @@ All notable changes to this project are documented in this file.
   `api_base_url`, and authorizes, executes and reports its current path. A path
   another project has since taken names that project, as in GitLab. Every
   action also requires the project it looks up again at execution to have an
-  authorized path, so a project moved, or a path taken over, between
-  authorization and execution is refused with `scope_unresolved` instead of
-  acted on.
+  authorized path, so a project that moved between authorization and execution
+  to a path that was not authorized is refused with `scope_unresolved` instead
+  of acted on. Grants name paths: a project that took over an authorized path
+  in between passes, as any project at that path does.
 - Jira and Confluence attachment downloads through the Atlassian gateway
   presented the credential, such as a service account's bearer token, on every
   redirect hop to `api.atlassian.com`, whose one origin serves every Atlassian

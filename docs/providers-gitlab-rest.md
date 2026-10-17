@@ -692,10 +692,12 @@ with 404, reported as `scope_unresolved`; use the current path there.
   group or user takes the old path or a namespace above it, and the path then
   names that project, as in GitLab itself. The Broker authorizes and acts on
   that project.
-- **Execution rechecks it.** Execution looks the project up again and refuses
-  it with `scope_unresolved` unless its current path is one that was
-  authorized, so a move between authorization and execution never redirects
-  an action. A move between pages invalidates a `pageToken`.
+- **Execution rechecks the path.** Execution looks the project up again and
+  refuses it with `scope_unresolved` unless its current path is one that was
+  authorized, so a project moved between authorization and execution to a
+  path that was not authorized is not acted on. A project that took over an
+  authorized path in between passes, as any project at that path does. A move
+  or takeover between pages invalidates a `pageToken`.
 - Results carry the project's current path and `web_url`.
 
 The [Git HTTP gateway](git-http-gateway.md#moved-or-renamed-repositories)
