@@ -2,6 +2,7 @@ pub(crate) mod admin;
 pub(crate) mod audit;
 pub(crate) mod audit_actions;
 pub(crate) mod common;
+pub(crate) mod connections;
 pub(crate) mod credentials;
 pub(crate) mod oauth;
 pub(crate) mod policy;

@@ -459,10 +459,12 @@ fn grant(
     }
 }
 
+/// A managed user, whose kind selects the import's personal token.
 fn identity(token_scopes: Option<Value>) -> IdentityContext {
     IdentityContext {
         caller_id: None,
         principal: "avery".into(),
+        principal_kind: Some(crate::PrincipalKind::User),
         principal_subject: Some("avery".into()),
         groups: vec!["engineering".into(), "support".into()],
         policy_groups: vec!["engineering".into(), "support".into()],
@@ -891,6 +893,116 @@ async fn unavailable_credentials_are_omitted_without_a_lower_band_fallback() {
     assert_eq!(denied.reason_code(), ReasonCode::ServiceActionDenied);
     assert!(denied.audit.is_some(), "the token caused the denial");
     assert_eq!(discovered(&banded, &eng_only, "issue.search"), None);
+}
+
+/// The credential modes a scope-free call passes.
+fn passed_modes(prepared: &PreparedInvocation) -> BTreeSet<String> {
+    passed(prepared)
+        .into_iter()
+        .map(|(mode, _, _)| mode)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_mixed_band_omits_only_the_mode_whose_credential_is_unavailable() {
+    let grants = vec![
+        grant(
+            "group:engineering",
+            "issue.search",
+            "per_user",
+            10,
+            &[],
+            &["wide"],
+        ),
+        grant(
+            "group:support",
+            "issue.search",
+            "service",
+            10,
+            &["p-ops"],
+            &[],
+        ),
+        grant("group:engineering", "issue.stats", "per_user", 10, &[], &[]),
+        grant("group:support", "issue.stats", "service", 10, &[], &[]),
+    ];
+    let user = identity(None);
+    // Without a managed kind the import's connection selects no method.
+    let unselected = IdentityContext {
+        principal_kind: None,
+        ..identity(None)
+    };
+    let both = runtime(grants.clone(), true);
+
+    // A user selects the connection's token: the whole band passes, for a
+    // scoped and a scope-free action.
+    let prepared = prepare(&both, &user, "issue.search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed(&prepared),
+        [
+            (
+                "per_user".into(),
+                all_except(&["FIN", "HR", "SEC"]),
+                Some(10)
+            ),
+            ("service".into(), finite(&["OPS"]), Some(10)),
+        ]
+    );
+    assert_eq!(
+        discovered(&both, &user, "issue.search"),
+        Some(reached(&prepared))
+    );
+    let prepared = prepare(&both, &user, "issue.stats", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed_modes(&prepared),
+        BTreeSet::from(["per_user".to_owned(), "service".to_owned()])
+    );
+
+    // The unselected personal method omits only the per_user grants; the
+    // service grants still pass, and nothing falls back to another method.
+    let prepared = prepare(&both, &unselected, "issue.search", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed(&prepared),
+        [("service".into(), finite(&["OPS"]), Some(10))]
+    );
+    assert_eq!(
+        discovered(&both, &unselected, "issue.search"),
+        Some(reached(&prepared))
+    );
+    let prepared = prepare(&both, &unselected, "issue.stats", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        passed_modes(&prepared),
+        BTreeSet::from(["service".to_owned()])
+    );
+    assert!(discovered(&both, &unselected, "issue.stats").is_some());
+
+    // With neither credential nothing passes; the planner never falls back
+    // to a lower band. (Hosts test the converse, a service slot missing
+    // while personal grants pass, against stored credentials.)
+    let personal_only = runtime(
+        vec![grant(
+            "group:engineering",
+            "issue.stats",
+            "per_user",
+            10,
+            &[],
+            &[],
+        )],
+        true,
+    );
+    let denied = prepare(&personal_only, &unselected, "issue.stats", json!({}))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(denied.reason_code(), ReasonCode::CredentialNotProvisioned);
+    assert_eq!(discovered(&personal_only, &unselected, "issue.stats"), None);
 }
 
 #[tokio::test]

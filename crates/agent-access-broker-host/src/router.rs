@@ -5,8 +5,8 @@ use crate::handlers::data::{
 };
 use crate::handlers::gateway::gateway_dispatch;
 use crate::handlers::management::admin::{
-    admin_credential_delete, admin_credential_get, admin_credential_put, admin_credential_verify,
-    admin_credentials_list, admin_credentials_rewrap, admin_external_group_binding_create,
+    admin_credential_delete, admin_credential_get, admin_credentials_list,
+    admin_credentials_rewrap, admin_external_group_binding_create,
     admin_external_group_binding_delete, admin_external_group_binding_patch,
     admin_external_group_bindings_list, admin_group_member_add, admin_group_member_delete,
     admin_group_members_list, admin_groups_create, admin_groups_get, admin_groups_list,
@@ -17,7 +17,7 @@ use crate::handlers::management::admin::{
     admin_principal_credential_delete, admin_principal_credential_get,
     admin_principal_credential_input_schema, admin_principal_credential_put,
     admin_principal_credential_targets, admin_principal_credential_verify,
-    admin_principal_group_add, admin_principal_group_delete,
+    admin_principal_credentials_list, admin_principal_group_add, admin_principal_group_delete,
     admin_principal_local_password_disable, admin_principal_local_password_enable,
     admin_principal_local_password_reset, admin_principal_local_password_unlock,
     admin_principal_login_methods_list, admin_principal_microsoft_oidc_link,
@@ -41,8 +41,8 @@ use crate::handlers::management::service_limits;
 use crate::handlers::management::user::{
     user_credential_input_schema, user_credential_targets, user_credentials_delete,
     user_credentials_get, user_credentials_list, user_credentials_put, user_credentials_verify,
-    user_token_get, user_token_issue, user_token_options, user_token_pause, user_token_resume,
-    user_token_revoke, user_tokens_list,
+    user_retained_credential_delete, user_token_get, user_token_issue, user_token_options,
+    user_token_pause, user_token_resume, user_token_revoke, user_tokens_list,
 };
 use crate::handlers::management::{identity_access, identity_bindings, identity_tokens};
 use crate::handlers::oidc::{microsoft_oidc_callback, microsoft_oidc_start};
@@ -157,7 +157,7 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             post(crate::handlers::management::oauth::connect),
         )
         .route(
-            "/v1/oauth/connections/{service}",
+            "/v1/oauth/connections/{registration}",
             delete(crate::handlers::management::oauth::disconnect),
         )
         .route(
@@ -166,18 +166,22 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         )
         .route("/v1/credentials/targets", get(user_credential_targets))
         .route(
-            "/v1/credentials/{service}/{name}",
+            "/v1/credentials/connections/{connection}",
             get(user_credentials_get)
                 .put(user_credentials_put)
                 .delete(user_credentials_delete),
         )
         .route(
-            "/v1/credentials/{service}/{name}/verify",
+            "/v1/credentials/connections/{connection}/verify",
             post(user_credentials_verify),
         )
         .route(
-            "/v1/credentials/{service}/{name}/input-schema",
+            "/v1/credentials/connections/{connection}/input-schema",
             get(user_credential_input_schema),
+        )
+        .route(
+            "/v1/credentials/retained/{credential_id}",
+            delete(user_retained_credential_delete),
         )
         .route("/v1/tokens", get(user_tokens_list).post(user_token_issue))
         .route("/v1/tokens/options", get(user_token_options))
@@ -390,6 +394,10 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             put(service_limits::set).delete(service_limits::clear),
         )
         .route(
+            "/v1/admin/principals/{principal}/credentials",
+            get(admin_principal_credentials_list),
+        )
+        .route(
             "/v1/admin/principals/{principal}/credentials/targets",
             get(admin_principal_credential_targets),
         )
@@ -418,17 +426,17 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             post(admin_principal_token_issue),
         )
         .route(
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}",
             get(admin_principal_credential_get)
                 .put(admin_principal_credential_put)
                 .delete(admin_principal_credential_delete),
         )
         .route(
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}/verify",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}/verify",
             post(admin_principal_credential_verify),
         )
         .route(
-            "/v1/admin/principals/{principal}/credentials/{service}/{name}/input-schema",
+            "/v1/admin/principals/{principal}/credentials/connections/{connection}/input-schema",
             get(admin_principal_credential_input_schema),
         )
         .route(
@@ -453,13 +461,7 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         )
         .route(
             "/v1/admin/credentials/{credential_id}",
-            get(admin_credential_get)
-                .put(admin_credential_put)
-                .delete(admin_credential_delete),
-        )
-        .route(
-            "/v1/admin/credentials/{credential_id}/verify",
-            post(admin_credential_verify),
+            get(admin_credential_get).delete(admin_credential_delete),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

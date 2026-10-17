@@ -1016,7 +1016,7 @@ fn accepts_egress_proxy_config_at_global_and_service_scopes() {
 fn credential_input_schema_describes_required_basic_and_bearer_fields() {
     let basic = credential_input_schema("jira", "Jira", "jira-cloud-api-token", "basic_api_token")
         .expect("basic schema");
-    assert_eq!(basic.service, "jira");
+    assert_eq!(basic.connection, "jira");
     assert_eq!(basic.profile, "jira-cloud-api-token");
     assert_eq!(basic.credential_kind, "basic_api_token");
     assert_eq!(basic.fields.len(), 2);
@@ -1134,8 +1134,7 @@ fn cloudbees_ci_credentials_and_actions_use_job_scope() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     let resources = select_resources(
@@ -2349,44 +2348,40 @@ fn accepts_jira_per_user_grants_when_configured() {
 }
 
 #[test]
-fn rejects_managed_store_credential_name_that_cannot_be_routed() {
-    let mut config = sample_broker();
-    config.managed_store = Some(ManagedStoreConfig {
-        kind: "sqlite".to_string(),
-        path: "/var/lib/agent-access-broker/managed-store.sqlite3".to_string(),
-        require_registered_principal_for_invocation: false,
-        auto_migrate: true,
-    });
-    config.credential_encryption = Some(CredentialEncryptionConfig {
-        active_key: "k1".to_string(),
-        keys: vec![CredentialEncryptionKeyConfig {
-            id: "k1".to_string(),
-            provider: "env".to_string(),
-            env: Some("AGENT_ACCESS_CREDENTIAL_KEY".to_string()),
-            path: None,
-        }],
-    });
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("Workstation".to_string()),
-            profile: Some("jira-cloud-api-token".to_string()),
-        },
-    );
-    config.policy.grants[0].credential_mode = "per_user".to_string();
-
-    let errors = validation_errors(validate_broker_config(&config));
-
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira.credential_name must match ^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*$",
-    );
+fn rejects_the_removed_per_user_credential_types_and_fields() {
+    // `credential_name` and `profile` are no longer credential fields.
+    for field in [
+        "credential_name = \"default\"",
+        "profile = \"jira-cloud-api-token\"",
+    ] {
+        let raw = format!(
+            "{MINIMAL_BROKER_CONFIG}\n[credentials.per_user.jira]\ntype = \"connection\"\nconnection = \"jira\"\n{field}\n"
+        );
+        assert!(parse_test_config(&raw).is_err(), "{field}");
+    }
+    // The per-user `managed_store` and `oauth` types are gone.
+    for kind in ["managed_store", "oauth"] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        let mut credential = connection_per_user_credential("jira");
+        credential.kind = kind.to_string();
+        credential.connection = None;
+        config
+            .credentials
+            .per_user
+            .insert("jira".to_string(), credential);
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            "credentials.per_user.jira.type must be connection or secret_store for per_user credentials",
+        );
+        assert_contains(
+            &errors,
+            &format!(
+                "credentials.per_user.jira.type {kind} is unsupported; expected basic_api_token, bearer_token, secret_store, or connection"
+            ),
+        );
+    }
 }
 
 #[test]
@@ -2400,8 +2395,7 @@ fn rejects_static_per_user_credentials() {
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
             CredentialConfig {
                 kind: "bearer_token".to_string(),
@@ -2410,8 +2404,7 @@ fn rejects_static_per_user_credentials() {
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         ] {
             let mut config = sample_broker();
@@ -2424,7 +2417,7 @@ fn rejects_static_per_user_credentials() {
             assert_contains(
                 &errors,
                 &format!(
-                    "credentials.per_user.{service}.type must be secret_store, managed_store, or oauth for per_user credentials"
+                    "credentials.per_user.{service}.type must be connection or secret_store for per_user credentials"
                 ),
             );
         }
@@ -2952,28 +2945,15 @@ fn rejects_atlassian_gateway_without_valid_cloud_id() {
 }
 
 #[test]
-fn backend_validation_resolves_only_managed_store_profiles() {
+fn backend_validation_passes_static_and_secret_store_kinds_as_written() {
     let config = sample_broker();
     let jira = configured_provider_descriptors(&config)
         .into_iter()
         .find(|descriptor| descriptor.service == "jira")
         .unwrap();
     let resolve = |credential: CredentialConfig| {
-        resolved_credential_kind(&credential, &jira).map(str::to_string)
+        resolved_credential_kind(&config.credentials, &credential, &jira).map(str::to_string)
     };
-
-    assert_eq!(
-        resolve(managed_per_user_credential("jira-cloud-api-token")).as_deref(),
-        Some("basic_api_token")
-    );
-    assert_eq!(
-        resolve(managed_per_user_credential("unknown-profile")),
-        None
-    );
-    let mut oauth = managed_per_user_credential("read");
-    oauth.kind = "oauth".to_string();
-    oauth.provider = Some("google".to_string());
-    assert_eq!(resolve(oauth).as_deref(), Some("oauth"));
     assert_eq!(
         resolve(jira_per_user_credential("/etc/agent-access/jira.json")).as_deref(),
         Some("secret_store")
@@ -2983,13 +2963,80 @@ fn backend_validation_resolves_only_managed_store_profiles() {
 }
 
 #[test]
-fn accepts_atlassian_gateway_with_managed_bearer_per_user_credentials() {
+fn accepts_a_shared_gitlab_connection_for_rest_and_the_git_gateway() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
-    use_atlassian_gateway_for_jira(&mut config);
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        managed_per_user_credential("jira-bearer-token"),
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab",
+        ConnectionConfig {
+            display_name: Some("GitLab".to_string()),
+            ..token_connection("gitlab-access-token")
+        },
+        &["gitlab", "gitlab_git"],
+    );
+
+    validate_broker_config(&config).unwrap();
+    assert_eq!(
+        config
+            .credentials
+            .connection_consumers("gitlab")
+            .collect::<Vec<_>>(),
+        ["gitlab", "gitlab_git"]
+    );
+    let connection = config
+        .credentials
+        .personal_connection("gitlab_git")
+        .unwrap();
+    assert_eq!(connection.id, "gitlab");
+    assert_eq!(
+        connection.select(Some(crate::PrincipalKind::User)),
+        crate::Selection::Token("gitlab-access-token")
+    );
+    assert!(config.credentials.personal_connection("jira").is_none());
+}
+
+#[test]
+fn rejects_a_shared_token_connection_across_different_upstreams_offline() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    gateway.upstream_base_url = "https://git.other.example".to_string();
+    gateway.allowed_upstream_hosts = vec!["https://git.other.example/**".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab",
+        token_connection("gitlab-access-token"),
+        &["gitlab", "gitlab_git"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.connections.gitlab: gitlab acts on https://gitlab.example.com but gitlab_git acts on https://git.other.example; a token connection's consumers must act on one upstream",
+    );
+}
+
+#[test]
+fn accepts_separate_jira_and_confluence_connections_on_product_profiles() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_connection(
+        &mut config,
+        "jira",
+        token_connection("jira-cloud-api-token"),
+        &["jira"],
+    );
+    use_connection(
+        &mut config,
+        "confluence",
+        token_connection("confluence-cloud-api-token"),
+        &["confluence"],
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
 
@@ -2997,7 +3044,329 @@ fn accepts_atlassian_gateway_with_managed_bearer_per_user_credentials() {
 }
 
 #[test]
-fn accepts_confluence_gateway_with_managed_bearer_per_user_credentials() {
+fn rejects_a_shared_connection_profile_a_consumer_does_not_declare() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_connection(
+        &mut config,
+        "atlassian",
+        token_connection("jira-cloud-api-token"),
+        &["jira", "confluence"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.connections.atlassian.token_profile jira-cloud-api-token is unsupported for service confluence",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.contains("unsupported for service jira")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn rejects_a_gateway_connection_profile_it_cannot_present() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "repositories",
+        token_connection("not-declared-anywhere"),
+        &["gitlab_git"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.connections.repositories.token_profile not-declared-anywhere is not a token or basic profile the gateway gitlab_git can present",
+    );
+}
+
+#[test]
+fn rejects_connections_without_a_method_or_with_dangling_references() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_connection(
+        &mut config,
+        "empty",
+        ConnectionConfig {
+            display_name: Some(" ".to_string()),
+            token_profile: None,
+            oauth: None,
+        },
+        &[],
+    );
+    config.credentials.per_user.insert(
+        "jira".to_string(),
+        connection_per_user_credential("missing"),
+    );
+    config.credentials.per_user.insert(
+        "unconfigured".to_string(),
+        connection_per_user_credential("empty"),
+    );
+    let mut service_entry = connection_per_user_credential("empty");
+    service_entry.token_ref = Some("env:TOKEN".to_string());
+    config
+        .credentials
+        .service
+        .insert("gitlab".to_string(), service_entry);
+    let mut stray = jira_per_user_credential("/etc/agent-access/confluence.json");
+    stray.connection = Some("empty".to_string());
+    config
+        .credentials
+        .per_user
+        .insert("confluence".to_string(), stray);
+
+    let errors = validation_errors(validate_broker_config(&config));
+    for needle in [
+        "credentials.connections.empty must set token_profile, oauth, or both",
+        "credentials.connections.empty.display_name must not be empty",
+        "credentials.per_user.jira.connection missing must name a configured credentials.connections entry",
+        "credentials.per_user.unconfigured uses a credential connection, but unconfigured is not a configured service",
+        "credentials.service.gitlab.type connection is supported only for credentials.per_user",
+        "credentials.service.gitlab.type connection sets only connection",
+        "credentials.per_user.confluence.connection is supported only for type connection",
+    ] {
+        assert_contains(&errors, needle);
+    }
+}
+
+#[test]
+fn connection_ids_share_the_service_namespace_with_their_consumers_only() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_connection(
+        &mut config,
+        "confluence",
+        token_connection("jira-cloud-api-token"),
+        &["jira"],
+    );
+    use_connection(
+        &mut config,
+        "broker",
+        token_connection("gitlab-access-token"),
+        &["gitlab"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.connections.confluence collides with the configured service confluence, which does not consume it",
+    );
+    assert_contains(
+        &errors,
+        "credentials.connections.broker uses an invalid connection ID",
+    );
+
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab_git",
+        token_connection("gitlab-access-token"),
+        &["gitlab"],
+    );
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.connections.gitlab_git collides with the configured service gitlab_git, which does not consume it",
+    );
+}
+
+#[test]
+fn rejects_oauth_connections_consumers_cannot_use() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    let oauth = |profile: &str| ConnectionOAuthConfig {
+        registration: "gitlab".to_string(),
+        profile: profile.to_string(),
+    };
+    use_connection(
+        &mut config,
+        "gitlab",
+        ConnectionConfig {
+            display_name: None,
+            token_profile: Some("gitlab-access-token".to_string()),
+            oauth: Some(oauth("default")),
+        },
+        &["gitlab", "gitlab_git"],
+    );
+    use_connection(
+        &mut config,
+        "gitlab_projects",
+        ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(oauth("projects")),
+        },
+        &[],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    for needle in [
+        "credentials.connections.gitlab.oauth must name a configured registration and permission profile",
+        "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab does not",
+        "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab_git does not",
+        "credential connections gitlab and gitlab_projects share OAuth registration gitlab with different permission profiles (default and projects); connections sharing a registration must use the same profile",
+    ] {
+        assert_contains(&errors, needle);
+    }
+}
+
+#[test]
+fn connections_require_the_managed_store_and_credential_encryption() {
+    let mut config = sample_broker();
+    config.credential_encryption = None;
+    use_connection(
+        &mut config,
+        "jira",
+        token_connection("jira-cloud-api-token"),
+        &["jira"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(&errors, "credentials.connections requires managed_store");
+    assert_contains(
+        &errors,
+        "credentials.connections requires credential_encryption",
+    );
+}
+
+#[test]
+fn backend_validation_resolves_connection_token_profiles() {
+    let mut config = sample_broker();
+    let jira = configured_provider_descriptors(&config)
+        .into_iter()
+        .find(|descriptor| descriptor.service == "jira")
+        .unwrap();
+    config
+        .credentials
+        .connections
+        .insert("jira".to_string(), token_connection("jira-cloud-api-token"));
+    config.credentials.connections.insert(
+        "both".to_string(),
+        ConnectionConfig {
+            oauth: Some(ConnectionOAuthConfig {
+                registration: "atlassian".to_string(),
+                profile: "default".to_string(),
+            }),
+            ..token_connection("jira-cloud-api-token")
+        },
+    );
+    config.credentials.connections.insert(
+        "oauth_only".to_string(),
+        ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(ConnectionOAuthConfig {
+                registration: "atlassian".to_string(),
+                profile: "default".to_string(),
+            }),
+        },
+    );
+    config
+        .credentials
+        .connections
+        .insert("unknown_profile".to_string(), token_connection("unknown"));
+    let resolve = |connection: &str| {
+        resolved_credential_kind(
+            &config.credentials,
+            &connection_per_user_credential(connection),
+            &jira,
+        )
+        .map(str::to_string)
+    };
+
+    assert_eq!(resolve("jira").as_deref(), Some("basic_api_token"));
+    // The token profile's kind, even when OAuth is also configured.
+    assert_eq!(resolve("both").as_deref(), Some("basic_api_token"));
+    assert_eq!(resolve("oauth_only").as_deref(), Some("oauth"));
+    assert_eq!(resolve("unknown_profile"), None);
+    assert_eq!(resolve("missing"), None);
+}
+
+#[test]
+fn backend_validation_reports_delegated_access_beside_a_token_profile() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    use_connection(
+        &mut config,
+        "jira",
+        ConnectionConfig {
+            oauth: Some(ConnectionOAuthConfig {
+                registration: "atlassian".to_string(),
+                profile: "default".to_string(),
+            }),
+            ..token_connection("jira-bearer-token")
+        },
+        &["jira"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    // The backend sees the bearer token profile and the delegated access
+    // beside it; the Atlassian backends accept only bearer tokens.
+    assert_contains(
+        &errors,
+        "credentials.per_user.jira offers delegated (OAuth) access, which jira does not accept",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.contains("does not resolve to a bearer_token credential")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn accepts_atlassian_gateway_with_bearer_connection_per_user_credentials() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    use_connection(
+        &mut config,
+        "jira",
+        token_connection("jira-bearer-token"),
+        &["jira"],
+    );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+
+    validate_broker_config(&config).unwrap();
+}
+
+#[test]
+fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_atlassian_gateway_for_jira(&mut config);
+    use_connection(
+        &mut config,
+        "jira",
+        token_connection("jira-cloud-api-token"),
+        &["jira"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_contains(
+        &errors,
+        "credentials.per_user.jira does not resolve to a bearer_token credential",
+    );
+}
+
+#[test]
+fn accepts_confluence_gateway_with_bearer_connection_per_user_credentials() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
     config
@@ -3012,29 +3381,14 @@ fn accepts_confluence_gateway_with_managed_bearer_per_user_credentials() {
     let credential = config.credentials.service.get_mut("confluence").unwrap();
     credential.kind = "bearer_token".to_string();
     credential.username_ref = None;
-    config.credentials.per_user.insert(
-        "confluence".to_string(),
-        managed_per_user_credential("confluence-bearer-token"),
+    use_connection(
+        &mut config,
+        "confluence",
+        token_connection("confluence-bearer-token"),
+        &["confluence"],
     );
 
     validate_broker_config(&config).unwrap();
-}
-
-#[test]
-fn rejects_atlassian_gateway_with_managed_basic_per_user_credentials() {
-    let mut config = sample_broker();
-    enable_test_managed_store(&mut config);
-    use_atlassian_gateway_for_jira(&mut config);
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        managed_per_user_credential("jira-cloud-api-token"),
-    );
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira does not resolve to a bearer_token credential",
-    );
 }
 
 #[test]
@@ -3111,8 +3465,7 @@ fn rejects_secret_store_outside_per_user_and_relative_store_paths() {
             provider: Some("local_file".to_string()),
             path: Some("relative-users.json".to_string()),
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -3240,8 +3593,7 @@ fn fake_service_requires_explicit_non_production_enablement() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.policy.grants[0].service = "fake".to_string();
@@ -5030,16 +5382,42 @@ fn git_http_gateway_config() -> GatewayConfig {
     }
 }
 
-fn managed_per_user_credential(profile: &str) -> CredentialConfig {
+fn connection_per_user_credential(connection: &str) -> CredentialConfig {
     CredentialConfig {
-        kind: "managed_store".to_string(),
+        kind: "connection".to_string(),
         username_ref: None,
         token_ref: None,
         provider: None,
         path: None,
         read_only: None,
-        credential_name: None,
-        profile: Some(profile.to_string()),
+        connection: Some(connection.to_string()),
+    }
+}
+
+fn token_connection(profile: &str) -> ConnectionConfig {
+    ConnectionConfig {
+        display_name: None,
+        token_profile: Some(profile.to_string()),
+        oauth: None,
+    }
+}
+
+/// Configures `connection` and points each consumer's per-user entry at it.
+fn use_connection(
+    config: &mut BrokerConfig,
+    id: &str,
+    connection: ConnectionConfig,
+    consumers: &[&str],
+) {
+    config
+        .credentials
+        .connections
+        .insert(id.to_string(), connection);
+    for consumer in consumers {
+        config
+            .credentials
+            .per_user
+            .insert((*consumer).to_string(), connection_per_user_credential(id));
     }
 }
 
@@ -5077,8 +5455,7 @@ fn jira_per_user_credential(path: &str) -> CredentialConfig {
         provider: Some("local_file".to_string()),
         path: Some(path.to_string()),
         read_only: None,
-        credential_name: None,
-        profile: None,
+        connection: None,
     }
 }
 
@@ -5283,12 +5660,12 @@ fn the_oauth_records_fixture_is_configured_explicitly_and_only_in_development() 
         "environment = \"development\"\nenable_fake_service = true",
     );
     // A delegated binding alone no longer creates the records service.
-    let binding = "\n[credentials.per_user.oauth_stub]\ntype = \"oauth\"\nprovider = \"stub\"\nprofile = \"read\"\n";
+    let binding = "\n[credentials.connections.oauth_stub]\noauth = { registration = \"stub\", profile = \"read\" }\n[credentials.per_user.oauth_stub]\ntype = \"connection\"\nconnection = \"oauth_stub\"\n";
     let config = parse_test_config(&format!("{enabled}{binding}")).unwrap();
     assert!(!configured_service_descriptors(&config).contains_key("oauth_stub"));
     assert_contains(
         validate_broker_config(&config).unwrap_err().errors(),
-        "credentials.per_user.oauth_stub: OAuth credentials are per_user only, for services that accept delegated credentials",
+        "credentials.per_user.oauth_stub uses a credential connection, but oauth_stub is not a configured service",
     );
 
     let table = "\n[providers.oauth_stub]\nbase_url = \"http://127.0.0.1:8099\"\n";
@@ -5564,18 +5941,23 @@ fn the_broker_namespace_is_reserved_even_for_an_unconfigured_native_kind() {
 }
 
 #[test]
-fn oauth_credentials_need_a_per_user_service_that_accepts_delegation() {
-    let config = sample_broker();
-    let oauth = CredentialConfig {
-        kind: "oauth".into(),
-        provider: Some("missing".into()),
-        profile: Some("read".into()),
-        username_ref: None,
-        token_ref: None,
-        path: None,
-        read_only: None,
-        credential_name: None,
-    };
+fn oauth_connections_need_consumers_that_accept_delegation() {
+    let mut config = sample_broker();
+    config.credentials.connections.insert(
+        "records".to_string(),
+        ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(ConnectionOAuthConfig {
+                registration: "missing".to_string(),
+                profile: "read".to_string(),
+            }),
+        },
+    );
+    config.credentials.per_user.insert(
+        "records".to_string(),
+        connection_per_user_credential("records"),
+    );
     let delegated = |actions: Vec<ActionDescriptor>| {
         ServiceDescriptor::new("records", "Records")
             .with_actions(actions)
@@ -5585,43 +5967,54 @@ fn oauth_credentials_need_a_per_user_service_that_accepts_delegation() {
         ActionDescriptor::new(name, "Read", serde_json::json!({"type": "object"}))
             .credential_modes(["per_user", "service"])
     };
-    let errors = |descriptor: ServiceDescriptor, mode: &str| {
+    let errors = |descriptor: ServiceDescriptor| {
         let services = BTreeMap::from([("records".to_string(), Arc::new(descriptor))]);
         let mut errors = Vec::new();
-        validate_credential(&config, &services, mode, "records", &oauth, &mut errors);
+        crate::connections::validate_connections(&config, &services, &mut errors);
         errors
             .into_iter()
-            .filter(|error| !error.contains("provider/profile"))
+            .filter(|error| !error.contains("configured registration"))
             .collect::<Vec<_>>()
     };
 
-    assert!(errors(delegated(vec![action("read")]), "credentials.per_user").is_empty());
+    assert!(errors(delegated(vec![action("read")])).is_empty());
     let mut static_only = delegated(vec![action("read")]);
     static_only.credentials = CredentialDescriptor::default();
-    let rejected = [
-        errors(static_only, "credentials.per_user"),
-        errors(delegated(vec![action("read")]), "credentials.service"),
-    ];
-    for errors in rejected {
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].ends_with(
-            "OAuth credentials are per_user only, for services that accept delegated credentials"
-        ));
-    }
-    let lookups = errors(
-        delegated(vec![
-            action("read").lookup(LookupRequirement::Execution),
-            action("service_read")
-                .lookup(LookupRequirement::ScopeResolution)
-                .credential_modes(["service"]),
-        ]),
-        "credentials.per_user",
+    assert_eq!(
+        errors(static_only),
+        [
+            "credentials.connections.records.oauth requires every consumer to accept delegated credentials, which records does not"
+        ]
     );
+    let lookups = errors(delegated(vec![
+        action("read").lookup(LookupRequirement::Execution),
+        action("service_read")
+            .lookup(LookupRequirement::ScopeResolution)
+            .credential_modes(["service"]),
+    ]));
     assert_eq!(
         lookups,
         [
-            "credentials.per_user.records: action read needs a per-user lookup credential, which an OAuth credential cannot provide"
+            "credentials.connections.records.oauth: records action read needs a per-user lookup credential, which an OAuth credential cannot provide"
         ]
+    );
+    // A connection is only ever a per-user credential.
+    let services = BTreeMap::from([(
+        "records".to_string(),
+        Arc::new(delegated(vec![action("read")])),
+    )]);
+    let mut errors = Vec::new();
+    validate_credential(
+        &config,
+        &services,
+        "credentials.service",
+        "records",
+        &connection_per_user_credential("records"),
+        &mut errors,
+    );
+    assert_eq!(
+        errors,
+        ["credentials.service.records.type connection is supported only for credentials.per_user"]
     );
 }
 

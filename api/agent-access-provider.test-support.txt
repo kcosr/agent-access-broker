@@ -3650,9 +3650,11 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ServiceC
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ServiceCapabilities
 #[non_exhaustive] pub struct agent_access_provider::ServiceCredentialKinds<'a>
 pub agent_access_provider::ServiceCredentialKinds::per_user: core::option::Option<&'a str>
+pub agent_access_provider::ServiceCredentialKinds::per_user_delegated: bool
 pub agent_access_provider::ServiceCredentialKinds::service: core::option::Option<&'a str>
 impl<'a> agent_access_provider::ServiceCredentialKinds<'a>
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::new(core::option::Option<&'a str>, core::option::Option<&'a str>) -> Self
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_per_user_delegated(self, bool) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::ServiceCredentialKinds<'a>
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::clone(&self) -> agent_access_provider::ServiceCredentialKinds<'a>
 impl<'a> core::default::Default for agent_access_provider::ServiceCredentialKinds<'a>
@@ -3675,6 +3677,7 @@ pub agent_access_provider::ServiceDescriptor::presentation_body_limit: core::opt
 pub agent_access_provider::ServiceDescriptor::resource_scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>
 pub agent_access_provider::ServiceDescriptor::service: alloc::string::String
 pub agent_access_provider::ServiceDescriptor::surface: agent_access_provider::ServiceSurface
+pub agent_access_provider::ServiceDescriptor::upstream_authority: core::option::Option<agent_access_provider::UpstreamAuthority>
 impl agent_access_provider::ServiceDescriptor
 pub fn agent_access_provider::ServiceDescriptor::action(&self, &str) -> core::option::Option<&agent_access_provider::ActionDescriptor>
 pub fn agent_access_provider::ServiceDescriptor::action_resource_scope(&self, &str) -> core::option::Option<(&str, &agent_access_provider::ResourceScopeCapabilities)>
@@ -3692,6 +3695,7 @@ pub fn agent_access_provider::ServiceDescriptor::with_credentials(self, agent_ac
 pub fn agent_access_provider::ServiceDescriptor::with_presentation_body_limit(self, u64) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_resource_scopes(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_surface(self, agent_access_provider::ServiceSurface) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_upstream_authority(self, agent_access_provider::UpstreamAuthority) -> Self
 impl agent_access_provider::ServiceDescriptor
 pub fn agent_access_provider::ServiceDescriptor::validate_resource_types(&self, &agent_access_provider::ResourceTypeRegistry) -> alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for agent_access_provider::ServiceDescriptor
@@ -3784,6 +3788,33 @@ impl core::marker::Unpin for agent_access_provider::UnsupportedCredentialMode
 impl core::marker::UnsafeUnpin for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UnsupportedCredentialMode
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UnsupportedCredentialMode
+pub struct agent_access_provider::UpstreamAuthority
+impl agent_access_provider::UpstreamAuthority
+pub fn agent_access_provider::UpstreamAuthority::from_base_url(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn agent_access_provider::UpstreamAuthority::instance_path(&self) -> &str
+pub fn agent_access_provider::UpstreamAuthority::origin(&self) -> &str
+pub fn agent_access_provider::UpstreamAuthority::same_instance(&self, &Self) -> bool
+pub fn agent_access_provider::UpstreamAuthority::tenant(&self) -> core::option::Option<&str>
+pub fn agent_access_provider::UpstreamAuthority::tenant_gateway(&self) -> core::option::Option<&str>
+pub fn agent_access_provider::UpstreamAuthority::with_tenant(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::UpstreamAuthority::with_tenant_gateway(self, &str) -> core::result::Result<Self, alloc::string::String>
+impl core::clone::Clone for agent_access_provider::UpstreamAuthority
+pub fn agent_access_provider::UpstreamAuthority::clone(&self) -> agent_access_provider::UpstreamAuthority
+impl core::cmp::Eq for agent_access_provider::UpstreamAuthority
+impl core::cmp::PartialEq for agent_access_provider::UpstreamAuthority
+pub fn agent_access_provider::UpstreamAuthority::eq(&self, &agent_access_provider::UpstreamAuthority) -> bool
+impl core::fmt::Debug for agent_access_provider::UpstreamAuthority
+pub fn agent_access_provider::UpstreamAuthority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::UpstreamAuthority
+pub fn agent_access_provider::UpstreamAuthority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::UpstreamAuthority
+impl core::marker::Freeze for agent_access_provider::UpstreamAuthority
+impl core::marker::Send for agent_access_provider::UpstreamAuthority
+impl core::marker::Sync for agent_access_provider::UpstreamAuthority
+impl core::marker::Unpin for agent_access_provider::UpstreamAuthority
+impl core::marker::UnsafeUnpin for agent_access_provider::UpstreamAuthority
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::UpstreamAuthority
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamAuthority
 pub struct agent_access_provider::UpstreamAuthorization
 impl core::clone::Clone for agent_access_provider::UpstreamAuthorization
 pub fn agent_access_provider::UpstreamAuthorization::clone(&self) -> agent_access_provider::UpstreamAuthorization
@@ -3971,6 +4002,7 @@ pub trait agent_access_provider::OAuthDialect: core::marker::Send + core::marker
 pub fn agent_access_provider::OAuthDialect::allows_access_without_refresh(&self) -> bool
 pub fn agent_access_provider::OAuthDialect::authorization_url(&self, &agent_access_provider::OAuthClient<'_>, &agent_access_provider::OAuthPermissionProfile, agent_access_provider::AuthorizationRequest<'_>) -> core::result::Result<url::Url, agent_access_provider::OAuthDialectError>
 pub fn agent_access_provider::OAuthDialect::callback_issuer(&self, &agent_access_provider::OAuthRegistrationConfig) -> agent_access_provider::OAuthCallbackIssuer
+pub fn agent_access_provider::OAuthDialect::check_consumer_authority(&self, &agent_access_provider::OAuthRegistrationConfig, &agent_access_provider::OAuthPermissionProfile, core::option::Option<&agent_access_provider::UpstreamAuthority>) -> core::result::Result<(), alloc::string::String>
 pub fn agent_access_provider::OAuthDialect::discover_targets<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, &'life4 str, &'life5 alloc::collections::btree::set::BTreeSet<alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<agent_access_provider::OAuthTarget>, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
 pub fn agent_access_provider::OAuthDialect::exchange_code<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, agent_access_provider::CodeExchange<'life4>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::TokenGrant, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
 pub fn agent_access_provider::OAuthDialect::identity<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, &'life4 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::ConnectedIdentity, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
@@ -4191,6 +4223,7 @@ struct agent_access_provider::ServiceProvider: named fields, non-exhaustive
 struct agent_access_provider::SigningError: unit
 struct agent_access_provider::TokenGrant: named fields, non-exhaustive
 struct agent_access_provider::UnsupportedCredentialMode: unit
+struct agent_access_provider::UpstreamAuthority: named fields, private fields
 struct agent_access_provider::UpstreamAuthorization: named fields, private fields
 struct agent_access_provider::UpstreamCall: named fields, private fields, non-exhaustive
 struct agent_access_provider::UpstreamClient: named fields, private fields
@@ -4239,6 +4272,7 @@ trait agent_access_provider::OAuthDialect: dyn-compatible
 trait agent_access_provider::OAuthDialect::allows_access_without_refresh: provided fn
 trait agent_access_provider::OAuthDialect::authorization_url: required fn
 trait agent_access_provider::OAuthDialect::callback_issuer: required fn
+trait agent_access_provider::OAuthDialect::check_consumer_authority: provided fn
 trait agent_access_provider::OAuthDialect::discover_targets: required fn
 trait agent_access_provider::OAuthDialect::exchange_code: required fn
 trait agent_access_provider::OAuthDialect::identity: required fn

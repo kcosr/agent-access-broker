@@ -243,8 +243,11 @@ binary and needs `python3`, whose absence fails it.
   the host services backends use (upstream HTTP clients built through the
   host's client factory, egress declarations and sanitized routes, upstream
   allowlists, correlation, upstream trace events, token signing and
-  continuation envelopes). Static credentials and delegated access have no
-  plaintext accessor, and providers never hold a request carrying one: they
+  continuation envelopes), and the upstream authority a descriptor declares
+  for credential connections (`authority.rs`: `UpstreamAuthority`, checked
+  against OAuth registrations by `OAuthDialect::check_consumer_authority`).
+  Static credentials and delegated access have no plaintext accessor, and
+  providers never hold a request carrying one: they
   hand an `UpstreamAuthorization` to the send method (`UpstreamCall`,
   `RedirectRules`), and the client adds the sensitive header to the request it
   builds. Only the host's raw-client paths (Git gateway, Git verification) use
@@ -270,7 +273,11 @@ binary and needs `python3`, whose absence fails it.
   upstream client factories) and the Git gateway's upstream credential
   presentation (`gateway_token_auth.rs`: `upstream_token_auth` and the
   host-only `gateway_upstream_authorization` that forwarding and Git
-  verification share); contains no backend. Its internal `imports`
+  verification share) and credential connections (`connections.rs`: the
+  `[credentials.connections]` model, its validation and authority checks,
+  `PrincipalKind` and `select`, which every personal-credential consumer
+  uses; `runtime/personal_credentials.rs` reads the selected token rows);
+  contains no backend. Its internal `imports`
   module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import

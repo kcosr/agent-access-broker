@@ -331,7 +331,7 @@ test("administrator connects an OAuth discovery draft, reviews tools and explici
   await expect(connection.getByText("Connected", { exact: true })).toBeVisible();
   expect((await managementRequest(page, "/v1/admin/imports/metrics") as { service: unknown }).service).toEqual(savedDraft.service);
   const connectedTargets = await managementRequest(page, "/v1/oauth/connections") as OAuthConnectionTarget[];
-  const originalConnectionId = connectedTargets.find((target) => target.service === "metrics")?.connection?.connectionId;
+  const originalConnectionId = connectedTargets.find((target) => target.registration === "metrics")?.connection?.connectionId;
   expect(originalConnectionId).toBeTruthy();
   await assertDraftDocument();
   await page.getByRole("button", { name: "Discover tools", exact: true }).click();
@@ -382,7 +382,7 @@ test("administrator connects an OAuth discovery draft, reviews tools and explici
   expect(retainedRead.ok, await retainedRead.text()).toBe(true);
   expect(tokenForms).toHaveLength(1);
   const deniedReplacement = await managementRequest(page, "/v1/oauth/connections") as OAuthConnectionTarget[];
-  expect(deniedReplacement.find((target) => target.service === "metrics")?.connection?.connectionId).toBe(originalConnectionId);
+  expect(deniedReplacement.find((target) => target.registration === "metrics")?.connection?.connectionId).toBe(originalConnectionId);
   await connection.getByRole("button", { name: "Reconnect", exact: true }).click();
   flow = await openOAuthWindow(page, confirmation.getByRole("button", { name: "Replace connection", exact: true }), "Synthetic MCP consent");
   expect(starts.at(-1)?.intent).toBe("replace_account");
@@ -391,7 +391,7 @@ test("administrator connects an OAuth discovery draft, reviews tools and explici
   await expect(connection.getByRole("button", { name: "Reconnect", exact: true })).toBeEnabled();
   expect(tokenForms).toHaveLength(2);
   const replaced = await managementRequest(page, "/v1/oauth/connections") as OAuthConnectionTarget[];
-  const replacement = replaced.find((target) => target.service === "metrics")?.connection;
+  const replacement = replaced.find((target) => target.registration === "metrics")?.connection;
   expect(replacement?.connectionId).toBeTruthy();
   expect(replacement?.connectionId).not.toBe(originalConnectionId);
   expect(replacement?.status).toBe("ready");

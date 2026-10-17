@@ -589,6 +589,24 @@ fn grants(runtime: &BrokerRuntime) {
     }
 }
 
+/// Avery's per_user grant on each service, through which verifying
+/// Avery's personal credential probes as Avery.
+fn verify_grants(runtime: &BrokerRuntime, services: &[&str]) {
+    for service in services {
+        runtime
+            .create_managed_policy_grant(grant(
+                &format!("verify-{service}"),
+                "user:avery",
+                service,
+                "server.info",
+                "per_user",
+                0,
+                select(&[], &[]),
+            ))
+            .unwrap();
+    }
+}
+
 fn sorted_grants(authorization: &Value) -> Vec<Value> {
     let mut grants = authorization["grants"].as_array().unwrap().clone();
     grants.sort_by_key(|grant| grant.to_string());
@@ -1355,6 +1373,7 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
     import(&app, &token, "notes", "notes", &["per_user"]).await;
     let runtime = broker.runtime();
     avery(&runtime, &config, &["tickets"]);
+    verify_grants(&runtime, &["tickets", "notes"]);
     let verify = |service: &'static str| {
         let (app, token) = (app.clone(), token.clone());
         async move {
@@ -1362,7 +1381,7 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
                 &app,
                 &token,
                 Method::POST,
-                &format!("/v1/admin/principals/avery/credentials/{service}/default/verify"),
+                &format!("/v1/admin/principals/avery/credentials/connections/{service}/verify"),
                 None,
             )
             .await
@@ -1672,7 +1691,7 @@ async fn inherited_network_settings_follow_the_trust_mode() {
         &app,
         &token,
         Method::POST,
-        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        "/v1/admin/principals/avery/credentials/connections/tickets/verify",
         None,
     )
     .await;
@@ -2313,6 +2332,7 @@ async fn queued_verifications_are_fenced_after_their_slot() {
     import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
     let runtime = broker.runtime();
     avery(&runtime, &config, &["tickets"]);
+    verify_grants(&runtime, &["tickets"]);
     let registry = runtime.command_registry().clone();
 
     let held = registry.acquire("tickets", 1, far()).await.unwrap();
@@ -2323,7 +2343,7 @@ async fn queued_verifications_are_fenced_after_their_slot() {
                 &app,
                 &token,
                 Method::POST,
-                "/v1/admin/principals/avery/credentials/tickets/default/verify",
+                "/v1/admin/principals/avery/credentials/connections/tickets/verify",
                 None,
             )
             .await
@@ -2356,7 +2376,7 @@ async fn queued_verifications_are_fenced_after_their_slot() {
         &app,
         &token,
         Method::POST,
-        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        "/v1/admin/principals/avery/credentials/connections/tickets/verify",
         None,
     )
     .await;
@@ -2473,6 +2493,141 @@ async fn a_recreated_resource_without_attributes_fails_the_queued_call() {
     broker.stop().await;
 }
 
+/// Personal mode added to an accepted import publishes its single-consumer
+/// connection: the user provisions a first token from an empty store and
+/// verifies it, the command running its `verify` with that token as the
+/// owner's, with process facts and no upstream status in audit.
+#[tokio::test]
+async fn personal_mode_added_after_acceptance_is_provisioned_and_verified_from_an_empty_store() {
+    let contract = Contract::new(&tickets_manifest(true));
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    let token = contract.admin.clone();
+    let accepted = import(&app, &token, "tickets", "tickets", &["service"]).await;
+    let store = broker.runtime().managed_store().unwrap().clone();
+    store
+        .create_principal(agent_access_core::PrincipalWriteRequest {
+            role: agent_access_core::PrincipalRole::User,
+            self_service_enabled: None,
+            principal_id: "avery".into(),
+            kind: "user".into(),
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    let user = store
+        .issue_broker_token(
+            &BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap(),
+            BrokerTokenIssueRequest {
+                principal_id: "avery".into(),
+                name: "setup".into(),
+                token_class: BrokerTokenClass::UserManage,
+                scopes: json!({}),
+                expires_at: None,
+                created_by: "admin".into(),
+            },
+        )
+        .unwrap()
+        .token;
+    // Service mode only: no personal connection to set up.
+    let (status, targets) =
+        request(&app, &user, Method::GET, "/v1/credentials/targets", None).await;
+    assert_eq!(status, StatusCode::OK, "{targets}");
+    assert_eq!(targets["result"], json!([]));
+    let (status, missing) = request(
+        &app,
+        &user,
+        Method::PUT,
+        "/v1/credentials/connections/tickets",
+        Some(json!({"secret": {"username": "avery", "token": PERSONAL_TOKEN}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
+
+    let mut update = versions(&accepted);
+    update["definition"] =
+        super::imports_command::definition("tickets", "tickets", &["service", "per_user"]);
+    update["confirmAffectedGrants"] = json!(true);
+    admin(
+        &app,
+        &token,
+        Method::PATCH,
+        "/v1/admin/imports/tickets",
+        update,
+    )
+    .await;
+    verify_grants(&broker.runtime(), &["tickets"]);
+
+    let (status, targets) =
+        request(&app, &user, Method::GET, "/v1/credentials/targets", None).await;
+    assert_eq!(status, StatusCode::OK, "{targets}");
+    let target = &targets["result"][0];
+    assert_eq!(target["connection"], "tickets", "{targets}");
+    assert_eq!(target["profile"], "username-token");
+    assert_eq!(target["credentialKind"], "basic_api_token");
+    assert_eq!(
+        target["consumers"],
+        json!([{"service": "tickets", "displayName": "tickets command",
+            "credentialVerificationInputs": []}])
+    );
+    assert!(store.list_credentials(Some("avery")).unwrap().is_empty());
+    let (status, stored) = request(
+        &app,
+        &user,
+        Method::PUT,
+        "/v1/credentials/connections/tickets",
+        Some(json!({"secret": {"username": "avery", "token": PERSONAL_TOKEN}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["result"]["verificationStatus"], "not_verified");
+
+    let (status, verified) = request(
+        &app,
+        &user,
+        Method::POST,
+        "/v1/credentials/connections/tickets/verify",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{verified}");
+    assert_eq!(
+        verified["result"]["verificationStatus"],
+        "upstream_verified"
+    );
+    assert_eq!(verified["result"]["probeService"], "tickets");
+    assert_eq!(
+        contract.last("verify").document["credential"],
+        json!({"mode": "user", "kind": "username_token", "username": "avery",
+            "token": PERSONAL_TOKEN})
+    );
+    let record = contract
+        .audit()
+        .into_iter()
+        .find(|record| {
+            record["brokerRequestId"] == verified["brokerRequestId"]
+                && record["providerAudit"].get("verification").is_some()
+        })
+        .unwrap_or_else(|| panic!("no verification audit: {verified}"));
+    assert!(record["upstreamStatus"].is_null(), "{record}");
+    assert_eq!(
+        record["providerAudit"]["verification"]["command"]["exitCode"], 0,
+        "{record}"
+    );
+    let management = &record["providerAudit"]["management"];
+    assert_eq!(
+        management["target"],
+        json!({"principal": "avery", "connection": "tickets", "probeService": "tickets"})
+    );
+    assert_eq!(management["targetServices"], json!(["tickets"]));
+    assert!(management.get("targetService").is_none(), "{record}");
+    drop(app);
+    broker.stop().await;
+}
+
 /// Items: a failed command verification keeps its process facts in its
 /// audit record, for a valid error code, a non-zero exit, a contract
 /// violation and a timeout; command verification records no upstream
@@ -2488,6 +2643,7 @@ async fn failed_verifications_keep_their_process_facts() {
     import(&app, &token, "tickets", "tickets", &["service", "per_user"]).await;
     let runtime = broker.runtime();
     avery(&runtime, &config, &["tickets"]);
+    verify_grants(&runtime, &["tickets"]);
     let verify = || {
         let (app, token) = (app.clone(), token.clone());
         async move {
@@ -2495,7 +2651,7 @@ async fn failed_verifications_keep_their_process_facts() {
                 &app,
                 &token,
                 Method::POST,
-                "/v1/admin/principals/avery/credentials/tickets/default/verify",
+                "/v1/admin/principals/avery/credentials/connections/tickets/verify",
                 None,
             )
             .await
@@ -2703,7 +2859,7 @@ async fn replies_may_name_private_attribute_values() {
         &app,
         &token,
         Method::POST,
-        "/v1/admin/principals/avery/credentials/tickets/default/verify",
+        "/v1/admin/principals/avery/credentials/connections/tickets/verify",
         None,
     )
     .await;

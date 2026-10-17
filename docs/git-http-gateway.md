@@ -43,7 +43,8 @@ from invoke/send runtime specs because they are not `/v1/invoke` actions.
 ```bash
 agent-access services list
 agent-access actions list --service gitlab_git
-agent-access --url http://127.0.0.1:8787 credentials verify gitlab_git default --repository team/project
+# Verify your token for the gitlab credential connection through the gateway
+agent-access --url http://127.0.0.1:8787 credentials verify gitlab --service gitlab_git --repository team/project
 ```
 
 Git clients point at the gateway listener host. When prompted for HTTP Basic
@@ -216,15 +217,20 @@ Any gateway request with a `Trailer` header is rejected before forwarding.
 
 Credential mode comes from the matched grant, as with providers. A `service`
 gateway credential is shared for the gateway service. A `per_user` gateway
-credential is selected from the calling principal's managed credentials; the
+credential is the calling principal's token for the gateway's
+[credential connection](configuration.md#credential-connections). The gateway
+can have its own connection, with the profile `git-basic-api-token` or
+`git-bearer-token`, or share another service's, such as the `gitlab`
+connection of GitLab REST, so that one stored token serves both. The
 self-service credential verifier requires a repository that the principal can
 fetch and uses `streaming_idle_timeout_ms` for stalled upstream discovery
 headers or body reads.
 
-The gateway presents a `basic_api_token` credential (per-user profile
-`git-basic-api-token`) as HTTP Basic with its own stored username. It presents
-a `bearer_token` credential (per-user profile `git-bearer-token`) as the
-gateway's `upstream_token_auth` setting selects:
+The gateway presents a `basic_api_token` credential (a service credential, or a
+basic-kind profile such as `git-basic-api-token`) as HTTP Basic with its own
+stored username. It presents a `bearer_token` credential (a service credential,
+or a bearer-kind profile such as `git-bearer-token` or `gitlab-access-token`)
+as the gateway's `upstream_token_auth` setting selects:
 
 | `upstream_token_auth` | Upstream header |
 | --- | --- |
@@ -245,14 +251,15 @@ any non-empty username works, and `oauth2` is GitLab's convention; avoid
 usernames GitLab treats specially, such as `gitlab-ci-token`. Either setup works
 for a GitLab upstream:
 
-- **A basic credential**: a `basic_api_token` service credential, or the
-  per-user profile `git-basic-api-token`, holding the access token with any
-  non-empty username, such as `oauth2`. A GitLab deploy token requires its own
-  username, so use this setup for deploy tokens.
+- **A basic credential**: a `basic_api_token` service credential, or a
+  gateway connection with the profile `git-basic-api-token`, holding the access
+  token with any non-empty username, such as `oauth2`. A GitLab deploy token
+  requires its own username, so use this setup for deploy tokens.
 - **A bearer-kind credential presented as Basic**: a `bearer_token` service
-  credential, or the per-user profile `git-bearer-token`, with the gateway set
+  credential, or a connection with a bearer-kind profile, with the gateway set
   to `upstream_token_auth = { scheme = "basic", username = "oauth2" }`. Users
-  store only the token.
+  store only the token. Sharing GitLab REST's `gitlab` connection gives each
+  principal one GitLab token for REST and Git.
 
 ```toml
 [gateways.gitlab_git]
@@ -265,11 +272,18 @@ upstream_token_auth = { scheme = "basic", username = "oauth2" }
 type = "bearer_token"
 token_ref = "env:GITLAB_GIT_TOKEN"
 
+# The connection GitLab REST also consumes (see providers-gitlab-rest.md).
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"
+
 [credentials.per_user.gitlab_git]
-type = "managed_store"
-credential_name = "default"
-profile = "git-bearer-token"
+type = "connection"
+connection = "gitlab"
 ```
+
+Grants stay per service: a GitLab REST grant does not authorize `repo.fetch`,
+and the gateway's grants do not authorize GitLab REST actions.
 
 Gateway responses are raw Git smart HTTP streams, not broker JSON envelopes.
 That protocol passthrough behavior is unchanged by the Jira, Confluence, and

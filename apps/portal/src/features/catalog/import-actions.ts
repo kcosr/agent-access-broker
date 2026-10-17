@@ -157,7 +157,8 @@ export function useImportActions() {
       const principal = session.principal;
       if (!principal) return Promise.reject(new Error("Sign in again to save a personal token."));
       return run(
-        (current) => brokerApi.adminPrincipalSaveCredential(current, principal, data.service.definition.service, "default", "token", { token }),
+        // The import's personal credential connection has its service ID.
+        (current) => brokerApi.adminPrincipalSaveCredential(current, principal, data.service.definition.service, "token", { token }),
         "Personal token saved"
       );
     }

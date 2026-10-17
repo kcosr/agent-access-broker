@@ -140,9 +140,10 @@ and administrators must repeat affected discovery. Adding `scope_mode =
    No token is exposed to the browser or agent.
 4. Discover, review and accept tools, enable the service, and configure ordinary
    action/context grants using personal credentials. Each user connects their own
-   account through **Credentials → Connected accounts**. Connect/reconnect
-   requires self-service enabled, the configured personal OAuth binding, and an
-   active `per_user` action grant covering that user or a current group. Separate
+   account on the import's OAuth registration row in **My access > Credentials**.
+   Connect/reconnect requires self-service enabled, the import's personal OAuth
+   binding, which publishes its credential connection, and an active `per_user`
+   action grant covering that user or a current group. Separate
    credential rights are not used. The base administrator has a narrow exception
    for their own import discovery, including later discovery refreshes.
 
@@ -155,7 +156,7 @@ enabled; retired or blocked imports still permit cleanup. Reconnect remains
 subject to current setup authority. See [connection management](oauth.md#browser-management-api)
 for capability flags, shared registrations and retained unbound slots.
 
-The import profile selector, discovery connection and Connected accounts show
+The import profile selector, discovery connection and Credentials list show
 **Server-default permissions** for that mode. Connection details show **Known
 scopes** when evidence is available, or **Scope details unavailable**. Missing
 scope details do not mean the account has no permissions, and known scopes may

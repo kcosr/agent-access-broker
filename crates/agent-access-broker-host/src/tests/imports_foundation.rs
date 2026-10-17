@@ -759,6 +759,293 @@ fn retained_unavailable_oauth_binding_does_not_block_other_import_administration
     );
 }
 
+const TOOLS_ENDPOINT: &str = "https://tools.example.test/mcp";
+
+/// The fixture's configuration with browser sign-in and one approved MCP
+/// OAuth registration, `tools`, whose `read` and `write` profiles both act on
+/// [`TOOLS_ENDPOINT`], which imports may reach.
+fn mcp_oauth_config(fixture: &Fixture) -> BrokerConfig {
+    let directory = fixture._directory.path();
+    let write = |name: &str, contents: String| {
+        let path = directory.join(name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    };
+    let csrf = write("csrf-key", URL_SAFE_NO_PAD.encode([34u8; 32]));
+    let pepper = write("pepper", URL_SAFE_NO_PAD.encode([35u8; 32]));
+    let secret = write("tools-client-secret", "tools-client-secret".into());
+    let mut config = fixture.config.clone();
+    config.browser_auth = agent_access_core::BrowserAuthConfig {
+        enabled: true,
+        public_origin: Some("https://broker.example.test".into()),
+        csrf_key_ref: Some(format!("file:{}", csrf.display())),
+        local_password: agent_access_core::LocalPasswordConfig {
+            enabled: true,
+            pepper_ref: Some(format!("file:{}", pepper.display())),
+            min_password_length: 8,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let profile = || agent_access_provider::OAuthPermissionProfile {
+        scope_mode: agent_access_provider::OAuthScopeMode::Explicit,
+        scopes: Some(vec!["tools.read".into()]),
+        audience: TOOLS_ENDPOINT.into(),
+        target: TOOLS_ENDPOINT.into(),
+    };
+    config.oauth.registrations.insert(
+        "tools".into(),
+        agent_access_provider::OAuthRegistrationConfig {
+            adapter: agent_access_provider::OAuthAdapter::new("mcp_oauth"),
+            base_url: "https://login.example.test/issuer".into(),
+            redirect_uri: "https://broker.example.test/v1/oauth/callback/tools".into(),
+            client_id: "broker".into(),
+            client_secret_ref: format!("file:{}", secret.display()),
+            adapter_settings: BTreeMap::from([
+                ("resource".into(), TOOLS_ENDPOINT.into()),
+                (
+                    "protected_resource_metadata_url".into(),
+                    "https://tools.example.test/.well-known/oauth-protected-resource/mcp".into(),
+                ),
+                (
+                    "authorization_server_metadata_url".into(),
+                    "https://login.example.test/.well-known/oauth-authorization-server/issuer"
+                        .into(),
+                ),
+                (
+                    "authorization_endpoint".into(),
+                    "https://login.example.test/authorize".into(),
+                ),
+                (
+                    "token_endpoint".into(),
+                    "https://login.example.test/token".into(),
+                ),
+            ]),
+            client_auth: Default::default(),
+            encoding: Default::default(),
+            rotation: Default::default(),
+            allow_insecure_loopback: false,
+            permission_profiles: BTreeMap::from([
+                ("read".into(), profile()),
+                ("write".into(), profile()),
+            ]),
+        },
+    );
+    config.imports.allowed_kinds.push("mcp_http".into());
+    config.imports.allowed_endpoints.push(TOOLS_ENDPOINT.into());
+    config
+}
+
+/// A draft MCP import whose personal binding uses `profile` of `tools`.
+fn tools_import(service: &str, profile: &str) -> ImportedServiceDefinition {
+    ImportedServiceDefinition {
+        service: service.into(),
+        display_name: "Tools".into(),
+        adapter_kind: "mcp_http".into(),
+        endpoint: TOOLS_ENDPOINT.into(),
+        connection_settings: BTreeMap::new(),
+        execution_bindings: vec![agent_access_core::imports::ImportedCredentialBinding {
+            owner_mode: ImportedCredentialMode::PerUser,
+            mechanism: agent_access_core::imports::ImportedAuthMechanism::Oauth,
+            delivery: ImportedCredentialDelivery::Bearer,
+            status: agent_access_core::imports::ImportedBindingStatus::Configured,
+            adapter_id: Some("mcp_oauth".into()),
+            registration_id: Some("tools".into()),
+            profile: Some(profile.into()),
+        }],
+        discovery: ImportedDiscoveryCredential::PerUser {
+            principal: "admin".into(),
+        },
+        transport_auth: false,
+        invocation_limit: None,
+    }
+}
+
+/// Publishes a new draft import through `runtime`.
+fn publish_draft(
+    runtime: &BrokerRuntime,
+    definition: ImportedServiceDefinition,
+) -> Result<BrokerRuntime, ManagedStoreError> {
+    let record = agent_access_core::ImportedServiceRecord {
+        definition: definition.clone(),
+        status: ImportedServiceStatus::Draft,
+        version: 1,
+        actions: vec![],
+        slot_versions: Default::default(),
+        accepted_metadata: None,
+        created_at: String::new(),
+        created_by: "admin".into(),
+        updated_at: String::new(),
+        updated_by: "admin".into(),
+    };
+    let prepared = runtime.prepare_imported_service_change(&record, None)?;
+    runtime
+        .managed_store()
+        .unwrap()
+        .create_imported_service(definition, "admin", |catalog| {
+            runtime.with_imported_catalog(catalog.clone(), prepared)
+        })
+        .map(|mutation| mutation.value)
+}
+
+/// The validation errors a runtime that must not start reports.
+fn startup_error(result: Result<BrokerRuntime, agent_access_core::RuntimeError>) -> String {
+    match result {
+        Ok(_) => panic!("a runtime with conflicting connections must not start"),
+        Err(agent_access_core::RuntimeError::Config(agent_access_core::ConfigError::Invalid {
+            errors,
+        })) => errors.join("; "),
+        Err(error) => panic!("unexpected startup failure: {error}"),
+    }
+}
+
+/// Connections sharing an OAuth registration, configured or synthesized for
+/// imports, must use one permission profile; publication and startup check
+/// the complete effective set.
+#[test]
+fn connections_sharing_a_registration_need_one_profile_at_publication_and_startup() {
+    let fixture = fixture();
+    let config = mcp_oauth_config(&fixture);
+    let runtime = BrokerRuntime::new_for_reload(config.clone(), &fixture.runtime).unwrap();
+
+    let runtime = publish_draft(&runtime, tools_import("tools_read", "read")).unwrap();
+    // The same profile shares the registration.
+    let runtime = publish_draft(&runtime, tools_import("tools_again", "read")).unwrap();
+    // Another profile of the registration is rejected and not published.
+    let Err(error) = publish_draft(&runtime, tools_import("tools_write", "write")) else {
+        panic!("an import with another profile of a shared registration must not publish");
+    };
+    assert!(
+        matches!(&error, ManagedStoreError::InputInvalid(message)
+            if message == "credential connections tools_again and tools_write share OAuth registration tools with different permission profiles (read and write); connections sharing a registration must use the same profile"),
+        "{error:?}"
+    );
+    assert!(runtime.imported_catalog().service("tools_write").is_none());
+    assert!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .imported_catalog()
+            .unwrap()
+            .service("tools_write")
+            .is_none()
+    );
+
+    // A configured connection against a synthesized one, at startup.
+    let configured = |profile: &str| {
+        let mut config = config.clone();
+        config.credentials.connections.insert(
+            "configured".into(),
+            agent_access_core::ConnectionConfig {
+                display_name: None,
+                token_profile: None,
+                oauth: Some(agent_access_core::ConnectionOAuthConfig {
+                    registration: "tools".into(),
+                    profile: profile.into(),
+                }),
+            },
+        );
+        config
+    };
+    let error = startup_error(BrokerRuntime::new_for_reload(configured("write"), &runtime));
+    assert!(
+        error.contains("credential connections configured and tools_again share OAuth registration tools with different permission profiles (write and read)"),
+        "{error}"
+    );
+    // ...and at publication.
+    let shared = BrokerRuntime::new_for_reload(configured("read"), &runtime).unwrap();
+    let Err(error) = publish_draft(&shared, tools_import("tools_write", "write")) else {
+        panic!("an import must not take another profile of a configured connection's registration");
+    };
+    assert!(
+        matches!(&error, ManagedStoreError::InputInvalid(message)
+            if message.contains("credential connections configured and tools_write share OAuth registration tools")),
+        "{error:?}"
+    );
+
+    // Two synthesized connections at startup: a catalog written without
+    // publication cannot start.
+    runtime
+        .managed_store()
+        .unwrap()
+        .create_imported_service(tools_import("tools_write", "write"), "admin", |_| Ok(()))
+        .unwrap();
+    let error = startup_error(BrokerRuntime::new_for_reload(config, &runtime));
+    assert!(
+        error.contains("credential connections tools_again and tools_write share OAuth registration tools with different permission profiles (read and write)"),
+        "{error}"
+    );
+}
+
+#[test]
+fn configured_connection_ids_collide_with_imports_on_startup_reload_and_write() {
+    let connection = || agent_access_core::ConnectionConfig {
+        display_name: None,
+        token_profile: Some("token".into()),
+        oauth: None,
+    };
+    let fixture = fixture();
+    // A configured connection holding a retained import's ID.
+    let mut colliding = fixture.config.clone();
+    colliding
+        .credentials
+        .connections
+        .insert("observability".into(), connection());
+    let expected = "retained imported service observability collides with credentials.connections.observability";
+    let rejection = |result: Result<BrokerRuntime, agent_access_core::RuntimeError>| match result {
+        Ok(_) => panic!("a colliding connection must not start"),
+        Err(error) => error.to_string(),
+    };
+    let startup = rejection(BrokerRuntime::new(colliding.clone()));
+    assert!(startup.contains(expected), "{startup}");
+    let reload = rejection(BrokerRuntime::new_for_reload(colliding, &fixture.runtime));
+    assert!(reload.contains(expected), "{reload}");
+
+    // Creating an import under a configured connection's ID.
+    let mut config = fixture.config.clone();
+    config
+        .credentials
+        .connections
+        .insert("tickets".into(), connection());
+    let runtime = BrokerRuntime::new_for_reload(config, &fixture.runtime).unwrap();
+    let mut definition = definition();
+    definition.service = "tickets".into();
+    let record = agent_access_core::ImportedServiceRecord {
+        definition: definition.clone(),
+        status: ImportedServiceStatus::Draft,
+        version: 1,
+        actions: vec![],
+        slot_versions: Default::default(),
+        accepted_metadata: None,
+        created_at: String::new(),
+        created_by: "admin".into(),
+        updated_at: String::new(),
+        updated_by: "admin".into(),
+    };
+    let prepared = runtime
+        .prepare_imported_service_change(&record, None)
+        .unwrap();
+    let Err(error) =
+        runtime
+            .managed_store()
+            .unwrap()
+            .create_imported_service(definition, "admin", |catalog| {
+                runtime.with_imported_catalog(catalog.clone(), prepared)
+            })
+    else {
+        panic!("an import must not take a configured connection's ID");
+    };
+    assert!(
+        matches!(
+            &error,
+            ManagedStoreError::InputInvalid(message)
+                if message == "imported service tickets collides with credentials.connections.tickets"
+        ),
+        "{error:?}"
+    );
+    assert!(runtime.imported_catalog().service("tickets").is_none());
+}
+
 #[test]
 fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
     // A native kind selected without a provider table still owns its name.

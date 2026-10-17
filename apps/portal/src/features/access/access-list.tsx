@@ -2,9 +2,10 @@
 // administered principal (the user page's Access tab): services, their
 // actions per execution context, resource scope, and a detail drawer.
 import { useId, useMemo } from "react";
-import type { AgentTokenOptions, CredentialMetadata, CredentialTarget } from "../../types";
+import type { AgentTokenOptions, CredentialConnection } from "../../types";
 import { buildAccessSummary, serviceDisplayNames } from "../../lib/access";
-import { ACTION_GRANT_LABEL, credentialStatus, credentialTone, credentialsByTarget } from "../../lib/helpers";
+import { ACTION_GRANT_LABEL, credentialStatus, credentialTone } from "../../lib/helpers";
+import { connectionForService, oauthRowKey } from "../../lib/credentials";
 import { clauseLabel } from "../../lib/resource-labels";
 import { useResourceTypes } from "../../lib/resource-types";
 import { urlParam } from "../../lib/url-state";
@@ -73,8 +74,8 @@ type ServiceSummary = {
   displayName: string;
   /** Hosts agents use for a gateway service; empty otherwise. */
   brokerHosts: string[];
-  target: CredentialTarget | undefined;
-  credential: CredentialMetadata | undefined;
+  /** The credential connection the service consumes for this principal, if any. */
+  connection: CredentialConnection | undefined;
 };
 
 /** Table rows for the effective access in one execution context (or all). */
@@ -102,23 +103,18 @@ export function useAccessList(subject: AccountSubject) {
   const options = useAgentTokenOptions(subject);
   const tokenActions = useAgentTokenActions(subject, options.options);
   const contexts = options.options?.executionContexts ?? [];
-  const byTarget = useMemo(() => credentialsByTarget(data.credentials), [data.credentials]);
   // Services with granted actions, named from the token options (not agent discovery).
   const services = useMemo<ServiceSummary[]>(() => {
-    const names = serviceDisplayNames(options.options, data.targets);
+    const names = serviceDisplayNames(options.options, data.credentials.connections);
     return (options.options?.services ?? [])
-      .map((option) => {
-        const target = data.targets.find((item) => item.service === option.service);
-        return {
-          service: option.service,
-          displayName: names.get(option.service) ?? option.service,
-          brokerHosts: option.brokerHosts,
-          target,
-          credential: target ? byTarget.get(`${target.service}/${target.credentialName}`) : undefined
-        };
-      })
+      .map((option) => ({
+        service: option.service,
+        displayName: names.get(option.service) ?? option.service,
+        brokerHosts: option.brokerHosts,
+        connection: connectionForService(data.credentials, option.service)
+      }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, [options.options, data.targets, byTarget]);
+  }, [options.options, data.credentials]);
 
   const list = useTableUrlState(ACCESS_STATE, "action");
   const context = contexts.includes(list.state.context) ? list.state.context : null;
@@ -244,8 +240,34 @@ export function AccessToolbar({ model, embedded = false }: { model: AccessListMo
 }
 
 function credentialLine(service: ServiceSummary) {
-  if (!service.target) return null;
-  return `credential ${credentialStatus(service.credential).toLowerCase()}`;
+  if (service.connection?.method !== "token") return null;
+  return `credential ${credentialStatus(service.connection.credential).toLowerCase()}`;
+}
+
+/** The credential cell of the access drawer: the service's connection and a link to manage it. */
+function CredentialSummary({ connection, administered }: { connection: CredentialConnection | undefined; administered: boolean }) {
+  if (!connection || connection.method === "unavailable") return <span className="wb-muted">No personal credential</span>;
+  const manage = (key: string) =>
+    administered ? null : (
+      <AppLink className="wb-link" href={paths.credentials(key)}>
+        Manage
+      </AppLink>
+    );
+  if (connection.method === "oauth") {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span>OAuth · {connection.displayName}</span>
+        {connection.registration ? manage(oauthRowKey(connection.registration)) : null}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Badge tone={credentialTone(connection.credential)}>{credentialStatus(connection.credential)}</Badge>
+      <span className="wb-muted">{connection.displayName}</span>
+      {manage(connection.connection)}
+    </span>
+  );
 }
 
 export function AccessRows({ model }: { model: AccessListModel }) {
@@ -382,7 +404,6 @@ export function AccessDrawer({ model }: { model: AccessListModel }) {
   const { open, list, services, tokenActions, subject } = model;
   if (!open) return null;
   const service = services.find((item) => item.service === open.service);
-  const status = service?.target ? credentialStatus(service.credential) : null;
   return (
     <Drawer
       resetKey={open.key}
@@ -429,21 +450,7 @@ export function AccessDrawer({ model }: { model: AccessListModel }) {
             { label: "Service", value: service?.displayName ?? open.service },
             { label: "Service ID", value: <span className="wb-num">{open.service}</span> },
             service?.brokerHosts.length ? { label: "Broker hosts", value: <span className="wb-mono">{service.brokerHosts.join(", ")}</span> } : null,
-            {
-              label: "Credential",
-              value: status ? (
-                <span className="inline-flex items-center gap-2">
-                  <Badge tone={credentialTone(service?.credential)}>{status}</Badge>
-                  {!subject.administered ? (
-                    <AppLink className="wb-link" href={paths.credentials(`${service?.target?.service}/${service?.target?.credentialName}`)}>
-                      Manage
-                    </AppLink>
-                  ) : null}
-                </span>
-              ) : (
-                <span className="wb-muted">No per-user credential</span>
-              )
-            }
+            { label: "Credential", value: <CredentialSummary connection={service?.connection} administered={subject.administered} /> }
           ]}
         />
       </DrawerSection>

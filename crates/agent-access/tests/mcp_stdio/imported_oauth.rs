@@ -843,7 +843,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     Mock::given(method("GET")).and(path("/resource-metadata")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"resource":endpoint,"authorization_servers":[issuer.uri()],"bearer_methods_supported":["header"]}))).mount(&issuer).await;
     Mock::given(method("GET")).and(path("/issuer-metadata")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"issuer":issuer.uri(),"authorization_endpoint":format!("{}/authorize",issuer.uri()),"token_endpoint":format!("{}/token",issuer.uri()),"response_types_supported":["code"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"authorization_response_iss_parameter_supported":true}))).mount(&issuer).await;
     let connected = browser(reqwest::Method::POST, "/v1/oauth/connect")
-        .json(&json!({"service":"metrics","intent":"connect"}))
+        .json(&json!({"registration":"personal","intent":"connect"}))
         .send()
         .await
         .unwrap();
@@ -923,13 +923,13 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     assert_eq!(
         metadata["result"].as_array().unwrap().len(),
         1,
-        "an entitled row suppresses the shared registration's cleanup-only row"
+        "the shared registration has one row"
     );
     let row = metadata["result"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["service"] == "metrics")
+        .find(|row| row["registration"] == "personal")
         .unwrap();
     assert_eq!(
         row["scopeMode"],
@@ -1031,7 +1031,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|row| row["service"] == "metrics")
+                .find(|row| row["registration"] == "personal")
                 .unwrap();
             assert_eq!(
                 current["connection"], original_connection,
@@ -1080,7 +1080,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["service"] == "metrics")
+        .find(|row| row["registration"] == "personal")
         .unwrap();
     assert_eq!(
         rejected["connection"]["connectionId"],
@@ -1112,15 +1112,16 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .clone();
     assert_eq!(
         rows.as_array().unwrap().len(),
-        2,
-        "each entitled service keeps its own row even with a shared registration"
+        1,
+        "a registration shared by two services has one row"
     );
-    assert!(
-        rows.as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["canConnect"] == true)
+    assert_eq!(
+        consumer_services(&rows[0]),
+        ["metrics", "metrics_secondary"],
+        "the row names every entitled consumer"
     );
+    assert_eq!(rows[0]["otherConsumers"], 0);
+    assert_eq!(rows[0]["canConnect"], true);
     write_policy_grant(
         &client,
         &base,
@@ -1138,7 +1139,9 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .unwrap()["result"]
         .clone();
     assert_eq!(rows.as_array().unwrap().len(), 1);
-    assert_eq!(rows[0]["service"], "metrics_secondary");
+    assert_eq!(rows[0]["registration"], "personal");
+    assert_eq!(consumer_services(&rows[0]), ["metrics_secondary"]);
+    assert_eq!(rows[0]["otherConsumers"], 1);
     assert_eq!(rows[0]["canConnect"], true);
     write_policy_grant(
         &client,
@@ -1159,9 +1162,11 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     assert_eq!(
         rows.as_array().unwrap().len(),
         1,
-        "one deterministic cleanup row represents the shared owned connection"
+        "one cleanup row represents the shared owned connection"
     );
-    assert_eq!(rows[0]["service"], "metrics");
+    assert_eq!(rows[0]["registration"], "personal");
+    assert!(consumer_services(&rows[0]).is_empty());
+    assert_eq!(rows[0]["otherConsumers"], 2);
     assert_eq!(rows[0]["canConnect"], false);
     assert_eq!(rows[0]["canDisconnect"], true);
     assert_eq!(rows[0]["connectUnavailableReason"], "no_personal_access");
@@ -1181,7 +1186,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         "withdrawn grants stop invocation before contacting upstream"
     );
     let denied = browser(reqwest::Method::POST, "/v1/oauth/connect")
-        .json(&json!({"service":"metrics","intent":"reconnect"}))
+        .json(&json!({"registration":"personal","intent":"reconnect"}))
         .send()
         .await
         .unwrap();
@@ -1189,7 +1194,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     let denied = denied.json::<Value>().await.unwrap();
     assert_eq!(denied["reasonCode"], "service_action_denied");
     assert_eq!(denied["error"]["message"], "oauth_setup_denied");
-    let response = browser(reqwest::Method::DELETE, "/v1/oauth/connections/metrics")
+    let response = browser(reqwest::Method::DELETE, "/v1/oauth/connections/personal")
         .send()
         .await
         .unwrap();
@@ -1293,6 +1298,16 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         );
     }
     issuer.verify().await;
+}
+
+/// The services an OAuth connections row lists as entitled consumers.
+fn consumer_services(row: &Value) -> Vec<String> {
+    row["consumers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|consumer| consumer["service"].as_str().unwrap().to_string())
+        .collect()
 }
 
 /// Managed identity, policy and store, browser login, JSONL audit, MCP

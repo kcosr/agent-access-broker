@@ -111,8 +111,10 @@ Descriptions and display labels are metadata. Schema or execution-annotation cha
 are behavioral changes. Disable is reversible. Retirement reserves the service/action
 identity permanently. Every retained import, whatever its status or adapter
 availability, must not share its service ID with `broker`, a native provider
-kind the binary selects (configured or not), a gateway, or a configured
-credential. Startup, configuration reload and import writes reject such a
+kind the binary selects (configured or not), a gateway, a configured
+credential or a configured
+[credential connection](configuration.md#credential-connections). Startup,
+configuration reload and import writes reject such a
 collision with a diagnostic naming both owners; a failed reload keeps the
 active configuration, and the operator resolves the retained identity first. An administrator cannot recycle a retired name onto a different
 upstream tool.
@@ -183,11 +185,23 @@ MCP budget does not change the fixed storage and runtime-spec ceilings.
 
 Execution credential ownership and authentication mechanism are separate. Static
 token execution supports bearer or an administrator-configured raw
-header. A service binding uses its encrypted execution slot. A personal binding uses
-the caller's managed `default` credential with profile `token`, or `username-token`
-for a command import whose credential kind is `username_token`. The selected personal
-credential never falls back to a shared service or discovery token. Command imports
-deliver credentials on the command's stdin (`stdin` delivery).
+header. A service binding uses its encrypted execution slot. A supported, allowed
+personal binding publishes a
+[credential connection](configuration.md#credential-connections) whose ID is the
+imported service ID and which only that import consumes. It mirrors the binding:
+
+| Personal binding | Connection | Who uses it |
+| --- | --- | --- |
+| Static token | Token profile `token`, or `username-token` for a command import whose credential kind is `username_token` | People and `system` principals store their own token; administrators provision service accounts' |
+| Approved MCP OAuth | OAuth with the import's registration and profile | People connect their account; service accounts and `system` principals have no personal credential |
+| None, unsupported or not allowed | None | Service mode only |
+
+Each principal's token is stored under the imported service ID with the name
+`default`, so tokens stored before connections existed keep working. The
+selected personal credential never falls back to a shared service or discovery
+token. Adding personal mode to an accepted import publishes its connection, and
+principals can then store their first token. Command imports deliver
+credentials on the command's stdin (`stdin` delivery).
 
 The broker still authenticates the invoking user and enforces their agent token,
 context, grant, rate limit, and audit identity when upstream uses a shared token.

@@ -1,17 +1,18 @@
 use crate::handlers::management::common::{
     AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
-    agent_token_boundary_audit, agent_token_issue_scopes, agent_token_list_query,
-    append_management_audit_with_phase, credential_input_schema_query, credential_targets,
+    ManagementContext, agent_token_boundary_audit, agent_token_issue_scopes,
+    agent_token_list_query, append_management_audit_with_phase, credential_input_schema_query,
     is_broker_user_manage_context, management_audit_unavailable_response, management_context,
     management_context_error_response, management_pre_audited_success_response,
     management_response, management_store_call, management_store_error_response,
     management_success_envelope, management_success_response, management_write_audit_preflight,
-    self_agent_token_issue_expires_at, visible_per_user_services,
+    self_agent_token_issue_expires_at,
 };
+use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
-    PrincipalCredentialTarget, credential_input_schema_for_principal, credential_target,
-    credential_verification_input_from_body, delete_credential_for_principal,
-    get_credential_for_principal, put_credential_for_principal, verify_credential_for_principal,
+    ConnectionCredentialRequest, CredentialAccess, connection_input_schema, connection_verify_body,
+    delete_connection_credential, get_connection_credential, put_connection_credential,
+    verify_connection_credential,
 };
 use crate::state::AppState;
 use agent_access_core::SelfAgentTokenIssueRequest;
@@ -22,6 +23,7 @@ use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 
 pub(crate) async fn user_tokens_list(
@@ -505,6 +507,17 @@ pub(crate) async fn user_token_resume(
     }
 }
 
+/// How a personal caller is authorized for its own credentials: grants for
+/// Broker-issued `user_manage` tokens and browser sessions, credential
+/// rights for classless self-service identities.
+fn personal_access(context: &ManagementContext) -> CredentialAccess {
+    if is_broker_user_manage_context(context) {
+        CredentialAccess::Owner
+    } else {
+        CredentialAccess::ClasslessOwner
+    }
+}
+
 pub(crate) async fn user_credentials_list(
     State(state): State<AppState>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -523,22 +536,58 @@ pub(crate) async fn user_credentials_list(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    let runtime = &context.snapshot.runtime;
+    let kind = context.identity.principal_kind;
+    let access = personal_access(&context);
+    let active = connections::active_token_rows(runtime, kind);
     let principal = context.identity.principal.clone();
-    let broker_user_manage = is_broker_user_manage_context(&context);
-    match management_store_call(&context, move |store| {
-        if broker_user_manage {
-            store.list_credentials(Some(&principal))
-        } else {
-            store.list_credentials_readable_by(&principal)
+    // Classless callers read what their read_metadata rights cover: the
+    // active row through `(connection, default)` and a retained row through
+    // its own stored service and name.
+    let token_connections = active
+        .iter()
+        .map(|(connection, _)| connection.clone())
+        .collect::<Vec<_>>();
+    let stored = match management_store_call(&context, move |store| {
+        let rows = store.list_credentials(Some(&principal))?;
+        if access != CredentialAccess::ClasslessOwner {
+            return Ok((rows, None));
         }
+        let right = "credentials:self:read_metadata";
+        let mut readable_connections = BTreeSet::new();
+        for connection in token_connections {
+            if store.has_credential_right(
+                &principal,
+                right,
+                &connection,
+                agent_access_core::CONNECTION_CREDENTIAL_NAME,
+            )? {
+                readable_connections.insert(connection);
+            }
+        }
+        let mut readable_rows = Vec::new();
+        for row in rows {
+            if store.has_credential_right(&principal, right, &row.service, &row.name)? {
+                readable_rows.push(row);
+            }
+        }
+        Ok((readable_rows, Some(readable_connections)))
     })
     .await
     {
-        Ok(credentials) => {
-            management_success_response(&context, operation, None, json!(credentials)).await
+        Ok(stored) => stored,
+        Err(error) => {
+            return management_store_error_response(&context, operation, None, error).await;
         }
-        Err(error) => management_store_error_response(&context, operation, None, error).await,
-    }
+    };
+    let (rows, readable_connections) = stored;
+    let result = connections::credential_list(
+        runtime,
+        &context.identity,
+        rows,
+        readable_connections.as_ref(),
+    );
+    management_success_response(&context, operation, None, json!(result)).await
 }
 
 pub(crate) async fn user_credential_targets(
@@ -559,22 +608,32 @@ pub(crate) async fn user_credential_targets(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let broker_user_manage = is_broker_user_manage_context(&context);
-    let targets = if broker_user_manage {
-        let allowed_services =
-            visible_per_user_services(&context.snapshot.runtime, &context.identity);
-        credential_targets(&context.snapshot.runtime, Some(&allowed_services))
+    let runtime = &context.snapshot.runtime;
+    let kind = context.identity.principal_kind;
+    let candidates = connections::connection_ids(runtime)
+        .into_iter()
+        .filter_map(|connection| {
+            let entitled = connections::entitled_consumers(runtime, &context.identity, &connection);
+            let target = connections::target(runtime, &connection, kind, &entitled)?;
+            Some((target, !entitled.is_empty()))
+        })
+        .collect::<Vec<_>>();
+    let targets = if personal_access(&context) == CredentialAccess::Owner {
+        candidates
+            .into_iter()
+            .filter_map(|(target, entitled)| entitled.then_some(target))
+            .collect::<Vec<_>>()
     } else {
+        // Classless callers set up what their write rights cover.
         let principal = context.identity.principal.clone();
-        let candidates = credential_targets(&context.snapshot.runtime, None);
         match management_store_call(&context, move |store| {
             let mut allowed = Vec::new();
-            for target in candidates {
+            for (target, _) in candidates {
                 if store.has_credential_right(
                     &principal,
                     "credentials:self:write",
-                    &target.service,
-                    &target.credential_name,
+                    &target.connection,
+                    agent_access_core::CONNECTION_CREDENTIAL_NAME,
                 )? {
                     allowed.push(target);
                 }
@@ -592,93 +651,83 @@ pub(crate) async fn user_credential_targets(
     management_success_response(&context, operation, None, json!(targets)).await
 }
 
-pub(crate) async fn user_credentials_get(
-    State(state): State<AppState>,
-    Path((service, name)): Path<(String, String)>,
-    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let operation = "credentials.inspect";
-    let context = match management_context(
-        &state,
+async fn personal_context(
+    state: &AppState,
+    remote_addr: SocketAddr,
+    headers: &HeaderMap,
+    operation: &str,
+) -> Result<ManagementContext, Box<axum::response::Response>> {
+    management_context(
+        state,
         remote_addr,
-        &headers,
+        headers,
         operation,
         ManagementAccess::User,
     )
     .await
-    {
+}
+
+fn personal_request(
+    context: &ManagementContext,
+    connection: String,
+) -> ConnectionCredentialRequest {
+    ConnectionCredentialRequest::new(
+        context.identity.principal.clone(),
+        connection,
+        personal_access(context),
+    )
+}
+
+pub(crate) async fn user_credentials_get(
+    State(state): State<AppState>,
+    Path(connection): Path<String>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let operation = "credentials.inspect";
+    let context = match personal_context(&state, remote_addr, &headers, operation).await {
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let principal = context.identity.principal.clone();
-    let enforce_right = !is_broker_user_manage_context(&context);
-    let request = PrincipalCredentialTarget::new(principal, service, name)
-        .enforce_right(enforce_right)
-        .enforce_configured_target(true);
-    get_credential_for_principal(
-        context,
-        operation,
-        request,
-        "credentials:self:read_metadata",
-    )
-    .await
+    let request = personal_request(&context, connection);
+    get_connection_credential(context, operation, request).await
 }
 
 pub(crate) async fn user_credentials_put(
     State(state): State<AppState>,
-    Path((service, name)): Path<(String, String)>,
+    Path(connection): Path<String>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<CredentialPutBody>,
 ) -> impl IntoResponse {
     let operation = "credentials.put";
-    let context = match management_context(
-        &state,
-        remote_addr,
-        &headers,
-        operation,
-        ManagementAccess::User,
-    )
-    .await
-    {
+    let context = match personal_context(&state, remote_addr, &headers, operation).await {
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let principal = context.identity.principal.clone();
-    let enforce_right = !is_broker_user_manage_context(&context);
-    let request = PrincipalCredentialTarget::new(principal, service, name)
-        .enforce_right(enforce_right)
-        .enforce_configured_target(true);
-    put_credential_for_principal(context, operation, request, body).await
+    let request = personal_request(&context, connection);
+    put_connection_credential(context, operation, request, body).await
 }
 
 pub(crate) async fn user_credential_input_schema(
     State(state): State<AppState>,
-    Path((service, name)): Path<(String, String)>,
+    Path(connection): Path<String>,
     RawQuery(raw_query): RawQuery,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let operation = "credentials.input_schema";
-    let context = match management_context(
-        &state,
-        remote_addr,
-        &headers,
-        operation,
-        ManagementAccess::User,
-    )
-    .await
-    {
+    let context = match personal_context(&state, remote_addr, &headers, operation).await {
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let principal = context.identity.principal.clone();
-    let enforce_right = !is_broker_user_manage_context(&context);
     let query = match credential_input_schema_query(raw_query.as_deref()) {
         Ok(query) => query,
         Err(message) => {
-            let target = Some(credential_target(&principal, &service, &name));
+            let target = Some(connections::audit_target(
+                &context.identity.principal,
+                &connection,
+            ));
             return management_context_error_response(
                 &context,
                 StatusCode::BAD_REQUEST,
@@ -690,64 +739,44 @@ pub(crate) async fn user_credential_input_schema(
             .await;
         }
     };
-    let request = PrincipalCredentialTarget::new(principal, service, name)
-        .enforce_right(enforce_right)
-        .enforce_configured_target(true);
-    credential_input_schema_for_principal(context, operation, request, query).await
+    let request = personal_request(&context, connection);
+    connection_input_schema(context, operation, request, query).await
 }
 
 pub(crate) async fn user_credentials_delete(
     State(state): State<AppState>,
-    Path((service, name)): Path<(String, String)>,
+    Path(connection): Path<String>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let operation = "credentials.delete";
-    let context = match management_context(
-        &state,
-        remote_addr,
-        &headers,
-        operation,
-        ManagementAccess::User,
-    )
-    .await
-    {
+    let context = match personal_context(&state, remote_addr, &headers, operation).await {
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let principal = context.identity.principal.clone();
-    let enforce_right = !is_broker_user_manage_context(&context);
-    let request = PrincipalCredentialTarget::new(principal, service, name)
-        .enforce_right(enforce_right)
-        .enforce_configured_target(true);
-    delete_credential_for_principal(context, operation, request).await
+    let request = personal_request(&context, connection);
+    delete_connection_credential(context, operation, request).await
 }
 
 pub(crate) async fn user_credentials_verify(
     State(state): State<AppState>,
-    Path((service, name)): Path<(String, String)>,
+    Path(connection): Path<String>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     let operation = "credentials.verify";
-    let context = match management_context(
-        &state,
-        remote_addr,
-        &headers,
-        operation,
-        ManagementAccess::User,
-    )
-    .await
-    {
+    let context = match personal_context(&state, remote_addr, &headers, operation).await {
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let principal = context.identity.principal.clone();
-    let target = Some(credential_target(&principal, &service, &name));
-    let input = match credential_verification_input_from_body(body) {
-        Ok(input) => input,
+    let body = match connection_verify_body(body) {
+        Ok(body) => body,
         Err(message) => {
+            let target = Some(connections::audit_target(
+                &context.identity.principal,
+                &connection,
+            ));
             return management_context_error_response(
                 &context,
                 StatusCode::BAD_REQUEST,
@@ -759,9 +788,65 @@ pub(crate) async fn user_credentials_verify(
             .await;
         }
     };
-    let enforce_right = !is_broker_user_manage_context(&context);
-    let request = PrincipalCredentialTarget::new(principal, service, name)
-        .enforce_right(enforce_right)
-        .enforce_configured_target(true);
-    verify_credential_for_principal(context, operation, request, input).await
+    let request = personal_request(&context, connection);
+    verify_connection_credential(context, operation, request, body).await
+}
+
+/// Deletes one of the caller's retained rows by its credential ID. The
+/// active token of a connection is refused: it is deleted through its
+/// connection.
+pub(crate) async fn user_retained_credential_delete(
+    State(state): State<AppState>,
+    Path(credential_id): Path<String>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let operation = "credentials.retained.delete";
+    let context = match personal_context(&state, remote_addr, &headers, operation).await {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let purpose = context.credential_purpose;
+    let target = Some(json!({
+        "principal": context.identity.principal.clone(),
+        "credentialId": credential_id.clone(),
+    }));
+    if personal_access(&context) == CredentialAccess::ClasslessOwner {
+        let principal = context.identity.principal.clone();
+        let credential_id = credential_id.clone();
+        if let Err(error) = management_store_call(&context, move |store| {
+            let credential = store.credential_by_id(&credential_id)?;
+            if credential.owner_principal != principal {
+                return Err(agent_access_core::ManagedStoreError::CredentialNotFound);
+            }
+            store.require_credential_right(
+                &principal,
+                "credentials:self:delete",
+                &credential.service,
+                &credential.name,
+            )
+        })
+        .await
+        {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    }
+    if let Err(response) =
+        management_write_audit_preflight(&context, operation, target.clone()).await
+    {
+        return *response;
+    }
+    let active =
+        connections::active_token_rows(&context.snapshot.runtime, context.identity.principal_kind);
+    let principal = context.identity.principal.clone();
+    match management_store_call(&context, move |store| {
+        store.delete_retained_user_credential(&credential_id, &principal, &active, purpose)
+    })
+    .await
+    {
+        Ok(credential) => {
+            management_pre_audited_success_response(&context, operation, target, json!(credential))
+        }
+        Err(error) => management_store_error_response(&context, operation, target, error).await,
+    }
 }

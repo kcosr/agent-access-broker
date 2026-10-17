@@ -39,7 +39,8 @@ controller's resolved egress proxy is reused for artifact storage redirects;
 its `NO_PROXY` decision also governs those hops.
 The usual broker egress proxy rules apply. A CloudBees service account or user
 API token authenticates with HTTP Basic. Upstream role permissions still apply.
-The managed per-user profile is `cloudbees-ci-api-token`.
+A per-user [credential connection](configuration.md#credential-connections)
+uses the `cloudbees-ci-api-token` profile.
 
 CloudBees actions do not perform pre-authorization metadata lookup and do not
 require a `credentials.lookup.cloudbees_ci` credential. The Broker resolves the

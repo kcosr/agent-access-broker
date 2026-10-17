@@ -382,13 +382,13 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/jira/default/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
         );
         write_json_response(&mut stream, 200, jira_credential_schema_response());
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "PUT");
-        assert_eq!(request.path, "/v1/credentials/jira/default");
+        assert_eq!(request.path, "/v1/credentials/connections/jira");
         let put_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(put_body["profile"], "jira-cloud-api-token");
         assert_eq!(put_body["secret"]["username"], "alice@example.com");
@@ -404,17 +404,19 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
                 "operation": "credentials.put",
                 "principal": "alice",
                 "result": {
-                    "service": "jira",
-                    "name": "default"
+                    "connection": "jira"
                 }
             }),
         );
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "POST");
-        assert_eq!(request.path, "/v1/credentials/jira/default/verify");
+        assert_eq!(request.path, "/v1/credentials/connections/jira/verify");
         let verify_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(verify_body["repository"], "sip/service");
+        assert_eq!(
+            verify_body,
+            serde_json::json!({"service": "jira_git", "repository": "sip/service"})
+        );
         write_json_response(
             &mut stream,
             200,
@@ -440,7 +442,6 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
             "credentials",
             "put",
             "jira",
-            "default",
             "--profile",
             "jira-cloud-api-token",
             "--username",
@@ -448,6 +449,8 @@ fn cli_credentials_put_fetches_schema_then_puts_and_verifies_against_stubbed_bro
             "--field-file",
             &format!("token={}", token_path.display()),
             "--verify",
+            "--verify-service",
+            "jira_git",
             "--verify-repository",
             "sip/service",
         ])
@@ -512,7 +515,7 @@ fn cli_credentials_put_verify_reuses_resolved_config_for_all_requests() {
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/jira/default/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
         );
         assert_identity_headers(&request, &mut request_ids);
         write_json_response(&mut stream, 200, jira_credential_schema_response());
@@ -524,7 +527,7 @@ fn cli_credentials_put_verify_reuses_resolved_config_for_all_requests() {
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "PUT");
-        assert_eq!(request.path, "/v1/credentials/jira/default");
+        assert_eq!(request.path, "/v1/credentials/connections/jira");
         assert_identity_headers(&request, &mut request_ids);
         let put_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(put_body["secret"]["token"], "jira-token");
@@ -539,15 +542,14 @@ fn cli_credentials_put_verify_reuses_resolved_config_for_all_requests() {
                 "operation": "credentials.put",
                 "principal": "alice",
                 "result": {
-                    "service": "jira",
-                    "name": "default"
+                    "connection": "jira"
                 }
             }),
         );
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "POST");
-        assert_eq!(request.path, "/v1/credentials/jira/default/verify");
+        assert_eq!(request.path, "/v1/credentials/connections/jira/verify");
         assert_identity_headers(&request, &mut request_ids);
         assert_eq!(request_ids.len(), 3);
         let verify_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
@@ -576,7 +578,6 @@ fn cli_credentials_put_verify_reuses_resolved_config_for_all_requests() {
             "credentials",
             "put",
             "jira",
-            "default",
             "--profile",
             "jira-cloud-api-token",
             "--username",
@@ -643,7 +644,7 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/admin/principals/bob/credentials/jira/default/input-schema?profile=jira-cloud-api-token"
+            "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
         );
         assert_identity_headers(&request, &mut request_ids);
         write_json_response(&mut stream, 200, jira_credential_schema_response());
@@ -657,7 +658,7 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
         assert_eq!(request.method, "PUT");
         assert_eq!(
             request.path,
-            "/v1/admin/principals/bob/credentials/jira/default"
+            "/v1/admin/principals/bob/credentials/connections/jira"
         );
         assert_identity_headers(&request, &mut request_ids);
         let put_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
@@ -673,8 +674,7 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
                 "operation": "credentials.put",
                 "principal": "admin",
                 "result": {
-                    "service": "jira",
-                    "name": "default"
+                    "connection": "jira"
                 }
             }),
         );
@@ -683,7 +683,7 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
         assert_eq!(request.method, "POST");
         assert_eq!(
             request.path,
-            "/v1/admin/principals/bob/credentials/jira/default/verify"
+            "/v1/admin/principals/bob/credentials/connections/jira/verify"
         );
         assert_identity_headers(&request, &mut request_ids);
         assert_eq!(request_ids.len(), 3);
@@ -713,7 +713,6 @@ fn cli_admin_credentials_put_verify_reuses_resolved_config_for_all_requests() {
             "put",
             "bob",
             "jira",
-            "default",
             "--profile",
             "jira-cloud-api-token",
             "--username",
@@ -744,7 +743,6 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "credentials".to_string(),
             "put".to_string(),
             "jira".to_string(),
-            "default".to_string(),
             "--profile".to_string(),
             "jira-cloud-api-token".to_string(),
             "--username".to_string(),
@@ -752,7 +750,7 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "--token-file".to_string(),
             self_token_path.display().to_string(),
         ],
-        "/v1/credentials/jira/default/input-schema?profile=jira-cloud-api-token",
+        "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
         None,
     );
 
@@ -761,7 +759,6 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "credentials".to_string(),
             "put".to_string(),
             "jira".to_string(),
-            "default".to_string(),
             "--profile".to_string(),
             "jira-cloud-api-token".to_string(),
             "--username".to_string(),
@@ -769,7 +766,7 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "--token-env".to_string(),
             "AAB_TEST_SELF_IDENTITY_TOKEN".to_string(),
         ],
-        "/v1/credentials/jira/default/input-schema?profile=jira-cloud-api-token",
+        "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
         Some((
             "AAB_TEST_SELF_IDENTITY_TOKEN".to_string(),
             "identity-token".to_string(),
@@ -785,7 +782,6 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "put".to_string(),
             "bob".to_string(),
             "jira".to_string(),
-            "default".to_string(),
             "--profile".to_string(),
             "jira-cloud-api-token".to_string(),
             "--username".to_string(),
@@ -793,7 +789,7 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "--token-file".to_string(),
             admin_token_path.display().to_string(),
         ],
-        "/v1/admin/principals/bob/credentials/jira/default/input-schema?profile=jira-cloud-api-token",
+        "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
         None,
     );
 
@@ -804,7 +800,6 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "put".to_string(),
             "bob".to_string(),
             "jira".to_string(),
-            "default".to_string(),
             "--profile".to_string(),
             "jira-cloud-api-token".to_string(),
             "--username".to_string(),
@@ -812,7 +807,7 @@ fn cli_credentials_put_token_sources_after_subcommand_are_identity_only() {
             "--token-env".to_string(),
             "AAB_TEST_ADMIN_IDENTITY_TOKEN".to_string(),
         ],
-        "/v1/admin/principals/bob/credentials/jira/default/input-schema?profile=jira-cloud-api-token",
+        "/v1/admin/principals/bob/credentials/connections/jira/input-schema?profile=jira-cloud-api-token",
         Some((
             "AAB_TEST_ADMIN_IDENTITY_TOKEN".to_string(),
             "identity-token".to_string(),
@@ -832,13 +827,13 @@ fn cli_credentials_put_surfaces_management_put_error_against_stubbed_broker() {
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/jira/default/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
         );
         write_json_response(&mut stream, 200, jira_credential_schema_response());
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "PUT");
-        assert_eq!(request.path, "/v1/credentials/jira/default");
+        assert_eq!(request.path, "/v1/credentials/connections/jira");
         let put_body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(put_body["profile"], "jira-cloud-api-token");
         assert_eq!(put_body["secret"]["username"], "alice@example.com");
@@ -866,7 +861,6 @@ fn cli_credentials_put_surfaces_management_put_error_against_stubbed_broker() {
             "credentials",
             "put",
             "jira",
-            "default",
             "--profile",
             "jira-cloud-api-token",
             "--username",
@@ -902,13 +896,13 @@ fn cli_credentials_put_surfaces_management_verify_error_against_stubbed_broker()
         assert_eq!(request.method, "GET");
         assert_eq!(
             request.path,
-            "/v1/credentials/jira/default/input-schema?profile=jira-cloud-api-token"
+            "/v1/credentials/connections/jira/input-schema?profile=jira-cloud-api-token"
         );
         write_json_response(&mut stream, 200, jira_credential_schema_response());
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "PUT");
-        assert_eq!(request.path, "/v1/credentials/jira/default");
+        assert_eq!(request.path, "/v1/credentials/connections/jira");
         write_json_response(
             &mut stream,
             200,
@@ -920,15 +914,14 @@ fn cli_credentials_put_surfaces_management_verify_error_against_stubbed_broker()
                 "operation": "credentials.put",
                 "principal": "alice",
                 "result": {
-                    "service": "jira",
-                    "name": "default"
+                    "connection": "jira"
                 }
             }),
         );
 
         let (mut stream, request) = accept_stub_request(&listener);
         assert_eq!(request.method, "POST");
-        assert_eq!(request.path, "/v1/credentials/jira/default/verify");
+        assert_eq!(request.path, "/v1/credentials/connections/jira/verify");
         write_json_response(
             &mut stream,
             403,
@@ -952,7 +945,6 @@ fn cli_credentials_put_surfaces_management_verify_error_against_stubbed_broker()
             "credentials",
             "put",
             "jira",
-            "default",
             "--profile",
             "jira-cloud-api-token",
             "--username",
@@ -5332,7 +5324,7 @@ fn jira_credential_schema_response() -> serde_json::Value {
         "operation": "credentials.input_schema",
         "principal": "alice",
         "result": {
-            "service": "jira",
+            "connection": "jira",
             "profile": "jira-cloud-api-token",
             "credentialKind": "basic_api_token",
             "fields": [

@@ -545,6 +545,7 @@ fn admin_audit_record(snapshot: &RuntimeSnapshot, input: &AdminAuditInput<'_>) -
         resource_scopes: ResourceScopes::new(),
         matched_grant: None,
         credential_mode: Some(None),
+        credential_connection: None,
         decision: input.decision.audit_decision(),
         reason_code: None,
         upstream_status: None,

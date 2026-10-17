@@ -1087,12 +1087,120 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
         .map(|record| {
             (
                 record["principal"].as_str().unwrap().to_owned(),
-                record.get("credentialMode").cloned().unwrap_or(Value::Null),
+                (
+                    record.get("credentialMode").cloned().unwrap_or(Value::Null),
+                    record
+                        .get("credentialConnection")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                ),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(modes["alice"], Value::Null, "{modes:?}");
-    assert_eq!(modes["charlie"], json!("service"), "{modes:?}");
+    // Alice's call passed her personal credential beside the service one:
+    // its mode is null, but it names the import's credential connection.
+    assert_eq!(modes["alice"], (Value::Null, json!("tickets")), "{modes:?}");
+    // Charlie's passed only the service grant, so no connection is named.
+    assert_eq!(
+        modes["charlie"],
+        (json!("service"), Value::Null),
+        "{modes:?}"
+    );
+}
+
+#[tokio::test]
+async fn command_enforced_personal_grants_pass_alone_without_a_service_slot() {
+    let manifest = json!({
+        "format": "agent-access-command/1",
+        "version": "1.0.0",
+        "credential": {"kind": "token", "modes": ["service", "per_user"]},
+        "actions": [
+            {"name": "issue.stats", "description": "Issue statistics.", "readOnly": true,
+             "inputSchema": {"type": "object", "additionalProperties": false}}
+        ]
+    });
+    let fixture = CommandFixture::new("tickets", &manifest);
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let enabled = enabled_tickets(&app, &token, &["service", "per_user"]).await;
+
+    let runtime = broker.runtime();
+    let store = runtime.managed_store().unwrap();
+    store
+        .upsert_user_credential(
+            runtime.credential_key_ring().unwrap(),
+            CredentialWriteRequest {
+                owner_principal_id: "alice".into(),
+                service: "tickets".into(),
+                name: "default".into(),
+                profile: "token".into(),
+                credential_kind: "bearer_token".into(),
+                secret: json!({"token": "alice-example"}),
+                metadata: json!({}),
+                actor: "admin".into(),
+            },
+            agent_access_core::CredentialManagementPurpose::Administrative,
+        )
+        .unwrap();
+    for grant in [
+        command_grant(
+            "stats-alice-user",
+            "user:alice",
+            "issue.stats",
+            "per_user",
+            0,
+        ),
+        command_grant(
+            "stats-alice-service",
+            "user:alice",
+            "issue.stats",
+            "service",
+            0,
+        ),
+    ] {
+        runtime.create_managed_policy_grant(grant).unwrap();
+    }
+    drop(runtime);
+    // Removing the service slot leaves the service grant retained but its
+    // credential unavailable; the personal mode stays available.
+    let (status, removed) = request(
+        &app,
+        &token,
+        Method::DELETE,
+        "/v1/admin/imports/tickets/credentials/execution",
+        Some(versions(&enabled)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+
+    let scopes = json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]});
+    let agent = fixture.issue("alice", BrokerTokenClass::AgentInvoke, scopes);
+    let (_, outcome) = request(
+        &app,
+        &agent,
+        Method::POST,
+        "/v1/invoke/tickets/issue.stats",
+        Some(json!({"inputs": {}})),
+    )
+    .await;
+    // The recording command fails every call it receives.
+    assert_eq!(outcome["reasonCode"], "operation_failed", "{outcome}");
+    drop(app);
+    broker.stop().await;
+    let audit = fixture.config.audit.as_ref().unwrap().path.clone();
+    let record = read_audit_records(Path::new(&audit))
+        .into_iter()
+        .find(|record| record["service"] == "tickets" && record["action"] == "issue.stats")
+        .unwrap();
+    // Only the personal grant passed.
+    assert_eq!(record["credentialMode"], "per_user", "{record}");
+    assert_eq!(record["credentialConnection"], "tickets", "{record}");
+    let grants = record["providerAudit"]["commandAuthorization"]["grants"]
+        .as_array()
+        .unwrap();
+    assert_eq!(grants.len(), 1, "{record}");
+    assert_eq!(grants[0]["credentialMode"], "per_user", "{record}");
 }
 
 /// Creates `tickets` with `modes`, discovers and accepts it, stores a

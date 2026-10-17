@@ -63,7 +63,7 @@ Choose the credential mode deliberately:
 
 | Mode | What it means | Administrator responsibility |
 | --- | --- | --- |
-| `per_user` | Calls use the principal's own upstream identity | Enable managed per-user credentials or supported personal OAuth and have the user connect it |
+| `per_user` | Calls use the principal's own upstream identity | Configure a credential connection for the service, have people store their token or connect OAuth, and provision service accounts' tokens |
 | `service` | Calls use a configured shared upstream identity | Provision the service credential, review its upstream privileges, and grant its use explicitly |
 
 Use per-user mode for personal ownership, such as GitLab review drafts. Service
@@ -72,18 +72,46 @@ alone authorizes no action. Jira, Confluence, and GitLab lookup-backed service
 mode also requires the configured shared metadata-lookup credential; per-user-only
 lookup uses the user's credential. Provider guides document those requirements.
 
-For example, a Jira integration can expose a managed user credential target with:
+Per-user credentials come from **credential connections**. A connection is one
+credential slot per principal that one or more services consume. For example,
+a Jira integration can let each principal store a Jira API token with:
 
 ```toml
+[credentials.connections.jira]
+display_name = "Jira"
+token_profile = "jira-cloud-api-token"
+
 [credentials.per_user.jira]
-type = "managed_store"
-credential_name = "default"
-profile = "jira-cloud-api-token"
+type = "connection"
+connection = "jira"
 ```
 
 This is an addition to the production baseline, not a complete broker config.
 Configure the Jira provider URL and other required provider settings as described
 in [Jira setup](providers-jira.md) before reloading.
+
+Services that reach the same upstream account can share one connection. GitLab
+REST and a GitLab Git gateway can both name a `gitlab` connection, so each
+principal stores one GitLab token for both; see the
+[Git gateway](git-http-gateway.md#credentials-limits-and-audit). Grants stay
+per service, so a principal with only GitLab REST grants still cannot fetch
+through the gateway. Jira and Confluence declare different token profiles and
+keep separate connections.
+
+You decide each connection's method; principals never choose, and the Broker
+never falls back from one method to the other:
+
+| Principal | Connection with `oauth` | Connection with only `token_profile` |
+| --- | --- | --- |
+| Human user | Connects their account through OAuth | Stores their own token |
+| Service account | Uses the token you provision, if the connection sets `token_profile` | Uses the token you provision |
+| `system` principal | Stores its own token, if the connection sets `token_profile` | Stores its own token |
+
+OAuth is available for services that accept delegated credentials: Gmail and
+imported MCP OAuth services. An import with a personal binding publishes its
+own connection under its service ID. See
+[credential connections](configuration.md#credential-connections) for every
+rule.
 
 Teams uses managed encrypted destination resources with service-mode grants and
 no dummy credential. Imported MCP/OpenAPI services require administrator discovery,
@@ -177,11 +205,12 @@ version checks and caller setup.
 ## Enable personal OAuth connections
 
 For Gmail and imported MCP OAuth, enable the human owner's self-service setting,
-configure the service's personal OAuth registration/profile binding, and assign a
-matching active action grant with `credentialMode = "per_user"` to the user or one
-of their current groups. The same setup applies to an administrator connecting a
+configure a credential connection whose `oauth` names the registration and
+permission profile (imports publish theirs), and assign a matching active action
+grant with `credentialMode = "per_user"` on a service that uses the connection
+to the user or one of their current groups. The same setup applies to an administrator connecting a
 personal account. A signed-in browser session is required; a setup bearer alone
-cannot perform consent. Use **My access > Credentials > Connected accounts**.
+cannot perform consent. Use the registration's row in **My access > Credentials**.
 
 Setup does not require a resource or execution context to be usable now, and the
 matching grant need not win invocation precedence. A user can prepare an account
@@ -202,7 +231,14 @@ Explicit personal credential rights authorize deliberately enabled classless
 static credential management. They do not authorize OAuth connection management;
 OAuth uses the grant-based setup rules above. Ordinary managed browser sessions
 and `user_manage` bearers also use configured per-user policy visibility for
-static API-token credentials rather than these rights.
+connection tokens rather than these rights.
+
+A credential right applies to one credential connection: its service bound is
+the connection ID and its credential name is `default`. A right on any other
+name, or on a service that no longer names a connection, has no effect. A
+classless caller also needs its managed principal row, whose kind selects each
+connection's method; rights cannot store a token for a connection that uses
+OAuth for it.
 
 | Right | Classless static credential operation |
 | --- | --- |
@@ -211,7 +247,7 @@ static API-token credentials rather than these rights.
 | `credentials:self:delete` | Remove a stored credential |
 | `credentials:self:verify` | Run supported credential verification |
 
-For a configured `jira/default` target, grant the operations the principal
+For a configured `jira` connection, grant the operations the principal
 actually needs:
 
 ```bash
@@ -227,26 +263,29 @@ agent-access admin rights grant alice \
 
 Always supply both `--service` and `--credential-name`; omission grants broader
 rights. Rights belong directly to the principal, are independently revocable,
-and may expire. Match the configured `credentials.per_user.<service>` target
-exactly. List and revoke retained rights with:
+and may expire. Name the configured connection ID exactly. List and revoke
+retained rights with:
 
 ```bash
 agent-access admin rights list
 agent-access admin rights revoke "<right-id>"
 ```
 
-For ordinary `type = "managed_store"` API-token credentials, a managed browser
-session or `user_manage` bearer is admitted by its token class and the owner's
-policy-visible per-user target; these routes do not additionally require the
-explicit rights above. Static credential deletion still requires access to the
-configured target, even when a retained credential appears in the owner's list.
+For ordinary connection tokens, a managed browser session or `user_manage`
+bearer is admitted by its token class and the owner's policy-visible connection;
+these routes do not additionally require the explicit rights above. Stored
+tokens that the configuration no longer selects, such as tokens kept under a
+former credential name or profile, stay listed for their owner, who can delete
+them by ID.
 OAuth owner cleanup after grant removal follows the separate rules above.
 None of these management operations grants invocation access.
 
 An administrator acting through **Admin > Principals > Credentials** or
 `agent-access admin credentials ...` uses administrative authority to manage the
-target's stored API-token credentials. That does not grant the target personal
-rights or complete the user's OAuth consent. An `admin` bearer cannot call
+target's stored tokens. An administrator can store a token only for a
+connection that selects a token for that principal: service accounts' and
+`system` principals' tokens, and people's for connections without OAuth. That
+does not grant the target personal rights or complete the user's OAuth consent. An `admin` bearer cannot call
 personal routes. Imported OAuth administrator discovery has a separate authority
 path described in [imported OAuth](imported-oauth.md).
 
@@ -258,7 +297,7 @@ execution contexts, and an identifiable label. Flat resource groups may include
 and exclude entries; inspect their current members before reuse.
 
 The example below grants the group read access to Jira project `ENG` from the
-`default` context. It assumes Jira and its per-user credential target are
+`default` context. It assumes Jira and its credential connection are
 configured and `default` is a configured execution context. Direct token
 clients must arrive in that context through the deployment's configured default
 or approved ingress.
@@ -299,11 +338,11 @@ changes to broad entries and reused groups.
 
 1. Open the user's **Access** tab. Confirm the intended actions/resources in every
    granted context, and check that unexpected writes or broad selectors are absent.
-2. Verify self-service is enabled and the configured personal credential target
-   matches a current `per_user` grant. Have the user sign in, change any temporary
-   password, and store/verify the credential through **My access > Credentials**.
-   OAuth-backed services use the connection flow instead of pasting an API token;
-   they need no separate credential rights. Check explicit rights only when
+2. Verify self-service is enabled and the service's credential connection is
+   configured for a current `per_user` grant. Have the user sign in, change any
+   temporary password, and store/verify the credential through
+   **My access > Credentials**. Connections with OAuth use the connect flow
+   instead of pasting an API token; they need no separate credential rights. Check explicit rights only when
    deliberately using classless static credential management.
 3. Have the user issue a finite `agent_invoke` token with only the required contexts.
    For dedicated automation, add explicit service/action/resource restrictions.
@@ -324,7 +363,10 @@ both actor and target metadata.
 Use **Admin > Principals > Service accounts** for workloads that must outlive a
 human owner. These accounts have no password/Microsoft login, self-service, or
 management tokens. Administrators manage their credentials, groups, grants, and
-bounded `agent_invoke` tokens. Assign an operational owner and rotation schedule.
+bounded `agent_invoke` tokens. A service account always uses a token you
+provision for each credential connection that sets `token_profile`, even when
+people connect that connection through OAuth; an OAuth-only connection gives it
+no personal credential. Assign an operational owner and rotation schedule.
 
 ```bash
 agent-access admin principals create build-agent \
@@ -380,7 +422,8 @@ future admission.
 Periodically review active administrators, auditors, service managers/assignments,
 service accounts and their owners, credential rights and expiry, enabled grants,
 resource-group membership, trusted username bindings and namespace availability,
-shared identity-access pause state, nonexpiring tokens, unused credentials, and principal-specific limits. Review
+shared identity-access pause state, nonexpiring tokens, unused credentials,
+stored tokens the configuration no longer selects, and principal-specific limits. Review
 retained grants/credentials/assignments before restoring a removed service name:
 its dormant records can become effective again.
 

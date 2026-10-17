@@ -77,19 +77,22 @@ A Broker invocation token identifies your agent to the broker. An upstream
 credential identifies the broker to Jira or another service. The broker retains
 the upstream credential; give your agent only its Broker invocation token.
 
-1. Open **My access > Credentials** and select the configured service target.
-2. Check its service, credential name, and profile. Use the fields requested by
-   that target; for example, a Jira Cloud API-token profile asks for the upstream
-   username and token.
-3. Enter your upstream values and choose **Save credential** for an empty target.
+1. Open **My access > Credentials** and select the credential connection. Each
+   row is one connection and lists the services you are granted that use it; a
+   shared connection, such as GitLab for GitLab REST and Git, needs one token.
+2. Check its profile and the services in **Used by**. Use the fields requested
+   by the connection; for example, a Jira Cloud API-token profile asks for the
+   upstream username and token.
+3. Enter your upstream values and choose **Save credential** for an empty connection.
    If a credential already exists, the drawer shows **Replace secret** and the
    button is **Replace credential**. Supply the required replacement fields.
 4. After saving, check the status and verify it as described below.
 
-![Personal service credential targets and statuses](../images/portal/guide-annotated/user-credentials-light.png)
+![Personal credential connections and statuses](../images/portal/guide-annotated/user-credentials-light.png)
 
-*Credential targets come from the broker's configuration and your permitted
-personal credential access.*
+*Credential connections come from the broker's configuration and your permitted
+personal credential access. This capture predates shared connections and shows
+one row per service.*
 
 ![Jira credential replacement fields with the secret masked](../images/portal/guide-annotated/user-credential-input-light.png)
 
@@ -103,19 +106,23 @@ credential works. Service-mode actions may use a shared credential managed by th
 administrator instead of your personal credential.
 
 For supported OAuth services, use the offered connection flow and upstream
-consent rather than pasting an OAuth access token into these fields. OAuth
-setup requires self-service, a configured personal binding and a matching active
-`per_user` action grant for you or one of your current groups. An existing bound
-connection remains visible and disconnectable after grant removal; reconnect
-requires a matching grant. See the [end-user guide](../end-user-guide.md#store-a-credential-or-connect-oauth)
+consent rather than pasting an OAuth access token into these fields. Each OAuth
+registration is one row of the same list, with **Connect account**,
+**Reconnect** and **Disconnect**. OAuth setup requires self-service, a credential
+connection with OAuth and a matching active `per_user` action grant on a service
+that uses it, for you or one of your current groups. An existing connection
+remains visible and disconnectable after grant removal; reconnect requires a
+matching grant. Rows marked **Not used** are stored credentials no service
+reads any more; delete them when you no longer need them. See the [end-user guide](../end-user-guide.md#store-a-credential-or-connect-oauth)
 if **Connect** or **Reconnect** is unavailable.
 
 ## 4. Verify the saved credential
 
-1. In the credential drawer, choose **Verify** when the target supports it.
-2. For Git gateway credentials, enter a permitted `namespace/repository` in
-   **Repository**, then choose **Verify**. Other services may have different
-   requirements.
+1. In the credential drawer, choose **Verify**. The broker verifies through one
+   of the connection's services.
+2. To verify through a Git gateway service, enter a permitted
+   `namespace/repository` in **Repository** under **Verify through Git**, then
+   choose that section's **Verify**.
 3. Read **Status**, **Last checked**, **Last verified**, and any **Last error**.
    The last successful verification time and the latest attempt time are separate.
 
@@ -131,7 +138,8 @@ verification timestamps.*
 
 ![Git gateway verification requiring a repository](../images/portal/guide-annotated/user-credential-test-repository-light.png)
 
-*Git gateway verification requires a repository the credential should reach.*
+*Verifying through a Git gateway requires a repository the credential should
+reach. This capture predates shared connections.*
 
 Expected result: the status reflects the latest supported verification outcome.
 An upstream verification establishes the tested credential's access at that time;

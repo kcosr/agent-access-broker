@@ -81,14 +81,18 @@ enabled = true
 mode = "create_if_empty"
 principal_id = "admin"
 initial_password = "${ADMIN_PASSWORD}"
+[credentials.connections.jira]
+display_name = "Jira"
+token_profile = "jira-cloud-api-token"
 [credentials.per_user.jira]
-type = "managed_store"
-credential_name = "default"
-profile = "jira-cloud-api-token"
+type = "connection"
+connection = "jira"
+[credentials.connections.gitlab_git]
+display_name = "GitLab Git"
+token_profile = "git-bearer-token"
 [credentials.per_user.gitlab_git]
-type = "managed_store"
-credential_name = "default"
-profile = "git-bearer-token"
+type = "connection"
+connection = "gitlab_git"
 [providers.jira]
 tenant_host = "jira.example.invalid"
 allowed_upstream_hosts = ["https://jira.example.invalid/**"]
@@ -212,7 +216,7 @@ async function saveAndVerifyGitCredential(page: Page, drawer: Locator, verifyPat
   const request = page.waitForRequest((candidate) => candidate.method() === "POST" && verifyPath.test(new URL(candidate.url()).pathname));
   const response = page.waitForResponse((candidate) => candidate.request().method() === "POST" && verifyPath.test(new URL(candidate.url()).pathname));
   await verifyButton.click();
-  expect((await request).postDataJSON()).toEqual({ repository: "team/app" });
+  expect((await request).postDataJSON()).toEqual({ service: "gitlab_git", repository: "team/app" });
   const body = await (await response).json();
   expect(body.reasonCode).not.toBe("input_invalid");
   expect(JSON.stringify(body)).not.toContain("requires repository");
@@ -320,18 +324,18 @@ test("My access shows names, effects and the repository input when the default c
   await expect(actionDrawer.getByText("git.local.test", { exact: true })).toBeVisible();
   await expect(actionDrawer.getByText("Read-only", { exact: true })).toBeVisible();
 
-  // Credentials are named, and GitLab Git verification asks for a repository.
+  // Credential connections are named, and verifying through GitLab Git asks for a repository.
   await page.goto(`${baseUrl}/ui/credentials`);
-  const credentials = page.getByRole("table", { name: "Service credentials", exact: true });
+  const credentials = page.getByRole("table", { name: "Credentials", exact: true });
   await expect(tableRow(credentials, "Jira")).toBeVisible();
   await tableRow(credentials, "GitLab Git").getByRole("link", { name: "GitLab Git", exact: true }).click();
-  await saveAndVerifyGitCredential(page, page.getByRole("complementary", { name: "GitLab Git credential", exact: true }), /^\/v1\/credentials\/gitlab_git\/default\/verify$/);
+  await saveAndVerifyGitCredential(page, page.getByRole("complementary", { name: "GitLab Git credential", exact: true }), /^\/v1\/credentials\/connections\/gitlab_git\/verify$/);
   expect([...services]).toEqual([]);
 
   // An administrator managing the user's credentials sees the same repository input.
   await signInAsAdmin(page);
   await page.goto(`${baseUrl}/ui/admin/principals/${USER}/credentials`);
-  const managed = page.getByRole("table", { name: "Service credentials", exact: true });
+  const managed = page.getByRole("table", { name: "Credentials", exact: true });
   await expect(tableRow(managed, "Jira")).toBeVisible();
   await tableRow(managed, "GitLab Git").getByRole("link", { name: "GitLab Git", exact: true }).click();
   const drawer = page.getByRole("complementary", { name: "GitLab Git credential", exact: true });
@@ -340,11 +344,11 @@ test("My access shows names, effects and the repository input when the default c
   const repository = drawer.getByRole("textbox", { name: "Repository" });
   await expect(repository).toBeVisible();
   await repository.fill("team/app");
-  const verifyPath = new RegExp(`^/v1/admin/principals/${USER}/credentials/gitlab_git/default/verify$`);
+  const verifyPath = new RegExp(`^/v1/admin/principals/${USER}/credentials/connections/gitlab_git/verify$`);
   const request = page.waitForRequest((candidate) => candidate.method() === "POST" && verifyPath.test(new URL(candidate.url()).pathname));
   const response = page.waitForResponse((candidate) => candidate.request().method() === "POST" && verifyPath.test(new URL(candidate.url()).pathname));
   await drawer.getByRole("button", { name: "Verify", exact: true }).click();
-  expect((await request).postDataJSON()).toEqual({ repository: "team/app" });
+  expect((await request).postDataJSON()).toEqual({ service: "gitlab_git", repository: "team/app" });
   const body = await (await response).json();
   expect(body.reasonCode).not.toBe("input_invalid");
   expect(JSON.stringify(body)).not.toContain("requires repository");

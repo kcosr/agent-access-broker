@@ -21,8 +21,9 @@ and write access use distinct authorization scopes throughout the control plane.
 
 Self-service permits personal token, credential, connection, and activity
 operations under their individual authorization rules. Personal OAuth
-connect/reconnect requires a configured binding and a matching active `per_user`
-action grant for the user or their current groups; separate credential rights
+connect/reconnect requires a credential connection with OAuth and a matching
+active `per_user` action grant on a service that uses it, for the user or their
+current groups; separate credential rights
 are not used. The owner can inspect and disconnect an existing bound connection
 after grant loss. See [OAuth setup](administrator-guide.md#enable-personal-oauth-connections). Disabling it
 hides the entire **My access** space, its tabs, shortcuts, and background queries,

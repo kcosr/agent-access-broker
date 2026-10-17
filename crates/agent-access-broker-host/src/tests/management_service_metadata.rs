@@ -78,19 +78,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
         ("gitlab_git", "git-bearer-token"),
         ("jira", "jira-cloud-api-token"),
     ] {
-        config.credentials.per_user.insert(
-            service.to_string(),
-            CredentialConfig {
-                kind: "managed_store".to_string(),
-                username_ref: None,
-                token_ref: None,
-                provider: None,
-                path: None,
-                read_only: None,
-                credential_name: Some("default".to_string()),
-                profile: Some(profile.to_string()),
-            },
-        );
+        super::use_token_connection(&mut config, service, profile, &[service]);
     }
     let grant = |service: &str, actions: &[&str], mode: &str, resources| PolicyGrantConfig {
         subjects: vec!["user:alice".to_string()],
@@ -265,17 +253,24 @@ fn assert_token_option_metadata(options: &Value) {
 
 fn assert_credential_target_metadata(targets: &Value) {
     assert_eq!(targets.as_array().unwrap().len(), 2, "{targets}");
-    let git = entry(targets, "service", "gitlab_git");
-    assert_eq!(git["displayName"], "GitLab Git");
-    assert_eq!(git["credentialVerificationInputs"], json!(["repository"]));
-    // Existing fields are unchanged.
-    assert_eq!(git["credentialName"], "default");
+    let git = entry(targets, "connection", "gitlab_git");
+    // Without a configured display name, the connection shows its ID.
+    assert_eq!(git["displayName"], "gitlab_git");
+    assert_eq!(
+        git["consumers"],
+        json!([{"service": "gitlab_git", "displayName": "GitLab Git",
+            "credentialVerificationInputs": ["repository"]}])
+    );
+    assert_eq!(git["otherConsumers"], 0);
     assert_eq!(git["profile"], "git-bearer-token");
-    let jira = entry(targets, "service", "jira");
-    assert_eq!(jira["displayName"], "Jira");
+    assert_eq!(git["inputSchema"]["connection"], "gitlab_git");
+    let jira = entry(targets, "connection", "jira");
+    assert_eq!(jira["displayName"], "jira");
     // Always serialized, empty when verification needs no input.
-    assert_eq!(jira["credentialVerificationInputs"], json!([]));
-    assert_eq!(jira["credentialName"], "default");
+    assert_eq!(
+        jira["consumers"][0]["credentialVerificationInputs"],
+        json!([])
+    );
     assert_eq!(jira["profile"], "jira-cloud-api-token");
 }
 

@@ -43,20 +43,32 @@ it does not remove write permissions from the upstream token. Lookup-backed
 service-mode grants require this credential. Per-user-only paths instead use the
 principal's selected credential for lookup and execution.
 
-For managed per-user credentials, replace the service execution stanza with
-`[credentials.per_user.jira]`, `type = "managed_store"`,
-`credential_name = "default"`, and `profile = "jira-cloud-api-token"`.
-Create the corresponding user credential and grant `credential_mode = "per_user"`.
-The [configuration reference](configuration.md) describes secret sources, managed
+For per-user credentials, replace the service execution stanza with a
+[credential connection](configuration.md#credential-connections):
+
+```toml
+[credentials.connections.jira]
+display_name = "Jira"
+token_profile = "jira-cloud-api-token"
+
+[credentials.per_user.jira]
+type = "connection"
+connection = "jira"
+```
+
+Each principal stores their own token for the connection, or an administrator
+provisions a service account's, and grants use `credential_mode = "per_user"`.
+The [configuration reference](configuration.md) describes secret sources, token
 profiles, attachment limits and optional egress/TLS settings. Atlassian bearer
 credentials additionally require `cloud_id` and an explicit
 `https://api.atlassian.com/**` allowlist; credential kind selects that gateway
 rather than the tenant route.
 
 For ordinary managed browser or `user_manage` credential management, enable the
-owner's self-service flag and grant access to this configured per-user target.
-Those management paths use current per-user policy visibility and do not require
-separate `credentials:self:*` rights for API-token credentials. The account role
+owner's self-service flag and grant them a `per_user` action on a service that
+uses this connection. Those management paths use current per-user policy
+visibility and do not require separate `credentials:self:*` rights for
+connection tokens. The account role
 alone does not grant invocation access. Deliberately configured classless
 management uses explicit scoped credential rights; see the
 [administrator guide](administrator-guide.md) for that distinct setup and the

@@ -273,7 +273,7 @@ test("administrator imports the reference command, grants it, and agents invoke 
   });
 
   await test.step("set and verify the personal username-and-token credential", async () => {
-    await page.goto(`${baseUrl}/ui/admin/principals/avery/credentials?credential=ticketing%2Fdefault`);
+    await page.goto(`${baseUrl}/ui/admin/principals/avery/credentials?credential=ticketing`);
     const drawer = page.getByRole("complementary", { name: "Ticketing credential", exact: true });
     await expect(drawer).toContainText("username-token");
     // The form follows the Broker's schema for the `username-token` profile.

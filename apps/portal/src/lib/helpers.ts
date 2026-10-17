@@ -6,7 +6,7 @@ import type {
   AgentTokenServiceRestriction,
   ResourceSelection,
   BrokerTokenRecord,
-  CredentialMetadata,
+  CredentialState,
   GroupPolicyReference,
   GroupRecord,
   PolicyCatalogResult,
@@ -169,12 +169,7 @@ export function tokenAllowedServiceItems(record: BrokerTokenRecord) {
   return services;
 }
 
-/** Credentials keyed by `service/name`, the identity of a credential target. */
-export function credentialsByTarget(credentials: CredentialMetadata[]) {
-  return new Map(credentials.map((credential) => [`${credential.service}/${credential.name}`, credential]));
-}
-
-export function credentialStatus(credential?: CredentialMetadata) {
+export function credentialStatus(credential?: CredentialState | null) {
   if (!credential) return "Not saved";
   if (credential.status === "disabled") return "Disabled";
   if (credential.status !== "active") return credential.status;
@@ -185,11 +180,11 @@ export function credentialStatus(credential?: CredentialMetadata) {
 }
 
 /** The toast after a verification: a service without upstream verification checks the credential locally only. */
-export function credentialVerifiedMessage(status: CredentialMetadata["verificationStatus"]) {
+export function credentialVerifiedMessage(status: CredentialState["verificationStatus"]) {
   return status === "local_verified" ? "Credential checked locally; the service does not verify it upstream" : "Credential verified";
 }
 
-export function credentialTone(credential?: CredentialMetadata): BadgeTone {
+export function credentialTone(credential?: CredentialState | null): BadgeTone {
   if (!credential) return "neutral";
   if (credential.status !== "active") return "neutral";
   if (credential.verificationStatus === "verification_failed") return "danger";

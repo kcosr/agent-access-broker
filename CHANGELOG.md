@@ -302,6 +302,73 @@ All notable changes to this project are documented in this file.
   resolve against the working directory. `LimitsConfig` no longer implements
   `Default`; construct it with `LimitsConfig::new(upload_spool_dir)`, which
   applies the built-in default for every other limit.
+- Personal credentials are configured as credential connections.
+  `[credentials.connections.<id>]` (`display_name`, `token_profile`, and
+  `oauth = { registration, profile }`) defines one per-principal credential,
+  and every service whose `[credentials.per_user.<service>]` entry is
+  `type = "connection"` with `connection = "<id>"` uses it. Services that reach
+  the same upstream account can share one connection, such as GitLab REST and
+  a GitLab Git gateway with one stored GitLab token, while keeping separate
+  grants. The per-user types `managed_store` and `oauth` and the `credential_name`
+  and `profile` keys are removed without a fallback parser; a per-user `type` is
+  `connection` or `secret_store`. A principal's kind selects the method from
+  configuration alone, with no fallback between methods: people use OAuth when
+  the connection sets it and a token they store otherwise; service accounts use
+  tokens administrators provision and `system` principals tokens they store,
+  never OAuth; a configured static principal takes the kind of the active
+  managed principal with its ID, and other static principals and anonymous
+  callers have no connection method. A connection's tokens are stored under its ID with the
+  name `default`, so a connection with the same ID and profile as an earlier
+  per-service credential reads its tokens unchanged; tokens under another name
+  stay stored but unread. Credential rights apply to the connection and
+  `default`; rights on other names have no effect. Connection IDs share the
+  service namespace: a connection may not be named `broker`, or after a
+  configured service, gateway or imported service that does not use it.
+  Imports with a personal binding publish their own connection under their
+  service ID and need no configuration change. There is no schema migration;
+  rewrite the configuration before upgrading, following the credential
+  connections steps under the operator guide's upgrade and rollback section.
+- Personal credential management is keyed by credential connection. `GET
+  /v1/credentials` returns `{connections, retained}`: each connection's method
+  for the caller (`token`, `oauth` or `unavailable`), the services it serves
+  that the caller is entitled to with a count of the others, and its active
+  token, plus the stored rows the configuration no longer selects. `GET
+  /v1/credentials/targets` lists connections, and `GET|PUT|DELETE
+  /v1/credentials/connections/{connection}` with `/verify` and
+  `/input-schema` replace the `{service}/{name}` routes; the administrator
+  routes move to `/v1/admin/principals/{principal}/credentials/connections/{connection}`
+  and apply only when the connection selects a token for that principal, and
+  `GET /v1/admin/principals/{principal}/credentials` lists a principal's
+  connections and retained rows in the personal list's shape. A classless
+  self-service caller needs its managed principal row, whose kind selects each
+  connection's method.
+  Verification takes an optional `service` beside `repository`, probes as the
+  credential owner and returns `probeService`. `DELETE
+  /v1/credentials/retained/{credentialId}` removes a retained row, and
+  `PUT /v1/admin/credentials/{id}` and `POST /v1/admin/credentials/{id}/verify`
+  are removed. OAuth routes are keyed by registration: `POST /v1/oauth/connect`
+  takes `registration` (and `importedService` for an administrator's import
+  discovery), `DELETE /v1/oauth/connections/{registration}` disconnects, and
+  `GET /v1/oauth/connections` returns one row per registration with its
+  `consumers` and `otherConsumers` instead of `service` and
+  `serviceDisplayName`; a registration the user still holds tokens for but no
+  connection selects is listed for disconnection only, with `permissionProfile`,
+  `scopeMode` and `target` null. A connection without `display_name` is named
+  by its ID. Consent is admitted for the registration as a whole,
+  through any consuming service the user holds a `per_user` grant on, and
+  consent flows left pending by an earlier version are discarded. Management
+  audit targets name `{principal, connection}`, `{principal, credentialId}` for
+  retained-row deletes, and `{registration}` for OAuth; connection records list
+  the consuming services in `providerAudit.management.targetServices`, and only a
+  connection with a single consumer sets `targetService`. The CLI follows: `credentials
+  inspect|put|delete|verify <connection>` drop the credential-name positional,
+  `credentials targets` and `credentials delete-retained <credential-id>` are
+  added, verification takes `--service` (`--verify-service` on `put`), and
+  `admin credentials list <principal>` lists a principal's connections, while
+  `list-stored [--principal]`, `targets`, `inspect-by-id` and `delete-by-id`
+  are added. The portal's Credentials list has one row per connection and
+  per OAuth registration, merging the separate Connected accounts section, and
+  lists retained rows for deletion.
 
 ### Added
 
@@ -612,6 +679,24 @@ All notable changes to this project are documented in this file.
   way as forwarding. The provider SDK adds the host-only placement
   `host::token_as_basic`, for static and delegated tokens; the crate-boundary
   check rejects it in native, adapter, reference and helper crates.
+
+- Invocation and Git gateway audit records carry `credentialConnection`, the
+  credential connection a personal credential came from. It is present when the
+  selected credential mode is `per_user`, and when a command call passes a
+  `per_user` grant even though mixed modes leave `credentialMode` null; it is
+  absent when only service credentials are used.
+
+- The provider SDK adds `UpstreamAuthority` and
+  `ServiceDescriptor::with_upstream_authority`, through which a backend
+  declares the upstream instance its credentials act on, and the provided
+  `OAuthDialect::check_consumer_authority`, which accepts every consumer by
+  default. The host checks that a token credential connection's consumers act
+  on one instance, and that an OAuth connection's registration dialect accepts
+  each consumer, at `config validate`, startup, reload and every imported-catalog
+  publication. `ServiceCredentialKinds` adds `per_user_delegated`, set with the
+  `with_per_user_delegated` builder, which reports that a credential connection
+  also offers OAuth; `per_user` reports the token profile's kind, or `oauth`
+  for an OAuth-only connection.
 
 ### Changed
 

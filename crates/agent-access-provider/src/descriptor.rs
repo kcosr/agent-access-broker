@@ -8,7 +8,8 @@
 use crate::attribution::AttributionCapability;
 use crate::presentation::ActionPresentation;
 use crate::{
-    ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
+    ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamAuthority,
+    UpstreamResourceOwnership,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,6 +44,11 @@ pub struct ServiceDescriptor {
     pub credentials: CredentialDescriptor,
     /// Largest embedded upstream body the broker renders for this service.
     pub presentation_body_limit: Option<u64>,
+    /// The upstream instance this service's credentials act on, from its
+    /// configuration. A credential connection's consumers must agree on it,
+    /// and an OAuth dialect checks it against a registration; a service that
+    /// declares none can share a credential connection with no other service.
+    pub upstream_authority: Option<UpstreamAuthority>,
 }
 
 #[non_exhaustive]
@@ -399,6 +405,7 @@ impl ServiceDescriptor {
             actions: Vec::new(),
             credentials: CredentialDescriptor::default(),
             presentation_body_limit: None,
+            upstream_authority: None,
         }
     }
 
@@ -429,6 +436,13 @@ impl ServiceDescriptor {
     /// Largest embedded upstream body the broker renders for this service.
     pub fn with_presentation_body_limit(mut self, bytes: u64) -> Self {
         self.presentation_body_limit = Some(bytes);
+        self
+    }
+
+    /// Declares the upstream instance this service's credentials act on,
+    /// derived from the configuration alone.
+    pub fn with_upstream_authority(mut self, authority: UpstreamAuthority) -> Self {
+        self.upstream_authority = Some(authority);
         self
     }
 
@@ -812,6 +826,7 @@ mod tests {
             actions,
             credentials: CredentialDescriptor::without_execution_credential(),
             presentation_body_limit: None,
+            upstream_authority: None,
         }
     }
 

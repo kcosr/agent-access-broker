@@ -23,8 +23,10 @@ const service = { service: "jira", displayName: "Jira", surface: "http", actions
 const catalog = { services: [service], subjects: { users: [principal], groups: [userGroup], anonymous: false }, resources: [resource, excludedResource], resourceGroups, executionContexts: { allowedValues: ["default"], defaultContext: "default", contextRequired: false } };
 const config = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
 const grant = { grantRef: "engineering-read", grantId: "engineering-read", writable: true, version: 1, subjects: [`group:${userGroup.groupId}`], service: "jira", actions: [action.action], credentialMode: "service", executionContexts: ["default"], status: "active", resources: { resourceIds: [], resourceGroupIds: [] } };
-const target = { service: "jira", displayName: "Jira", credentialName: "work-account", profile: "personal", credentialKind: "bearer", credentialVerificationInputs: [], inputSchema: { service: "jira", profile: "personal", credentialKind: "bearer", fields: [] } };
-const credential = { credentialId: "credential-123", ownerPrincipal: "viewer", ownerKind: "user", service: "jira", name: target.credentialName, profile: "personal", credentialKind: "bearer", metadata: {}, status: "active", ...stamp };
+const consumers = [{ service: "jira", displayName: "Jira", credentialVerificationInputs: [] }];
+const target = { connection: "work-account", displayName: "Jira", consumers, otherConsumers: 0, profile: "personal", credentialKind: "bearer", inputSchema: { connection: "work-account", profile: "personal", credentialKind: "bearer", fields: [] } };
+const credential = { credentialId: "credential-123", ownerPrincipal: "viewer", ownerKind: "user", connection: target.connection, profile: "personal", credentialKind: "bearer", metadata: {}, status: "active", ...stamp };
+const credentialList = { connections: [{ connection: target.connection, displayName: "Jira", method: "token", consumers, otherConsumers: 0, profile: "personal", credentialKind: "bearer", registration: null, credential }], retained: [] };
 const draftImport = { definition: { service: "metrics-draft", displayName: "Metrics draft", adapterKind: "mcp_http", endpoint: "https://metrics.example.test/mcp", executionBindings: [], connectionSettings: {}, discovery: { kind: "anonymous" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, ...stamp };
 
 test.beforeAll(async () => {
@@ -69,7 +71,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEna
     else if (pathname.endsWith("/effective-access")) result = { policyGeneration: 1, access: [] };
     else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = [target];
-    else if (pathname === "/v1/credentials") result = [credential];
+    else if (pathname === "/v1/credentials") result = credentialList;
     else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [draftImport] };
     else if (pathname === "/v1/admin/imports/metrics-draft/preview") result = { service: draftImport, operatorAllowed: true, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {}, preview: null };
     else if (pathname.endsWith("/audit/options")) result = { services: [] };
@@ -228,7 +230,7 @@ test("actions, draft imports, own credentials and audit search have usable desti
   palette = await search(page, "credential-123");
   await palette.getByRole("group", { name: "Your credentials", exact: true }).getByRole("option").first().click();
   await expect.poll(() => new URL(page.url()).pathname).toBe("/ui/credentials");
-  expect(new URL(page.url()).searchParams.get("credential")).toBe("jira/work-account");
+  expect(new URL(page.url()).searchParams.get("credential")).toBe("work-account");
   await expect(page.getByRole("complementary", { name: /Jira/ })).toBeVisible();
   palette = await search(page, "investigation-123");
   await palette.getByRole("option", { name: /Search audit for/ }).click();

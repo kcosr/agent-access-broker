@@ -906,7 +906,8 @@ sequenceDiagram
    input. An import change that would leave a retained grant invalid at the
    next start is refused and names the grants to fix first.
 10. **Execution-credential resolution.** The credential for the selected mode is
-   loaded.
+   loaded; for `per_user`, the method the service's credential connection
+   selects for the caller's principal kind.
 11. **Lookup-credential resolution.** If final policy selects `per_user`, any
    provider-side execution-time confirmation uses the caller's per-user
    credential. If final policy selects `service`, it uses the shared lookup
@@ -1249,10 +1250,12 @@ denies with `CredentialNotProvisioned` (403). A backend explicitly declaring no
 execution credential can use service mode without a dummy credential. Teams uses
 this path with its admitted resource's signed endpoint.
 
-**`service` / `per_user` credential kinds.**
+**Credential kinds.**
 
-- `basic_api_token` loads `username_ref` + `token_ref`.
-- `bearer_token` loads `token_ref` only.
+- `basic_api_token` loads `username_ref` + `token_ref` for a service or lookup
+  credential; a stored token of a basic-kind profile holds both.
+- `bearer_token` loads `token_ref` only, or a stored token of a bearer-kind
+  profile.
 - The runtime and test support are the only constructors of
   `ExecutionCredential`, so each kind always carries its required material.
   Providers read it through a typed view (`Basic { username, token }` or
@@ -1268,21 +1271,60 @@ identity and matches the exact principal first, then the exact
 `principal_subject`. An empty, unreadable, or invalid store fails closed
 (`CredentialNotProvisioned` or `CredentialInvalid`).
 
-**`per_user` `managed_store`** loads the authenticated principal's user
-credential by `(principal, service, credential name)`, requires the stored
-profile to match the configured profile, decrypts the secret with the credential
-encryption key ring, and enforces metadata expiry (`CredentialExpired`) plus
-active status. A missing row resolves to `CredentialNotFound` (404).
+**`per_user` `connection`** names a **credential connection**
+(`credentials.connections.<id>`): one per-principal credential slot that
+several services can consume, such as one GitLab token for GitLab REST and the
+GitLab Git gateway. The connection decides how a principal authenticates; each
+consuming service's grants still decide what the principal may do. One
+configuration-only function, `select(connection, principal_kind)`, returns the
+method: a stored token of the connection's `token_profile`, the principal's
+OAuth connection for the connection's `oauth` registration and profile, or
+nothing. `user` principals use OAuth when the connection sets it and a stored
+token otherwise; `service_account` and `system` principals use a stored token
+when the connection sets `token_profile` and have no personal method
+otherwise. A configured static principal takes the kind of the active managed
+principal with its ID, read once per authentication; other static principals
+and anonymous callers have none. The principal kind travels on the identity
+from `principals.kind` (never defaulted; unknown kinds select nothing). Selection never reads stored material, and there
+is no fallback between methods. Runtime execution, both lookup phases, the Git
+gateway, discovery and readiness, management, consent admission, verification,
+backend validation and the command-import paths all use this one selection.
+Imports with a supported, allowed personal binding publish a single-consumer
+connection under the imported service ID that mirrors that binding. See
+[credential connections](configuration.md#credential-connections).
 
-**`per_user` `oauth`** is a delegated credential: access the caller granted the
-broker through an [OAuth connection](oauth.md). It applies only to services
-whose descriptor declares `CredentialDescriptor::delegated`, with a short
-description of what connecting allows; the portal's connected-accounts view shows
-it under the service's display name, so it names no service itself. After policy
-admits the invocation, the runtime acquires the caller's current access from
-the OAuth manager (refreshing it when due) inside the invocation's correlation
-context, so a denied invocation never obtains or refreshes upstream access. The
-provider receives it as `ExecutionAccess::Delegated`, a lease it
+Services sharing a connection must act on one upstream. Each backend or gateway
+declares an `UpstreamAuthority` in its service descriptor: a normalized origin
+and instance path, with an optional tenant and tenant gateway (GitLab REST the
+instance of its `api_base_url`, a Git gateway its `upstream_base_url`, Jira and
+Confluence their site with the cloud ID and Atlassian gateway, an HTTP import its
+endpoint). A token connection's consumers must all declare authorities naming
+the same instance. An OAuth connection's registration dialect checks each
+consumer's authority against the resource the registration grants through
+`OAuthDialect::check_consumer_authority`, which accepts by default. The checks
+run at offline validation, at startup and reload, and at every imported-catalog
+publication, including import creation, without contacting upstream. Stored
+tokens are not bound to an authority, so a later base-URL change sends them to
+the new instance, as a provider base-URL change always has.
+
+A **token** selection loads the authenticated principal's row
+`(principal, connection, default)`, requires the stored profile to match the
+connection's `token_profile`, decrypts the secret with the credential
+encryption key ring, and enforces metadata expiry (`CredentialExpired`) plus
+active status. A missing row resolves to `CredentialNotFound` (404); a
+principal for which the connection selects nothing is denied with
+`CredentialNotProvisioned`.
+
+An **OAuth** selection is a delegated credential: access the caller granted the
+broker through an [OAuth connection](oauth.md), keyed by owner and
+registration, so connections sharing a registration share it. It applies only
+to services whose descriptor declares `CredentialDescriptor::delegated`, with a
+short description of what connecting allows; management shows it under the
+service's display name, so it names no service itself.
+After policy admits the invocation, the runtime acquires the caller's current
+access from the OAuth manager (refreshing it when due) inside the invocation's
+correlation context, so a denied invocation never obtains or refreshes upstream
+access. The provider receives it as `ExecutionAccess::Delegated`, a lease it
 can read (`access()`: token, target, audience, version, expiry) and, after an
 upstream 401, replace once (`recover_after_unauthorized`). Immediately before
 dispatch the runtime revalidates the lease: access revoked, disconnected, or
@@ -1356,10 +1398,13 @@ The durable tables are:
 - `rights` - scoped management rights for self-service credential operations.
   Credential rights such as `credentials:self:write` support optional
   service and credential-name bounds, expiry, revocation, issuer, and reason.
+  A credential connection's rights are those on `(connection, default)`.
   OAuth does not use these rights; personal setup uses current `per_user` grants.
 - `credentials` - per-user credential metadata and lifecycle fields keyed by
-  `(owner_kind, owner_principal_id, service, name)`. Public API responses omit
-  `secret_backend`, `secret_ref`, and `material_version`.
+  `(owner_kind, owner_principal_id, service, name)`. A credential connection's
+  token rows use the connection ID as `service` and `default` as `name`; rows
+  the configuration does not select stay stored, unread, until deleted. Public
+  API responses omit `secret_backend`, `secret_ref`, and `material_version`.
 - `credential_secret_material` - encrypted secret bytes, nonce, and key id for
   the credential's `sqlite_encrypted` secret reference. It is linked one-to-one
   to `credentials` and cascades when a credential row is deleted.
@@ -1521,7 +1566,11 @@ configured by `[audit]`. The record is camelCase and carries: `auditId`,
 `configGeneration`, `policyGeneration`, `principal`, `principalSubject`,
 `groups`, `service`, `action`, `resourceScopes`, `matchedGrant`,
 `credentialMode` (`Option<Option<String>>`: `service`/`per_user` on allow, null
-for admin records), `decision`, `reasonCode`, `upstreamStatus`,
+for admin records), `credentialConnection` (the credential connection a personal
+credential came from; present when the selected mode is `per_user`, or when a
+command call passes a `per_user` grant even though mixed modes leave
+`credentialMode` null, and absent when only service credentials are used or for
+management and authentication records), `decision`, `reasonCode`, `upstreamStatus`,
 `upstreamDurationMs`, `objectIds`, `identitySource`, optional `callerId`, `source`,
 `executionContext`, `searchAuthorization` (search actions), and
 `providerAudit`. When present, `matchedGrant` carries `subject`, `priority`,
@@ -1720,7 +1769,10 @@ every query, and filters cannot widen it:
   admission rejections also use `broker` and have no scope service. The broker sets
   `targetService` on policy management that names a service or grant and on
   admin operations (`admin.*`) whose target names a service, such as manager
-  assignments, credential changes, and service-limit overrides. Records
+  assignments and service-limit overrides, or a credential connection with a
+  single consuming service. Connection records list every consumer in
+  `targetServices`; a change to a connection several services share has no
+  scope service. Records
   without a scope service, such as users' own token, credential, and login
   activity, are never visible to this tier;
 - managed users see records whose `principal` is their own, including records
@@ -2200,8 +2252,9 @@ agent containers. Production integrations include Google for Gmail and approved
 imported MCP OAuth registrations. An independent development-only test provider
 exercises collection resources and lifecycle fault recovery.
 
-Personal OAuth setup requires self-service, a configured binding, and a matching
-active `per_user` action grant for the owner or their current groups. Resource and
+Personal OAuth setup requires self-service, a credential connection that selects
+OAuth for the owner, and a matching active `per_user` action grant on a service
+that uses it, for the owner or their current groups. Resource and
 execution-context availability and invocation precedence do not govern setup;
 invocation still evaluates them independently. Existing bound connections remain
 inspectable and locally disconnectable after grant loss.

@@ -1,13 +1,13 @@
-import type { AgentTokenOptions, CredentialTarget, EffectiveAccessClause, EffectiveAccessItem, ResourceType } from "../types";
+import type { AgentTokenOptions, ConnectionConsumer, EffectiveAccessClause, EffectiveAccessItem, ResourceType } from "../types";
 
 /**
- * Service display names from the principal's token options and credential
- * targets (both independent of the request's execution context). Services
- * missing from both keep their ID.
+ * Service display names from the services consuming the principal's credential
+ * connections, then from its token options (both independent of the request's
+ * execution context). Services missing from both keep their ID.
  */
-export function serviceDisplayNames(options: AgentTokenOptions | null, targets: CredentialTarget[] = []): Map<string, string> {
+export function serviceDisplayNames(options: AgentTokenOptions | null, connections: ReadonlyArray<{ consumers: ConnectionConsumer[] }> = []): Map<string, string> {
   const names = new Map<string, string>();
-  for (const target of targets) if (target.displayName) names.set(target.service, target.displayName);
+  for (const connection of connections) for (const consumer of connection.consumers) if (consumer.displayName) names.set(consumer.service, consumer.displayName);
   for (const service of options?.services ?? []) if (service.displayName) names.set(service.service, service.displayName);
   return names;
 }

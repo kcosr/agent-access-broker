@@ -333,7 +333,10 @@ discovery uses the same planner:
 3. Express each grant's boundary as finite values or as all values except
    some, intersected with the agent token's resource restriction.
 4. Omit grants whose boundary ends up empty, whose credential mode the
-   action no longer supports, or whose credential is unavailable. If none
+   action no longer supports, or whose credential is unavailable, including a
+   personal grant for a caller whose principal kind the import's credential
+   connection offers no method. Each remaining grant still uses only its own
+   mode's credential. If none
    remain, the call is denied: `credential_not_provisioned` when credentials
    were the cause, otherwise `service_action_denied`.
 
@@ -370,9 +373,12 @@ A command declares at most one credential kind, in one or both modes:
 
 - **Service mode** (`service`) uses the import's encrypted execution
   credential, set by an administrator.
-- **Personal mode** (`per_user`) uses the caller's managed `default`
-  credential, with profile `token` or `username-token`. A personal credential
-  never falls back to the service credential.
+- **Personal mode** (`per_user`) uses the caller's token for the import's
+  [credential connection](configuration.md#credential-connections), which the
+  Broker publishes under the imported service ID with the profile `token` or
+  `username-token`. People and `system` principals store their own token, and
+  administrators provision service accounts'. Command imports offer no OAuth.
+  A personal credential never falls back to the service credential.
 - An action may narrow the modes with `credentialModes`.
 
 On stdin, `credentials` is keyed by wire mode, `service` or `user`, and holds
@@ -922,6 +928,9 @@ boundary. A command-enforced call records
 their IDs, versions, credential modes and boundaries. Both are captured by the
 Broker, so an interrupted call keeps them, with facts not yet known, such as
 the exit status of a killed process, recorded as `null`. Audit never holds inputs, results, attributes or stderr.
+A call that passes a personal grant also records `credentialConnection`, the
+imported service ID of the import's credential connection, even when mixed
+modes leave `credentialMode` null; a call passing only service grants omits it.
 Verification records the same facts under `providerAudit.verification.command`.
 
 `contractViolation` is a verdict on the response:

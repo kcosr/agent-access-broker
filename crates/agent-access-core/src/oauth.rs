@@ -78,14 +78,22 @@ pub enum OAuthReturnPath {
     Catalog,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What a consent flow was started with, from which its admission is
+/// rechecked when the callback claims it and inside the transaction that
+/// installs its tokens. Consent is admitted for the registration as a
+/// whole: some current consumer of a credential connection selecting the
+/// registration for the owner must admit the owner (see
+/// `managed_store::oauth::check_admission`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthManagementAdmission {
-    pub service: String,
-    pub credential_name: String,
-    #[serde(default)]
-    pub imported_service_version: Option<u64>,
-    #[serde(default)]
+    /// The imported service an administrator's import discovery connects
+    /// for: its administrator-discovery admission then also applies, and the
+    /// catalog return path opens its Import tab.
+    pub imported_service: Option<String>,
+    /// The version of each imported consumer of the registration when the
+    /// flow started. An imported consumer admits only at that version.
+    pub imported_versions: BTreeMap<String, u64>,
     pub return_path: Option<OAuthReturnPath>,
 }
 
@@ -404,6 +412,7 @@ pub(crate) struct SlotState {
     pub generation: String,
     pub config_fingerprint: String,
     pub credential_revision: String,
+    #[serde(deserialize_with = "current_flows")]
     pub flows: BTreeMap<String, Flow>,
     pub connection: Option<ConnectionState>,
 }
@@ -458,6 +467,21 @@ impl SlotState {
         }
     }
 }
+/// The pending consent flows of a stored slot that have the current shape.
+/// A flow an earlier version stored in another shape is dropped, as if it
+/// had expired, so its user restarts consent; the rest of the slot,
+/// including its refresh material, still decodes strictly.
+fn current_flows<'de, D>(deserializer: D) -> Result<BTreeMap<String, Flow>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let stored = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    Ok(stored
+        .into_iter()
+        .filter_map(|(state, flow)| Some((state, serde_json::from_value::<Flow>(flow).ok()?)))
+        .collect())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Flow {
@@ -732,7 +756,13 @@ impl OAuthManager {
         Ok(match flow.admission.return_path {
             Some(OAuthReturnPath::Catalog) => format!(
                 "/ui/admin/catalog/services/{}/import",
-                percent_encoding::utf8_percent_encode(&flow.admission.service, PATH_SEGMENT)
+                percent_encoding::utf8_percent_encode(
+                    flow.admission
+                        .imported_service
+                        .as_deref()
+                        .ok_or(OAuthError::InvalidFlow)?,
+                    PATH_SEGMENT
+                )
             ),
             Some(OAuthReturnPath::Credentials) | None => "/ui/credentials".into(),
         })
@@ -853,8 +883,13 @@ impl OAuthManager {
             Err(error) => return Err(error),
         }
         if !bounded(session, 512)
-            || !identifier(&admission.service)
-            || !identifier(&admission.credential_name)
+            || admission
+                .imported_service
+                .iter()
+                .chain(admission.imported_versions.keys())
+                .any(|service| !identifier(service))
+            || (admission.return_path == Some(OAuthReturnPath::Catalog)
+                && admission.imported_service.is_none())
         {
             return Err(OAuthError::InvalidFlow);
         }
@@ -2143,12 +2178,7 @@ pub(crate) mod tests {
         }
     }
     fn admission() -> OAuthManagementAdmission {
-        OAuthManagementAdmission {
-            service: "oauth_stub".into(),
-            credential_name: "default".into(),
-            imported_service_version: None,
-            return_path: None,
-        }
+        OAuthManagementAdmission::default()
     }
     fn runtime(manager: &OAuthManager) -> OAuthRuntimeResolver {
         let directory = manager.inner.store.path().parent().unwrap();
@@ -2191,10 +2221,11 @@ pub(crate) mod tests {
             [browser_auth.local_password]
             enabled = true
             pepper_ref = {key_ref:?}
+            [credentials.connections.oauth_stub]
+            oauth = {{ registration = "stub", profile = "read" }}
             [credentials.per_user.oauth_stub]
-            type = "oauth"
-            provider = "stub"
-            profile = "read"
+            type = "connection"
+            connection = "oauth_stub"
             # The records API is never contacted by these lifecycle tests.
             [providers.oauth_stub]
             base_url = "http://127.0.0.1:9"
@@ -2376,6 +2407,7 @@ pub(crate) mod tests {
         let broker = runtime(&manager)();
         let identity = crate::IdentityContext {
             principal: "user".into(),
+            principal_kind: Some(crate::PrincipalKind::User),
             authenticated: true,
             ..crate::IdentityContext::anonymous()
         };
@@ -2410,6 +2442,58 @@ pub(crate) mod tests {
             service.availability.requirements[0].resolution,
             "administrator"
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_only_connections_select_nothing_for_service_and_system_principals() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        let broker = runtime(&manager)();
+        let context = crate::ExecutionContext::new("default").unwrap();
+        let discover = |principal_kind| {
+            let identity = crate::IdentityContext {
+                principal: "user".into(),
+                principal_kind,
+                authenticated: true,
+                ..crate::IdentityContext::anonymous()
+            };
+            broker
+                .service_capabilities(&identity, &context, "oauth_stub")
+                .unwrap()
+        };
+        // The connected user's OAuth connection is selected and usable.
+        let service = discover(Some(crate::PrincipalKind::User));
+        assert_eq!(
+            service.availability.state,
+            crate::AvailabilityState::Available
+        );
+        assert!(!service.actions.is_empty());
+        // The same principal ID under another kind never reads that OAuth
+        // connection, and only configuration can change it.
+        for kind in [
+            Some(crate::PrincipalKind::ServiceAccount),
+            Some(crate::PrincipalKind::System),
+            None,
+        ] {
+            let service = discover(kind);
+            assert!(service.actions.is_empty(), "{kind:?}");
+            assert_eq!(
+                service.availability.state,
+                crate::AvailabilityState::Unavailable,
+                "{kind:?}"
+            );
+            assert_eq!(
+                service.availability.requirements[0].reason,
+                "credential_not_provisioned"
+            );
+            assert_eq!(
+                service.availability.requirements[0].resolution,
+                "administrator"
+            );
+        }
+        let requests = server.received_requests().await.unwrap().len();
+        let _ = discover(Some(crate::PrincipalKind::ServiceAccount));
+        assert_eq!(requests, server.received_requests().await.unwrap().len());
     }
 
     async fn fixture() -> (
@@ -3047,6 +3131,23 @@ pub(crate) mod tests {
         let (_dir, _store, _ring, manager, _server) = fixture().await;
         let mut request = admission();
         request.return_path = Some(OAuthReturnPath::Catalog);
+        // The catalog page belongs to the service the flow names.
+        let mut unnamed = request.clone();
+        unnamed.imported_service = None;
+        assert!(matches!(
+            manager
+                .connect(
+                    "user",
+                    "session",
+                    &binding(),
+                    OAuthConnectIntent::Connect,
+                    unnamed,
+                    runtime(&manager),
+                )
+                .await,
+            Err(OAuthError::InvalidFlow)
+        ));
+        request.imported_service = Some("oauth_stub".into());
         let started = manager
             .connect(
                 "user",
@@ -3174,6 +3275,62 @@ pub(crate) mod tests {
             restarted.acquire("user", &binding()).await.unwrap_err(),
             OAuthError::ReconnectRequired
         );
+    }
+
+    #[tokio::test]
+    async fn pending_flows_of_an_earlier_shape_are_discarded_and_refresh_material_survives() {
+        let (_dir, store, ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        // A consent flow pending from before registration-level admission,
+        // with that version's service-keyed admission.
+        crate::managed_store::oauth::edit_stored_slot_json(
+            &store,
+            &ring,
+            "user",
+            "stub",
+            |state| {
+                let generation = state["generation"].clone();
+                let mut flows = serde_json::Map::new();
+                flows.insert(
+                    digest("old-state"),
+                    serde_json::json!({
+                        "session_hash": digest("session"),
+                        "verifier": "old-verifier",
+                        "expires_at": now() + FLOW_TTL,
+                        "profile": "read",
+                        "generation": generation,
+                        "intent": "reconnect",
+                        "consumed": false,
+                        "admission": {
+                            "service": "oauth_stub",
+                            "credential_name": "default",
+                            "imported_service_version": null,
+                            "return_path": null
+                        },
+                        "expected_issuer": null
+                    }),
+                );
+                state["flows"] = serde_json::Value::Object(flows);
+            },
+        );
+        // The slot still decodes, at activation too, without the old flow.
+        manager.activate().unwrap();
+        let slot = manager.read("user", "stub").unwrap();
+        assert!(slot.flows.is_empty());
+        assert!(slot.connection.is_some());
+        assert_eq!(
+            manager
+                .callback_return_path("user", "session", "stub", "old-state")
+                .unwrap_err(),
+            OAuthError::InvalidFlow
+        );
+        // The stored refresh material still renews access.
+        successive_refreshes(&server).await;
+        expire(&manager);
+        let lease = manager.acquire("user", &binding()).await.unwrap();
+        assert_eq!(lease.token(), "protected-access-1");
+        // The user can start consent again.
+        start(&manager, OAuthConnectIntent::Reconnect).await;
     }
 
     #[tokio::test]
@@ -3473,10 +3630,13 @@ pub(crate) mod tests {
                 .insert("other".into(), alternate);
             changed
                 .credentials
-                .per_user
+                .connections
                 .get_mut("oauth_stub")
                 .unwrap()
-                .profile = Some("other".into());
+                .oauth
+                .as_mut()
+                .unwrap()
+                .profile = "other".into();
             let changed =
                 Arc::new(crate::BrokerRuntime::new_for_reload(changed, &published.load()).unwrap());
             if publish_during_exchange {
@@ -3511,6 +3671,44 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn consent_is_stale_once_no_connection_selects_its_registration() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        let published = Arc::new(arc_swap::ArcSwap::from(runtime(&manager)()));
+        let current = Arc::clone(&published);
+        let resolver: OAuthRuntimeResolver = Arc::new(move || current.load_full());
+        let state = start(&manager, OAuthConnectIntent::Connect).await;
+        // The connection is rebound to another registration.
+        let mut changed = published.load().config().clone();
+        let mut registration = changed.oauth.registrations["stub"].clone();
+        registration.redirect_uri = registration.redirect_uri.replace("/stub", "/stub_two");
+        changed
+            .oauth
+            .registrations
+            .insert("stub_two".into(), registration);
+        changed
+            .credentials
+            .connections
+            .get_mut("oauth_stub")
+            .unwrap()
+            .oauth
+            .as_mut()
+            .unwrap()
+            .registration = "stub_two".into();
+        published.store(Arc::new(
+            crate::BrokerRuntime::new_for_reload(changed, &published.load()).unwrap(),
+        ));
+        assert_eq!(
+            manager
+                .complete("user", "session", "stub", &state, "code", resolver)
+                .await
+                .unwrap_err(),
+            OAuthError::Stale
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(manager.read("user", "stub").unwrap().flows.is_empty());
+    }
+
+    #[tokio::test]
     async fn runtime_publication_does_not_preserve_a_withdrawn_setup_grant() {
         let (_dir, store, _ring, manager, server) = fixture().await;
         let published = Arc::new(arc_swap::ArcSwap::from(runtime(&manager)()));
@@ -3541,6 +3739,7 @@ pub(crate) mod tests {
         test_sql(&store, "UPDATE policy_grants SET status='disabled'");
         let identity = next.identity_from_principal_groups(
             "user".into(),
+            Some(crate::PrincipalKind::User),
             Some("user".into()),
             Vec::new(),
             None,

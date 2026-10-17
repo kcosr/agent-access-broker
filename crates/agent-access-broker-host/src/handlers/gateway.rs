@@ -4112,6 +4112,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -4216,6 +4217,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -4940,6 +4942,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5077,6 +5080,7 @@ mod tests {
         let runtime = BrokerRuntime::new(config).unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5157,6 +5161,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5244,6 +5249,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5335,6 +5341,7 @@ mod tests {
         .unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5443,6 +5450,7 @@ mod tests {
         let runtime = BrokerRuntime::new(config).unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5600,6 +5608,7 @@ mod tests {
         let runtime = BrokerRuntime::new(config).unwrap();
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            None,
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5759,6 +5768,7 @@ mod tests {
         });
         let identity = runtime.identity_from_principal_groups(
             "gateway-user".to_string(),
+            Some(agent_access_core::PrincipalKind::User),
             Some("gateway-user".to_string()),
             vec!["gateway-users".to_string()],
             None,
@@ -5891,8 +5901,9 @@ mod tests {
         drain_gateway_test_audit(&runtime).await;
     }
 
-    /// A per-user managed `git-bearer-token` credential is presented under the
-    /// configured Basic username, like a static one.
+    /// A per-user `git-bearer-token` credential read through the gateway's
+    /// credential connection, keyed by the connection's ID, is presented
+    /// under the configured Basic username, like a static one.
     #[tokio::test]
     async fn gateway_presents_a_per_user_managed_bearer_credential_as_configured() {
         let temp = test_temp_dir();
@@ -5922,17 +5933,24 @@ mod tests {
             }],
         });
         config.credentials.service.clear();
+        config.credentials.connections.insert(
+            "gitlab".to_string(),
+            agent_access_core::ConnectionConfig {
+                display_name: None,
+                token_profile: Some("git-bearer-token".to_string()),
+                oauth: None,
+            },
+        );
         config.credentials.per_user.insert(
             "gitlab_git".to_string(),
             CredentialConfig {
-                kind: "managed_store".to_string(),
+                kind: "connection".to_string(),
                 username_ref: None,
                 token_ref: None,
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: Some("default".to_string()),
-                profile: Some("git-bearer-token".to_string()),
+                connection: Some("gitlab".to_string()),
             },
         );
         config
@@ -5967,7 +5985,7 @@ mod tests {
                 runtime.credential_key_ring().unwrap(),
                 agent_access_core::CredentialWriteRequest {
                     owner_principal_id: "gateway-user".to_string(),
-                    service: "gitlab_git".to_string(),
+                    service: "gitlab".to_string(),
                     name: "default".to_string(),
                     profile: "git-bearer-token".to_string(),
                     credential_kind: "bearer_token".to_string(),
@@ -5998,6 +6016,251 @@ mod tests {
             "authorization: Basic b2F1dGgyOnBlcnNvbmFsLXRva2Vu"
         );
         drain_gateway_test_audit(&runtime).await;
+        // Gateway records name the connection the personal token came from.
+        let records = audit_records(&audit_path)
+            .into_iter()
+            .filter(|record| record["service"] == "gitlab_git")
+            .collect::<Vec<_>>();
+        assert!(!records.is_empty());
+        for record in records {
+            assert_eq!(record["credentialMode"], "per_user", "{record}");
+            assert_eq!(record["credentialConnection"], "gitlab", "{record}");
+        }
+    }
+
+    /// GitLab REST as the real descriptor declares it, recording the
+    /// credentials scope resolution and execution receive.
+    struct SharedGitlabRestProvider {
+        descriptor: agent_access_provider::ServiceDescriptor,
+        seen: std::sync::Arc<
+            std::sync::Mutex<Vec<Option<agent_access_provider::ExecutionCredential>>>,
+        >,
+    }
+
+    impl agent_access_provider::test_support::DescribedProvider for SharedGitlabRestProvider {
+        fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
+            self.descriptor.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl agent_access_provider::Provider for SharedGitlabRestProvider {
+        async fn resolve_scopes(
+            &self,
+            request: agent_access_provider::ScopeRequest<'_>,
+        ) -> Result<agent_access_provider::ScopeResolution, ProviderError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(request.lookup_credential().cloned());
+            let project = request.inputs()["project"].as_str().unwrap().to_owned();
+            Ok(agent_access_provider::ScopeResolution::resources(
+                ResourceScopes::from([("repository".to_string(), vec![project])]),
+            ))
+        }
+
+        async fn invoke(
+            &self,
+            request: agent_access_provider::ProviderInvocation,
+        ) -> Result<agent_access_provider::ProviderResult, ProviderError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(request.execution().static_credential().cloned());
+            Ok(agent_access_provider::ProviderResult::new(
+                json!({"id": 42}),
+            ))
+        }
+    }
+
+    /// One GitLab token stored once serves GitLab REST and the GitLab Git
+    /// gateway through the shared `gitlab` credential connection: the REST
+    /// provider receives it for scope resolution and execution, and the
+    /// gateway presents it as Basic `oauth2:<token>`.
+    #[tokio::test]
+    async fn a_shared_gitlab_connection_serves_rest_and_the_git_gateway() {
+        let temp = test_temp_dir();
+        let token_path = temp.join("shared-gitlab-unused-service-token");
+        let identity_token_path = temp.join("shared-gitlab-identity-token");
+        let key_path = temp.join("shared-gitlab-key");
+        let store_path = temp.join("shared-gitlab.sqlite");
+        let audit_path = temp.join("shared-gitlab.audit.jsonl");
+        std::fs::write(&token_path, "service-token").unwrap();
+        std::fs::write(&identity_token_path, "identity-token").unwrap();
+        std::fs::write(&key_path, URL_SAFE_NO_PAD.encode([43_u8; 32])).unwrap();
+        let mut config = test_forwarding_config(&token_path, &identity_token_path, &audit_path);
+        // The REST API of the instance the gateway's upstream_base_url names.
+        let gitlab_config = agent_access_gitlab::GitlabProviderConfig {
+            provisioning: agent_access_gitlab::GitlabProvisioningConfig::default(),
+            attachments: Default::default(),
+            api_base_url: "https://gitlab.example.com/git/root/api/v4".to_string(),
+            web_base_url: "https://gitlab.example.com/git/root".to_string(),
+            egress_proxy: None,
+            allowed_upstream_hosts: vec![
+                "https://gitlab.example.com/git/root/api/v4/**".to_string(),
+            ],
+            content: agent_access_gitlab::GitlabContentConfig::default(),
+            search: agent_access_provider::SearchLimitsConfig::default(),
+            webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
+        };
+        let descriptor = agent_access_gitlab::gitlab_descriptor(&gitlab_config);
+        config.providers =
+            agent_access_core::ProvidersConfig::new(Arc::new(crate::backend_registry()))
+                .with(gitlab_config);
+        let store_config = agent_access_core::ManagedStoreConfig {
+            kind: "sqlite".to_string(),
+            path: store_path.display().to_string(),
+            require_registered_principal_for_invocation: false,
+            auto_migrate: true,
+        };
+        config.managed_store = Some(store_config.clone());
+        config.credential_encryption = Some(agent_access_core::CredentialEncryptionConfig {
+            active_key: "fixture".into(),
+            keys: vec![agent_access_core::CredentialEncryptionKeyConfig {
+                id: "fixture".into(),
+                provider: "file".into(),
+                env: None,
+                path: Some(key_path.display().to_string()),
+            }],
+        });
+        config.credentials.service.clear();
+        config.credentials.connections.insert(
+            "gitlab".to_string(),
+            agent_access_core::ConnectionConfig {
+                display_name: Some("GitLab".to_string()),
+                token_profile: Some("gitlab-access-token".to_string()),
+                oauth: None,
+            },
+        );
+        for service in ["gitlab", "gitlab_git"] {
+            config.credentials.per_user.insert(
+                service.to_string(),
+                CredentialConfig {
+                    kind: "connection".to_string(),
+                    username_ref: None,
+                    token_ref: None,
+                    provider: None,
+                    path: None,
+                    read_only: None,
+                    connection: Some("gitlab".to_string()),
+                },
+            );
+        }
+        let gateway = config.gateways.get_mut("gitlab_git").unwrap();
+        gateway.credential_modes = vec!["per_user".to_string()];
+        gateway.upstream_token_auth = basic_token_auth("oauth2");
+        config.policy.grants[0].credential_mode = "per_user".to_string();
+        let mut rest_grant = config.policy.grants[0].clone();
+        rest_grant.service = "gitlab".to_string();
+        rest_grant.actions = vec!["project.view".to_string()];
+        config.policy.grants.push(rest_grant);
+        let store = agent_access_core::ManagedStore::open(
+            &store_config,
+            agent_access_core::ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        store
+            .create_principal(agent_access_core::PrincipalWriteRequest {
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "gateway-user".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            })
+            .unwrap();
+        drop(store);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = BrokerRuntime::with_providers(
+            config,
+            vec![Arc::new(SharedGitlabRestProvider {
+                descriptor,
+                seen: seen.clone(),
+            })],
+        )
+        .unwrap();
+        // One token, stored once under the connection's ID.
+        runtime
+            .managed_store()
+            .unwrap()
+            .upsert_user_credential(
+                runtime.credential_key_ring().unwrap(),
+                agent_access_core::CredentialWriteRequest {
+                    owner_principal_id: "gateway-user".to_string(),
+                    service: "gitlab".to_string(),
+                    name: "default".to_string(),
+                    profile: "gitlab-access-token".to_string(),
+                    credential_kind: "bearer_token".to_string(),
+                    secret: json!({"token": "shared-gitlab-token"}),
+                    metadata: json!({}),
+                    actor: "test".to_string(),
+                },
+                agent_access_core::CredentialManagementPurpose::Administrative,
+            )
+            .unwrap();
+
+        let identity = runtime.identity_from_principal_groups(
+            "gateway-user".to_string(),
+            Some(agent_access_core::PrincipalKind::User),
+            Some("gateway-user".to_string()),
+            vec!["gateway-users".to_string()],
+            None,
+            None,
+        );
+        let rest = runtime
+            .invoke(
+                test_governed_operation(OperationContext {
+                    agent_request_id: "shared-gitlab-rest".to_string(),
+                    broker_request_id: "broker-shared-gitlab-rest".to_string(),
+                    identity,
+                    service: "gitlab".to_string(),
+                    action: "project.view".to_string(),
+                    source: agent_access_core::SourceContext::unknown(),
+                }),
+                agent_access_core::InvokeRequest::new(json!({"project": "sip/service"})),
+            )
+            .await;
+        assert_eq!(rest.status, 200, "{:?}", rest.envelope);
+        let token = agent_access_provider::test_support::bearer_credential("shared-gitlab-token");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [Some(token.clone()), Some(token)],
+            "scope resolution and execution use the connection's token"
+        );
+
+        // The Git gateway presents the same token as Basic oauth2:<token>.
+        assert_eq!(
+            forwarded_upstream_authorization(
+                &runtime,
+                basic_token_auth("oauth2"),
+                "shared-gitlab-git",
+            )
+            .await,
+            format!(
+                "authorization: Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("oauth2:shared-gitlab-token")
+            )
+        );
+        drain_gateway_test_audit(&runtime).await;
+        let connections = audit_records(&audit_path)
+            .into_iter()
+            .filter(|record| record["decision"] == "allow")
+            .map(|record| {
+                (
+                    record["service"].as_str().unwrap().to_owned(),
+                    record["credentialConnection"].as_str().map(str::to_owned),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            connections,
+            std::collections::BTreeSet::from([
+                ("gitlab".to_owned(), Some("gitlab".to_owned())),
+                ("gitlab_git".to_owned(), Some("gitlab".to_owned())),
+            ])
+        );
     }
 
     async fn read_http_request_headers(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
@@ -6113,6 +6376,7 @@ mod tests {
             },
             credentials: CredentialsConfig {
                 imported_modes: Default::default(),
+                connections: BTreeMap::new(),
                 service: BTreeMap::from([(
                     "gitlab_git".to_string(),
                     CredentialConfig {
@@ -6122,8 +6386,7 @@ mod tests {
                         provider: None,
                         path: None,
                         read_only: None,
-                        credential_name: None,
-                        profile: None,
+                        connection: None,
                     },
                 )]),
                 per_user: BTreeMap::new(),

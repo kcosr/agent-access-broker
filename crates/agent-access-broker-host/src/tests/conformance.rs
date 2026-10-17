@@ -252,22 +252,11 @@ fn conformance_backend_configures_through_its_registration_alone() {
         validation_errors(&entry)
     );
 
-    // Its managed credential profile is the only one per-user credentials may name.
+    // Its managed credential profile is the only one its personal
+    // credential connection may name.
     let managed = |profile: &str| {
         let mut config = parse(&raw).unwrap();
-        config.credentials.per_user.insert(
-            "conformance".into(),
-            CredentialConfig {
-                kind: "managed_store".into(),
-                profile: Some(profile.into()),
-                username_ref: None,
-                token_ref: None,
-                provider: None,
-                path: None,
-                read_only: None,
-                credential_name: None,
-            },
-        );
+        super::use_token_connection(&mut config, "conformance", profile, &["conformance"]);
         config
     };
     let profile_errors = |profile: &str| match validate_broker_config(&managed(profile)) {
@@ -619,8 +608,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config.policy.resources.push(ResourceDefinition {

@@ -83,7 +83,7 @@ export function useTokenList(subject: AccountSubject) {
   const options = useAgentTokenOptions(subject);
   const actions = useAgentTokenActions(subject, options.options);
   const tokens = data.tokens;
-  const names = useMemo(() => serviceDisplayNames(options.options, data.targets), [options.options, data.targets]);
+  const names = useMemo(() => serviceDisplayNames(options.options, data.credentials.connections), [options.options, data.credentials.connections]);
   const counts = useMemo(() => {
     const counts: Record<StatusFilter, number> = { current: 0, expired: 0, revoked: 0, all: tokens.length };
     for (const token of tokens) {

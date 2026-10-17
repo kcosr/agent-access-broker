@@ -7,7 +7,7 @@ import type {
   AgentTokenOptions,
   BrokerTokenRecord,
   ConfigStatusResult,
-  CredentialMetadata,
+  CredentialList,
   CredentialTarget,
   ExternalGroupBinding,
   GroupDetail,
@@ -32,21 +32,23 @@ import type {
 } from "../types";
 import type { ImportListResult, ImportPreviewResult } from "../import-types";
 import { portalQueryKeys, viewerKey } from "../lib/portal-queries";
+import { EMPTY_CREDENTIAL_LIST } from "../lib/credentials";
 import { indexResourceTypes, NO_RESOURCE_TYPES, type ResourceTypes } from "../lib/resource-types";
 import { canViewAdmin, canUseSelfService, hasPolicyScope } from "../lib/capabilities";
 import { useSession } from "../app/session";
 import type { AccountSubject } from "../app/active-route";
 
 export type ConsoleData = {
+  /** Connections whose token can be stored now, with their input form. */
   targets: CredentialTarget[];
-  credentials: CredentialMetadata[];
+  /** The principal's credential connections and retained stored rows. */
+  credentials: CredentialList;
   tokens: BrokerTokenRecord[];
 };
 
 type AdminUserData = {
   methods: LoginMethodRecord[];
   userTokens: AdminBrokerTokenRecord[];
-  userCredentials: CredentialMetadata[];
 };
 
 /** Session facts every query gate uses. */
@@ -81,7 +83,7 @@ export function useResourceTypesQuery(): ResourceTypes {
 }
 
 /**
- * Credential targets, credentials, and tokens (including revoked and expired
+ * Credential targets, credential connections, and tokens (including revoked and expired
  * ones; views filter by status) for the signed-in user or an administered
  * principal. Service names and action classifications come from the targets
  * and the token options, never from agent discovery (`/v1/services`), which
@@ -109,7 +111,7 @@ export function useConsoleData(subject: AccountSubject, enabled = true) {
       runQuery((current) =>
         Promise.all([
           brokerApi.adminPrincipalCredentialTargets(current, principalId),
-          brokerApi.adminCredentials(current, principalId),
+          brokerApi.adminPrincipalCredentials(current, principalId),
           brokerApi.adminPrincipalAgentTokens(current, principalId, true, true)
         ]).then(([targets, credentials, tokens]) => ({ targets, credentials, tokens }))
       )
@@ -118,7 +120,7 @@ export function useConsoleData(subject: AccountSubject, enabled = true) {
   return {
     query,
     targets: query.data?.targets ?? [],
-    credentials: query.data?.credentials ?? [],
+    credentials: query.data?.credentials ?? EMPTY_CREDENTIAL_LIST,
     tokens: query.data?.tokens ?? [],
     loading: query.isPending && query.fetchStatus !== "idle"
   };
@@ -273,7 +275,7 @@ export function useAdminLoginMethods(principalId: string) {
   });
 }
 
-/** Login methods, management tokens, and credentials shown on the admin user page. */
+/** Login methods and management tokens shown on the admin user page. */
 export function useAdminUserDetail(principalId: string) {
   const { viewer, admin, runQuery } = useQueryAccess();
   return useQuery<AdminUserData>({
@@ -283,9 +285,8 @@ export function useAdminUserDetail(principalId: string) {
       runQuery((current) =>
         Promise.all([
           brokerApi.adminLoginMethods(current, principalId),
-          brokerApi.adminTokens(current, principalId),
-          brokerApi.adminCredentials(current, principalId)
-        ]).then(([methods, userTokens, userCredentials]) => ({ methods, userTokens, userCredentials }))
+          brokerApi.adminTokens(current, principalId)
+        ]).then(([methods, userTokens]) => ({ methods, userTokens }))
       )
   });
 }
@@ -391,7 +392,7 @@ export function useImportPreview(service: string, enabled = true) {
   });
 }
 
-/** The signed-in user's delegated OAuth connection targets. */
+/** The signed-in user's OAuth registrations, one row each. */
 export function useOAuthConnections(enabled = true) {
   const { viewer, selfService, runQuery } = useQueryAccess();
   return useQuery<OAuthConnectionTarget[]>({

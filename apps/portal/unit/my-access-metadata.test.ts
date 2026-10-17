@@ -1,12 +1,13 @@
 // My access reads service names, action classifications, and verification
-// inputs from the token options and credential targets, never from agent
+// inputs from the token options and credential connections, never from agent
 // discovery (`/v1/services`, filtered by the request's execution context).
 import { describe, expect, it } from "vitest";
 import { buildAccessSummary, serviceDisplayNames } from "../src/lib/access";
 import { accessRows, filterAccessRows, ACCESS_STATE } from "../src/features/access/access-list";
 import { credentialVerificationNeedsRepository } from "../src/mutations/credentials";
 import { indexResourceTypes } from "../src/lib/resource-types";
-import type { AgentTokenOptions, CredentialTarget } from "../src/types";
+import type { AgentTokenOptions, ConnectionConsumer, CredentialConnection } from "../src/types";
+import { connectionForService, consumerSummary } from "../src/lib/credentials";
 import { readUrlState, writeUrlState } from "../src/lib/url-state";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 
@@ -35,19 +36,23 @@ const options: AgentTokenOptions = {
   mcp: null
 };
 
-const target = (service: string, displayName: string, credentialVerificationInputs: string[]): CredentialTarget => ({
-  service,
-  displayName,
-  credentialVerificationInputs,
-  credentialName: "default",
+const consumer = (service: string, displayName: string, credentialVerificationInputs: string[]): ConnectionConsumer => ({ service, displayName, credentialVerificationInputs });
+
+const connection = (id: string, consumers: ConnectionConsumer[], otherConsumers = 0): CredentialConnection => ({
+  connection: id,
+  displayName: id,
+  method: "token",
+  consumers,
+  otherConsumers,
   profile: "token",
   credentialKind: "bearer_token",
-  inputSchema: { fields: [] } as unknown as CredentialTarget["inputSchema"]
+  registration: null,
+  credential: null
 });
 
 describe("My access metadata", () => {
-  it("names services from the token options and credential targets, keeping the ID otherwise", () => {
-    const names = serviceDisplayNames(options, [target("jira", "Jira", []), target("gitlab_git", "GitLab Git", ["repository"])]);
+  it("names services from the token options and credential connections, keeping the ID otherwise", () => {
+    const names = serviceDisplayNames(options, [connection("jira", [consumer("jira", "Jira", [])]), connection("gitlab", [consumer("gitlab_git", "GitLab Git", ["repository"])])]);
     expect(names.get("cloudbees_ci")).toBe("CloudBees CI");
     expect(names.get("gitlab_git")).toBe("GitLab Git");
     expect(names.get("jira")).toBe("Jira");
@@ -118,8 +123,18 @@ describe("My access metadata", () => {
     expect(readUrlState(ACCESS_STATE, cleared)).toMatchObject({ context: "", effect: [], service: "", q: "", sort: { key: "action", dir: "desc" }, group: "service" });
   });
 
-  it("asks for a repository when the target's verification needs one", () => {
-    expect(credentialVerificationNeedsRepository(target("gitlab_git", "GitLab Git", ["repository"]))).toBe(true);
-    expect(credentialVerificationNeedsRepository(target("jira", "Jira", []))).toBe(false);
+  it("asks for a repository when verifying through a consumer needs one", () => {
+    expect(credentialVerificationNeedsRepository(consumer("gitlab_git", "GitLab Git", ["repository"]))).toBe(true);
+    expect(credentialVerificationNeedsRepository(consumer("jira", "Jira", []))).toBe(false);
+  });
+
+  it("finds a service's connection and names its consumers", () => {
+    const gitlab = connection("gitlab", [consumer("gitlab", "GitLab REST", []), consumer("gitlab_git", "GitLab Git", ["repository"])], 1);
+    const list = { connections: [connection("jira", [consumer("jira", "Jira", [])]), gitlab], retained: [] };
+    expect(connectionForService(list, "gitlab_git")).toBe(gitlab);
+    expect(connectionForService(list, "confluence")).toBeUndefined();
+    expect(consumerSummary(gitlab.consumers, gitlab.otherConsumers)).toBe("GitLab REST, GitLab Git and 1 other service");
+    expect(consumerSummary([consumer("jira", "Jira", [])], 0)).toBe("Jira");
+    expect(consumerSummary([], 2)).toBe("2 other services");
   });
 });

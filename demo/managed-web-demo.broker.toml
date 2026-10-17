@@ -109,10 +109,13 @@ username_ref = "env:AAB_DEMO_JIRA_LOOKUP_USERNAME"
 token_ref = "env:AAB_DEMO_JIRA_LOOKUP_TOKEN"
 read_only = true
 
+[credentials.connections.jira]
+display_name = "Jira"
+token_profile = "jira-cloud-api-token"
+
 [credentials.per_user.jira]
-type = "managed_store"
-credential_name = "default"
-profile = "jira-cloud-api-token"
+type = "connection"
+connection = "jira"
 
 [credentials.service.confluence]
 type = "basic_api_token"
@@ -125,10 +128,13 @@ username_ref = "env:AAB_DEMO_CONFLUENCE_LOOKUP_USERNAME"
 token_ref = "env:AAB_DEMO_CONFLUENCE_LOOKUP_TOKEN"
 read_only = true
 
+[credentials.connections.confluence]
+display_name = "Confluence"
+token_profile = "confluence-cloud-api-token"
+
 [credentials.per_user.confluence]
-type = "managed_store"
-credential_name = "default"
-profile = "confluence-cloud-api-token"
+type = "connection"
+connection = "confluence"
 
 [credentials.service.gitlab]
 type = "bearer_token"
@@ -139,19 +145,23 @@ type = "bearer_token"
 token_ref = "env:AAB_DEMO_GITLAB_LOOKUP_TOKEN"
 read_only = true
 
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"
+
 [credentials.per_user.gitlab]
-type = "managed_store"
-credential_name = "default"
-profile = "gitlab-access-token"
+type = "connection"
+connection = "gitlab"
 
 [credentials.service.gitlab_git]
 type = "bearer_token"
 token_ref = "env:AAB_DEMO_GITLAB_GIT_SERVICE_TOKEN"
 
+# GitLab REST and the Git gateway share the gitlab connection: one stored
+# GitLab token per principal, presented to Git as Basic (see the gateway).
 [credentials.per_user.gitlab_git]
-type = "managed_store"
-credential_name = "default"
-profile = "git-bearer-token"
+type = "connection"
+connection = "gitlab"
 
 [providers.jira]
 tenant_host = "jira.example.invalid"
@@ -221,6 +231,8 @@ allowed_upstream_hosts = ["https://gitlab.example.invalid/**"]
 auth_modes = ["basic_broker_token"]
 basic_broker_token_username = "agent-access"
 credential_modes = ["service", "per_user"]
+# GitLab's Git endpoint accepts only Basic credentials.
+upstream_token_auth = { scheme = "basic", username = "oauth2" }
 redirect_policy = "none"
 correlation_headers = true
 request_body_max_bytes = 536870912

@@ -323,7 +323,7 @@ mod tests {
             Some("/v1/readyz")
         );
         assert!(sanitized_path("/metrics", None).is_none());
-        assert!(sanitized_path("/v1/credentials/fake/default", None).is_none());
+        assert!(sanitized_path("/v1/credentials/connections/fake", None).is_none());
     }
 
     #[derive(Clone, Default)]

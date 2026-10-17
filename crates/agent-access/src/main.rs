@@ -7,10 +7,10 @@ mod output;
 use agent_access_core::ExitPolicy;
 use agent_access_core::{
     API_CATALOG_VERSION, AgentTokenServiceRestriction, ApiActionSpec, ApiCatalog, CliConfig,
-    CliTlsConfig, ConfigError, CredentialInputField, CredentialInputSchema, HttpRouteSpec,
-    InvokeRequest, ResourceSelection, RouteAccess, SEND_SCHEMA_VERSION,
-    cli_exit_code_for_http_status, expand_current_user_home, generic_send_schema, load_cli_config,
-    load_cli_tls_certificates, split_service_action, validate_cli_config, validate_cli_config_file,
+    CliTlsConfig, ConfigError, CredentialInputField, HttpRouteSpec, InvokeRequest,
+    ResourceSelection, RouteAccess, SEND_SCHEMA_VERSION, cli_exit_code_for_http_status,
+    expand_current_user_home, generic_send_schema, load_cli_config, load_cli_tls_certificates,
+    split_service_action, validate_cli_config, validate_cli_config_file,
 };
 use agent_access_provider::{
     ActionIo, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER,
@@ -842,56 +842,84 @@ enum ActionsCommand {
     },
 }
 
+#[derive(Debug, Args)]
+struct CredentialPutArgs {
+    #[arg(
+        long,
+        help = "Expected token profile; the broker rejects any other than the connection's"
+    )]
+    profile: Option<String>,
+    #[arg(long, help_heading = "Credential Field Options")]
+    username: Option<String>,
+    #[arg(long, help_heading = "Credential Field Options")]
+    username_env: Option<String>,
+    #[arg(long, help_heading = "Credential Field Options")]
+    username_file: Option<PathBuf>,
+    #[arg(long = "field", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field literal as name=value")]
+    field: Vec<NamedValue>,
+    #[arg(long = "field-env", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field from environment as name=ENV_VAR")]
+    field_env: Vec<NamedValue>,
+    #[arg(long = "field-file", value_parser = parse_named_path, help_heading = "Credential Field Options", help = "Credential field from file as name=PATH")]
+    field_file: Vec<NamedPath>,
+    #[arg(
+        long = "field-stdin",
+        help_heading = "Credential Field Options",
+        help = "Credential field name to read from stdin"
+    )]
+    field_stdin: Option<String>,
+    #[arg(long)]
+    display_name: Option<String>,
+    #[arg(long)]
+    expires_at: Option<String>,
+    #[arg(long, help = "Verify the stored token after saving it")]
+    verify: bool,
+    #[arg(
+        long = "verify-service",
+        requires = "verify",
+        help = "Consuming service to verify through"
+    )]
+    verify_service: Option<String>,
+    #[arg(
+        long = "verify-repository",
+        requires = "verify",
+        help = "Repository a Git gateway consumer verifies against"
+    )]
+    verify_repository: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct CredentialVerifyArgs {
+    #[arg(long, help = "Consuming service to verify through")]
+    service: Option<String>,
+    #[arg(long, help = "Repository a Git gateway consumer verifies against")]
+    repository: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum CredentialsCommand {
+    /// List your credential connections and retained stored credentials.
     List,
-    Inspect {
-        service: String,
-        name: String,
-    },
+    /// List the connections whose token you can store now, with their input form.
+    Targets,
+    /// Show your stored token's metadata for a connection.
+    Inspect { connection: String },
+    /// Store or replace your token for a connection.
     Put {
-        service: String,
-        name: String,
-        #[arg(long)]
-        profile: Option<String>,
-        #[arg(long, help_heading = "Credential Field Options")]
-        username: Option<String>,
-        #[arg(long, help_heading = "Credential Field Options")]
-        username_env: Option<String>,
-        #[arg(long, help_heading = "Credential Field Options")]
-        username_file: Option<PathBuf>,
-        #[arg(long = "field", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field literal as name=value")]
-        field: Vec<NamedValue>,
-        #[arg(long = "field-env", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field from environment as name=ENV_VAR")]
-        field_env: Vec<NamedValue>,
-        #[arg(long = "field-file", value_parser = parse_named_path, help_heading = "Credential Field Options", help = "Credential field from file as name=PATH")]
-        field_file: Vec<NamedPath>,
-        #[arg(
-            long = "field-stdin",
-            help_heading = "Credential Field Options",
-            help = "Credential field name to read from stdin"
-        )]
-        field_stdin: Option<String>,
-        #[arg(long)]
-        display_name: Option<String>,
-        #[arg(long)]
-        expires_at: Option<String>,
-        #[arg(long)]
-        verify: bool,
-        #[arg(long = "verify-repository", requires = "verify")]
-        verify_repository: Option<String>,
+        connection: String,
+        #[command(flatten)]
+        input: CredentialPutArgs,
     },
-    Delete {
-        service: String,
-        name: String,
-    },
+    /// Delete your token for a connection.
+    Delete { connection: String },
+    /// Verify your token for a connection through one of its services.
     Verify {
-        service: String,
-        name: String,
-        #[arg(long)]
-        repository: Option<String>,
+        connection: String,
+        #[command(flatten)]
+        verify: CredentialVerifyArgs,
     },
+    /// Delete a retained stored credential the configuration no longer selects.
+    DeleteRetained { credential_id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1422,57 +1450,43 @@ fn admin_token_action_path(token_id: &str, action: BrokerTokenAction) -> String 
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum AdminCredentialsCommand {
-    List,
+    /// List a principal's credential connections and retained stored credentials.
+    List { principal: String },
+    /// List stored credentials by ID, active and retained, with their stored service and name.
+    ListStored {
+        #[arg(long)]
+        principal: Option<String>,
+    },
+    /// List the connections whose token you can store for a principal.
+    Targets { principal: String },
+    /// Show a principal's stored token metadata for a connection.
     Inspect {
         principal: String,
-        service: String,
-        name: String,
+        connection: String,
     },
+    /// Store or replace a principal's token for a connection.
     Put {
         principal: String,
-        service: String,
-        name: String,
-        #[arg(long)]
-        profile: Option<String>,
-        #[arg(long, help_heading = "Credential Field Options")]
-        username: Option<String>,
-        #[arg(long, help_heading = "Credential Field Options")]
-        username_env: Option<String>,
-        #[arg(long, help_heading = "Credential Field Options")]
-        username_file: Option<PathBuf>,
-        #[arg(long = "field", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field literal as name=value")]
-        field: Vec<NamedValue>,
-        #[arg(long = "field-env", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field from environment as name=ENV_VAR")]
-        field_env: Vec<NamedValue>,
-        #[arg(long = "field-file", value_parser = parse_named_path, help_heading = "Credential Field Options", help = "Credential field from file as name=PATH")]
-        field_file: Vec<NamedPath>,
-        #[arg(
-            long = "field-stdin",
-            help_heading = "Credential Field Options",
-            help = "Credential field name to read from stdin"
-        )]
-        field_stdin: Option<String>,
-        #[arg(long)]
-        display_name: Option<String>,
-        #[arg(long)]
-        expires_at: Option<String>,
-        #[arg(long)]
-        verify: bool,
-        #[arg(long = "verify-repository", requires = "verify")]
-        verify_repository: Option<String>,
+        connection: String,
+        #[command(flatten)]
+        input: CredentialPutArgs,
     },
+    /// Delete a principal's token for a connection.
     Delete {
         principal: String,
-        service: String,
-        name: String,
+        connection: String,
     },
+    /// Verify a principal's token for a connection, probing as that principal.
     Verify {
         principal: String,
-        service: String,
-        name: String,
-        #[arg(long)]
-        repository: Option<String>,
+        connection: String,
+        #[command(flatten)]
+        verify: CredentialVerifyArgs,
     },
+    /// Show any stored credential by its ID.
+    InspectById { credential_id: String },
+    /// Delete any stored credential by its ID, such as a retained one.
+    DeleteById { credential_id: String },
     Rewrap {
         #[arg(long)]
         from_key: String,
@@ -11182,6 +11196,15 @@ fn append_query_value(
     Ok(())
 }
 
+/// The input form of a credential connection's token, as its input-schema
+/// route returns it: the profile to store and the fields it takes.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialInputSchema {
+    profile: String,
+    fields: Vec<CredentialInputField>,
+}
+
 async fn fetch_credential_input_schema(
     ctx: &CliContext<'_>,
     path: &str,
@@ -11581,11 +11604,73 @@ fn configured_token_file_status(path: &Path) -> ConfiguredTokenFileStatus {
     }
 }
 
-fn credential_verify_body(repository: Option<&str>) -> serde_json::Value {
-    match repository {
-        Some(repository) => serde_json::json!({ "repository": repository }),
-        None => serde_json::json!({}),
+fn credential_verify_body(verify: &CredentialVerifyArgs) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    if let Some(service) = &verify.service {
+        body.insert("service".to_string(), serde_json::json!(service));
     }
+    if let Some(repository) = &verify.repository {
+        body.insert("repository".to_string(), serde_json::json!(repository));
+    }
+    serde_json::Value::Object(body)
+}
+
+/// The self-service route of `connection`'s token.
+fn self_connection_path(connection: &str) -> String {
+    require_cli_input(validate_connection_argument(connection));
+    format!("/v1/credentials/connections/{connection}")
+}
+
+/// The administrator route of `principal`'s token for `connection`.
+fn admin_connection_path(principal: &str, connection: &str) -> String {
+    require_cli_input(validate_connection_argument(connection));
+    format!(
+        "/v1/admin/principals/{}/credentials/connections/{connection}",
+        encoded_path_segment(principal)
+    )
+}
+
+/// Fetches the input schema of `credential_path`, collects the fields from
+/// their sources, stores the token, and verifies it when asked.
+async fn put_connection_credential(
+    ctx: &CliContext<'_>,
+    credential_path: &str,
+    input: &CredentialPutArgs,
+) -> Result<()> {
+    let schema = fetch_credential_input_schema(
+        ctx,
+        &credential_input_schema_path(credential_path, &input.profile),
+    )
+    .await?;
+    let body = require_cli_input(credential_put_body(CredentialPutInput {
+        schema: &schema,
+        username: &input.username,
+        username_env: &input.username_env,
+        username_file: &input.username_file,
+        field: &input.field,
+        field_env: &input.field_env,
+        field_file: &input.field_file,
+        field_stdin: &input.field_stdin,
+        display_name: &input.display_name,
+        expires_at: &input.expires_at,
+    }));
+    let (status, value) =
+        send_broker_json_method(ctx, reqwest::Method::PUT, credential_path, Some(body)).await?;
+    if status >= 400 || !input.verify {
+        print_value_and_exit(status, value);
+    }
+    let verify = CredentialVerifyArgs {
+        service: input.verify_service.clone(),
+        repository: input.verify_repository.clone(),
+    };
+    let (verify_status, verify_value) = send_broker_json_method(
+        ctx,
+        reqwest::Method::POST,
+        &format!("{credential_path}/verify"),
+        Some(credential_verify_body(&verify)),
+    )
+    .await?;
+    print_value_and_exit(verify_status, verify_value);
 }
 
 async fn run_credentials_command(ctx: &CliContext<'_>, command: &CredentialsCommand) -> Result<()> {
@@ -11593,86 +11678,47 @@ async fn run_credentials_command(ctx: &CliContext<'_>, command: &CredentialsComm
         CredentialsCommand::List => {
             run_broker_get(ctx, "/v1/credentials", ResponseShape::Object).await
         }
-        CredentialsCommand::Inspect { service, name } => {
-            validate_service_and_name(service, name);
+        CredentialsCommand::Targets => {
+            run_broker_get(ctx, "/v1/credentials/targets", ResponseShape::Object).await
+        }
+        CredentialsCommand::Inspect { connection } => {
             run_broker_get(
                 ctx,
-                &format!("/v1/credentials/{service}/{name}"),
+                &self_connection_path(connection),
                 ResponseShape::Object,
             )
             .await
         }
-        CredentialsCommand::Put {
-            service,
-            name,
-            profile,
-            username,
-            username_env,
-            username_file,
-            field,
-            field_env,
-            field_file,
-            field_stdin,
-            display_name,
-            expires_at,
-            verify,
-            verify_repository,
-        } => {
-            validate_service_and_name(service, name);
-            let credential_path = format!("/v1/credentials/{service}/{name}");
-            let schema = fetch_credential_input_schema(
-                ctx,
-                &credential_input_schema_path(&credential_path, profile),
-            )
-            .await?;
-            let body = require_cli_input(credential_put_body(CredentialPutInput {
-                schema: &schema,
-                username,
-                username_env,
-                username_file,
-                field,
-                field_env,
-                field_file,
-                field_stdin,
-                display_name,
-                expires_at,
-            }));
-            let (status, value) =
-                send_broker_json_method(ctx, reqwest::Method::PUT, &credential_path, Some(body))
-                    .await?;
-            if status >= 400 || !*verify {
-                print_value_and_exit(status, value);
-            }
-            let (verify_status, verify_value) = send_broker_json_method(
-                ctx,
-                reqwest::Method::POST,
-                &format!("{credential_path}/verify"),
-                Some(credential_verify_body(verify_repository.as_deref())),
-            )
-            .await?;
-            print_value_and_exit(verify_status, verify_value);
+        CredentialsCommand::Put { connection, input } => {
+            put_connection_credential(ctx, &self_connection_path(connection), input).await
         }
-        CredentialsCommand::Delete { service, name } => {
-            validate_service_and_name(service, name);
+        CredentialsCommand::Delete { connection } => {
             run_broker_json_method(
                 ctx,
                 reqwest::Method::DELETE,
-                &format!("/v1/credentials/{service}/{name}"),
+                &self_connection_path(connection),
                 None,
             )
             .await
         }
-        CredentialsCommand::Verify {
-            service,
-            name,
-            repository,
-        } => {
-            validate_service_and_name(service, name);
+        CredentialsCommand::Verify { connection, verify } => {
             run_broker_json_method(
                 ctx,
                 reqwest::Method::POST,
-                &format!("/v1/credentials/{service}/{name}/verify"),
-                Some(credential_verify_body(repository.as_deref())),
+                &format!("{}/verify", self_connection_path(connection)),
+                Some(credential_verify_body(verify)),
+            )
+            .await
+        }
+        CredentialsCommand::DeleteRetained { credential_id } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::DELETE,
+                &format!(
+                    "/v1/credentials/retained/{}",
+                    encoded_path_segment(credential_id)
+                ),
+                None,
             )
             .await
         }
@@ -12857,100 +12903,104 @@ async fn run_admin_credentials_command(
     command: &AdminCredentialsCommand,
 ) -> Result<()> {
     match command {
-        AdminCredentialsCommand::List => {
-            run_broker_get(ctx, "/v1/admin/credentials", ResponseShape::Object).await
+        AdminCredentialsCommand::List { principal } => {
+            run_broker_get(
+                ctx,
+                &format!(
+                    "/v1/admin/principals/{}/credentials",
+                    encoded_path_segment(principal)
+                ),
+                ResponseShape::Object,
+            )
+            .await
+        }
+        AdminCredentialsCommand::ListStored { principal } => {
+            let path = match principal {
+                Some(principal) => {
+                    let query = form_urlencoded::Serializer::new(String::new())
+                        .append_pair("principal", principal)
+                        .finish();
+                    format!("/v1/admin/credentials?{query}")
+                }
+                None => "/v1/admin/credentials".to_string(),
+            };
+            run_broker_get(ctx, &path, ResponseShape::Object).await
+        }
+        AdminCredentialsCommand::Targets { principal } => {
+            run_broker_get(
+                ctx,
+                &format!(
+                    "/v1/admin/principals/{}/credentials/targets",
+                    encoded_path_segment(principal)
+                ),
+                ResponseShape::Object,
+            )
+            .await
         }
         AdminCredentialsCommand::Inspect {
             principal,
-            service,
-            name,
+            connection,
         } => {
-            validate_service_and_name(service, name);
             run_broker_get(
                 ctx,
-                &format!("/v1/admin/principals/{principal}/credentials/{service}/{name}"),
+                &admin_connection_path(principal, connection),
                 ResponseShape::Object,
             )
             .await
         }
         AdminCredentialsCommand::Put {
             principal,
-            service,
-            name,
-            profile,
-            username,
-            username_env,
-            username_file,
-            field,
-            field_env,
-            field_file,
-            field_stdin,
-            display_name,
-            expires_at,
-            verify,
-            verify_repository,
+            connection,
+            input,
         } => {
-            validate_service_and_name(service, name);
-            let credential_path =
-                format!("/v1/admin/principals/{principal}/credentials/{service}/{name}");
-            let schema = fetch_credential_input_schema(
-                ctx,
-                &credential_input_schema_path(&credential_path, profile),
-            )
-            .await?;
-            let body = require_cli_input(credential_put_body(CredentialPutInput {
-                schema: &schema,
-                username,
-                username_env,
-                username_file,
-                field,
-                field_env,
-                field_file,
-                field_stdin,
-                display_name,
-                expires_at,
-            }));
-            let (status, value) =
-                send_broker_json_method(ctx, reqwest::Method::PUT, &credential_path, Some(body))
-                    .await?;
-            if status >= 400 || !*verify {
-                print_value_and_exit(status, value);
-            }
-            let (verify_status, verify_value) = send_broker_json_method(
-                ctx,
-                reqwest::Method::POST,
-                &format!("{credential_path}/verify"),
-                Some(credential_verify_body(verify_repository.as_deref())),
-            )
-            .await?;
-            print_value_and_exit(verify_status, verify_value);
+            put_connection_credential(ctx, &admin_connection_path(principal, connection), input)
+                .await
         }
         AdminCredentialsCommand::Delete {
             principal,
-            service,
-            name,
+            connection,
         } => {
-            validate_service_and_name(service, name);
             run_broker_json_method(
                 ctx,
                 reqwest::Method::DELETE,
-                &format!("/v1/admin/principals/{principal}/credentials/{service}/{name}"),
+                &admin_connection_path(principal, connection),
                 None,
             )
             .await
         }
         AdminCredentialsCommand::Verify {
             principal,
-            service,
-            name,
-            repository,
+            connection,
+            verify,
         } => {
-            validate_service_and_name(service, name);
             run_broker_json_method(
                 ctx,
                 reqwest::Method::POST,
-                &format!("/v1/admin/principals/{principal}/credentials/{service}/{name}/verify"),
-                Some(credential_verify_body(repository.as_deref())),
+                &format!("{}/verify", admin_connection_path(principal, connection)),
+                Some(credential_verify_body(verify)),
+            )
+            .await
+        }
+        AdminCredentialsCommand::InspectById { credential_id } => {
+            run_broker_get(
+                ctx,
+                &format!(
+                    "/v1/admin/credentials/{}",
+                    encoded_path_segment(credential_id)
+                ),
+                ResponseShape::Object,
+            )
+            .await
+        }
+        AdminCredentialsCommand::DeleteById { credential_id } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::DELETE,
+                &format!(
+                    "/v1/admin/credentials/{}",
+                    encoded_path_segment(credential_id)
+                ),
+                None,
             )
             .await
         }
@@ -14101,10 +14151,11 @@ fn read_prompted_field(prompt_label: &str, field_name: &str, secret: bool) -> Re
     Ok(value.trim().to_string())
 }
 
-fn validate_service_and_name(service: &str, name: &str) {
-    require_cli_input(validate_service_argument(service));
-    if !agent_access_provider::is_action_name(name) {
-        require_cli_input::<()>(Err(anyhow::anyhow!("credential name is invalid")));
+fn validate_connection_argument(connection: &str) -> Result<()> {
+    if is_service_name(connection) {
+        Ok(())
+    } else {
+        anyhow::bail!("credential connection ID is invalid")
     }
 }
 
@@ -16966,6 +17017,16 @@ fn default_config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// The CLI's view of an input schema the broker built.
+    fn cli_input_schema(
+        schema: agent_access_core::CredentialInputSchema,
+    ) -> super::CredentialInputSchema {
+        super::CredentialInputSchema {
+            profile: schema.profile,
+            fields: schema.fields,
+        }
+    }
+
     #[test]
     fn identity_administration_cli_requires_explicit_versions_and_removes_token_pause() {
         for arguments in [
@@ -21919,10 +21980,9 @@ upload_spool_dir = "upload-spool"
             "version": "agent-access.send.v1",
             "kind": "http",
             "method": "PUT",
-            "route": "/v1/credentials/{service}/{name}",
+            "route": "/v1/credentials/connections/{connection}",
             "pathParams": {
-                "service": "jira",
-                "name": "default"
+                "connection": "jira"
             },
             "body": {
                 "profile": "jira-cloud-api-token"
@@ -21951,7 +22011,7 @@ upload_spool_dir = "upload-spool"
             "version": "agent-access.send.v1",
             "kind": "http",
             "method": "PUT",
-            "route": "/v1/credentials/{service}/{name}",
+            "route": "/v1/credentials/connections/{connection}",
             "body": {
                 "secret": {
                     "apiToken": "inline"
@@ -21972,7 +22032,7 @@ upload_spool_dir = "upload-spool"
             "version": "agent-access.send.v1",
             "kind": "http",
             "method": "PUT",
-            "route": "/v1/credentials/{service}/{name}",
+            "route": "/v1/credentials/connections/{connection}",
             "secretSources": [
                 {
                     "pointer": "/body/notSecret/apiToken",
@@ -23161,13 +23221,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_collects_fields_from_schema_sources() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let token_path =
             std::env::temp_dir().join(format!("agent-access-cli-token-{}.txt", Uuid::new_v4()));
         fs::write(&token_path, b"secret-token\n").unwrap();
@@ -23203,13 +23265,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_collects_token_from_field_env() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let env_name = format!("AGENT_ACCESS_TEST_TOKEN_{}", Uuid::new_v4().simple());
         // SAFETY: the variable name is UUID-derived and scoped to this test.
         unsafe {
@@ -23248,13 +23312,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_plans_token_from_field_stdin() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let username = Some("alice@example.com".to_string());
         let empty_values = Vec::new();
         let empty_paths = Vec::new();
@@ -23281,13 +23347,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_rejects_secret_literal_fields() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let username = None;
         let fields = vec![NamedValue {
             name: "token".to_string(),
@@ -23318,13 +23386,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_rejects_duplicate_sources_before_reading_values() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let username = Some("alice@example.com".to_string());
         let field_env = vec![NamedValue {
             name: "token".to_string(),
@@ -23357,13 +23427,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_allows_identical_duplicate_source_plans() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let username = Some("alice@example.com".to_string());
         let duplicate = vec![
             NamedValue {
@@ -23402,13 +23474,15 @@ upload_spool_dir = "upload-spool"
 
     #[test]
     fn credential_put_body_rejects_unsupported_schema_input_methods_before_stdin() {
-        let schema = agent_access_core::credential_input_schema(
-            "jira",
-            "Jira",
-            "jira-cloud-api-token",
-            "basic_api_token",
-        )
-        .unwrap();
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "jira",
+                "Jira",
+                "jira-cloud-api-token",
+                "basic_api_token",
+            )
+            .unwrap(),
+        );
         let empty_values = Vec::new();
         let field_files = vec![NamedPath {
             name: "token".to_string(),
@@ -23453,10 +23527,10 @@ upload_spool_dir = "upload-spool"
         assert!(parse_named_value("Bad=value").is_err());
         assert_eq!(
             credential_input_schema_path(
-                "/v1/credentials/jira/default",
+                "/v1/credentials/connections/jira",
                 &Some("jira cloud/profile".to_string())
             ),
-            "/v1/credentials/jira/default/input-schema?profile=jira+cloud%2Fprofile"
+            "/v1/credentials/connections/jira/input-schema?profile=jira+cloud%2Fprofile"
         );
     }
 

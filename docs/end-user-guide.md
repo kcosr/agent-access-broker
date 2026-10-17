@@ -7,7 +7,7 @@ Use this guide to connect your account, store an upstream credential, and give a
 agent a Broker invocation token. Your administrator must first configure the
 integration, create your account, and grant access. Ask them for the broker HTTPS
 URL, your login method or finite setup token, the available execution contexts,
-the services/resources you may use, and your configured personal credential targets.
+the services/resources you may use, and the credential connections you set up.
 Administrator setup is in the
 [administrator guide](administrator-guide.md).
 
@@ -36,9 +36,9 @@ If it is disabled, ask an administrator to manage your credentials/tokens.
 Account and password settings remain available.
 
 Press **Ctrl+K / ⌘K** to jump to pages, your available services and actions, your
-tokens, and saved credentials that still have an available credential target.
-Search uses credential names, services, profiles, and IDs; secret values are
-never searched. Selecting a service action opens its authorized access view.
+tokens, and the credential connections you have stored a token for. Search uses
+connection and service names and IDs, profiles, and credential IDs; secret
+values are never searched. Selecting a service action opens its authorized access view.
 See [portal search](portal-guide/index.md#search-and-jump-with-ctrlk--k).
 
 Microsoft groups refresh on successful Microsoft login and expire after the
@@ -48,24 +48,42 @@ remain independent. Microsoft-only users change their password at Microsoft.
 
 ## Store a credential or connect OAuth
 
-In **My access > Credentials**, select the configured target for your service,
-enter the requested fields, save, and verify when supported. Use the profile and
-credential name offered by the broker. Storing a credential does not create a
-grant. Service-mode actions use the configured shared identity and may not require
-a personal credential. Teams destination URLs are managed by administrators.
+Your personal upstream credentials are organized as **credential
+connections**. A connection is one credential that one or more services use:
+for example, one GitLab token can serve both GitLab REST and Git. Your
+administrator decides how each connection authenticates. When it uses OAuth,
+you connect your upstream account; otherwise you store a token. You do not
+choose between them, and a stored token is never used in place of a connection
+that uses OAuth.
+
+**My access > Credentials** lists one row per connection, naming the services you
+are granted that use it and counting any others. Select a connection, enter the
+requested fields, save, and verify when supported. Use the token form the broker
+offers. Verification probes as you through one of those services; a Git gateway
+needs a repository you can fetch. A connection that uses OAuth is one row per
+OAuth registration, with **Connect account**, **Reconnect** and **Disconnect**.
+Rows marked **Not used** are stored credentials the configuration no longer
+selects, for example a token you stored before two services began sharing a
+connection; no service reads them, and you can delete them.
+Storing a credential does not create a grant: each service that uses the
+connection still needs its own grant. Service-mode actions use the configured
+shared identity and may not require a personal credential. Teams destination
+URLs are managed by administrators.
 
 For Gmail and other supported OAuth-backed services, your administrator enables
-self-service, configures the service's personal OAuth binding, and grants you or
-one of your current groups an active `per_user` action grant. No separate
-credential rights are required. Choose **Connect account**, complete upstream
+self-service, configures the connection's OAuth registration, and grants you or
+one of your current groups an active `per_user` action grant on a service that
+uses it. No separate
+credential rights are required. Choose **Connect account** on its row, complete upstream
 consent, and confirm the connection status. You can prepare an account even when
 its resources or execution contexts are not currently available; each invocation
 still needs its own authorization.
 
 An existing connection stays visible and disconnectable after you lose its grant,
-while self-service remains enabled and the registration is still bound to a
-service. Connect/reconnect remains unavailable until you have a matching grant.
-Disconnecting a shared connection affects every service using that registration.
+while self-service remains enabled and a credential connection still uses the
+registration. Connect/reconnect remains unavailable until you have a matching
+grant. Disconnecting a shared connection affects every service using that
+registration.
 See [administrator OAuth setup](administrator-guide.md#enable-personal-oauth-connections).
 Do not paste an OAuth access token into a generic API-token field. OAuth consent requires a
 signed-in browser session; the CLI setup token alone cannot authorize it. See
@@ -118,46 +136,53 @@ been loaded securely into the named environment variables. Use `--field-env`
 with the variable's name, not its expanded secret value. You can instead use
 `--field-file token=/secure/path` or `--field-stdin token`.
 
+`credentials targets` lists the connections you can store a token for, with
+their fields. Each command names the connection, which may be shared: the
+`gitlab` connection's one token serves GitLab REST and Git when your
+administrator shares it.
+
 ```bash
-agent-access --config ~/.config/agent-access/setup.toml credentials put jira default \
-  --profile jira-cloud-api-token --username-env JIRA_USERNAME \
-  --field-env token=JIRA_API_TOKEN --display-name "My Jira account" --verify
+agent-access --config ~/.config/agent-access/setup.toml credentials targets
 
-agent-access --config ~/.config/agent-access/setup.toml credentials put confluence default \
-  --profile confluence-cloud-api-token --username-env CONFLUENCE_USERNAME \
-  --field-env token=CONFLUENCE_API_TOKEN --display-name "My Confluence account" --verify
+agent-access --config ~/.config/agent-access/setup.toml credentials put jira \
+  --username-env JIRA_USERNAME --field-env token=JIRA_API_TOKEN \
+  --display-name "My Jira account" --verify
 
-agent-access --config ~/.config/agent-access/setup.toml credentials put cloudbees_ci default \
-  --profile cloudbees-ci-api-token --username-env CLOUDBEES_CI_USERNAME \
-  --field-env token=CLOUDBEES_CI_API_TOKEN --display-name "My CloudBees CI account"
+agent-access --config ~/.config/agent-access/setup.toml credentials put confluence \
+  --username-env CONFLUENCE_USERNAME --field-env token=CONFLUENCE_API_TOKEN \
+  --display-name "My Confluence account" --verify
 
-agent-access --config ~/.config/agent-access/setup.toml credentials put gitlab default \
-  --profile gitlab-access-token --field-env token=GITLAB_ACCESS_TOKEN \
-  --display-name "My GitLab account" --verify
+agent-access --config ~/.config/agent-access/setup.toml credentials put cloudbees_ci \
+  --username-env CLOUDBEES_CI_USERNAME --field-env token=CLOUDBEES_CI_API_TOKEN \
+  --display-name "My CloudBees CI account"
+
+agent-access --config ~/.config/agent-access/setup.toml credentials put gitlab \
+  --field-env token=GITLAB_ACCESS_TOKEN --display-name "My GitLab account" --verify
 ```
 
-Managed browser sessions and `user_manage` bearers manage these ordinary stored
-API-token targets through their configured per-user policy visibility. Explicit
+Managed browser sessions and `user_manage` bearers manage these connection
+tokens through their configured per-user policy visibility. Explicit
 credential rights remain required for intentionally enabled classless static
-credential management. Static credential deletion still requires current access
-to the configured target; OAuth owner cleanup after grant removal is separate.
-Administrative credential commands act
+credential management. You can always inspect and delete your own token, and
+delete retained rows, even after losing the grant; OAuth owner cleanup after
+grant removal follows its own rules. Administrative credential commands act
 through a separate role-gated authority path.
 
-Run only the commands for configured credential targets. `default` must match the
-credential name configured for that service. `--token-file`/`--token-env` select
-the **Broker** token; `--field-file`/`--field-env` select the **upstream** credential
-field. They are not interchangeable.
+Run only the commands for connections `credentials targets` or `credentials
+list` shows. `--token-file`/`--token-env` select the **Broker** token;
+`--field-file`/`--field-env` select the **upstream** credential field. They are
+not interchangeable.
 
 ```bash
-agent-access --config ~/.config/agent-access/setup.toml credentials inspect jira default
-agent-access --config ~/.config/agent-access/setup.toml credentials verify jira default
-agent-access --config ~/.config/agent-access/setup.toml credentials verify gitlab_git default \
-  --repository group/project
+agent-access --config ~/.config/agent-access/setup.toml credentials inspect jira
+agent-access --config ~/.config/agent-access/setup.toml credentials verify jira
+agent-access --config ~/.config/agent-access/setup.toml credentials verify gitlab \
+  --service gitlab_git --repository group/project
 ```
 
-Git gateway credential verification requires a repository. Other verification
-requirements depend on the service. Metadata reads never return the stored
+Without `--service`, verification probes through a service that can identify
+your upstream account, or checks the token locally. Verifying through a Git
+gateway service requires a repository. Metadata reads never return the stored
 secret. `lastVerificationAttemptAt` records attempts, `lastVerifiedAt` records
 success, and `verificationStatus` distinguishes local verification, upstream
 verification, and failure. Check the sanitized error code after a failed attempt.
@@ -329,11 +354,12 @@ revoke the old token. Ask your administrator to revoke the setup token after onb
 finite setup token or browser session for later management.
 
 ```bash
-agent-access --config ~/.config/agent-access/setup.toml credentials delete jira default
+agent-access --config ~/.config/agent-access/setup.toml credentials delete jira
+agent-access --config ~/.config/agent-access/setup.toml credentials delete-retained "<credential-id>"
 ```
 
 Deleting a credential removes the broker's encrypted copy; it does not revoke
-the upstream credential. Revoke it upstream when needed. Disabled/expired/revoked
+the upstream credential. `credentials list` shows the IDs of retained rows. Revoke it upstream when needed. Disabled/expired/revoked
 records can remain visible for administration; they are not proof of active access.
 
 ## Review activity and get help
@@ -358,10 +384,11 @@ report.
 | --- | --- |
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
-| OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant and the configured OAuth binding; an existing owned connection can still be disconnected after grant loss |
-| `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right, credential name, expiry, and revocation; these rights do not govern OAuth |
+| OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |
+| `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right on the connection, its expiry, and revocation; these rights do not govern OAuth |
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
-| `credential_not_found` | Store the credential matching the configured service/name/profile, or reconnect OAuth |
+| `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |
+| `credential_not_provisioned` | The service's credential connection offers no personal credential for your account type, or the service has none; ask the administrator |
 | `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions |
 | `execution_context_denied` | Use the correct ingress and a token/grant authorized for that context; token selection cannot attest context |
 | `broker_token_paused` | Resume only if the secret remains trusted; otherwise replace and revoke it |

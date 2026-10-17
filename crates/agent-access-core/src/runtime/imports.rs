@@ -253,7 +253,7 @@ pub(super) fn descriptor(
             action
         })
         .collect();
-    ServiceDescriptor::new(
+    let descriptor = ServiceDescriptor::new(
         record.definition.service.clone(),
         record.definition.display_name.clone(),
     )
@@ -275,7 +275,12 @@ pub(super) fn descriptor(
     } else {
         let kind = execution_credential_kind(record);
         CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
-    })
+    });
+    // An HTTP import acts on its endpoint; a command import declares none.
+    match UpstreamAuthority::from_base_url(&record.definition.endpoint) {
+        Ok(authority) => descriptor.with_upstream_authority(authority),
+        Err(_) => descriptor,
+    }
 }
 
 fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefinition) -> bool {
@@ -433,6 +438,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .collect::<Vec<_>>()
         };
         config.credentials.per_user.remove(service);
+        config.credentials.connections.remove(service);
         if modes.iter().any(|mode| mode == "per_user") {
             let binding = record
                 .definition
@@ -440,22 +446,20 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .iter()
                 .find(|binding| binding.owner_mode == ImportedCredentialMode::PerUser)
                 .expect("selected mode");
-            let oauth = binding.mechanism == ImportedAuthMechanism::Oauth;
+            config
+                .credentials
+                .connections
+                .insert(service.clone(), personal_connection(record, binding));
             config.credentials.per_user.insert(
                 service.clone(),
                 CredentialConfig {
-                    kind: if oauth { "oauth" } else { "managed_store" }.into(),
+                    kind: "connection".into(),
                     username_ref: None,
                     token_ref: None,
                     path: None,
                     read_only: None,
-                    provider: oauth.then(|| binding.registration_id.clone()).flatten(),
-                    credential_name: Some("default".into()),
-                    profile: if oauth {
-                        binding.profile.clone()
-                    } else {
-                        Some(execution_credential_kind(record).personal_profile().into())
-                    },
+                    provider: None,
+                    connection: Some(service.clone()),
                 },
             );
         }
@@ -471,6 +475,40 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                     window: format!("{}s", limit.window_seconds),
                 },
             );
+        }
+    }
+}
+
+/// The single-consumer credential connection an import's supported,
+/// allowed personal binding publishes under the imported service ID. It
+/// mirrors that binding and never adds a second method: an approved OAuth
+/// binding gives OAuth only, and a static binding gives the profile the
+/// accepted declaration fixes (`token`, or `username-token` for command
+/// imports that declare it). Service and system principals therefore select
+/// nothing for an OAuth import, and command imports never offer OAuth.
+fn personal_connection(
+    record: &ImportedServiceRecord,
+    binding: &ImportedCredentialBinding,
+) -> crate::ConnectionConfig {
+    let display_name = Some(record.definition.display_name.clone());
+    if binding.mechanism == ImportedAuthMechanism::Oauth {
+        crate::ConnectionConfig {
+            display_name,
+            token_profile: None,
+            oauth: binding
+                .registration_id
+                .clone()
+                .zip(binding.profile.clone())
+                .map(|(registration, profile)| crate::ConnectionOAuthConfig {
+                    registration,
+                    profile,
+                }),
+        }
+    } else {
+        crate::ConnectionConfig {
+            display_name,
+            token_profile: Some(execution_credential_kind(record).personal_profile().into()),
+            oauth: None,
         }
     }
 }
@@ -781,6 +819,19 @@ impl BrokerRuntime {
             providers.insert(name, provider.provider());
         }
         effective_credentials(&mut config, &catalog);
+        // The publication's synthesized connections join the configured
+        // ones; a catalog that breaks a check across them is not published.
+        let connection_errors = crate::connections::effective_connection_errors(
+            &config.credentials,
+            &services,
+            &config.oauth,
+            config.providers.registry(),
+        );
+        if !connection_errors.is_empty() {
+            return Err(ManagedStoreError::InputInvalid(
+                connection_errors.join("; "),
+            ));
+        }
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
         next.resource_types = resource_types;
@@ -1247,14 +1298,7 @@ impl BrokerRuntime {
             return Err(import_credential_unavailable());
         }
         if mode == "per_user" {
-            let credential = self
-                .effective_credentials
-                .per_user
-                .get(service)
-                .ok_or_else(import_credential_unavailable)?;
-            return self
-                .resolve_managed_execution_credential(service, credential, identity)
-                .await;
+            return self.resolve_connection_token(service, identity).await;
         }
         let store = self
             .managed_store

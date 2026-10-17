@@ -1744,6 +1744,25 @@ fn gitlab_webhook_actions_do_not_advertise_content_attribution() {
 fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
     let descriptor = gitlab_descriptor(&config());
     assert_eq!(descriptor.validate(), Ok(()));
+    // The instance the REST API belongs to, as a Git gateway names it.
+    let authority = descriptor.upstream_authority.as_ref().unwrap();
+    assert_eq!(
+        format!("{}{}", authority.origin(), authority.instance_path()),
+        config()
+            .api_base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/api/v4")
+    );
+    assert_eq!(
+        gitlab_upstream_authority("https://gitlab.example.com/not-api"),
+        None
+    );
+    assert_eq!(
+        gitlab_upstream_authority("https://GitLab.example.com/group/api/v4/")
+            .unwrap()
+            .to_string(),
+        "https://gitlab.example.com/group"
+    );
 
     let sensitive = descriptor
         .actions

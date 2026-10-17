@@ -1061,6 +1061,7 @@ pub(crate) async fn microsoft_oidc_callback(
         .collect::<BTreeSet<_>>();
     let audit_identity = IdentityContext {
         principal: result.principal.principal_id.clone(),
+        principal_kind: result.principal.principal_kind(),
         principal_subject: None,
         groups: result.membership.groups.clone(),
         policy_groups: result.membership.policy_groups.clone(),
@@ -1377,6 +1378,7 @@ async fn append_oidc_audit(
         resource_scopes: ResourceScopes::new(),
         matched_grant: None,
         credential_mode: Some(None),
+        credential_connection: None,
         decision,
         reason_code: reason_code.map(Into::into),
         upstream_status: None,

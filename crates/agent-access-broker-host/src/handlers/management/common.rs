@@ -8,7 +8,7 @@ use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     AgentInvokeTokenCaveats, AgentTokenOptions, AuditRecord, BrokerConfig, BrokerRuntime,
-    BrokerTokenClass, CredentialInputSchema, DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL_SECONDS,
+    BrokerTokenClass, DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL_SECONDS,
     EffectiveServicePolicyManagementAuthority, ManagedManagementAuthority, PolicyReadScope,
     PolicyWriteScope, PrincipalRole, ResourceSelection, RuntimeError, SourceContext,
     broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl,
@@ -16,7 +16,7 @@ use agent_access_core::{
 };
 use agent_access_provider::{
     Decision, ProviderCredentialVerification, ProviderError, ProviderReason, ReasonCode,
-    ReasonCodeId, ResourceScopes, is_action_name,
+    ReasonCodeId, ResourceScopes,
 };
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
@@ -152,20 +152,6 @@ where
 pub(super) struct AgentTokenListQuery {
     pub(super) include_revoked: bool,
     pub(super) include_expired: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct CredentialTarget {
-    pub(super) service: String,
-    pub(super) display_name: String,
-    /// Inputs verifying this credential needs besides the credential itself,
-    /// such as `repository` for Git. Empty when verification needs none.
-    pub(super) credential_verification_inputs: Vec<String>,
-    pub(super) credential_name: String,
-    pub(super) profile: String,
-    pub(super) credential_kind: String,
-    pub(super) input_schema: CredentialInputSchema,
 }
 
 fn self_service_max_agent_token_ttl_seconds(config: &BrokerConfig) -> u64 {
@@ -494,60 +480,6 @@ pub(super) fn agent_token_list_query(
         }
     }
     Ok(query)
-}
-
-pub(super) fn visible_per_user_services(
-    runtime: &BrokerRuntime,
-    identity: &agent_access_core::IdentityContext,
-) -> BTreeSet<String> {
-    runtime
-        .visible_services_for_management(identity)
-        .into_iter()
-        .filter(|service| runtime.has_any_per_user_policy_for_service(identity, &service.service))
-        .map(|service| service.service)
-        .collect()
-}
-
-pub(super) fn credential_targets(
-    runtime: &BrokerRuntime,
-    allowed_services: Option<&BTreeSet<String>>,
-) -> Vec<CredentialTarget> {
-    runtime
-        .effective_credentials()
-        .per_user
-        .iter()
-        .filter_map(|(service, credential)| {
-            if let Some(allowed_services) = allowed_services
-                && !allowed_services.contains(service)
-            {
-                return None;
-            }
-            if credential.kind != "managed_store" {
-                return None;
-            }
-            let credential_name = credential
-                .credential_name
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            if !is_action_name(&credential_name) {
-                return None;
-            }
-            let profile = credential.profile.clone()?;
-            let credential_kind = runtime.credential_profile_kind(service, &profile)?;
-            let input_schema =
-                runtime.credential_input_schema(service, &profile, credential_kind)?;
-            let descriptor = runtime.service_descriptor(service)?;
-            Some(CredentialTarget {
-                service: service.clone(),
-                display_name: descriptor.display_name.clone(),
-                credential_verification_inputs: descriptor.credential_verification_inputs(),
-                credential_name,
-                profile,
-                credential_kind: credential_kind.to_string(),
-                input_schema,
-            })
-        })
-        .collect()
 }
 
 pub(super) async fn run_managed_store_blocking<T, F>(
@@ -1021,6 +953,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "admin.tokens.list_principal_agent"
             | "admin.tokens.inspect_principal_agent"
             | "admin.credentials.list"
+            | "admin.credentials.list_principal"
             | "admin.credentials.inspect"
             | "admin.credentials.input_schema"
             | "admin.credentials.targets"
@@ -1211,6 +1144,7 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "admin.tokens.options_principal_agent",
     "admin.tokens.effective_access_principal_agent",
     "admin.credentials.list",
+    "admin.credentials.list_principal",
     "admin.credentials.inspect",
     "admin.credentials.targets",
     "admin.credentials.input_schema",
@@ -1258,7 +1192,6 @@ pub(crate) const READ_ONLY_POST_CATALOG_OPERATIONS: &[&str] = &[
     "admin.principals.identity_token.reveal",
     "admin.policy.resources.attribute.reveal",
     "credentials.verify",
-    "admin.credentials.verify",
     "admin.principals.credentials.verify",
 ];
 
@@ -1748,6 +1681,10 @@ async fn append_management_audit_with_details(
     if let Some(phase) = extra.phase {
         management.insert("phase".to_string(), json!(phase));
     }
+    let connection_services = connection_target_services(snapshot, envelope);
+    if let Some(services) = &connection_services {
+        management.insert("targetServices".to_string(), json!(services));
+    }
     if let Some(scope) = policy_management_scope {
         let (target_service, service_specific) = audit_target_service(snapshot, envelope).await;
         for (key, value) in
@@ -1763,7 +1700,9 @@ async fn append_management_audit_with_details(
             service_specific,
         );
         management.insert("authorizationBasis".to_string(), json!(basis));
-    } else if let Some(target_service) = admin_target_service(envelope) {
+    } else if let Some(target_service) =
+        admin_target_service(envelope, connection_services.as_deref())
+    {
         management.insert("targetService".to_string(), json!(target_service));
     }
     if !policy_management_authorities.is_empty() {
@@ -1793,6 +1732,7 @@ async fn append_management_audit_with_details(
         resource_scopes: ResourceScopes::new(),
         matched_grant: None,
         credential_mode: Some(None),
+        credential_connection: None,
         decision: envelope.decision.clone(),
         reason_code: envelope.reason_code.clone(),
         upstream_status: extra
@@ -1810,13 +1750,47 @@ async fn append_management_audit_with_details(
     snapshot.runtime.append_audit_record(&record).await
 }
 
+/// The services consuming the credential connection a management target
+/// names, in configured order, which its record lists as `targetServices`.
+fn connection_target_services(
+    snapshot: &RuntimeSnapshot,
+    envelope: &ManagementEnvelope,
+) -> Option<Vec<String>> {
+    let connection = envelope.target.as_ref()?.get("connection")?.as_str()?;
+    Some(
+        snapshot
+            .runtime
+            .effective_credentials()
+            .connection_consumers(connection)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// The one service a credential connection target is about: its only
+/// consumer. A record about a connection several services share has no
+/// single scope service.
+fn connection_scope_service(services: &[String]) -> Option<&str> {
+    match services {
+        [service] => Some(service),
+        _ => None,
+    }
+}
+
 /// The service an admin operation acts on, taken from its target, so admin
 /// records carry `targetService` like policy-management records do and are
-/// visible to that service's policy managers. Self-service operations are
+/// visible to that service's policy managers: the target's service, or the
+/// only consumer of its credential connection. Self-service operations are
 /// excluded: a user's own actions stay out of service managers' view.
-fn admin_target_service(envelope: &ManagementEnvelope) -> Option<&str> {
+fn admin_target_service<'a>(
+    envelope: &'a ManagementEnvelope,
+    connection_services: Option<&'a [String]>,
+) -> Option<&'a str> {
     if !envelope.operation.starts_with("admin.") {
         return None;
+    }
+    if let Some(services) = connection_services {
+        return connection_scope_service(services);
     }
     envelope
         .target
@@ -1852,6 +1826,9 @@ async fn audit_target_service(
     let Some(target) = envelope.target.as_ref() else {
         return (None, false);
     };
+    if let Some(services) = connection_target_services(snapshot, envelope) {
+        return (connection_scope_service(&services).map(str::to_owned), true);
+    }
     if let Some(service) = target.get("service").and_then(Value::as_str) {
         return (Some(service.to_string()), true);
     }
@@ -2258,52 +2235,6 @@ mod tests {
     }
 
     #[test]
-    fn credential_target_serializes_service_metadata_in_camel_case() {
-        let target = |credential_verification_inputs: Vec<String>| CredentialTarget {
-            service: "gitlab_git".to_string(),
-            display_name: "GitLab Git".to_string(),
-            credential_verification_inputs,
-            credential_name: "default".to_string(),
-            profile: "git-bearer-token".to_string(),
-            credential_kind: "bearer_token".to_string(),
-            input_schema: agent_access_core::CredentialInputSchema {
-                service: "gitlab_git".to_string(),
-                profile: "git-bearer-token".to_string(),
-                credential_kind: "bearer_token".to_string(),
-                fields: vec![],
-            },
-        };
-        let with_inputs = serde_json::to_value(target(vec!["repository".to_string()])).unwrap();
-        assert_eq!(with_inputs["displayName"], "GitLab Git");
-        assert_eq!(
-            with_inputs["credentialVerificationInputs"],
-            json!(["repository"])
-        );
-        // Always serialized, even when verification needs no input.
-        let without_inputs = serde_json::to_value(target(vec![])).unwrap();
-        assert_eq!(without_inputs["credentialVerificationInputs"], json!([]));
-        let mut keys = without_inputs
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            [
-                "credentialKind",
-                "credentialName",
-                "credentialVerificationInputs",
-                "displayName",
-                "inputSchema",
-                "profile",
-                "service"
-            ]
-        );
-    }
-
-    #[test]
     fn agent_token_options_serialize_service_metadata_in_camel_case() {
         let options = serde_json::to_value(restricted_token_options()).unwrap();
         let service = &options["services"][0];
@@ -2546,6 +2477,7 @@ upload_spool_dir = "upload-spool"
         .unwrap();
         let identity = IdentityContext {
             principal: "admin".to_string(),
+            principal_kind: None,
             principal_subject: None,
             groups: vec!["broker-admins".to_string()],
             policy_groups: vec![],

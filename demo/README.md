@@ -61,8 +61,11 @@ only their applicable resource type. The same repository entry serves GitLab
 REST and Git HTTP. Browse Resources to inspect coverage, contexts, and Used by.
 The demo always creates a fresh database; existing policy records are not migrated.
 
-Alice's GitLab grant uses her managed per-user credential for inline review
-replies, draft-note CRUD/publication, and review submission. GitLab owns those
+Alice's GitLab REST and Git gateway grants share the `gitlab` credential
+connection: one stored GitLab token serves both, and the gateway presents it to
+GitLab as Basic with the username `oauth2`. Her GitLab grant uses that per-user
+credential for inline review replies, draft-note CRUD/publication, and review
+submission. GitLab owns those
 drafts and reviewer state under Alice's upstream identity. A production
 operator may deliberately use a service credential for a bot reviewer, but all
 principals sharing that bot then share its draft set.

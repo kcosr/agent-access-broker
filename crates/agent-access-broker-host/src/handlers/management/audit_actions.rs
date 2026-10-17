@@ -29,6 +29,7 @@ pub(crate) const ADMIN_TOKENS_REVOKE_PRINCIPAL_AGENT: &str = "admin.tokens.revok
 pub(crate) const ADMIN_TOKENS_PAUSE_PRINCIPAL_AGENT: &str = "admin.tokens.pause_principal_agent";
 pub(crate) const ADMIN_TOKENS_RESUME_PRINCIPAL_AGENT: &str = "admin.tokens.resume_principal_agent";
 pub(crate) const ADMIN_CREDENTIALS_TARGETS: &str = "admin.credentials.targets";
+pub(crate) const ADMIN_CREDENTIALS_LIST_PRINCIPAL: &str = "admin.credentials.list_principal";
 pub(crate) const ADMIN_CREDENTIALS_INSPECT: &str = "admin.credentials.inspect";
 pub(crate) const ADMIN_CREDENTIALS_INPUT_SCHEMA: &str = "admin.credentials.input_schema";
 pub(crate) const ADMIN_CREDENTIALS_PUT: &str = "admin.credentials.put";
@@ -84,6 +85,10 @@ pub(crate) const CATALOG_TO_HANDLER_OPERATION: &[(&str, &str)] = &[
     (
         "admin.principals.agent_tokens.resume",
         ADMIN_TOKENS_RESUME_PRINCIPAL_AGENT,
+    ),
+    (
+        "admin.principals.credentials.list",
+        ADMIN_CREDENTIALS_LIST_PRINCIPAL,
     ),
     (
         "admin.principals.credentials.targets",

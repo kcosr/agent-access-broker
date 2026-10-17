@@ -528,14 +528,18 @@ impl BrokerRuntime {
                 })?
             }
             "per_user" => {
-                let (name, profile) = self.personal_command_credential(service)?;
+                let row = self.personal_command_credential(service, identity)?;
                 if !identity.authenticated {
                     return Err(credential_unavailable());
                 }
-                let (principal, service) = (identity.principal.clone(), service.to_owned());
+                let principal = identity.principal.clone();
                 managed_store_blocking(move || {
                     store.resolve_user_command_credential(
-                        &ring, &principal, &service, &name, &profile,
+                        &ring,
+                        &principal,
+                        &row.service,
+                        &row.name,
+                        &row.profile,
                     )
                 })
                 .await
@@ -555,34 +559,29 @@ impl BrokerRuntime {
         Ok(credential)
     }
 
-    /// The name and profile of the personal credential a command import
-    /// reads in `per_user` mode.
+    /// The stored row of the personal credential a command import reads in
+    /// `per_user` mode for `identity`: its connection's token row, which
+    /// `select` must choose for the principal's kind. Command imports offer
+    /// no OAuth, and an unavailable selection never falls back.
     fn personal_command_credential(
         &self,
         service: &str,
-    ) -> Result<(String, String), ProviderError> {
-        let credential = self
-            .effective_credentials
-            .per_user
-            .get(service)
-            .filter(|credential| credential.kind == "managed_store")
-            .ok_or_else(credential_unavailable)?;
-        Ok((
-            credential
-                .credential_name
-                .clone()
-                .unwrap_or_else(|| "default".into()),
-            credential
-                .profile
-                .clone()
-                .ok_or_else(credential_unavailable)?,
-        ))
+        identity: &IdentityContext,
+    ) -> Result<PersonalTokenRow, ProviderError> {
+        match self.personal_selection(service, identity) {
+            Some((connection, crate::Selection::Token(profile))) => Ok(PersonalTokenRow {
+                service: connection.id.to_owned(),
+                name: crate::CONNECTION_CREDENTIAL_NAME.to_owned(),
+                profile: profile.to_owned(),
+            }),
+            _ => Err(credential_unavailable()),
+        }
     }
 
     /// The request's `caller`, read from the managed store: the principal's
     /// kind, display name and email, the asserted username binding, the
     /// agent token and its label, and the caller's policy groups.
-    async fn command_caller(
+    pub(super) async fn command_caller(
         &self,
         identity: &IdentityContext,
     ) -> Result<CommandCaller, ProviderError> {
@@ -604,6 +603,20 @@ impl BrokerRuntime {
         })
         .await
         .map_err(provider_error_from_managed_store)?;
+        // The kind that selected the call's credentials is the kind the
+        // command is told; a principal whose stored kind no longer matches
+        // the admitted identity's is refused. An identity without a managed
+        // kind, such as a configured static principal, selected no personal
+        // credential.
+        if identity
+            .principal_kind
+            .is_some_and(|kind| crate::PrincipalKind::from_stored(&record.kind) != Some(kind))
+        {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "the caller's principal kind changed after admission",
+            ));
+        }
         Ok(CommandCaller {
             principal: identity.principal.clone(),
             kind: record.kind,
@@ -657,9 +670,9 @@ impl BrokerRuntime {
         error
     }
 
-    /// Verifies the personal credential `target` names, which `owner` holds
-    /// as `name` for the command import `service`, by running `<path>
-    /// verify` under the command's budget. `None` when the command does not
+    /// Verifies the personal credential `target` names, the token row of
+    /// the command import `service`'s connection that `owner`'s kind
+    /// selects, by running `<path> verify` under the command's budget. `None` when the command does not
     /// declare `verify`, so verification is unsupported. The import must
     /// still dispatch under this generation when the verification is
     /// admitted, after its slot, and immediately before the process starts;
@@ -670,7 +683,6 @@ impl BrokerRuntime {
         &self,
         service: &str,
         owner: &IdentityContext,
-        name: &str,
         target: &CredentialVerificationTarget,
         correlation: CorrelationContext,
     ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
@@ -686,7 +698,7 @@ impl BrokerRuntime {
             return Ok(None);
         }
         self.command_import_fenced(service)?;
-        let (_, profile) = self.personal_command_credential(service)?;
+        let row = self.personal_command_credential(service, owner)?;
         let deadline = self.command_deadline(service, Instant::now())?;
         let permit = self.command_permit(service, deadline).await?;
         self.command_import_fenced(service)?;
@@ -701,15 +713,15 @@ impl BrokerRuntime {
             )
         })?;
         let credential = managed_store_blocking({
-            let (principal, service, name, target) = (
-                owner.principal.clone(),
-                service.to_owned(),
-                name.to_owned(),
-                target.clone(),
-            );
+            let (principal, target) = (owner.principal.clone(), target.clone());
             move || {
                 store.resolve_user_command_credential_for_verification(
-                    &ring, &principal, &service, &name, &profile, &target,
+                    &ring,
+                    &principal,
+                    &row.service,
+                    &row.name,
+                    &row.profile,
+                    &target,
                 )
             }
         })
@@ -868,4 +880,12 @@ fn request_authorization(
                 .collect::<Result<_, ProviderError>>()?,
         },
     })
+}
+
+/// The stored row `(service, name)` and expected profile of a personal
+/// command credential.
+struct PersonalTokenRow {
+    service: String,
+    name: String,
+    profile: String,
 }

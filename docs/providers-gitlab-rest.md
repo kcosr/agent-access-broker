@@ -39,18 +39,33 @@ policy authorization. Use a separate upstream read credential for service-mode
 lookup paths: the Broker's `read_only` declaration does not alter GitLab scopes.
 Per-user-only paths use the selected principal credential for lookup instead.
 
-For managed per-user execution, configure `[credentials.per_user.gitlab]` with
-`type = "managed_store"`, `credential_name = "default"`, and
-`profile = "gitlab-access-token"`; create the principal's credential and grant
-`credential_mode = "per_user"`. Upstream project membership and token scopes must
+For per-user execution, configure a
+[credential connection](configuration.md#credential-connections) with the
+`gitlab-access-token` profile and name it from `[credentials.per_user.gitlab]`:
+
+```toml
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"
+
+[credentials.per_user.gitlab]
+type = "connection"
+connection = "gitlab"
+```
+
+A [GitLab Git gateway](git-http-gateway.md#credentials-limits-and-audit) can
+consume the same connection, so each principal stores one GitLab token for both.
+Have the principal store their token, or provision a service account's, and
+grant `credential_mode = "per_user"`. Upstream project membership and token scopes must
 support the chosen actions. Configure `git_repository` resources and action grants
 through the selected policy authority. Validate and reload the Broker, verify a
 small `project.view` or `issue.search`, and inspect audit before write tests.
 
 For ordinary managed browser or `user_manage` credential management, enable the
-owner's self-service flag and grant access to this configured per-user target.
-Those management paths use current per-user policy visibility and do not require
-separate `credentials:self:*` rights for API-token credentials. The account role
+owner's self-service flag and grant them a `per_user` action on a service that
+uses this connection. Those management paths use current per-user policy
+visibility and do not require separate `credentials:self:*` rights for
+connection tokens. The account role
 alone does not grant invocation access. Deliberately configured classless
 management uses explicit scoped credential rights; see the
 [administrator guide](administrator-guide.md) for that distinct setup and the

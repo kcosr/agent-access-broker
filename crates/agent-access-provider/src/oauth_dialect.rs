@@ -7,8 +7,8 @@
 use crate::host::UpstreamClientFactory;
 use crate::{
     BodyReadError, ClientProfile, EgressDeclaration, ModuleMetadata, ProviderBuildError,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError, complete_upstream_trace,
-    read_bounded_body,
+    UpstreamAuthority, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
+    complete_upstream_trace, read_bounded_body,
 };
 use async_trait::async_trait;
 use reqwest::{Method, RequestBuilder, Response};
@@ -513,6 +513,23 @@ pub trait OAuthDialect: Send + Sync + 'static {
     /// Checks the dialect adds to a registration's generic validation; the
     /// error explains, without secrets, what the registration must change.
     fn validate_registration(&self, config: &OAuthRegistrationConfig) -> Result<(), String>;
+
+    /// Checks that a service whose credential connection uses this
+    /// registration's `profile` acts on the registration's resource
+    /// authority, which is distinct from its authorization server.
+    /// `consumer` is the service's declared [`UpstreamAuthority`], `None` when
+    /// it declares none. The host calls it offline at configuration
+    /// validation, startup and reload. The default accepts every consumer;
+    /// a dialect whose grants act on one upstream instance or tenant
+    /// overrides it. The error explains, without secrets, what must match.
+    fn check_consumer_authority(
+        &self,
+        _config: &OAuthRegistrationConfig,
+        _profile: &OAuthPermissionProfile,
+        _consumer: Option<&UpstreamAuthority>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 
     /// URL patterns the registration's requests may reach.
     fn upstream_allowlist(&self, config: &OAuthRegistrationConfig) -> Vec<String>;

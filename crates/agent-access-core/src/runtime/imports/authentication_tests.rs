@@ -229,6 +229,152 @@ fn oauth_eligibility_comes_from_the_selected_import_companion() {
 }
 
 #[test]
+fn an_approved_oauth_binding_publishes_an_oauth_only_connection() {
+    let config = config();
+    let record = |binding: ImportedCredentialBinding| crate::ImportedServiceRecord {
+        definition: ImportedServiceDefinition {
+            execution_bindings: vec![binding],
+            ..definition("fixture_import")
+        },
+        status: crate::ImportedServiceStatus::Enabled,
+        version: 1,
+        actions: vec![],
+        slot_versions: BTreeMap::new(),
+        accepted_metadata: None,
+        created_at: String::new(),
+        created_by: String::new(),
+        updated_at: String::new(),
+        updated_by: String::new(),
+    };
+    let publish = |binding| {
+        let mut effective = config.clone();
+        effective_credentials(
+            &mut effective,
+            &crate::ImportedCatalog {
+                revision: 1,
+                services: vec![record(binding)],
+            },
+        );
+        effective.credentials
+    };
+
+    let credentials = publish(binding("stub", "records"));
+    let oauth = crate::ConnectionOAuthConfig {
+        registration: "records".into(),
+        profile: "read".into(),
+    };
+    assert_eq!(
+        credentials.connections["records"],
+        crate::ConnectionConfig {
+            display_name: Some("Records".into()),
+            token_profile: None,
+            oauth: Some(oauth.clone()),
+        }
+    );
+    let connection = credentials.personal_connection("records").unwrap();
+    assert_eq!(
+        connection.select(Some(crate::PrincipalKind::User)),
+        crate::Selection::OAuth(&oauth)
+    );
+    // The import offers no token, so other principals select nothing.
+    for principal_kind in [
+        Some(crate::PrincipalKind::ServiceAccount),
+        Some(crate::PrincipalKind::System),
+        None,
+    ] {
+        assert_eq!(
+            connection.select(principal_kind),
+            crate::Selection::Unavailable
+        );
+    }
+
+    // An OAuth binding that is not allowed publishes no connection.
+    let credentials = publish(binding("stub", "unrelated"));
+    assert!(credentials.connections.is_empty());
+    assert!(credentials.per_user.is_empty());
+    assert!(credentials.imported_modes["records"].is_empty());
+}
+
+#[test]
+fn synthesized_connections_sharing_a_registration_must_share_its_profile() {
+    let mut config = config();
+    let registration = config.oauth.registrations.get_mut("records").unwrap();
+    let read = registration.permission_profiles["read"].clone();
+    registration
+        .permission_profiles
+        .insert("write".into(), read);
+    let record = |service: &str, profile: &str| {
+        let mut binding = binding("stub", "records");
+        binding.profile = Some(profile.into());
+        crate::ImportedServiceRecord {
+            definition: ImportedServiceDefinition {
+                service: service.into(),
+                execution_bindings: vec![binding],
+                ..definition("fixture_import")
+            },
+            status: crate::ImportedServiceStatus::Enabled,
+            version: 1,
+            actions: vec![],
+            slot_versions: BTreeMap::new(),
+            accepted_metadata: None,
+            created_at: String::new(),
+            created_by: String::new(),
+            updated_at: String::new(),
+            updated_by: String::new(),
+        }
+    };
+    let errors = |config: &BrokerConfig, records: Vec<crate::ImportedServiceRecord>| {
+        let mut effective = config.clone();
+        effective_credentials(
+            &mut effective,
+            &crate::ImportedCatalog {
+                revision: 1,
+                services: records,
+            },
+        );
+        crate::connections::shared_registration_errors(&effective.credentials)
+    };
+
+    // Two imports bound to one registration with different profiles.
+    assert_eq!(
+        errors(
+            &config,
+            vec![record("records_a", "read"), record("records_b", "write")]
+        ),
+        [
+            "credential connections records_a and records_b share OAuth registration records with different permission profiles (read and write); connections sharing a registration must use the same profile"
+        ]
+    );
+    // The same profile shares the registration.
+    assert!(
+        errors(
+            &config,
+            vec![record("records_a", "read"), record("records_b", "read")]
+        )
+        .is_empty()
+    );
+    // A configured connection against a synthesized one.
+    config.credentials.connections.insert(
+        "configured".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(crate::ConnectionOAuthConfig {
+                registration: "records".into(),
+                profile: "write".into(),
+            }),
+        },
+    );
+    assert_eq!(
+        errors(&config, vec![record("records_a", "read")]),
+        [
+            "credential connections configured and records_a share OAuth registration records with different permission profiles (write and read); connections sharing a registration must use the same profile"
+        ]
+    );
+    assert!(errors(&config, vec![record("records_a", "write")]).is_empty());
+}
+
+#[test]
 fn the_projection_groups_approved_registrations_by_import_kind() {
     let config = config();
     assert_eq!(

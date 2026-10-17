@@ -68,6 +68,7 @@ pub(crate) use broker::{ConfigDoc, TestBroker, TestProvider, with_provider_insta
 mod confluence_read_presentation;
 mod conformance;
 pub(crate) mod conformance_import;
+mod credential_connections;
 mod discovery;
 mod domain_reasons;
 mod gitlab_uploads;
@@ -1316,8 +1317,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -1329,8 +1329,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -1424,8 +1423,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -1437,8 +1435,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -2385,8 +2382,7 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -2405,6 +2401,7 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "gateway-user".to_string(),
+        None,
         Some("gateway-user".to_string()),
         vec![],
         None,
@@ -2527,8 +2524,7 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -2547,6 +2543,7 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "gateway-user".to_string(),
+        None,
         Some("gateway-user".to_string()),
         vec![],
         None,
@@ -6152,8 +6149,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     let mut mixed_gateway = test_git_gateway_config();
@@ -6170,49 +6166,17 @@ async fn managed_store_admin_and_user_token_smoke() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
-    config.credentials.per_user.insert(
-        "gitlab".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("gitlab-access-token".to_string()),
-        },
+    use_token_connection(&mut config, "gitlab", "gitlab-access-token", &["gitlab"]);
+    use_token_connection(
+        &mut config,
+        "gitlab_git",
+        "git-bearer-token",
+        &["gitlab_git"],
     );
-    config.credentials.per_user.insert(
-        "gitlab_git".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("git-bearer-token".to_string()),
-        },
-    );
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("jira-cloud-api-token".to_string()),
-        },
-    );
+    use_token_connection(&mut config, "jira", "jira-cloud-api-token", &["jira"]);
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["group:users".to_string()],
         execution_contexts: None,
@@ -7411,8 +7375,11 @@ async fn managed_store_admin_and_user_token_smoke() {
         .as_array()
         .expect("credential targets result must be an array");
     assert_eq!(cookie_credential_targets.len(), 1);
-    assert_eq!(cookie_credential_targets[0]["service"], "gitlab");
-    assert_eq!(cookie_credential_targets[0]["credentialName"], "default");
+    assert_eq!(cookie_credential_targets[0]["connection"], "gitlab");
+    assert_eq!(
+        cookie_credential_targets[0]["consumers"][0]["service"],
+        "gitlab"
+    );
     assert_eq!(
         cookie_credential_targets[0]["inputSchema"]["fields"][0]["name"],
         "token"
@@ -7423,7 +7390,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri("/v1/credentials/gitlab/other")
+                .uri("/v1/credentials/connections/gitlab")
                 .extension(ConnectInfo(
                     "127.0.0.1:40119".parse::<SocketAddr>().unwrap(),
                 ))
@@ -7432,7 +7399,7 @@ async fn managed_store_admin_and_user_token_smoke() {
                 .header("X-Agent-Access-CSRF", &csrf_token)
                 .header("Content-Type", "application/json")
                 .body(Body::from(
-                    r#"{"profile":"gitlab-access-token","secret":{"token":"alice-token"},"metadata":{}}"#,
+                    r#"{"profile":"git-bearer-token","secret":{"token":"alice-token"},"metadata":{}}"#,
                 ))
                 .unwrap(),
         )
@@ -7452,7 +7419,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri("/v1/credentials/gitlab_git/default")
+                .uri("/v1/credentials/connections/gitlab_git")
                 .extension(ConnectInfo(
                     "127.0.0.1:40120".parse::<SocketAddr>().unwrap(),
                 ))
@@ -7622,7 +7589,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let admin_put_mallory_credential = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/admin/principals/mallory/credentials/gitlab/default",
+        "/v1/admin/principals/mallory/credentials/connections/gitlab",
         "managed-put-mallory-credential",
         "Authorization",
         admin_authorization.clone(),
@@ -7662,35 +7629,36 @@ async fn managed_store_admin_and_user_token_smoke() {
     .await;
     assert_eq!(mallory_list_without_policy.status(), StatusCode::OK);
     let mallory_list_without_policy_body = response_json(mallory_list_without_policy).await;
-    assert_eq!(
-        mallory_list_without_policy_body["result"][0]["service"],
-        "gitlab"
-    );
+    // The owned token stays listed for cleanup, with no entitled consumer.
+    let mallory_gitlab = &mallory_list_without_policy_body["result"]["connections"][0];
+    assert_eq!(mallory_gitlab["connection"], "gitlab");
+    assert_eq!(mallory_gitlab["method"], "token");
+    assert_eq!(mallory_gitlab["consumers"], json!([]));
+    assert_eq!(mallory_gitlab["otherConsumers"], 1);
+    assert_eq!(mallory_gitlab["credential"]["connection"], "gitlab");
     assert_no_secret_storage_fields(&mallory_list_without_policy_body);
 
     let mallory_inspect_without_policy = authed_json_request(
         app.clone(),
         Method::GET,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-token-inspect-without-policy",
         "Authorization",
         mallory_authorization.clone(),
         None,
     )
     .await;
+    // The owner reads its own token's metadata after grant loss.
+    assert_eq!(mallory_inspect_without_policy.status(), StatusCode::OK);
     assert_eq!(
-        mallory_inspect_without_policy.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        response_json(mallory_inspect_without_policy).await["reasonCode"],
-        "service_action_denied"
+        response_json(mallory_inspect_without_policy).await["result"]["connection"],
+        "gitlab"
     );
 
     let mallory_schema_without_policy = authed_json_request(
         app.clone(),
         Method::GET,
-        "/v1/credentials/gitlab/default/input-schema?profile=gitlab-access-token",
+        "/v1/credentials/connections/gitlab/input-schema?profile=gitlab-access-token",
         "managed-token-schema-without-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7709,7 +7677,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let mallory_put_without_policy = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-token-put-without-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7725,7 +7693,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let mallory_verify_without_policy = authed_json_request(
         app.clone(),
         Method::POST,
-        "/v1/credentials/gitlab/default/verify",
+        "/v1/credentials/connections/gitlab/verify",
         "managed-token-verify-without-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7738,25 +7706,6 @@ async fn managed_store_admin_and_user_token_smoke() {
     );
     assert_eq!(
         response_json(mallory_verify_without_policy).await["reasonCode"],
-        "service_action_denied"
-    );
-
-    let mallory_delete_without_policy = authed_json_request(
-        app.clone(),
-        Method::DELETE,
-        "/v1/credentials/gitlab/default",
-        "managed-token-delete-without-policy",
-        "Authorization",
-        mallory_authorization.clone(),
-        None,
-    )
-    .await;
-    assert_eq!(
-        mallory_delete_without_policy.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        response_json(mallory_delete_without_policy).await["reasonCode"],
         "service_action_denied"
     );
 
@@ -7784,15 +7733,20 @@ async fn managed_store_admin_and_user_token_smoke() {
     .await;
     assert_eq!(mallory_list_with_policy.status(), StatusCode::OK);
     let mallory_list_body = response_json(mallory_list_with_policy).await;
-    assert_eq!(mallory_list_body["result"][0]["service"], "gitlab");
-    assert_eq!(mallory_list_body["result"][0]["name"], "default");
+    let mallory_gitlab = &mallory_list_body["result"]["connections"][0];
+    assert_eq!(mallory_gitlab["connection"], "gitlab");
+    assert_eq!(mallory_gitlab["consumers"][0]["service"], "gitlab");
+    assert_eq!(mallory_gitlab["otherConsumers"], 0);
+    assert_eq!(mallory_gitlab["credential"]["connection"], "gitlab");
+    assert!(mallory_gitlab["credential"].get("service").is_none());
+    assert_eq!(mallory_list_body["result"]["retained"], json!([]));
     assert_no_secret_storage_fields(&mallory_list_body);
     assert!(!mallory_list_body.to_string().contains("mallory-token"));
 
     let mallory_inspect_with_policy = authed_json_request(
         app.clone(),
         Method::GET,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-token-inspect-with-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7806,7 +7760,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let mallory_schema_with_policy = authed_json_request(
         app.clone(),
         Method::GET,
-        "/v1/credentials/gitlab/default/input-schema?profile=gitlab-access-token",
+        "/v1/credentials/connections/gitlab/input-schema?profile=gitlab-access-token",
         "managed-token-schema-with-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7818,7 +7772,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let mallory_put_with_policy = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-token-put-with-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7832,7 +7786,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let mallory_verify_with_policy = authed_json_request(
         app.clone(),
         Method::POST,
-        "/v1/credentials/gitlab/default/verify",
+        "/v1/credentials/connections/gitlab/verify",
         "managed-token-verify-with-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7846,7 +7800,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let mallory_delete_with_policy = authed_json_request(
         app.clone(),
         Method::DELETE,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-token-delete-with-policy",
         "Authorization",
         mallory_authorization.clone(),
@@ -7863,7 +7817,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             Request::builder()
                 .method(Method::GET)
                 .uri(
-                    "/v1/admin/principals/alice/credentials/gitlab/default/input-schema?profile=gitlab-access-token",
+                    "/v1/admin/principals/alice/credentials/connections/gitlab/input-schema?profile=gitlab-access-token",
                 )
                 .extension(ConnectInfo(
                     "127.0.0.1:40116".parse::<SocketAddr>().unwrap(),
@@ -7877,7 +7831,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .unwrap();
     assert_eq!(admin_input_schema.status(), StatusCode::OK);
     let admin_input_schema_body = response_json(admin_input_schema).await;
-    assert_eq!(admin_input_schema_body["result"]["service"], "gitlab");
+    assert_eq!(admin_input_schema_body["result"]["connection"], "gitlab");
     assert_eq!(
         admin_input_schema_body["result"]["profile"],
         "gitlab-access-token"
@@ -7901,7 +7855,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             Request::builder()
                 .method(Method::GET)
                 .uri(
-                    "/v1/admin/principals/alice/credentials/gitlab/default/input-schema?profile=unsupported-profile",
+                    "/v1/admin/principals/alice/credentials/connections/gitlab/input-schema?profile=unsupported-profile",
                 )
                 .extension(ConnectInfo(
                     "127.0.0.1:40118".parse::<SocketAddr>().unwrap(),
@@ -7927,7 +7881,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri("/v1/admin/principals/alice/credentials/gitlab/default")
+                .uri("/v1/admin/principals/alice/credentials/connections/gitlab")
                 .extension(ConnectInfo(
                     "127.0.0.1:40120".parse::<SocketAddr>().unwrap(),
                 ))
@@ -7953,7 +7907,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             Request::builder()
                 .method(Method::GET)
                 .uri(
-                    "/v1/admin/principals/alice/credentials/gitlab/default/input-schema?unknown=value",
+                    "/v1/admin/principals/alice/credentials/connections/gitlab/input-schema?unknown=value",
                 )
                 .extension(ConnectInfo(
                     "127.0.0.1:40119".parse::<SocketAddr>().unwrap(),
@@ -7984,7 +7938,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri("/v1/admin/principals/alice/credentials/gitlab/default")
+                .uri("/v1/admin/principals/alice/credentials/connections/gitlab")
                 .extension(ConnectInfo("127.0.0.1:40101".parse::<SocketAddr>().unwrap()))
                 .header(REQUEST_ID_HEADER, "managed-put-credential")
                 .header("Authorization", admin_authorization.clone())
@@ -8031,7 +7985,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/v1/admin/credentials/{credential_id}"))
+                .uri("/v1/admin/principals/alice/credentials/connections/gitlab")
                 .extension(ConnectInfo(
                     "127.0.0.1:40112".parse::<SocketAddr>().unwrap(),
                 ))
@@ -8124,7 +8078,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/v1/credentials/gitlab/default/input-schema?profile=gitlab-access-token")
+                .uri("/v1/credentials/connections/gitlab/input-schema?profile=gitlab-access-token")
                 .extension(ConnectInfo(
                     "127.0.0.1:40117".parse::<SocketAddr>().unwrap(),
                 ))
@@ -8711,7 +8665,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let user_put_without_write_right = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-user-put-no-write-right",
         "Authorization",
         format!("Bearer {raw_token}"),
@@ -8740,7 +8694,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let missing_key_verify = authed_json_request(
         app.clone(),
         Method::POST,
-        "/v1/credentials/gitlab/default/verify",
+        "/v1/credentials/connections/gitlab/verify",
         "managed-user-verify-missing-key",
         "Authorization",
         format!("Bearer {raw_token}"),
@@ -8775,7 +8729,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/v1/credentials/gitlab/default/verify")
+                .uri("/v1/credentials/connections/gitlab/verify")
                 .extension(ConnectInfo(
                     "127.0.0.1:40115".parse::<SocketAddr>().unwrap(),
                 ))
@@ -8815,10 +8769,13 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(list.status(), StatusCode::OK);
     let list_body = response_json(list).await;
     assert_eq!(list_body["principal"], "alice");
-    assert_eq!(list_body["result"][0]["service"], "gitlab");
-    assert_eq!(list_body["result"][0]["name"], "default");
+    let gitlab = &list_body["result"]["connections"][0];
+    assert_eq!(gitlab["connection"], "gitlab");
+    assert_eq!(gitlab["method"], "token");
+    assert_eq!(gitlab["profile"], "gitlab-access-token");
+    assert_eq!(gitlab["credential"]["connection"], "gitlab");
     assert_eq!(
-        list_body["result"][0]["verificationStatus"],
+        gitlab["credential"]["verificationStatus"],
         "upstream_verified"
     );
     assert_no_secret_storage_fields(&list_body);
@@ -8843,7 +8800,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let invalid_secret = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/admin/principals/alice/credentials/gitlab/default",
+        "/v1/admin/principals/alice/credentials/connections/gitlab",
         "managed-invalid-secret",
         "Authorization",
         admin_authorization.clone(),
@@ -9309,7 +9266,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let bob_write_missing_right = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-bob-write-no-right",
         "Authorization",
         format!("Bearer {bob_token}"),
@@ -9348,7 +9305,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let bob_write_expired_right = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-bob-write-expired-right",
         "Authorization",
         format!("Bearer {bob_token}"),
@@ -9375,7 +9332,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let bob_input_schema = authed_json_request(
         app.clone(),
         Method::GET,
-        "/v1/credentials/gitlab/default/input-schema?profile=gitlab-access-token",
+        "/v1/credentials/connections/gitlab/input-schema?profile=gitlab-access-token",
         "managed-bob-schema-with-right",
         "Authorization",
         format!("Bearer {bob_token}"),
@@ -9400,7 +9357,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     let bob_write_revoked_right = authed_json_request(
         app.clone(),
         Method::PUT,
-        "/v1/credentials/gitlab/default",
+        "/v1/credentials/connections/gitlab",
         "managed-bob-write-revoked-right",
         "Authorization",
         format!("Bearer {bob_token}"),
@@ -12775,7 +12732,7 @@ async fn managed_jira_verify_marks_upstream_verified_after_provider_probe() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/v1/admin/principals/alice/credentials/jira/default/verify")
+                .uri("/v1/admin/principals/alice/credentials/connections/jira/verify")
                 .extension(ConnectInfo(
                     "127.0.0.1:43000".parse::<SocketAddr>().unwrap(),
                 ))
@@ -12870,7 +12827,7 @@ async fn managed_jira_verify_does_not_mark_credential_after_upstream_failure() {
     let verify = admin_request(
         app,
         Method::POST,
-        "/v1/admin/principals/alice/credentials/jira/default/verify",
+        "/v1/admin/principals/alice/credentials/connections/jira/verify",
         Some("managed-upstream-fail-verify"),
         Some("admin-token"),
     )
@@ -12948,7 +12905,7 @@ async fn managed_verify_does_not_mark_credential_after_local_failure() {
     let verify = authed_json_request(
         app,
         Method::POST,
-        "/v1/admin/principals/alice/credentials/jira/default/verify",
+        "/v1/admin/principals/alice/credentials/connections/jira/verify",
         "managed-local-fail-verify",
         "Authorization",
         "Bearer admin-token",
@@ -13033,7 +12990,7 @@ async fn admin_verify_rejects_disabled_managed_credential_owner() {
     let verify = admin_request(
         app,
         Method::POST,
-        "/v1/admin/principals/alice/credentials/jira/default/verify",
+        "/v1/admin/principals/alice/credentials/connections/jira/verify",
         Some("managed-disabled-owner-verify"),
         Some("admin-token"),
     )
@@ -13725,8 +13682,7 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -13878,8 +13834,7 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -13891,8 +13846,7 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -14052,8 +14006,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -14065,8 +14018,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -14288,8 +14240,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -14301,8 +14252,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -14403,8 +14353,7 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -14416,8 +14365,7 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -14926,6 +14874,8 @@ fn managed_jira_verify_config(
     store_path: &std::path::Path,
     audit_path: &std::path::Path,
 ) -> BrokerConfig {
+    let alice_token_path = admin_token_path.with_extension("alice");
+    std::fs::write(&alice_token_path, "alice-token").unwrap();
     let mut config = fake_config(audit_path.to_str().unwrap());
     config.identity = IdentityConfig {
         trusted_callers: Default::default(),
@@ -14936,10 +14886,17 @@ fn managed_jira_verify_config(
             kind: "static_principals".to_string(),
             header: "Authorization".to_string(),
             scheme: "Bearer".to_string(),
-            principals: vec![StaticPrincipalConfig {
-                principal: "admin".to_string(),
-                token_refs: vec![format!("file:{}", admin_token_path.display())],
-            }],
+            principals: vec![
+                StaticPrincipalConfig {
+                    principal: "admin".to_string(),
+                    token_refs: vec![format!("file:{}", admin_token_path.display())],
+                },
+                // The credential owner, whom a TOML policy grant can name.
+                StaticPrincipalConfig {
+                    principal: "alice".to_string(),
+                    token_refs: vec![format!("file:{}", alice_token_path.display())],
+                },
+            ],
         }],
         groups: vec![IdentityGroupConfig {
             id: "broker-admins".to_string(),
@@ -14986,20 +14943,39 @@ fn managed_jira_verify_config(
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
-    config.credentials.per_user.insert(
-        "jira".to_string(),
-        CredentialConfig {
-            kind: "managed_store".to_string(),
-            username_ref: None,
-            token_ref: None,
-            provider: None,
-            path: None,
-            read_only: None,
-            credential_name: Some("default".to_string()),
-            profile: Some("jira-cloud-api-token".to_string()),
-        },
-    );
+    use_token_connection(&mut config, "jira", "jira-cloud-api-token", &["jira"]);
+    // Verification probes as the owner, through a consumer it holds a
+    // per_user grant on.
+    config.policy.grants.push(PolicyGrantConfig {
+        subjects: vec!["user:alice".to_string()],
+        execution_contexts: None,
+        service: "jira".to_string(),
+        actions: vec!["issue.view".to_string()],
+        resources: selected_resources(&[("jira-project", &["TEST"])]),
+        credential_mode: "per_user".to_string(),
+        priority: None,
+    });
     config
+}
+
+/// A Jira verification double's descriptor: the Jira cloud token profile
+/// and one per_user action, which the credential owner's verification grant
+/// names.
+fn jira_verification_descriptor(name: &str) -> ServiceDescriptor {
+    ServiceDescriptor::new("jira", name)
+        .with_resource_scopes(fixture_scope_capabilities("project"))
+        .with_actions(vec![
+            ActionDescriptor::new(
+                "issue.view",
+                "View an issue in verification tests",
+                json!({"type": "object"}),
+            )
+            .scope("project")
+            .credential_modes(["per_user"]),
+        ])
+        .with_credentials(
+            CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
+        )
 }
 
 fn test_multipart_config() -> BrokerConfig {
@@ -15820,9 +15796,7 @@ async fn multipart_upload_request(
 
 impl agent_access_provider::test_support::DescribedProvider for TestCredentialVerificationProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor::new("jira", "Credential Verification Provider").with_credentials(
-            CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
-        )
+        jira_verification_descriptor("Credential Verification Provider")
     }
 }
 
@@ -15880,9 +15854,7 @@ impl agent_access_provider::test_support::DescribedProvider
     for TestFailingCredentialVerificationProvider
 {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor::new("jira", "Failing Credential Verification Provider").with_credentials(
-            CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
-        )
+        jira_verification_descriptor("Failing Credential Verification Provider")
     }
 }
 
@@ -15932,10 +15904,7 @@ impl agent_access_provider::test_support::DescribedProvider
     for TestLocalCredentialVerificationFailureProvider
 {
     fn descriptor(&self) -> ServiceDescriptor {
-        ServiceDescriptor::new("jira", "Local Credential Verification Failure Provider")
-            .with_credentials(
-                CredentialDescriptor::default().profile("jira-cloud-api-token", "basic_api_token"),
-            )
+        jira_verification_descriptor("Local Credential Verification Failure Provider")
     }
 }
 
@@ -16302,8 +16271,7 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -16315,8 +16283,7 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.policy.grants.push(PolicyGrantConfig {
@@ -16361,6 +16328,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
         },
         credentials: CredentialsConfig {
             imported_modes: Default::default(),
+            connections: BTreeMap::new(),
             service: BTreeMap::from([(
                 "fake".to_string(),
                 CredentialConfig {
@@ -16370,8 +16338,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
                     provider: None,
                     path: None,
                     read_only: None,
-                    credential_name: None,
-                    profile: None,
+                    connection: None,
                 },
             )]),
             per_user: BTreeMap::new(),
@@ -16442,8 +16409,7 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.credentials.lookup.insert(
@@ -16455,8 +16421,7 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             provider: None,
             path: None,
             read_only: Some(true),
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config
@@ -16691,8 +16656,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config.policy.grants.push(PolicyGrantConfig {
@@ -16715,8 +16679,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config.credentials.lookup.insert(
@@ -16728,8 +16691,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: Some(true),
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config
@@ -16789,8 +16751,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config.credentials.lookup.insert(
@@ -16802,8 +16763,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: Some(true),
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config
@@ -16853,8 +16813,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: None,
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config.credentials.lookup.insert(
@@ -16866,8 +16825,7 @@ async fn spec_token_fixture_with_restrictions(
                 provider: None,
                 path: None,
                 read_only: Some(true),
-                credential_name: None,
-                profile: None,
+                connection: None,
             },
         );
         config
@@ -17454,8 +17412,7 @@ async fn service_policy_management_fixture_with_policy_authority(
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
 
@@ -17656,8 +17613,7 @@ where
             provider: None,
             path: None,
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     let mut gateway = test_git_gateway_config();
@@ -18712,6 +18668,43 @@ thread_local! {
 /// helpers that build configurations need not return a guard. Call it on
 /// the test's own thread; a spawned thread's exit would remove the
 /// directory early.
+/// A personal credential entry consuming `connection`.
+pub(crate) fn connection_credential(connection: &str) -> CredentialConfig {
+    CredentialConfig {
+        kind: "connection".to_string(),
+        username_ref: None,
+        token_ref: None,
+        provider: None,
+        path: None,
+        read_only: None,
+        connection: Some(connection.to_string()),
+    }
+}
+
+/// Points each of `consumers`' personal credentials at the token connection
+/// `connection` with `profile`.
+pub(crate) fn use_token_connection(
+    config: &mut BrokerConfig,
+    connection: &str,
+    profile: &str,
+    consumers: &[&str],
+) {
+    config.credentials.connections.insert(
+        connection.to_string(),
+        agent_access_core::ConnectionConfig {
+            display_name: None,
+            token_profile: Some(profile.to_string()),
+            oauth: None,
+        },
+    );
+    for consumer in consumers {
+        config
+            .credentials
+            .per_user
+            .insert((*consumer).to_string(), connection_credential(connection));
+    }
+}
+
 pub(crate) fn test_temp_dir() -> PathBuf {
     let thread = std::thread::current();
     assert!(

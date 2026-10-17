@@ -103,6 +103,14 @@ empty history, visibility tiers, editable prefixes, and dropdown alignment in
 both themes and viewport sizes. Cookie tests distinguish absent or invalid
 broker sessions while allowing unrelated malformed cookies.
 
+`apps/portal/tests/credentials.spec.ts` covers the Credentials list with mocked
+responses: one row per credential connection naming its entitled services and
+counting the others, verification through a Git gateway service with a
+repository, one row per OAuth registration whose disconnect confirmation names
+the affected services, and deletion of a retained stored credential by ID. The
+real-broker `portal.spec.ts` and `my-access-metadata.spec.ts` store, verify and
+delete connection tokens for a user and for an administered principal.
+
 `apps/portal/tests/resource-audit.spec.ts` uses a real temporary Broker and
 SQLite audit store, with no mocked API responses or seeded audit rows. Its
 resource/group journey creates a named repository, includes it in a group, and

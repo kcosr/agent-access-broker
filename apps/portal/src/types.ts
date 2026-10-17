@@ -36,17 +36,34 @@ export type ResourceTypeMetadata = {
 
 export type OAuthScopeMode = "explicit" | "server_default";
 
-export type OAuthConnectionTarget = {
+/** A service consuming a credential connection, as list and target rows name it. */
+export type ConnectionConsumer = {
   service: string;
-  /** The service's display name from its descriptor. */
-  serviceDisplayName: string;
-  /** What connecting allows, as the service's backend describes it. */
-  connectionDescription: string | null;
+  displayName: string;
+  /** Inputs verifying through this service needs besides the credential (a Git gateway: `repository`); empty when none. */
+  credentialVerificationInputs: string[];
+};
+
+/** One OAuth registration the signed-in user's credential connections use. */
+export type OAuthConnectionTarget = {
   registration: string;
-  permissionProfile: string;
-  scopeMode: OAuthScopeMode;
+  /** The first selecting connection's display name. */
+  displayName: string;
+  /** What connecting allows, as a consuming service's backend describes it. */
+  connectionDescription: string | null;
+  /** Consuming services the user may set up through. */
+  consumers: ConnectionConsumer[];
+  /** Consuming services the connection serves too, which the user is not entitled to. */
+  otherConsumers: number;
+  /**
+   * Null, like `scopeMode` and `target`, on a cleanup-only row for a
+   * registration no credential connection selects any more: its consented
+   * profile is unknown.
+   */
+  permissionProfile: string | null;
+  scopeMode: OAuthScopeMode | null;
   requestedScopes: string[];
-  target: string;
+  target: string | null;
   canConnect: boolean;
   connectUnavailableReason: null | "no_personal_access" | "service_unavailable";
   canDisconnect: boolean;
@@ -187,29 +204,28 @@ export type CredentialInputField = {
 };
 
 export type CredentialInputSchema = {
-  service: string;
+  connection: string;
   profile: string;
   credentialKind: string;
   fields: CredentialInputField[];
 };
 
+/** A credential connection whose token the principal can store now. */
 export type CredentialTarget = {
-  service: string;
+  connection: string;
   displayName: string;
-  /** Inputs a verification needs besides the secret (GitLab Git: `repository`); empty when none. */
-  credentialVerificationInputs: string[];
-  credentialName: string;
+  consumers: ConnectionConsumer[];
+  otherConsumers: number;
   profile: string;
   credentialKind: string;
   inputSchema: CredentialInputSchema;
 };
 
-export type CredentialMetadata = {
+/** Lifecycle and verification fields every stored credential has. */
+export type CredentialState = {
   credentialId: string;
   ownerPrincipal: string;
   ownerKind: string;
-  service: string;
-  name: string;
   profile: string;
   credentialKind: string;
   metadata: Record<string, unknown>;
@@ -225,7 +241,40 @@ export type CredentialMetadata = {
   lastVerificationErrorCode?: string | null;
 };
 
+/** A stored row with its stored service column and name (administrator lists, retained rows). */
+export type CredentialMetadata = CredentialState & { service: string; name: string };
+
+/** A connection's active token, keyed by its connection. */
+export type ConnectionCredential = CredentialState & {
+  connection: string;
+  /** The consumer whose probe answered the latest verification; `null` for a local check. */
+  probeService?: string | null;
+};
+
+export type CredentialMethod = "token" | "oauth" | "unavailable";
+
+/** One credential connection of the principal, whatever its method. */
+export type CredentialConnection = {
+  connection: string;
+  displayName: string;
+  method: CredentialMethod;
+  consumers: ConnectionConsumer[];
+  otherConsumers: number;
+  profile: string | null;
+  credentialKind: string | null;
+  registration: string | null;
+  credential: ConnectionCredential | null;
+};
+
+/** `GET /v1/credentials`: the caller's connections and the stored rows the configuration no longer selects. */
+export type CredentialList = {
+  connections: CredentialConnection[];
+  retained: CredentialMetadata[];
+};
+
 export type CredentialVerificationInput = {
+  /** The consuming service to verify through. */
+  service?: string;
   repository?: string;
 };
 

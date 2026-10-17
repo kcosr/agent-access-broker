@@ -1,6 +1,7 @@
 // Stored-credential golden vectors. `upsert_user_credential` wrote these rows
-// at 808326b for principal `alice` with key `k1` (`[7; 32]`). Upgrades must
-// keep resolving them without reentry, so the row columns, the AAD inputs and
+// for principal `alice` with key `k1` (`[7; 32]`): the first three at 808326b
+// and the imported `username-token` row at 0b00bec. Upgrades must keep
+// resolving them without reentry, so the row columns, the AAD inputs and
 // encoding, the `basic_api_token`/`bearer_token` kind spellings, the profiles
 // and the secret plaintext encoding are a persisted contract. Adapt assertions
 // to a changed credential API, but never regenerate these vectors to make a
@@ -20,7 +21,7 @@ struct GoldenStoredCredential {
     token: &'static str,
 }
 
-const GOLDEN_STORED_CREDENTIALS: [GoldenStoredCredential; 3] = [
+const GOLDEN_STORED_CREDENTIALS: [GoldenStoredCredential; 4] = [
     GoldenStoredCredential {
         credential_id: "1f5455b1-7a4d-485d-9f44-764a44e0e986",
         service: "jira",
@@ -47,8 +48,10 @@ const GOLDEN_STORED_CREDENTIALS: [GoldenStoredCredential; 3] = [
         username: None,
         token: "golden-bearer-token",
     },
-    // A personal token for an imported service uses the same table with the
-    // fixed imported profile `token`.
+    // A personal credential for an imported service uses the same table with
+    // the profile its accepted declaration fixes: `token` (`bearer_token`) for
+    // MCP, OpenAPI and token command imports, and `username-token`
+    // (`basic_api_token`) for command imports that declare `username_token`.
     GoldenStoredCredential {
         credential_id: "6b834d3a-33ee-40df-be85-54a3d3fd1595",
         service: "inventory",
@@ -61,6 +64,19 @@ const GOLDEN_STORED_CREDENTIALS: [GoldenStoredCredential; 3] = [
         ciphertext_hex: "0cb78e85403a49442a0897c7b8147b0311595a4ef6bc73f95720dec8f0e05c308a1a7e88add4ac63a67ba856922c82da5cd7bfba63686dda4da9",
         username: None,
         token: "golden-imported-personal-token",
+    },
+    GoldenStoredCredential {
+        credential_id: "85073696-f3ad-4078-875e-8bf0effd22f4",
+        service: "ticketing",
+        profile: "username-token",
+        credential_kind: "basic_api_token",
+        metadata_json: r#"{"displayName":"Golden ticketing"}"#,
+        secret_ref: "sqlite:4093d38d-3417-4429-9d0c-54bb0d20aa12",
+        material_version: "8db173cf-4bc2-431c-b943-321446e0e821",
+        nonce_hex: "721ecf97d4fb800994bb05e4",
+        ciphertext_hex: "cf0b22a76330c238db50f75793afdf365bbe087a03084a1c32b11138bfe62520a53b7ae72da241ab3a94ff40563c29244d10581b40b6337a1362919149bdfdaeb991d4681a83362ba62ba5ab479d58d513916e3de9d578bdc2d9689e",
+        username: Some("golden-imported-user"),
+        token: "golden-imported-username-token",
     },
 ];
 
@@ -144,6 +160,19 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
 }
 
 #[test]
+fn imported_username_token_row_from_baseline_resolves_for_a_command() {
+    let (_temp, store) = store_with_golden_stored_credentials();
+    let ring = key_ring("k1");
+    let credential = store
+        .resolve_user_command_credential(&ring, "alice", "ticketing", "default", "username-token")
+        .unwrap();
+    assert_eq!(
+        credential.kind(),
+        crate::imports::ImportedCredentialKind::UsernameToken
+    );
+}
+
+#[test]
 fn stored_credential_aad_is_derived_from_frozen_row_fields() {
     let (_temp, store) = store_with_golden_stored_credentials();
     let conn = store.connection.lock().unwrap();
@@ -156,5 +185,15 @@ fn stored_credential_aad_is_derived_from_frozen_row_fields() {
          credential_profile=jira-cloud-api-token;credential_kind=basic_api_token;\
          secret_backend=sqlite_encrypted;secret_ref=sqlite:804ab3da-42ba-4b0b-8144-16289ad01822;\
          material_version=04bd9663-c38d-4ed3-8af0-3ad5cdd521b8;key_id=k1"
+    );
+    let row = encrypted_credential_by_tuple(&conn, "alice", "ticketing", "default").unwrap();
+    assert_eq!(
+        credential_aad(&row).bytes(),
+        "schema_version=002_credential_secret_material;\
+         credential_id=85073696-f3ad-4078-875e-8bf0effd22f4;owner_kind=user;\
+         owner_principal=alice;service=ticketing;name=default;\
+         credential_profile=username-token;credential_kind=basic_api_token;\
+         secret_backend=sqlite_encrypted;secret_ref=sqlite:4093d38d-3417-4429-9d0c-54bb0d20aa12;\
+         material_version=8db173cf-4bc2-431c-b943-321446e0e821;key_id=k1"
     );
 }

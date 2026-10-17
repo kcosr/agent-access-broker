@@ -209,20 +209,21 @@ add_member() {
   expect_ok "$response" "add $principal to $group"
 }
 
+# Stores a principal's token for a credential connection.
 put_credential() {
   local principal="$1"
-  local service="$2"
+  local connection="$2"
   local profile="$3"
   local display_name="$4"
   local secret="$5"
   local principal_path response
   principal_path="$(urlencode "$principal")"
-  response="$(api_with_session PUT "/v1/admin/principals/$principal_path/credentials/$service/default" "$(jq -n \
+  response="$(api_with_session PUT "/v1/admin/principals/$principal_path/credentials/connections/$connection" "$(jq -n \
     --arg profile "$profile" \
     --arg displayName "$display_name" \
     --argjson secret "$secret" \
     '{profile:$profile, secret:$secret, metadata:{displayName:$displayName}}')")"
-  expect_ok "$response" "put $service credential for $principal"
+  expect_ok "$response" "put $connection credential for $principal"
 }
 
 create_resource() {
@@ -482,10 +483,9 @@ put_credential "alice@example.test" "jira" "jira-cloud-api-token" "Alice Jira Cl
   '{"username":"alice@example.test","token":"fake-alice-jira-token"}'
 put_credential "alice@example.test" "confluence" "confluence-cloud-api-token" "Alice Confluence Cloud demo credential" \
   '{"username":"alice@example.test","token":"fake-alice-confluence-token"}'
-put_credential "alice@example.test" "gitlab" "gitlab-access-token" "Alice GitLab REST demo credential" \
+# One GitLab token serves GitLab REST and the Git gateway through the shared connection.
+put_credential "alice@example.test" "gitlab" "gitlab-access-token" "Alice GitLab demo credential" \
   '{"token":"fake-alice-gitlab-token"}'
-put_credential "alice@example.test" "gitlab_git" "git-bearer-token" "Alice Git HTTP demo credential" \
-  '{"token":"fake-alice-git-token"}'
 
 create_resource "demo-fake-project" "fake_project" "DEMO"
 create_resource "demo-project" "jira_project" "DEMO"

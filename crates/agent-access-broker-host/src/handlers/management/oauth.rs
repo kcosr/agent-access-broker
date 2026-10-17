@@ -3,6 +3,7 @@ use super::common::{
     ManagementAccess, ManagementContext, management_context, management_context_error_response,
     management_success_response, management_write_audit_preflight,
 };
+use super::connections;
 use crate::state::AppState;
 use agent_access_core::{
     OAuthBinding, OAuthConnectIntent, OAuthError, OAuthManagementAdmission, OAuthReturnPath,
@@ -14,7 +15,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -75,24 +76,38 @@ async fn browser_context(
     Ok(context)
 }
 
-fn binding(context: &ManagementContext, service: &str) -> Result<OAuthBinding, OAuthError> {
+/// The registrations the signed-in user's credential connections select
+/// OAuth for, each with its binding, the selecting connections and their
+/// consumers in configured order.
+struct RegistrationConsumers {
+    binding: OAuthBinding,
+    connections: Vec<String>,
+    consumers: Vec<String>,
+}
+
+fn selected_registrations(context: &ManagementContext) -> BTreeMap<String, RegistrationConsumers> {
     let runtime = &context.snapshot.runtime;
-    let credential = runtime
-        .effective_credentials()
-        .per_user
-        .get(service)
-        .filter(|c| c.kind == "oauth")
-        .ok_or(OAuthError::Configuration)?;
-    Ok(OAuthBinding {
-        registration: credential
-            .provider
-            .clone()
-            .ok_or(OAuthError::Configuration)?,
-        permission_profile: credential
-            .profile
-            .clone()
-            .ok_or(OAuthError::Configuration)?,
-    })
+    let mut registrations = BTreeMap::<String, RegistrationConsumers>::new();
+    for connection in connections::connection_ids(runtime) {
+        // The signed-in principal's kind selects the connection's method.
+        let Some(agent_access_core::Selection::OAuth(oauth)) =
+            connections::selection(runtime, &connection, context.identity.principal_kind)
+        else {
+            continue;
+        };
+        let entry = registrations
+            .entry(oauth.registration.clone())
+            .or_insert_with(|| RegistrationConsumers {
+                binding: oauth.binding(),
+                connections: Vec::new(),
+                consumers: Vec::new(),
+            });
+        entry
+            .consumers
+            .extend(connections::consumers(runtime, &connection));
+        entry.connections.push(connection);
+    }
+    registrations
 }
 
 fn setup_unavailable_reason(
@@ -117,15 +132,21 @@ fn setup_unavailable_reason(
     .then_some("no_personal_access"))
 }
 
-fn binding_for_setup(
+/// The consumers of a registration the user may set up through, and why
+/// the others are unavailable.
+fn entitlement(
     context: &ManagementContext,
-    service: &str,
-) -> Result<OAuthBinding, OAuthError> {
-    let binding = binding(context, service)?;
-    if setup_unavailable_reason(context, service)?.is_some() {
-        return Err(OAuthError::SetupDenied);
+    consumers: &[String],
+) -> Result<(Vec<String>, Vec<&'static str>), OAuthError> {
+    let mut entitled = Vec::new();
+    let mut reasons = Vec::new();
+    for service in consumers {
+        match setup_unavailable_reason(context, service)? {
+            None => entitled.push(service.clone()),
+            Some(reason) => reasons.push(reason),
+        }
     }
-    Ok(binding)
+    Ok((entitled, reasons))
 }
 
 pub(crate) async fn list(
@@ -144,72 +165,116 @@ pub(crate) async fn list(
             management_success_response(&context, operation, None, json!([])).await,
         );
     };
-    let connections = match manager.list(&context.identity.principal) {
+    let owned_connections = match manager.list(&context.identity.principal) {
         Ok(c) => c,
         Err(e) => return error(&context, operation, e).await,
     };
-    let mut candidates = Vec::new();
-    let mut entitled_registrations = BTreeSet::new();
-    for service in runtime.effective_credentials().per_user.keys() {
-        let Ok(binding) = binding(&context, service) else {
-            continue;
-        };
-        let unavailable = match setup_unavailable_reason(&context, service) {
-            Ok(reason) => reason,
+    let mut rows = Vec::new();
+    let selected_registrations = selected_registrations(&context);
+    for (registration_id, selected) in &selected_registrations {
+        let registration_id = registration_id.clone();
+        let (entitled, reasons) = match entitlement(&context, &selected.consumers) {
+            Ok(entitlement) => entitlement,
             Err(failure) => return error(&context, operation, failure).await,
         };
-        if unavailable.is_none() {
-            entitled_registrations.insert(binding.registration.clone());
-        }
-        candidates.push((service, binding, unavailable));
-    }
-    let mut rows = Vec::new();
-    let mut cleanup_registrations = BTreeSet::new();
-    for (service, binding, unavailable) in candidates {
-        let connection = connections
+        let connection = owned_connections
             .iter()
-            .find(|c| c.registration == binding.registration);
+            .find(|c| c.registration == registration_id);
         let owned = connection.is_some_and(|c| c.connection_id.is_some());
-        if unavailable.is_some()
-            && (!owned
-                || entitled_registrations.contains(&binding.registration)
-                || !cleanup_registrations.insert(binding.registration.clone()))
-        {
-            continue;
-        }
-        let Some(registration) = manager.config().registrations.get(&binding.registration) else {
+        // Without a consumer to set up through, an owned connection stays
+        // listed for local disconnect.
+        let unavailable = if entitled.is_empty() {
+            if !owned {
+                continue;
+            }
+            Some(if reasons.contains(&"service_unavailable") {
+                "service_unavailable"
+            } else {
+                "no_personal_access"
+            })
+        } else {
+            None
+        };
+        let Some(registration) = manager.config().registrations.get(&registration_id) else {
             continue;
         };
         let Some(profile) = registration
             .permission_profiles
-            .get(&binding.permission_profile)
+            .get(&selected.binding.permission_profile)
         else {
             continue;
         };
-        // The backend describes its own connection; the portal names no service.
-        let descriptor = runtime.service_descriptor(service);
-        let display_name = descriptor.as_ref().map_or(service.as_str(), |descriptor| {
-            descriptor.display_name.as_str()
-        });
-        let description = descriptor
-            .as_ref()
-            .and_then(|descriptor| descriptor.credentials.delegated.as_ref())
-            .map(|connection| connection.description);
-        rows.push(json!({"service":service,"serviceDisplayName":display_name,
-            "connectionDescription":description,"registration":binding.registration,
-            "permissionProfile":binding.permission_profile,"scopeMode":profile.scope_mode,
-            "requestedScopes":profile.requested_scopes(),
-            "target":profile.target,"canConnect":unavailable.is_none(),
-            "connectUnavailableReason":unavailable,
+        let (consumers, other_consumers) = registration_consumer_view(runtime, selected, &entitled);
+        // An entitled consumer's backend describes the connection; the
+        // caller learns nothing of consumers it is not entitled to.
+        let description = entitled
+            .first()
+            .and_then(|service| runtime.service_descriptor(service))
+            .and_then(|descriptor| {
+                descriptor
+                    .credentials
+                    .delegated
+                    .as_ref()
+                    .map(|connection| connection.description)
+            });
+        let display_name = connections::display_name(runtime, &selected.connections[0]);
+        rows.push(json!({"registration":registration_id,
+            "permissionProfile":selected.binding.permission_profile,
+            "displayName":display_name,"connectionDescription":description,
+            "scopeMode":profile.scope_mode,"requestedScopes":profile.requested_scopes(),
+            "target":profile.target,"consumers":consumers,"otherConsumers":other_consumers,
+            "canConnect":unavailable.is_none(),"connectUnavailableReason":unavailable,
             "canDisconnect":owned,"connection":connection}));
     }
+    // An owned connection whose registration no credential connection
+    // selects for the caller any more, because its last consumer was
+    // removed or rebound, stays listed for local disconnect on ownership
+    // alone. No binding names its permission profile, and the slot keeps
+    // no durable record of the consented one, so its profile fields are
+    // null.
+    for connection in owned_connections.iter().filter(|connection| {
+        connection.connection_id.is_some()
+            && !selected_registrations.contains_key(&connection.registration)
+    }) {
+        rows.push(json!({"registration":connection.registration,
+            "permissionProfile":null,"displayName":connection.registration,
+            "connectionDescription":null,"scopeMode":null,"requestedScopes":[],"target":null,
+            "consumers":[],"otherConsumers":0,
+            "canConnect":false,"connectUnavailableReason":"no_personal_access",
+            "canDisconnect":true,"connection":connection}));
+    }
     private_response(management_success_response(&context, operation, None, json!(rows)).await)
+}
+
+/// The entitled consumers across a registration's connections and the
+/// count of its other consumers.
+fn registration_consumer_view(
+    runtime: &agent_access_core::BrokerRuntime,
+    selected: &RegistrationConsumers,
+    entitled: &[String],
+) -> (Vec<connections::ConnectionConsumer>, usize) {
+    let mut views = Vec::new();
+    for service in entitled {
+        if let Some(descriptor) = runtime.service_descriptor(service) {
+            views.push(connections::ConnectionConsumer {
+                service: service.clone(),
+                display_name: descriptor.display_name.clone(),
+                credential_verification_inputs: descriptor.credential_verification_inputs(),
+            });
+        }
+    }
+    let other = selected.consumers.len().saturating_sub(views.len());
+    (views, other)
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ConnectBody {
-    service: String,
+    registration: String,
+    /// The imported service whose administrator discovery, or whose
+    /// catalog page, this connection serves.
+    #[serde(default)]
+    imported_service: Option<String>,
     #[serde(default)]
     intent: OAuthConnectIntent,
     return_path: Option<OAuthReturnPath>,
@@ -226,36 +291,65 @@ pub(crate) async fn connect(
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let binding = match binding_for_setup(&context, &body.service) {
-        Ok(b) => b,
-        Err(e) => return error(&context, operation, e).await,
+    let mut registrations = selected_registrations(&context);
+    let Some(selected) = registrations.remove(&body.registration) else {
+        return error(&context, operation, OAuthError::Configuration).await;
+    };
+    let (entitled, _) = match entitlement(&context, &selected.consumers) {
+        Ok(entitlement) => entitlement,
+        Err(failure) => return error(&context, operation, failure).await,
+    };
+    let runtime = &context.snapshot.runtime;
+    if let Some(service) = body.imported_service.as_deref()
+        && (!selected
+            .consumers
+            .iter()
+            .any(|consumer| consumer == service)
+            || runtime.imported_catalog().service(service).is_none())
+    {
+        return error(&context, operation, OAuthError::Configuration).await;
+    }
+    if body.return_path == Some(OAuthReturnPath::Catalog) && body.imported_service.is_none() {
+        return error(&context, operation, OAuthError::InvalidFlow).await;
+    }
+    // Checked again, transactionally, when the flow starts, is claimed and
+    // installs; this early denial contacts no provider.
+    if entitled.is_empty() {
+        return error(&context, operation, OAuthError::SetupDenied).await;
+    }
+    // Each imported consumer admits only at the version it has now.
+    let imported_versions = selected
+        .consumers
+        .iter()
+        .filter_map(|service| {
+            runtime
+                .imported_catalog()
+                .service(service)
+                .map(|record| (service.clone(), record.version))
+        })
+        .collect();
+    let admission = OAuthManagementAdmission {
+        imported_service: body.imported_service.clone(),
+        imported_versions,
+        return_path: body.return_path,
     };
     let Some(manager) = context.snapshot.runtime.oauth_manager() else {
         return error(&context, operation, OAuthError::Configuration).await;
     };
-    if let Err(r) =
-        management_write_audit_preflight(&context, operation, Some(json!({"service":body.service})))
-            .await
-    {
+    let mut target = json!({"registration": body.registration});
+    if let Some(service) = &body.imported_service {
+        target["importedService"] = json!(service);
+    }
+    if let Err(r) = management_write_audit_preflight(&context, operation, Some(target)).await {
         return *r;
     }
     match manager
         .connect(
             &context.identity.principal,
             session(&context).unwrap(),
-            &binding,
+            &selected.binding,
             body.intent,
-            OAuthManagementAdmission {
-                imported_service_version: context
-                    .snapshot
-                    .runtime
-                    .imported_catalog()
-                    .service(&body.service)
-                    .map(|r| r.version),
-                service: body.service,
-                credential_name: "default".into(),
-                return_path: body.return_path,
-            },
+            admission,
             {
                 let reloadable = state.reloadable.clone();
                 Arc::new(move || Arc::new(reloadable.current().runtime.clone()))
@@ -274,33 +368,35 @@ pub(crate) async fn disconnect(
     State(state): State<AppState>,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Path(service): Path<String>,
+    Path(registration): Path<String>,
 ) -> Response {
     let operation = "oauth.connections.disconnect";
     let context = match browser_context(&state, remote, &headers, operation).await {
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let binding = match binding(&context, &service) {
-        Ok(b) => b,
-        Err(e) => return error(&context, operation, e).await,
-    };
     let Some(manager) = context.snapshot.runtime.oauth_manager() else {
         return error(&context, operation, OAuthError::Configuration).await;
     };
-    let owned = match manager.status(&context.identity.principal, &binding.registration) {
+    if !manager.config().registrations.contains_key(&registration) {
+        return error(&context, operation, OAuthError::Configuration).await;
+    }
+    let owned = match manager.status(&context.identity.principal, &registration) {
         Ok(connection) => connection.connection_id.is_some(),
         Err(failure) => return error(&context, operation, failure).await,
     };
-    if let Err(r) =
-        management_write_audit_preflight(&context, operation, Some(json!({"service":service})))
-            .await
+    if let Err(r) = management_write_audit_preflight(
+        &context,
+        operation,
+        Some(json!({"registration": registration})),
+    )
+    .await
     {
         return *r;
     }
     if owned
         && let Err(failure) = manager
-            .disconnect(&context.identity.principal, &binding.registration)
+            .disconnect(&context.identity.principal, &registration)
             .await
     {
         return error(&context, operation, failure).await;

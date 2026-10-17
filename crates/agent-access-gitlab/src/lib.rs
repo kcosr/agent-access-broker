@@ -7450,7 +7450,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             )
         }
     }));
-    ServiceDescriptor::new("gitlab", "GitLab")
+    let descriptor = ServiceDescriptor::new("gitlab", "GitLab")
         .with_resource_scopes(BTreeMap::from([(
             "repository".to_string(),
             ResourceScopeCapabilities::new(
@@ -7474,7 +7474,20 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
         .with_credentials(
             CredentialDescriptor::default().profile("gitlab-access-token", "bearer_token"),
         )
-        .with_presentation_body_limit(config.content.max_body_bytes)
+        .with_presentation_body_limit(config.content.max_body_bytes);
+    match gitlab_upstream_authority(&config.api_base_url) {
+        Some(authority) => descriptor.with_upstream_authority(authority),
+        None => descriptor,
+    }
+}
+
+/// The GitLab instance `api_base_url` belongs to: the REST v4 API root
+/// without its `/api/v4` suffix, which is also what the Git gateway's
+/// `upstream_base_url` names. `None` for a URL that is not one.
+fn gitlab_upstream_authority(api_base_url: &str) -> Option<UpstreamAuthority> {
+    let trimmed = api_base_url.trim_end_matches('/');
+    let instance = trimmed.strip_suffix("/api/v4")?;
+    UpstreamAuthority::from_base_url(instance).ok()
 }
 
 /// Every GitLab action is authorized against one repository resolved from

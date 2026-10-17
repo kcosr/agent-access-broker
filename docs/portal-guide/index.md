@@ -46,7 +46,7 @@ and common commands.
 | Service actions | Action ID, description, service name/ID, required scope types, and read/write classification |
 | Grants | Grant reference, service, description, subject IDs and display names, action IDs, and status |
 | Your tokens | Token name, ID, and active/paused/expired/revoked status |
-| Your credentials | Saved credential name/ID, service name/ID, profile, kind, and status; only targets available to you |
+| Your credentials | Connection name/ID, the services using it, credential ID, profile, kind, and status; only connections with a stored token |
 
 Search ignores case. Each space-separated word must appear in the result's
 name or searchable information; words can match different fields. Exact names

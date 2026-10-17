@@ -52,7 +52,8 @@ test.describe("delegated OAuth browser connection", () => {
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Sign in", exact: true })).not.toBeVisible();
     await page.goto(connection.portal_url + "/credentials");
-    const accounts = page.getByRole("region", { name: /^Connected accounts/ });
+    // OAuth registrations are rows of the one Credentials list.
+    const accounts = page.getByRole("table", { name: "Credentials", exact: true });
     await expect(accounts).toBeVisible();
     let flow = await openOAuthWindow(page, accounts.getByRole("button", { name: "Connect account", exact: true }), "Development OAuth consent");
     await flow.consent.getByRole("button", { name: "Deny", exact: true }).click();

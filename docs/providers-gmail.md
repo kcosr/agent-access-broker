@@ -38,11 +38,18 @@ scopes = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
 audience = "https://gmail.googleapis.com/"
 target = "me"
 
+[credentials.connections.gmail]
+display_name = "Gmail"
+oauth = { registration = "google", profile = "mail" }
+
 [credentials.per_user.gmail]
-type = "oauth"
-provider = "google"
-profile = "mail"
+type = "connection"
+connection = "gmail"
 ```
+
+The [credential connection](configuration.md#credential-connections) sets only
+`oauth`, so people connect their mailbox; service accounts and `system`
+principals have no Gmail credential.
 
 Create the mailbox grant in the managed Policies dashboard or management CLI;
 managed policy rejects inline TOML grants. For example, run as an administrator
@@ -70,15 +77,15 @@ back; Google does not need inbound network access to the Broker. A normal hosted
 origin needs HTTPS with a certificate trusted by the browser. The Broker listener
 serves HTTP; terminate TLS at your deployment's reverse proxy.
 
-Enable the owner's self-service setting. The configured Gmail OAuth binding and
-an active `per_user` action grant, assigned directly or through a current group,
+Enable the owner's self-service setting. The Gmail credential connection's OAuth
+binding and an active `per_user` action grant, assigned directly or through a current group,
 permit connect/reconnect; no separate credential rights are required. The owner
 can still inspect and disconnect an existing connection after grant removal while
 self-service remains enabled. See the
 [administrator guide](administrator-guide.md#enable-personal-oauth-connections).
 Log into the portal and,
-under **My access > Credentials > Connected accounts**, select **Connect account**
-on the Gmail entry. The connection uses PKCE, state and the browser session. Reconnect requires
+under **My access > Credentials**, select **Connect account**
+on the Google registration's Gmail row. The connection uses PKCE, state and the browser session. Reconnect requires
 the same Google `sub`; an explicit account replacement through the management API
 is a separate intent. Tokens stay encrypted in the Broker and are never sent to
 CLI/MCP agents. Disconnect is local; remove Google's app consent separately if desired.

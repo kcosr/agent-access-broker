@@ -23,6 +23,7 @@ pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
 mod mcp_views;
 mod owned;
+mod personal_credentials;
 #[cfg(test)]
 mod provider_contract_tests;
 #[cfg(test)]
@@ -190,6 +191,12 @@ pub struct IdentitySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdentityContext {
     pub principal: String,
+    /// The managed principal's kind, which selects its credential
+    /// connections' methods: set wherever a managed principal is resolved,
+    /// including a configured static principal whose ID names an active
+    /// managed principal; `None` for other static principals and anonymous
+    /// callers. Never defaulted; an unknown kind fails deserialization.
+    pub principal_kind: Option<crate::PrincipalKind>,
     pub principal_subject: Option<String>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
@@ -203,6 +210,7 @@ impl IdentityContext {
     pub fn anonymous() -> Self {
         Self {
             principal: "anonymous".to_string(),
+            principal_kind: None,
             principal_subject: None,
             groups: vec!["anonymous".to_string()],
             policy_groups: vec!["anonymous".to_string()],
@@ -2222,6 +2230,18 @@ impl BrokerRuntime {
         }
         let source_config = config.clone();
         imports::effective_credentials(&mut config, &imported_catalog);
+        // Imports add connections offline validation cannot see.
+        let connection_errors = crate::connections::effective_connection_errors(
+            &config.credentials,
+            &services,
+            &config.oauth,
+            config.providers.registry(),
+        );
+        if !connection_errors.is_empty() {
+            return Err(RuntimeError::Config(ConfigError::Invalid {
+                errors: connection_errors,
+            }));
+        }
         let policy_snapshot = Arc::new(ArcSwap::from_pointee(load_policy_snapshot(
             &imports::retention_config(&config, &imported_catalog),
             managed_store.as_ref(),
@@ -2915,19 +2935,15 @@ impl BrokerRuntime {
                 service,
                 "service",
                 credential,
-                self.accepts_delegated_credentials(service),
-                &self.config.oauth,
             )?;
         }
         for (service, credential) in &self.effective_credentials.per_user {
-            check_credential_ready(
-                &format!("credentials.per_user.{service}"),
-                service,
-                "per_user",
-                credential,
-                self.accepts_delegated_credentials(service),
-                &self.config.oauth,
-            )?;
+            let label = format!("credentials.per_user.{service}");
+            if credential.kind == "connection" {
+                self.check_connection_ready(&label, service)?;
+                continue;
+            }
+            check_credential_ready(&label, service, "per_user", credential)?;
         }
         for (service, credential) in &self.effective_credentials.lookup {
             check_credential_ready(
@@ -2935,8 +2951,6 @@ impl BrokerRuntime {
                 service,
                 "lookup",
                 credential,
-                self.accepts_delegated_credentials(service),
-                &self.config.oauth,
             )?;
         }
         Ok(())
@@ -2976,6 +2990,7 @@ impl BrokerRuntime {
             return Ok(AdmittedIdentity {
                 identity: self.identity_from_principal_groups(
                     resolved.principal,
+                    resolved.principal_kind,
                     resolved.subject,
                     resolved.groups,
                     Some(resolved.policy_groups),
@@ -3002,6 +3017,7 @@ impl BrokerRuntime {
     pub fn identity_from_principal_groups(
         &self,
         principal: String,
+        principal_kind: Option<crate::PrincipalKind>,
         principal_subject: Option<String>,
         raw_groups: Vec<String>,
         managed_policy_groups: Option<Vec<String>>,
@@ -3019,6 +3035,7 @@ impl BrokerRuntime {
 
         IdentityContext {
             principal,
+            principal_kind,
             principal_subject,
             groups,
             policy_groups,
@@ -3569,23 +3586,6 @@ impl BrokerRuntime {
         self.services.values()
     }
 
-    /// Credential kind stored by a managed credential profile of a service.
-    pub fn credential_profile_kind(&self, service: &str, profile: &str) -> Option<&'static str> {
-        self.services.get(service)?.credential_profile_kind(profile)
-    }
-
-    /// Input fields for storing a managed credential, prompted with the
-    /// service's display name.
-    pub fn credential_input_schema(
-        &self,
-        service: &str,
-        profile: &str,
-        credential_kind: &str,
-    ) -> Option<crate::CredentialInputSchema> {
-        let descriptor = self.services.get(service)?;
-        crate::credential_input_schema(service, &descriptor.display_name, profile, credential_kind)
-    }
-
     fn action_descriptor(&self, service: &str, action: &str) -> Option<&ActionDescriptor> {
         self.services.get(service)?.action(action)
     }
@@ -3631,8 +3631,10 @@ impl BrokerRuntime {
         } else {
             None
         };
+        let principal_kind = crate::managed_store::principal_kind_at_conn(conn, owner)?;
         let identity = self.identity_from_principal_groups(
             owner.to_string(),
+            principal_kind,
             Some(owner.to_string()),
             Vec::new(),
             managed_policy_groups,
@@ -3696,6 +3698,7 @@ impl BrokerRuntime {
             let source_audit = source.audit(&resolved);
             return Ok(self.identity_from_principal_groups(
                 resolved.principal,
+                resolved.principal_kind,
                 resolved.subject,
                 resolved.groups,
                 Some(resolved.policy_groups),
@@ -4136,6 +4139,11 @@ impl BrokerRuntime {
             resource_scopes: context.resource_scopes.clone(),
             matched_grant: context.matched_grant.clone(),
             credential_mode: context.credential_mode.clone().map(Some),
+            credential_connection: self.audit_credential_connection(
+                &context.service,
+                context.credential_mode.as_deref(),
+                None,
+            ),
             decision: Decision::Allow,
             reason_code: None,
             upstream_status: None,
@@ -5749,11 +5757,8 @@ impl BrokerRuntime {
             if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
                 return Ok(ExecutionAccess::Static(credential.clone()));
             }
-            if let Some(credential) = self
-                .effective_credentials
-                .per_user
-                .get(service)
-                .filter(|credential| credential.kind == "oauth")
+            if let Some((_, crate::Selection::OAuth(oauth))) =
+                self.personal_selection(service, identity)
             {
                 let accepts_delegated =
                     descriptor.is_some_and(|descriptor| descriptor.delegated.is_some());
@@ -5764,7 +5769,7 @@ impl BrokerRuntime {
                     self.acquire_delegated_credential(
                         service,
                         accepts_delegated,
-                        credential,
+                        oauth.binding(),
                         identity,
                     ),
                 )
@@ -5781,7 +5786,7 @@ impl BrokerRuntime {
         &self,
         service: &str,
         accepts_delegated: bool,
-        credential: &CredentialConfig,
+        binding: crate::OAuthBinding,
         identity: &IdentityContext,
     ) -> Result<DelegatedCredential, ProviderError> {
         if !accepts_delegated {
@@ -5796,11 +5801,7 @@ impl BrokerRuntime {
                 "delegated credentials require an authenticated identity",
             ));
         }
-        let (Some(manager), Some(registration), Some(permission_profile)) = (
-            self.oauth.clone(),
-            credential.provider.clone(),
-            credential.profile.clone(),
-        ) else {
+        let Some(manager) = self.oauth.clone() else {
             return Err(ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
                 "delegated OAuth credential is not configured",
@@ -5810,10 +5811,7 @@ impl BrokerRuntime {
             manager,
             service.to_owned(),
             identity.principal.clone(),
-            crate::OAuthBinding {
-                registration,
-                permission_profile,
-            },
+            binding,
         )
         .await
     }
@@ -6285,61 +6283,10 @@ impl BrokerRuntime {
                 "selected credential mode is not provisioned",
             )
         })?;
-        if credential.kind == "managed_store" {
-            return self
-                .resolve_managed_execution_credential(service, credential, identity)
-                .await;
+        if credential.kind == "connection" {
+            return self.resolve_connection_token(service, identity).await;
         }
         load_execution_credential(service, credential_mode, credential, Some(identity))
-    }
-
-    async fn resolve_managed_execution_credential(
-        &self,
-        service: &str,
-        credential: &CredentialConfig,
-        identity: &IdentityContext,
-    ) -> Result<ExecutionCredential, ProviderError> {
-        let identity = identity.authenticated.then_some(identity).ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "managed per_user credential requires authenticated identity",
-            )
-        })?;
-        let store = self.managed_store.clone().ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "managed credential store is not configured",
-            )
-        })?;
-        let key_ring = self.credential_key_ring.clone().ok_or_else(|| {
-            ProviderError::error(
-                ReasonCode::EncryptionKeyMissing,
-                "credential encryption key ring is not configured",
-            )
-        })?;
-        let credential_name = credential
-            .credential_name
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        let profile = credential.profile.clone().ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::CredentialInvalid,
-                "managed per_user credential profile is not configured",
-            )
-        })?;
-        let principal = identity.principal.clone();
-        let service = service.to_string();
-        managed_store_blocking(move || {
-            store.resolve_user_credential(
-                &key_ring,
-                &principal,
-                &service,
-                &credential_name,
-                &profile,
-            )
-        })
-        .await
-        .map_err(provider_error_from_managed_store)
     }
 
     async fn finalize(
@@ -6482,6 +6429,11 @@ impl BrokerRuntime {
         } else {
             provider_audit
         };
+        let credential_connection = self.audit_credential_connection(
+            &service,
+            credential_mode.as_deref(),
+            command.as_ref(),
+        );
         let mut audit_record = AuditRecord {
             search_authorization,
             timestamp: Utc::now().to_rfc3339(),
@@ -6497,6 +6449,7 @@ impl BrokerRuntime {
             resource_scopes,
             matched_grant,
             credential_mode: credential_mode.map(Some),
+            credential_connection,
             decision: envelope.decision.clone(),
             reason_code: envelope.reason_code.clone(),
             upstream_status,
@@ -6916,9 +6869,10 @@ fn register_service_provider(
 /// discovery, and catalog projection.
 /// The other owner of an imported service identity, if any, named for a
 /// diagnostic: the reserved control-plane namespace, a selected native kind
-/// (configured or not), a gateway, another configured service or a
-/// configured credential. Every retained import is checked, whatever its
-/// status or adapter availability.
+/// (configured or not), a gateway, another configured service, a configured
+/// credential or a configured credential connection, whose ID shares the
+/// namespace of token rows and credential rights. Every retained import is
+/// checked, whatever its status or adapter availability.
 pub(crate) fn imported_service_collision(
     config: &BrokerConfig,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
@@ -6935,6 +6889,9 @@ pub(crate) fn imported_service_collision(
     }
     if services.contains_key(name) {
         return Some(format!("the configured service {name}"));
+    }
+    if config.credentials.connections.contains_key(name) {
+        return Some(format!("credentials.connections.{name}"));
     }
     [
         ("credentials.service", &config.credentials.service),
@@ -7045,6 +7002,12 @@ pub(crate) fn gateway_service_descriptor(
             )]))
             .with_actions(actions)
             .with_credentials(credentials),
+    )
+    .map(
+        |descriptor| match UpstreamAuthority::from_base_url(&gateway.upstream_base_url) {
+            Ok(authority) => descriptor.with_upstream_authority(authority),
+            Err(_) => descriptor,
+        },
     )
 }
 
@@ -7638,6 +7601,7 @@ fn process_is_live(pid: u32) -> bool {
 #[derive(Debug)]
 struct ResolvedTokenIdentity {
     principal: String,
+    principal_kind: Option<crate::PrincipalKind>,
     subject: Option<String>,
     groups: Vec<String>,
     policy_groups: Vec<String>,
@@ -7688,7 +7652,7 @@ impl IdentitySourceResolver {
 
     fn resolve(&self, token: &str) -> Result<SourceResolution, IdentityFailure> {
         match &self.resolver {
-            IdentitySourceResolverKind::Static(source) => Ok(source.resolve(token)),
+            IdentitySourceResolverKind::Static(source) => source.resolve(token),
             IdentitySourceResolverKind::BrokerTokens(source) => source.resolve(token),
         }
     }
@@ -7711,22 +7675,35 @@ impl IdentitySourceResolver {
 
 struct StaticPrincipalsSource {
     tokens: BTreeMap<String, StaticPrincipalIdentity>,
+    /// The managed store, whose principal row for a static principal's ID
+    /// supplies its kind.
+    store: Option<ManagedStore>,
 }
 
 impl StaticPrincipalsSource {
-    fn resolve(&self, token: &str) -> SourceResolution {
+    /// A configured static principal carries the kind of the active managed
+    /// principal with its ID, as classless management resolves it, and none
+    /// without one. A store that cannot answer fails the resolution.
+    fn resolve(&self, token: &str) -> Result<SourceResolution, IdentityFailure> {
         let Some(identity) = self.tokens.get(token) else {
-            return SourceResolution::NoMatch;
+            return Ok(SourceResolution::NoMatch);
         };
-        SourceResolution::Resolved(ResolvedTokenIdentity {
+        let principal_kind = match &self.store {
+            Some(store) => store
+                .static_principal_kind(&identity.principal)
+                .map_err(|_| IdentityFailure::Unavailable)?,
+            None => None,
+        };
+        Ok(SourceResolution::Resolved(ResolvedTokenIdentity {
             principal: identity.principal.clone(),
+            principal_kind,
             subject: Some(identity.principal.clone()),
             groups: Vec::new(),
             policy_groups: Vec::new(),
             token_class: None,
             token_id: None,
             token_scopes: None,
-        })
+        }))
     }
 }
 
@@ -7771,6 +7748,7 @@ impl BrokerTokensSource {
         };
         Ok(SourceResolution::Resolved(ResolvedTokenIdentity {
             principal: identity.principal_id,
+            principal_kind: identity.principal_kind,
             subject: None,
             groups: identity.groups,
             policy_groups: identity.policy_groups,
@@ -7857,7 +7835,10 @@ fn load_identity_sources(
                 }
                 sources.push(IdentitySourceResolver {
                     audit,
-                    resolver: IdentitySourceResolverKind::Static(StaticPrincipalsSource { tokens }),
+                    resolver: IdentitySourceResolverKind::Static(StaticPrincipalsSource {
+                        tokens,
+                        store: managed_store.clone(),
+                    }),
                 });
             }
             "broker_tokens" => {
@@ -8338,8 +8319,6 @@ fn check_credential_ready(
     service: &str,
     credential_mode: &str,
     credential: &CredentialConfig,
-    accepts_delegated: bool,
-    oauth: &crate::OAuthConfig,
 ) -> Result<(), RuntimeError> {
     match credential.kind.as_str() {
         "basic_api_token" | "bearer_token" => {
@@ -8351,43 +8330,6 @@ fn check_credential_ready(
                 })
         }
         "secret_store" => check_secret_store_ready(label, credential_mode, credential),
-        "oauth" => {
-            let profile = credential
-                .provider
-                .as_ref()
-                .and_then(|id| oauth.registrations.get(id))
-                .and_then(|registration| {
-                    credential
-                        .profile
-                        .as_ref()
-                        .and_then(|id| registration.permission_profiles.get(id))
-                });
-            if credential_mode == "per_user" && accepts_delegated && profile.is_some() {
-                // Application secrets and registration configuration are prepared
-                // by OAuthManager at startup/reload; local-state readiness checks
-                // encrypted slots. Readiness must not depend on any user's consent
-                // or send token requests to the upstream provider.
-                Ok(())
-            } else {
-                Err(RuntimeError::Credential {
-                    label: label.to_string(),
-                    message: "OAuth requires a configured per_user registration/profile binding"
-                        .into(),
-                })
-            }
-        }
-
-        "managed_store" => {
-            if credential_mode == "per_user" {
-                Ok(())
-            } else {
-                Err(RuntimeError::Credential {
-                    label: label.to_string(),
-                    message: "managed_store credentials are supported only for per_user execution"
-                        .to_string(),
-                })
-            }
-        }
         _ => Err(RuntimeError::Credential {
             label: label.to_string(),
             message: "credential kind is unsupported".to_string(),
@@ -8636,6 +8578,11 @@ pub struct AuditRecord {
     pub matched_grant: Option<MatchedGrantAudit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_mode: Option<Option<String>>,
+    /// The credential connection the call's personal credential comes from:
+    /// present whenever the selected mode is `per_user`, or a command call
+    /// passes a `per_user` grant, even when `credentialMode` is null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_connection: Option<String>,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<ReasonCodeId>,
@@ -10252,8 +10199,7 @@ pub fn fake_service_credential(token_ref: impl Into<String>) -> CredentialConfig
         provider: None,
         path: None,
         read_only: None,
-        credential_name: None,
-        profile: None,
+        connection: None,
     }
 }
 

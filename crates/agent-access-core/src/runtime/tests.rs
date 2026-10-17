@@ -1,5 +1,7 @@
 use super::*;
 use agent_access_provider::test_support::{basic_credential, bearer_credential};
+#[path = "connection_tests.rs"]
+mod connection;
 #[path = "credential_discovery_tests.rs"]
 mod credential_discovery;
 #[path = "trusted_user_tests.rs"]
@@ -126,6 +128,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
     let denied_identity = IdentityContext {
         caller_id: None,
         principal: "broker-admin".to_string(),
+        principal_kind: None,
         principal_subject: Some("broker-admin".to_string()),
         groups: vec![],
         policy_groups: vec![],
@@ -1420,6 +1423,7 @@ pub(super) fn test_audit_record() -> AuditRecord {
         resource_scopes: BTreeMap::new(),
         matched_grant: None,
         credential_mode: None,
+        credential_connection: None,
         decision: Decision::Allow,
         reason_code: None,
         upstream_status: None,
@@ -4841,6 +4845,8 @@ fn bearer_static_identity_matches_authorization_scheme() {
     headers.insert("Authorization", "Bearer bearer-token".parse().unwrap());
     let identity = runtime.resolve_identity(&headers).unwrap();
     assert_eq!(identity.principal, "agent-one");
+    // A configured static principal without a managed store has no kind.
+    assert_eq!(identity.principal_kind, None);
 
     let mut invalid_headers = HeaderMap::new();
     invalid_headers.insert("Authorization", "bearer-token".parse().unwrap());
@@ -5053,63 +5059,57 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
             )]),
         },
     );
-    let credential = CredentialConfig {
-        kind: "oauth".into(),
-        provider: Some("stub".into()),
-        profile: Some("read".into()),
-        username_ref: None,
-        token_ref: None,
-        path: None,
-        read_only: None,
-        credential_name: None,
-    };
-    config
-        .credentials
-        .per_user
-        .insert("oauth_stub".into(), credential.clone());
+    config.credentials.connections.insert(
+        "oauth_stub".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profile: None,
+            oauth: Some(crate::ConnectionOAuthConfig {
+                registration: "stub".into(),
+                profile: "read".into(),
+            }),
+        },
+    );
+    config.credentials.per_user.insert(
+        "oauth_stub".into(),
+        CredentialConfig {
+            kind: "connection".into(),
+            provider: None,
+            connection: Some("oauth_stub".into()),
+            username_ref: None,
+            token_ref: None,
+            path: None,
+            read_only: None,
+        },
+    );
     config
         .providers
         .insert(agent_access_fake::OAuthStubProviderConfig {
             base_url: "http://127.0.0.1:9".into(),
         });
-    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let mut runtime = BrokerRuntime::new(config.clone()).unwrap();
     runtime.readiness().await.unwrap();
+    runtime
+        .check_connection_ready("test", "oauth_stub")
+        .unwrap();
+    // Readiness fails closed when the published connection no longer names a
+    // configured registration and profile.
+    let mut credentials = (*runtime.effective_credentials).clone();
+    credentials
+        .connections
+        .get_mut("oauth_stub")
+        .unwrap()
+        .oauth
+        .as_mut()
+        .unwrap()
+        .profile = "missing".into();
+    runtime.effective_credentials = Arc::new(credentials);
     assert!(
-        check_credential_ready(
-            "test",
-            "oauth_stub",
-            "service",
-            &credential,
-            true,
-            &config.oauth
-        )
-        .is_err()
+        runtime
+            .check_connection_ready("test", "oauth_stub")
+            .is_err()
     );
-    let mut missing_profile = credential.clone();
-    missing_profile.profile = Some("missing".into());
-    assert!(
-        check_credential_ready(
-            "test",
-            "oauth_stub",
-            "per_user",
-            &missing_profile,
-            true,
-            &config.oauth
-        )
-        .is_err()
-    );
-    config.oauth.registrations.clear();
-    assert!(
-        check_credential_ready(
-            "test",
-            "oauth_stub",
-            "per_user",
-            &credential,
-            true,
-            &config.oauth
-        )
-        .is_err()
-    );
+    assert!(runtime.check_connection_ready("test", "fake").is_err());
 }
 
 #[test]
@@ -5218,8 +5218,7 @@ async fn readiness_accepts_configured_secret_store_references() {
             provider: Some("local_file".to_string()),
             path: Some(store_path.display().to_string()),
             read_only: None,
-            credential_name: None,
-            profile: None,
+            connection: None,
         },
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -5262,6 +5261,7 @@ fn local_file_secret_store_resolves_per_user_material() {
     let identity = IdentityContext {
         caller_id: None,
         principal: "agent-one".to_string(),
+        principal_kind: None,
         principal_subject: Some("subject-one".to_string()),
         groups: vec!["agents".to_string()],
         policy_groups: vec!["agents".to_string()],
@@ -5295,6 +5295,7 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
     let principal_identity = IdentityContext {
         caller_id: None,
         principal: "alice@example.com".to_string(),
+        principal_kind: None,
         principal_subject: Some("subject-one".to_string()),
         groups: vec!["agents".to_string()],
         policy_groups: vec!["agents".to_string()],
@@ -5313,6 +5314,7 @@ fn local_file_secret_store_resolves_jira_basic_api_token_by_principal_and_subjec
     let subject_identity = IdentityContext {
         caller_id: None,
         principal: "other@example.com".to_string(),
+        principal_kind: None,
         principal_subject: Some("subject-one".to_string()),
         groups: vec!["agents".to_string()],
         policy_groups: vec!["agents".to_string()],
@@ -5354,6 +5356,7 @@ fn local_file_secret_store_rejects_jira_anonymous_and_invalid_records() {
     let identity = IdentityContext {
         caller_id: None,
         principal: "agent-one".to_string(),
+        principal_kind: None,
         principal_subject: None,
         groups: vec!["agents".to_string()],
         policy_groups: vec!["agents".to_string()],
@@ -5473,6 +5476,7 @@ fn principal_group_identity_uses_toml_groups_for_toml_authority() {
 
     let identity = runtime.identity_from_principal_groups(
         "alice".to_string(),
+        None,
         Some("external-alice".to_string()),
         vec![
             "managed-only".to_string(),
@@ -5640,6 +5644,7 @@ async fn git_gateway_credential_verify_uses_upload_pack_discovery() {
     let runtime = runtime_with_replaced_config(&runtime, runtime_config);
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         Vec::new(),
         None,
@@ -5756,8 +5761,10 @@ async fn git_gateway_credential_verify_uses_the_gateway_token_presentation() {
         gateway.allowed_upstream_hosts = vec![format!("{}/**", server.uri())];
         gateway.upstream_token_auth = token_auth.clone();
         let runtime = runtime_with_replaced_config(&runtime, runtime_config);
+        // A configured static principal, which has no managed kind.
         let identity = runtime.identity_from_principal_groups(
             "agent-one".to_string(),
+            None,
             Some("agent-one".to_string()),
             Vec::new(),
             None,
@@ -5828,6 +5835,7 @@ async fn git_gateway_credential_verify_rejects_non_git_discovery_success() {
     let runtime = runtime_with_replaced_config(&runtime, runtime_config);
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         Vec::new(),
         None,
@@ -5900,6 +5908,7 @@ async fn git_gateway_credential_verify_reports_upstream_throttling() {
     let runtime = runtime_with_replaced_config(&runtime, runtime_config);
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         Vec::new(),
         None,
@@ -5988,6 +5997,7 @@ async fn git_gateway_credential_verify_rejects_malformed_discovery_body() {
     let runtime = runtime_with_replaced_config(&runtime, runtime_config);
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         Vec::new(),
         None,
@@ -6160,6 +6170,7 @@ async fn git_gateway_credential_verify_requires_per_user_policy() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         Vec::new(),
         None,
@@ -6223,6 +6234,7 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
         .with_config_generation(7);
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         vec![],
         None,
@@ -6361,6 +6373,7 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         vec![],
         None,
@@ -6476,6 +6489,7 @@ async fn gateway_operation_requires_classified_required_scopes_before_credential
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         vec![],
         None,
@@ -6585,6 +6599,29 @@ async fn readiness_accepts_broker_token_source_with_active_managed_credentials()
         .unwrap();
 
     runtime.readiness().await.unwrap();
+
+    // A broker token resolves the stored principal's kind.
+    let issued = store
+        .issue_broker_token(
+            runtime.broker_token_hasher().unwrap(),
+            crate::BrokerTokenIssueRequest {
+                principal_id: "alice".to_string(),
+                name: "alice agent".to_string(),
+                token_class: BrokerTokenClass::AgentInvoke,
+                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                expires_at: None,
+                created_by: "admin".to_string(),
+            },
+        )
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        format!("Bearer {}", issued.token).parse().unwrap(),
+    );
+    let identity = runtime.resolve_identity(&headers).unwrap();
+    assert_eq!(identity.principal, "alice");
+    assert_eq!(identity.principal_kind, Some(crate::PrincipalKind::User));
 }
 
 #[test]
@@ -7669,6 +7706,7 @@ async fn policy_precedence_prefers_user_grant_over_higher_priority_group_grant()
                 identity: IdentityContext {
                     caller_id: None,
                     principal: "agent-one".to_string(),
+                    principal_kind: None,
                     principal_subject: Some("agent-one".to_string()),
                     groups: vec!["agents".to_string()],
                     policy_groups: vec!["agents".to_string()],
@@ -7703,6 +7741,7 @@ async fn multi_subject_grant_authorizes_each_listed_subject_and_audits_concrete_
         IdentityContext {
             caller_id: None,
             principal: "agent-one".to_string(),
+            principal_kind: None,
             principal_subject: Some("agent-one".to_string()),
             groups: Vec::new(),
             policy_groups: Vec::new(),
@@ -7719,6 +7758,7 @@ async fn multi_subject_grant_authorizes_each_listed_subject_and_audits_concrete_
         IdentityContext {
             caller_id: None,
             principal: "agent-two".to_string(),
+            principal_kind: None,
             principal_subject: Some("agent-two".to_string()),
             groups: vec!["agents".to_string()],
             policy_groups: vec!["agents".to_string()],
@@ -7738,6 +7778,7 @@ async fn multi_subject_grant_prefers_direct_user_subject_over_group_subject() {
         IdentityContext {
             caller_id: None,
             principal: "agent-one".to_string(),
+            principal_kind: None,
             principal_subject: Some("agent-one".to_string()),
             groups: vec!["agents".to_string()],
             policy_groups: vec!["agents".to_string()],
@@ -7758,6 +7799,7 @@ async fn multi_group_subjects_in_one_grant_choose_deterministic_audit_subject() 
         IdentityContext {
             caller_id: None,
             principal: "agent-one".to_string(),
+            principal_kind: None,
             principal_subject: Some("agent-one".to_string()),
             groups: vec!["agents".to_string(), "other".to_string()],
             policy_groups: vec!["agents".to_string(), "other".to_string()],
@@ -8375,6 +8417,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         },
         credentials: CredentialsConfig {
             imported_modes: Default::default(),
+            connections: BTreeMap::new(),
             service: BTreeMap::from([(
                 "fake".to_string(),
                 fake_service_credential("env:FAKE_SERVICE_TOKEN"),
@@ -8554,6 +8597,7 @@ fn git_verify_runtime_for_upstream(
     let runtime = runtime_with_replaced_config(&runtime, runtime_config);
     let identity = runtime.identity_from_principal_groups(
         "agent-one".to_string(),
+        None,
         Some("agent-one".to_string()),
         Vec::new(),
         None,
@@ -8878,8 +8922,7 @@ fn lookup_trace_basic_credential(token: &str, read_only: bool) -> CredentialConf
         provider: None,
         path: None,
         read_only: read_only.then_some(true),
-        credential_name: None,
-        profile: None,
+        connection: None,
     }
 }
 
@@ -8950,6 +8993,7 @@ fn agent_one_identity() -> IdentityContext {
     IdentityContext {
         caller_id: None,
         principal: "agent-one".to_string(),
+        principal_kind: None,
         principal_subject: Some("agent-one".to_string()),
         groups: vec!["agents".to_string()],
         policy_groups: vec!["agents".to_string()],
@@ -8962,6 +9006,7 @@ fn shell_token_identity(scopes: Value) -> IdentityContext {
     IdentityContext {
         caller_id: None,
         principal: "agent-one".to_string(),
+        principal_kind: None,
         principal_subject: Some("agent-one".to_string()),
         groups: vec!["agents".to_string()],
         policy_groups: vec!["agents".to_string()],
@@ -9078,8 +9123,7 @@ fn fake_per_user_credential(path: &str) -> CredentialConfig {
         provider: Some("local_file".to_string()),
         path: Some(path.to_string()),
         read_only: None,
-        credential_name: None,
-        profile: None,
+        connection: None,
     }
 }
 
