@@ -2287,3 +2287,268 @@ async fn every_narrow_read_and_discovery_omits_unrelated_inventory_and_private_c
         }
     }
 }
+
+fn missing_reference_capability_fixture(attested: bool) -> Fixture {
+    let mut fixture = fixture(false);
+    let issued = fixture.runtime.managed_store().unwrap().issue_broker_token(
+        fixture.runtime.broker_token_hasher().unwrap(), crate::BrokerTokenIssueRequest {
+            principal_id:"operator".into(),name:"relayed management".into(),token_class:BrokerTokenClass::AgentInvoke,
+            scopes:json!({"allowedServices":[SERVICE_ID],"allowedExecutionContexts":["default"]}),
+            expires_at:None,created_by:"admin".into(),
+        }).unwrap();
+    let caller_path = fixture
+        .directory
+        .path()
+        .join("caller-without-encryption.token");
+    fs::write(&caller_path, "synthetic-caller-without-encryption").unwrap();
+    let mut config = (*fixture.runtime.config).clone();
+    config.identity.trusted_callers.insert(
+        "relay".into(),
+        crate::TrustedCallerConfig {
+            credential_ref: format!("file:{}", caller_path.display()),
+            credential_transport: crate::TrustedCallerCredentialTransport::CallerAuthorization,
+            username_namespace: attested.then(|| "workspace".into()),
+            context_mode: crate::TrustedCallerContextMode::Fixed,
+            execution_context: Some("default".into()),
+            allowed_execution_contexts: None,
+            allow_forwarded_identity: false,
+        },
+    );
+    // Startup currently requires encryption for any managed store. Exercise the
+    // independent runtime prerequisites by constructing a validated candidate
+    // before caller-generation activation, then removing its loaded key ring.
+    // The identities below still come from real trusted-caller ingress.
+    fixture.runtime = BrokerRuntime::new_for_reload(config, &fixture.runtime).unwrap();
+    assert!(fixture.runtime.credential_key_ring().is_some());
+    assert!(
+        fixture
+            .runtime
+            .trusted_callers
+            .iter()
+            .all(|caller| caller.secret_reference_contract().is_none())
+    );
+    let mut headers = HeaderMap::from_iter([(
+        http::header::HeaderName::from_static("x-agent-access-caller-authorization"),
+        "Bearer synthetic-caller-without-encryption"
+            .parse()
+            .unwrap(),
+    )]);
+    if attested {
+        fixture
+            .runtime
+            .managed_store()
+            .unwrap()
+            .create_username_binding("operator", "workspace", "no-encryption-user", "admin")
+            .unwrap();
+        headers.insert(
+            http::header::HeaderName::from_static("x-agent-access-user"),
+            "no-encryption-user".parse().unwrap(),
+        );
+    } else {
+        headers.insert(
+            http::header::AUTHORIZATION,
+            format!("Bearer {}", issued.token).parse().unwrap(),
+        );
+    }
+    let admission = fixture.runtime.admit_mcp_ingress(&headers).unwrap();
+    let admitted = fixture
+        .runtime
+        .resolve_admitted_identity_with_proof(&headers, &admission)
+        .unwrap();
+    assert_eq!(admitted.identity.caller_id.as_deref(), Some("relay"));
+    assert_eq!(admitted.proof.is_some(), attested);
+    fixture.identity = admitted.identity;
+    fixture.identity_proof = admitted.proof;
+    // A loaded key ring alone is insufficient: caller reference authority is
+    // unavailable until the candidate has an activated caller contract.
+    assert!(
+        !fixture
+            .runtime
+            .can_hold_secret_references(&fixture.identity)
+    );
+    for action in ["credential.install", "token.create"] {
+        assert_eq!(
+            fixture
+                .runtime
+                .broker_management_requirements(&fixture.identity, action)
+                .iter()
+                .map(|item| item.reason())
+                .collect::<Vec<_>>(),
+            ["reference_identity_unsupported"]
+        );
+    }
+    fixture.runtime.credential_key_ring = None;
+    assert!(fixture.runtime.credential_key_ring().is_none());
+    fixture
+}
+
+#[tokio::test]
+async fn relayed_management_keeps_nonsecret_actions_with_missing_loaded_reference_capability() {
+    for attested in [false, true] {
+        let fixture = missing_reference_capability_fixture(attested);
+        assert!(
+            !fixture
+                .runtime
+                .can_hold_secret_references(&fixture.identity)
+        );
+        let services = fixture.runtime.api_services_for_identity(
+            &fixture.identity,
+            &ExecutionContext::new("default").unwrap(),
+        );
+        let service = services
+            .iter()
+            .find(|service| service.service == SERVICE_ID)
+            .unwrap();
+        for action in ["group.view", "group.member.add"] {
+            assert!(
+                fixture
+                    .runtime
+                    .broker_management_requirements(&fixture.identity, action)
+                    .is_empty()
+            );
+            assert!(service.actions.iter().any(|item| item.action == action));
+            let inputs = if action == "group.view" {
+                json!({"groupId":"workers"})
+            } else {
+                json!({"groupId":"workers","principalId":"worker"})
+            };
+            let response = invoke(&fixture, action, inputs, false).await;
+            assert_eq!(
+                response.status, 200,
+                "attested={attested} {action}: {:?}",
+                response.envelope
+            );
+        }
+        assert!(
+            fixture
+                .runtime
+                .managed_store()
+                .unwrap()
+                .groups("worker")
+                .unwrap()
+                .contains(&"workers".into())
+        );
+        for action in ["credential.install", "token.create"] {
+            let requirements = fixture
+                .runtime
+                .broker_management_requirements(&fixture.identity, action);
+            assert_eq!(
+                requirements
+                    .iter()
+                    .map(|item| item.reason())
+                    .collect::<Vec<_>>(),
+                [
+                    "credential_encryption_unavailable",
+                    "reference_identity_unsupported"
+                ]
+            );
+            assert!(
+                requirements.iter().all(|item| matches!(
+                    item,
+                    crate::AvailabilityRequirement::LocalRuntime { .. }
+                ))
+            );
+            assert!(!service.actions.iter().any(|item| item.action == action));
+            let input = if action == "credential.install" {
+                json!({"principalId":"worker","connectionId":"gitlab-main","token":{"secretRef":format!("sr_{}","A".repeat(43))}})
+            } else {
+                token_create_input(&fixture, &Uuid::new_v4().to_string())
+            };
+            let response = invoke(&fixture, action, input, false).await;
+            assert_eq!(
+                response.status, 503,
+                "attested={attested} {action}: {:?}",
+                response.envelope
+            );
+            assert_eq!(
+                response.envelope.reason_code.as_ref().unwrap().as_str(),
+                "access_management_unavailable"
+            );
+        }
+        assert!(
+            fixture
+                .runtime
+                .managed_store()
+                .unwrap()
+                .list_credentials(Some("worker"))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .runtime
+                .managed_store()
+                .unwrap()
+                .list_broker_tokens_for_principal("worker")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn nonsecret_management_rechecks_identity_with_missing_loaded_reference_capability() {
+    for attested in [false, true] {
+        let mut fixture = missing_reference_capability_fixture(attested);
+        fixture
+            .runtime
+            .managed_store()
+            .unwrap()
+            .add_group("worker", "workers", "admin")
+            .unwrap();
+        if attested {
+            let proof = fixture.identity_proof.take();
+            let unproven =
+                invoke(&fixture, "group.view", json!({"groupId":"workers"}), false).await;
+            assert_eq!(unproven.status, 403, "{:?}", unproven.envelope);
+            fixture.identity_proof = proof;
+        }
+        let original = fixture.identity_proof.clone();
+        let token_id = fixture.identity.source.as_ref().unwrap().token_id.clone();
+        let transition: BeforeCommit = Arc::new(move |runtime| {
+            let store = runtime.managed_store().unwrap();
+            if let Some(proof) = &original {
+                // Restore the same username binding value without refreshing the
+                // immutable proof captured by the already admitted command.
+                let binding = proof.binding_id().unwrap();
+                store
+                    .set_username_binding_enabled("operator", binding, false, 1, "admin")
+                    .unwrap();
+                store
+                    .set_username_binding_enabled("operator", binding, true, 2, "admin")
+                    .unwrap();
+            } else {
+                store
+                    .revoke_broker_token(token_id.as_deref().unwrap(), "admin")
+                    .unwrap();
+            }
+        });
+        let denied = invoke_with_commit_control(
+            &fixture,
+            "group.member.remove",
+            json!({"principalId":"worker","groupId":"workers"}),
+            false,
+            Some(transition),
+            None,
+        )
+        .await;
+        assert_eq!(
+            denied.status, 403,
+            "attested={attested}: {:?}",
+            denied.envelope
+        );
+        assert_eq!(
+            denied.envelope.result.as_ref().unwrap()["executionState"],
+            "not_committed"
+        );
+        assert!(
+            fixture
+                .runtime
+                .managed_store()
+                .unwrap()
+                .groups("worker")
+                .unwrap()
+                .contains(&"workers".into())
+        );
+    }
+}

@@ -53,6 +53,7 @@ pub struct AdmittedManagementCommand {
     command: ManagementCommand,
     context: FinalizeContext,
     runtime: Arc<BrokerConfig>,
+    identity_proof: Option<crate::AttestedIdentityProof>,
     origin: Option<SecretReferenceOrigin>,
     reservation: Option<SecretOutputReservationBatch>,
 }
@@ -90,13 +91,34 @@ impl BrokerRuntime {
             return Err(denied());
         }
         let execution_context = context.execution_context.as_ref().ok_or_else(denied)?;
-        let origin = if context.identity.source.as_ref().is_some_and(|s| {
-            s.token_class == Some(BrokerTokenClass::AgentInvoke)
-                && matches!(
-                    s.kind.as_str(),
-                    "broker_tokens" | "trusted_user" | "forwarded_identity"
-                )
-        }) {
+        let identity_proof =
+            if let Some(source) = context.identity.source.as_ref()
+                && matches!(source.kind.as_str(), "trusted_user" | "forwarded_identity")
+            {
+                let proof = proof.ok_or_else(denied)?;
+                if source.token_class != Some(BrokerTokenClass::AgentInvoke)
+                    || source.token_id.is_some()
+                    || proof.principal_id() != context.identity.principal
+                    || proof.is_username() != (source.kind == "trusted_user")
+                    || source.binding_id.as_deref() != proof.binding_id()
+                    || source.namespace.as_deref() != proof.namespace()
+                    || !context.identity.caller_id.as_ref().is_some_and(|caller| {
+                        self.config.identity.trusted_callers.contains_key(caller)
+                    })
+                {
+                    return Err(denied());
+                }
+                Some(proof.clone())
+            } else {
+                if proof.is_some() {
+                    return Err(denied());
+                }
+                None
+            };
+        let origin = if matches!(
+            command,
+            ManagementCommand::CredentialInstall(_) | ManagementCommand::TokenCreate(_)
+        ) {
             Some(
                 self.secret_reference_origin(&context.identity, execution_context, proof)
                     .map_err(|_| denied())?,
@@ -104,13 +126,6 @@ impl BrokerRuntime {
         } else {
             None
         };
-        if matches!(
-            command,
-            ManagementCommand::CredentialInstall(_) | ManagementCommand::TokenCreate(_)
-        ) && origin.is_none()
-        {
-            return Err(denied());
-        }
         let reservation = outputs.local_reservation();
         if matches!(command, ManagementCommand::TokenCreate(_))
             && (self.config.secret_outputs.mode != crate::SecretOutputMode::Reference
@@ -122,6 +137,7 @@ impl BrokerRuntime {
             command,
             context: context.clone(),
             runtime: self.config.clone(),
+            identity_proof,
             origin,
             reservation,
         })
@@ -370,6 +386,15 @@ impl BrokerRuntime {
         }
         if let Some(origin) = &admitted.origin {
             self.check_secret_reference_origin_conn(conn, origin)
+                .map_err(|_| CommandError::Denied)?;
+        }
+        if let Some(proof) = &admitted.identity_proof {
+            // The host pins caller configuration at its snapshot fence. A read
+            // may finish on that admitted snapshot after reload; a write holds
+            // the fence through commit. Recheck the original human proof here
+            // without requiring the durable caller generation used by secrets.
+            proof
+                .check_current_conn(conn)
                 .map_err(|_| CommandError::Denied)?;
         }
         let identity = store::current_identity(conn, &admitted.context.identity)?;

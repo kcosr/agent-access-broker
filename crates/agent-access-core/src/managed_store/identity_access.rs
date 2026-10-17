@@ -57,6 +57,16 @@ impl std::fmt::Debug for AttestedIdentityProof {
 }
 
 impl AttestedIdentityProof {
+    /// Recheck this exact admitted identity in the caller's transaction without
+    /// opening another transaction or requiring encrypted reference storage.
+    pub(crate) fn check_current_conn(&self, conn: &Connection) -> Result<(), ManagedStoreError> {
+        let (_, current) = resolve_proof_conn(conn, self)?;
+        if current != *self {
+            return Err(ManagedStoreError::AttestedIdentityDenied);
+        }
+        Ok(())
+    }
+
     /// A durable projection of this exact admitted proof. It deliberately omits
     /// the asserted username and identity-token fingerprint; it never looks up
     /// current mappings or replaces the versions captured at admission.

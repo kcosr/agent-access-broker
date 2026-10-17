@@ -595,7 +595,7 @@ where
     let (send, receive) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let _registration = registration;
-        let _guard = tokio::select! {
+        let guard = tokio::select! {
             biased;
             _ = control.local_interrupted() => {
                 let response = management_undispatched_response(&context, &operation, ReasonCode::OperationCancelled, "management write canceled before commit", target).await;
@@ -610,6 +610,7 @@ where
             guard = state.policy_mutation_lock.lock() => guard,
         };
         if !Arc::ptr_eq(&state.current(), &context.snapshot) {
+            drop(guard);
             let response = management_store_error_response(
                 &context,
                 &operation,
@@ -621,6 +622,7 @@ where
             return;
         }
         if tokio::time::Instant::now() >= deadline || !control.begin_local_commit() {
+            drop(guard);
             let (reason, message) = if tokio::time::Instant::now() >= deadline {
                 (
                     ReasonCode::OperationTimeout,
@@ -644,6 +646,9 @@ where
             mutate(runtime, authority)
         })
         .await;
+        // The transaction and any policy publication have settled. Retain the
+        // completion owner, but do not serialize other writes behind its audit.
+        drop(guard);
         let response = match result {
             Ok(Ok(result)) => {
                 let envelope = render(&context, &operation, target, result.value);

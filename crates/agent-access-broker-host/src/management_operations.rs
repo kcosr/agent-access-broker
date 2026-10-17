@@ -55,10 +55,14 @@ impl LocalOperationHost for SnapshotLocalOperations {
                     );
                 }
             }
-            let _guard = tokio::select! {
-                biased;
-                error=control.local_interrupted()=>return LocalOperationOutcome::rejected(error),
-                guard=state.policy_mutation_lock.lock()=>guard,
+            let _guard = if write {
+                Some(tokio::select! {
+                    biased;
+                    error=control.local_interrupted()=>return LocalOperationOutcome::rejected(error),
+                    guard=state.policy_mutation_lock.lock()=>guard,
+                })
+            } else {
+                None
             };
             if !Arc::ptr_eq(&state.current(), &snapshot) {
                 let mut error = ProviderError::deny(

@@ -204,10 +204,18 @@ impl BrokerRuntime {
             })
     }
 
-    /// Discovery checks only the admitted identity's non-secret auth category.
+    /// Discovery checks the admitted identity's auth category and loaded caller
+    /// reference contract, without reading encrypted material or stored secrets.
     /// Final reservation still proves the exact live token/attested origin.
     pub(super) fn can_hold_secret_references(&self, identity: &IdentityContext) -> bool {
         identity.authenticated
+            && identity.caller_id.as_ref().is_none_or(|name| {
+                self.trusted_callers.iter().any(|caller| {
+                    caller
+                        .secret_reference_contract()
+                        .is_some_and(|(current, _, _)| current == name)
+                })
+            })
             && identity.source.as_ref().is_some_and(|source| {
                 source.token_class == Some(BrokerTokenClass::AgentInvoke)
                     && match source.kind.as_str() {

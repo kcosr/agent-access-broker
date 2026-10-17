@@ -60,6 +60,119 @@ fn events(fixture: &AuditFixture, request: &str) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn management_local_read_does_not_wait_for_the_policy_mutation_lock() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let snapshot = fixture.state.current();
+    let runtime = &snapshot.runtime;
+    runtime
+        .managed_store()
+        .unwrap()
+        .create_principal(create_request("read-target"))
+        .unwrap();
+    runtime
+        .create_managed_resource(agent_access_core::CreateResourceRequest {
+            id: Some("read-target-scope".into()),
+            display_name: None,
+            resource_type: ResourceType::from_static("broker_principal"),
+            selector: ResourceSelector::Exact {
+                value: "read-target".into(),
+            },
+            allowed_execution_contexts: vec!["default".into()],
+            enabled: true,
+            attributes: Default::default(),
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    runtime
+        .create_managed_policy_grant(agent_access_core::ManagedPolicyGrantCreateRequest {
+            grant_id: Some("local-read".into()),
+            subjects: vec!["user:alice".into()],
+            execution_contexts: vec!["default".into()],
+            service: "broker_management".into(),
+            actions: vec!["principal.view".into()],
+            resources: ResourceSelection {
+                resource_ids: vec!["read-target-scope".into()],
+                resource_group_ids: vec![],
+            },
+            credential_mode: "service".into(),
+            priority: None,
+            status: None,
+            description: None,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+
+    // Hold the write fence for the entire request. The timeout is only a
+    // deadlock watchdog: a successful read must finish before we release it.
+    let guard = fixture.state.policy_mutation_lock.lock().await;
+    let (status, response) = tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.request(
+            Method::POST,
+            &fixture.alice_agent,
+            "/v1/invoke/broker_management/principal.view",
+            Some(r#"{"inputs":{"principalId":"read-target"}}"#),
+            "local-read-with-write-fence",
+        ),
+    )
+    .await
+    .expect("read-only local command waited for the policy mutation lock");
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["result"]["principalId"], "read-target");
+    drop(guard);
+}
+
+#[tokio::test]
+async fn management_write_releases_publication_fence_before_rendering_completion() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let state = AppState {
+        reloadable: fixture.state.clone(),
+    };
+    let context = context(&fixture, "release-before-completion").await;
+    let mutation_state = fixture.state.clone();
+    let rendering_state = fixture.state.clone();
+    let response = management_authorized_write(
+        &state,
+        context,
+        "admin.principals.create",
+        None,
+        move |runtime, authority| {
+            assert!(
+                mutation_state.policy_mutation_lock.try_lock().is_err(),
+                "the transaction must retain the publication fence"
+            );
+            runtime
+                .managed_store()
+                .unwrap()
+                .create_principal_with_management_authority(
+                    create_request("release-before-completion"),
+                    authority,
+                )
+        },
+        move |context, operation, target, record| {
+            assert!(
+                rendering_state.policy_mutation_lock.try_lock().is_ok(),
+                "rendering and completion audit must run outside the publication fence"
+            );
+            crate::handlers::management::common::management_success_envelope(
+                context,
+                operation,
+                target,
+                json!(record),
+            )
+        },
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let records = events(&fixture, "release-before-completion");
+    assert_eq!(records.len(), 2, "preflight and one completion audit");
+    assert_eq!(
+        records[1]["providerAudit"]["management"]["phase"],
+        "success"
+    );
+}
+
+#[tokio::test]
 async fn management_authority_rechecks_original_token_and_current_role_inside_transaction() {
     for change in ["revoke", "downgrade", "disable", "replace_hash", "actor"] {
         let fixture = audit_fixture(Backend::Sqlite).await;
