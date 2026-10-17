@@ -761,8 +761,30 @@ async fn provisioning_catalog_openapi_send_and_pagination_bindings() {
                     .get("accessLevel")
                     .is_none()
             );
+            let documentation = item["documentation"]["roleSelection"].as_str().unwrap();
+            for expected in [
+                "guest (10)",
+                "planner (15)",
+                "reporter (20)",
+                "security_manager (25)",
+                "developer (30)",
+                "maintainer (40)",
+                "Custom-role names and IDs are unsupported",
+            ] {
+                assert!(documentation.contains(expected), "{action}: {expected}");
+            }
+        } else {
+            assert!(item["documentation"].get("roleSelection").is_none());
+        }
+        if matches!(
+            *action,
+            "project.member.view"
+                | "project.access_token.list"
+                | "project.access_token.view"
+                | "service_account.token.list"
+        ) {
             assert!(
-                item["documentation"]["roleSelection"]
+                item["documentation"]["accessLevel"]
                     .as_str()
                     .unwrap()
                     .contains("Owner (50)")
