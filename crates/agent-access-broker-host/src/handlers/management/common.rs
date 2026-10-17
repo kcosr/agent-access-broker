@@ -27,6 +27,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 use url::form_urlencoded;
 
 #[derive(Debug, Clone, Copy)]
@@ -641,9 +643,15 @@ where
             return;
         }
         let runtime = context.snapshot.runtime.clone();
+        let span = tracing::Span::current();
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
         let result = tokio::task::spawn_blocking(move || {
-            runtime.check_management_authority_runtime(&authority)?;
-            mutate(runtime, authority)
+            tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(|| {
+                    runtime.check_management_authority_runtime(&authority)?;
+                    mutate(runtime, authority)
+                })
+            })
         })
         .await;
         // The transaction and any policy publication have settled. Retain the
@@ -707,7 +715,7 @@ where
             }
         };
         let _ = send.send(response);
-    });
+    }.in_current_span().with_current_subscriber());
     receive.await.unwrap_or_else(|_| {
         let mut envelope = management_error_envelope(
             &request_id,

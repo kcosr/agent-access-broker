@@ -9482,11 +9482,20 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert!(!audit.contains(&raw_admin_token));
     assert!(!audit.contains(&bob_token));
     assert!(!audit.contains(&self_agent_token));
-    assert!(!audit.contains("secretBackend"));
-    assert!(!audit.contains("secretRef"));
-    assert!(!audit.contains("materialVersion"));
-    assert!(!audit.contains("secretCiphertext"));
-    assert!(!audit.contains("secretNonce"));
+    let mut literal_credential_receipts = 0;
+    for line in audit.lines() {
+        let record: Value = serde_json::from_str(line).unwrap();
+        assert_no_secret_storage_fields(&record);
+        if let Some(references) =
+            record.pointer("/providerAudit/management/change/secretReferences")
+        {
+            // This smoke stores literal credentials. Its safe provenance array
+            // is empty and must not be confused with a secretRef capability.
+            assert_eq!(references, &json!([]));
+            literal_credential_receipts += 1;
+        }
+    }
+    assert!(literal_credential_receipts > 0);
 }
 
 #[tokio::test]

@@ -173,6 +173,79 @@ async fn management_write_releases_publication_fence_before_rendering_completion
 }
 
 #[tokio::test]
+async fn management_write_preserves_request_span_and_task_subscriber() {
+    use tracing::Instrument;
+    use tracing::instrument::WithSubscriber;
+
+    #[derive(Clone, Default)]
+    struct OwnerEvents(Arc<std::sync::Mutex<Vec<(String, bool)>>>);
+    impl<S> tracing_subscriber::Layer<S> for OwnerEvents
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_event(&self, event: &tracing::Event<'_>, ctx: TracingLayerContext<'_, S>) {
+            let mut fields = BTreeMap::new();
+            event.record(&mut JsonVisitor(&mut fields));
+            if let Some(stage) = fields.get("management_stage").and_then(Value::as_str) {
+                let correlated = ctx.event_scope(event).is_some_and(|scope| {
+                    scope
+                        .from_root()
+                        .any(|span| span.metadata().name() == "management-owner-correlation")
+                });
+                self.0.lock().unwrap().push((stage.into(), correlated));
+            }
+        }
+    }
+
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let state = AppState {
+        reloadable: fixture.state.clone(),
+    };
+    let context = context(&fixture, "management-owner-correlation").await;
+    let events = OwnerEvents::default();
+    let subscriber = tracing_subscriber::registry().with(events.clone());
+    let response = async {
+        management_authorized_write(
+            &state,
+            context,
+            "admin.principals.create",
+            None,
+            |runtime, authority| {
+                tracing::info!(management_stage = "blocking", "management store work");
+                runtime
+                    .managed_store()
+                    .unwrap()
+                    .create_principal_with_management_authority(
+                        create_request("management-owner-correlation"),
+                        authority,
+                    )
+            },
+            |context, operation, target, record| {
+                tracing::info!(
+                    management_stage = "completion",
+                    "management completion work"
+                );
+                crate::handlers::management::common::management_success_envelope(
+                    context,
+                    operation,
+                    target,
+                    json!(record),
+                )
+            },
+        )
+        .instrument(tracing::info_span!("management-owner-correlation"))
+        .await
+    }
+    .with_subscriber(subscriber)
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        *events.0.lock().unwrap(),
+        vec![("blocking".into(), true), ("completion".into(), true)]
+    );
+}
+
+#[tokio::test]
 async fn management_authority_rechecks_original_token_and_current_role_inside_transaction() {
     for change in ["revoke", "downgrade", "disable", "replace_hash", "actor"] {
         let fixture = audit_fixture(Backend::Sqlite).await;
