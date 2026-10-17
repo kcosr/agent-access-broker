@@ -93,6 +93,10 @@ pub struct ActionDescriptor {
     /// JSON pointers into sensitive response values, including deliberate secret
     /// exports and opaque imported payloads; these responses are never cached.
     pub sensitive_output_pointers: Vec<String>,
+    /// Transferable string outputs, distinct from generally sensitive data.
+    pub secret_outputs: Vec<crate::SecretOutputDescriptor>,
+    /// Payload string fields that also accept host-resolved references.
+    pub secret_inputs: Vec<crate::SecretInputDescriptor>,
     pub attribution: Option<AttributionCapability>,
     /// Handles issued by this action must survive restarts and reloads, so
     /// the broker must hold a stable signing key.
@@ -257,6 +261,8 @@ impl ActionDescriptor {
             upstream_resource_ownership: None,
             io: ActionIo::Json,
             sensitive_output_pointers: Vec::new(),
+            secret_outputs: Vec::new(),
+            secret_inputs: Vec::new(),
             attribution: None,
             requires_stable_signing_key: false,
             presentation: None,
@@ -337,6 +343,46 @@ impl ActionDescriptor {
     pub fn sensitive_output(mut self, pointer: impl Into<String>) -> Self {
         self.sensitive_output_pointers.push(pointer.into());
         self
+    }
+
+    /// Declares a transferable secret and marks its output sensitive. The
+    /// provider supplies the value through `ProviderResult::with_secret_output`.
+    pub fn secret_output(mut self, output: crate::SecretOutputDescriptor) -> Self {
+        if !self
+            .sensitive_output_pointers
+            .iter()
+            .any(|p| p == output.pointer())
+        {
+            self.sensitive_output_pointers
+                .push(output.pointer().to_owned());
+        }
+        self.secret_outputs.push(output);
+        self
+    }
+
+    /// Marks a fixed string payload field as reference-capable and sensitive.
+    /// Scope resolution must not depend on its value. The original schema
+    /// remains the literal-value contract; use `reference_input_schema` for
+    /// admission before host resolution.
+    pub fn secret_input(mut self, input: crate::SecretInputDescriptor) -> Self {
+        crate::secret::mark_sensitive_input(&mut self.input_schema, input.pointer());
+        self.secret_inputs.push(input);
+        self
+    }
+
+    /// Projects only declared input fields as literal-or-reference values.
+    /// The provider's original literal schemas are preserved in `input_schema`.
+    pub fn reference_input_schema(&self) -> Result<Value, crate::SecretContractError> {
+        crate::secret::reference_input_schema(self)
+    }
+
+    /// Checks resolved inputs against the original literal schema without
+    /// including values or schema errors in diagnostics.
+    pub fn validate_literal_secret_inputs(
+        &self,
+        inputs: &Value,
+    ) -> Result<(), crate::SecretContractError> {
+        crate::secret::validate_literal_inputs(self, inputs)
     }
 
     pub fn attribution(mut self, capability: AttributionCapability) -> Self {
@@ -665,6 +711,11 @@ impl ServiceDescriptor {
                         "{service}.{name} sensitive output {pointer} is not a JSON pointer"
                     ));
                 }
+            }
+            if let Err(error) = crate::secret::validate_secret_contract(action) {
+                errors.push(format!(
+                    "{service}.{name} secret contract is invalid: {error}"
+                ));
             }
         }
         if errors.is_empty() {

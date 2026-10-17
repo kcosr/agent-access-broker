@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct InvocationControl {
     inner: Arc<ControlState>,
+    identity_proof: Option<crate::AttestedIdentityProof>,
 }
 struct ControlState {
     gate: AtomicU8, // 0 preparation, 1 canceled before dispatch, 2 dispatched
@@ -33,8 +34,16 @@ impl InvocationControl {
                 forced: CancellationToken::new(),
                 deadline: timeout.map(|duration| tokio::time::Instant::now() + duration),
             }),
+            identity_proof: None,
         }
     }
+    /// Carry the private proof accepted at final host identity admission. The
+    /// proof never enters request JSON, diagnostic context or provider inputs.
+    pub fn with_identity_proof(mut self, proof: Option<crate::AttestedIdentityProof>) -> Self {
+        self.identity_proof = proof;
+        self
+    }
+
     /// Explicit cancellation prevents dispatch only when it wins this atomic gate.
     pub fn cancel(&self) {
         let _ = self
@@ -141,7 +150,12 @@ impl BrokerRuntime {
                 )),
             }
         };
-        let preparation = AssertUnwindSafe(self.prepare_invoke(context, request)).catch_unwind();
+        let preparation = AssertUnwindSafe(self.prepare_invoke(
+            context,
+            request,
+            control.identity_proof.as_ref(),
+        ))
+        .catch_unwind();
         let prepared = tokio::select! {
             biased;
             message = control.interrupted(true) => Err(Box::new(PreparationFailure::new(fallback.clone(), Err(interrupted_error(message, false))))),
@@ -150,9 +164,13 @@ impl BrokerRuntime {
                 Err(_) => Err(Box::new(PreparationFailure::new(fallback, Err(interrupted_error((ReasonCode::OperationFailed, "operation failed during preparation"), false))))),
             }
         };
+        let mut secret_outputs = secret_references::PreparedSecretOutputs::default();
+        let mut response_options = agent_access_provider::presentation::ResponseOptions::default();
         let (finalize_context, result) = match prepared {
             Err(failure) => (failure.context, failure.result),
             Ok(mut prepared) => {
+                secret_outputs = prepared.secret_outputs.clone();
+                response_options = prepared.response_options;
                 let finalize_context = prepared.finalize_context.clone();
                 if !control.dispatch() {
                     (
@@ -173,7 +191,7 @@ impl BrokerRuntime {
                     let execution =
                         AssertUnwindSafe(agent_access_provider::host::with_provider_finalization(
                             finalization.clone(),
-                            self.execute_prepared_invoke(prepared, body_parts, false),
+                            self.execute_prepared_invoke(prepared, body_parts),
                         ))
                         .catch_unwind();
                     tokio::pin!(execution);
@@ -214,6 +232,14 @@ impl BrokerRuntime {
                 }
             }
         };
+        let result = self.complete_prepared_invoke(
+            &finalize_context,
+            &secret_outputs,
+            response_options,
+            false,
+            result,
+        );
+        let secret_evidence = secret_outputs.audit_failure_evidence(&result);
         // No cancellation select around finalization: the reserved terminal append
         // is acknowledged before success and cannot race a second outcome record.
         let applied_unverified = result.as_ref().err().is_some_and(|error| {
@@ -242,6 +268,9 @@ impl BrokerRuntime {
             });
             if applied_unverified {
                 evidence["mutationStatus"] = json!("applied_unverified");
+            }
+            if let Some(secret_evidence) = secret_evidence {
+                evidence["secretOutput"] = secret_evidence;
             }
             response.envelope.result = Some(evidence);
         }

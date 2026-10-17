@@ -16,6 +16,7 @@ mod observability;
 mod operations;
 mod reload;
 mod router;
+mod secret_references;
 mod state;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

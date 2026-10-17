@@ -818,6 +818,9 @@ fn write_gitlab_webhook_reload_config(
         r#"[deployment]
 environment = "test"
 
+[secret_outputs]
+mode = "raw"
+
 [identity]
 mode = "optional"
 authority = "toml"

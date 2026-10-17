@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- Connection credential PUTs, including literal tokens, return `409 version_conflict` before writing when a runtime publication overtakes admission; retry the PUT using current configuration.
+
+- Declared transferable provider secrets default to encrypted temporary reference
+  delivery. Configure `[secret_outputs] mode = "raw"` for intentional plaintext
+  delivery. Reference-capable actions require a managed encrypted store.
+- Managed-store schema `029_secret_references` adds temporary encrypted outputs,
+  bounded outcome receipts, and durable trusted-caller generations. Rollback
+  requires a pre-migration backup.
+- The exhaustive `ManagedStoreError` enum exposed through the host's
+  `test-support` API gains five `SecretReference*` variants. Downstream tests
+  that exhaustively match this enum must handle the new variants.
+
 - The native provider contract changes, so existing provider implementations must be
   updated:
   - **Scope resolution.** `Provider::resolve_scopes`, `resolve_scopes_with_lookup`

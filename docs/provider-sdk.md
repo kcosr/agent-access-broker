@@ -262,7 +262,9 @@ its builder methods:
 | `.search_contained()` | That the host computes a search boundary and the provider constrains its query to it. |
 | `.raw_download()`, `.multipart_upload(plan)` | Streamed response bodies, or admitted file uploads. |
 | `.resource_attributes()` | That dispatch needs the private attributes of the one admitted exact resource. |
-| `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. The host sends such responses with `Cache-Control: no-store`. |
+| `.sensitive_output(pointer)` | A JSON pointer into `/result` containing sensitive data, including opaque imported payloads. The host sends such responses with `Cache-Control: no-store`; sensitivity alone does not capture or replace values. |
+| `.secret_output(SecretOutputDescriptor::new(pointer, max_bytes))` | A transferable string secret supplied in the protected result sidecar. Also marks the pointer sensitive. Outputs are required unless `.optional()` is set. |
+| `.secret_input(SecretInputDescriptor::new(pointer))` | A fixed string payload field under `/inputs` that accepts a literal or a secret reference. Also marks the field `writeOnly`. |
 | `.requires_stable_signing_key()` | That the action issues durable handles, so the Broker must hold a stable key. |
 | `.documentation(json)`, `.presentation(..)`, `.attribution(..)`, `.upstream_resource_ownership(..)` | Extended usage text, rich rendering, attribution footers and static ownership metadata. |
 
@@ -286,6 +288,93 @@ with a token profile must declare authorities naming the same instance, and an
 OAuth connection's dialect checks each consumer's authority (see
 [delegated access](#delegated-access)). A service that declares none cannot
 share a token connection with another service.
+
+### Transferable secrets
+
+Providers declare which values are transferable secrets; Broker deployment
+policy chooses raw or reference delivery. The SDK does not store or resolve
+references. Use `SecretOutputDescriptor::new("/result/issuedToken", 8192)` and
+return the value with
+`ProviderResult::with_secret_output("/result/issuedToken", token_string)`.
+Keep `issuedToken` absent from ordinary result JSON, audit data, and object IDs.
+The host rejects duplicated sidecar plaintext and discards contaminated metadata.
+`object_ids` must contain only safe bounded identifiers/locators: temporary
+completion receipts may retain them after the secret expires. Keep other private
+payloads out of that field. For the output pointer, any parent objects must
+already exist. Other result fields contain only safe issuance metadata, such as
+the created token's ID, owner ID and expiry. The host checks declarations,
+reserves capacity before dispatch and inserts either the raw string or a
+reference object after handling the protected value. Reference delivery never
+falls back to raw after capture fails.
+
+The sidecar is excluded from both serialization and deserialization, its
+`Debug` value is redacted, and its owned strings are zeroized on drop. Only the
+host uses `host::take_secret_outputs` and `host::SecretOutputValue::value`;
+provider tests use the feature-gated
+`test_support::secret_outputs_match(&result, &[(pointer, expected_value)])`
+inspector, which compares synthetic values without revealing or draining them.
+The crate-boundary check forbids the host extraction port and output type in
+provider-side sources, including tests. Do not copy a
+secret into ordinary result JSON, audit, object IDs, error text or logs.
+Preserve confirmed upstream issuance separately from delivery failure: a
+failure to capture or deliver a newly issued token is not permission to issue
+another one.
+
+Secret pointers use envelope-relative roots: `/result` for outputs and `/inputs`
+for inputs. They name fixed object properties with ordinary JSON Pointer
+escaping (`~0` for `~`, `~1` for `/`). Wildcards, empty properties, control
+characters, duplicate paths and overlapping paths are unsupported. Each action
+supports at most sixteen input and sixteen output declarations, each pointer
+at most sixteen properties and 1,024 UTF-8 bytes. Output byte bounds are positive
+and at most one MiB; deployment storage limits can be smaller. These contracts
+require JSON I/O, and transferable outputs cannot declare response presentation
+or streaming. Optional outputs still reserve their declared capacity before
+dispatch.
+
+For an input, declare the original literal `type: "string"` schema at a fixed
+property path. Its ancestors must be unambiguous `type: "object"` schemas with
+explicit `properties`; paths through arrays, references, schema composition,
+conditionals or pattern properties are unsupported. Leaf string constraints
+such as `enum`, `const`, `pattern`, `minLength` and `maxLength` remain in force.
+`ActionDescriptor::reference_input_schema()` projects each declared field as
+the original literal schema or a strict object containing `secretRef` and an
+optional `expiresAt`. Unknown reference-object properties are rejected. The
+reference ID is `sr_` followed by 43 base64url characters. An output's visible
+expiry can be copied with its reference, but the stored deadline is authoritative;
+supplying a later expiry cannot renew the reference.
+
+Scope resolution runs before the host resolves secret payloads. A provider
+opting into reference inputs must accept its `reference_input_schema()` during
+that phase and resolve resources only from independent locator fields. Never
+use a secret field to choose the resource, target URL or scope. After admission,
+the host authorizes and resolves the reference, checks the original literal
+schema and gives `ProviderInvocation::inputs()` the string. The
+`validate_literal_secret_inputs` helper validates the original full input schema
+without including supplied values in errors. Admitted inputs are redacted from
+`Debug`; their owned string values are zeroized when the request is dropped,
+including independently owned clones. A provider remains responsible for any
+additional copies it creates.
+
+```rust check
+use agent_access_provider::{ActionDescriptor, ProviderResult, SecretOutputDescriptor};
+use agent_access_provider::deps::serde_json::{Map, Value};
+
+fn key_action() -> ActionDescriptor {
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("object".into()));
+    ActionDescriptor::new("key.create", "Issue a key", schema.into())
+        .credential_modes(["service"])
+        .secret_output(SecretOutputDescriptor::new("/result/issuedToken", 8192))
+}
+
+fn key_result(key_id: u64, secret: String) -> ProviderResult {
+    let mut metadata = Map::new();
+    metadata.insert("keyId".into(), Value::from(key_id));
+    metadata.insert("retrySafe".into(), Value::Bool(false));
+    ProviderResult::new(metadata.into())
+        .with_secret_output("/result/issuedToken", secret)
+}
+```
 
 ### Token-only actions
 

@@ -85,6 +85,12 @@ contracts section of each inventory shows the result per type.
   owned data the same accessors return, and a `ResourceTypeRegistry` holds
   either form as a shared descriptor. `ResourcePattern`, a declared type's
   value grammar, has private fields and a fallible constructor.
+- Transferable-secret declarations (`SecretOutputDescriptor` and
+  `SecretInputDescriptor`) have private fields and constructors. Provider output
+  values use a private, zeroizing result sidecar; only `host::take_secret_outputs`
+  exposes `SecretOutputValue` to the host. The boundary checker rejects those
+  names in provider-side sources, including tests. Test-support comparisons do
+  not expose the value. These contracts are independent of sensitive markers.
 - Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`,
   `BoundedDownload`, `UrlPatternPolicy`, `MutationReceipt`,
   `CredentialPlacement`) and lent credential material (`DelegatedAccess`,

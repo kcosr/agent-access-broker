@@ -14,7 +14,8 @@ fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
         descriptor.capabilities().documentation,
         Some(documentation.clone())
     );
-    let action = api_action_spec("example", &descriptor).unwrap();
+    let action =
+        api_action_spec("example", &descriptor, crate::SecretOutputMode::Reference).unwrap();
     let mut catalog = empty_catalog(json!({}));
     catalog.services.push(ApiServiceSpec {
         availability: None,
@@ -102,11 +103,13 @@ fn imported_local_schema_refs_remain_scoped_in_send_openapi_and_mcp() {
             api_action_spec(
                 "imported",
                 &ActionDescriptor::new("small", "Small", schema(2)),
+                crate::SecretOutputMode::Reference,
             )
             .unwrap(),
             api_action_spec(
                 "imported",
                 &ActionDescriptor::new("large", "Large", schema(10)),
+                crate::SecretOutputMode::Reference,
             )
             .unwrap(),
         ],
@@ -353,7 +356,8 @@ fn action_projection_preserves_optional_upstream_resource_ownership() {
     .credential_modes(["per_user"])
     .lookup(agent_access_provider::LookupRequirement::ScopeResolution)
     .upstream_resource_ownership(agent_access_provider::UpstreamResourceOwnership::ActingUser);
-    let projected = api_action_spec("gitlab", &action).expect("action is valid");
+    let projected = api_action_spec("gitlab", &action, crate::SecretOutputMode::Reference)
+        .expect("action is valid");
     let value = serde_json::to_value(projected).unwrap();
     assert_eq!(value["upstreamResourceOwnership"], "acting_user");
 
@@ -392,6 +396,7 @@ fn gitlab_project_upload_projects_single_file_transport_contract() {
             &["project", "url"],
             Some(1),
         )),
+        crate::SecretOutputMode::Reference,
     )
     .unwrap();
     let ActionIo::MultipartUpload { plan } = &action.io else {
@@ -539,6 +544,7 @@ fn service_projection_removes_gateway_metadata() {
                 .credential_modes(["service"]),
             ]),
         true,
+        crate::SecretOutputMode::Reference,
     );
     assert!(projected.is_none());
 }
@@ -578,6 +584,7 @@ fn service_projection_marks_sensitive_configured_http_headers() {
             .credential_modes(["service"]),
         ]),
         true,
+        crate::SecretOutputMode::Reference,
     )
     .unwrap();
 
@@ -704,6 +711,9 @@ fn invoke_formats_project_into_openapi_and_send_schema() {
         }),
         sensitive_input_pointers: Vec::new(),
         sensitive_output_pointers: Vec::new(),
+        secret_outputs: Vec::new(),
+        secret_input_pointers: Vec::new(),
+        secret_output_mode: None,
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
@@ -771,6 +781,9 @@ fn non_advertising_actions_accept_only_explicit_default_response_formats() {
         }),
         sensitive_input_pointers: Vec::new(),
         sensitive_output_pointers: Vec::new(),
+        secret_outputs: Vec::new(),
+        secret_input_pointers: Vec::new(),
+        secret_output_mode: None,
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
@@ -857,6 +870,9 @@ fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_action
         input_schema: json!({ "type": "object" }),
         sensitive_input_pointers: Vec::new(),
         sensitive_output_pointers: Vec::new(),
+        secret_outputs: Vec::new(),
+        secret_input_pointers: Vec::new(),
+        secret_output_mode: None,
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
@@ -965,6 +981,9 @@ fn generated_specs_describe_multipart_uploads() {
             }),
             sensitive_input_pointers: Vec::new(),
             sensitive_output_pointers: Vec::new(),
+            secret_outputs: Vec::new(),
+            secret_input_pointers: Vec::new(),
+            secret_output_mode: None,
             io: descriptor_io("confluence", "attachment.add"),
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
@@ -1054,6 +1073,9 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             input_schema: json!({ "type": "object" }),
             sensitive_input_pointers: Vec::new(),
             sensitive_output_pointers: Vec::new(),
+            secret_outputs: Vec::new(),
+            secret_input_pointers: Vec::new(),
+            secret_output_mode: None,
             io: ActionIo::MultipartUpload {
                 plan: MultipartUploadSpec::new(
                     "asset".to_string(),
@@ -1119,6 +1141,9 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             }),
             sensitive_input_pointers: Vec::new(),
             sensitive_output_pointers: Vec::new(),
+            secret_outputs: Vec::new(),
+            secret_input_pointers: Vec::new(),
+            secret_output_mode: None,
             io: ActionIo::MultipartUpload {
                 plan: MultipartUploadSpec::new(
                     "asset".to_string(),
@@ -2278,21 +2303,32 @@ fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
         "Read-shaped name",
         json!({"type":"object"}),
     );
-    let unreviewed = api_action_spec("files", &base).unwrap();
+    let unreviewed = api_action_spec("files", &base, crate::SecretOutputMode::Reference).unwrap();
     assert!(!unreviewed.read_only);
     assert!(unreviewed.supports_json_file_output());
-    let read = api_action_spec("files", &base.clone().read_only()).unwrap();
+    let read = api_action_spec(
+        "files",
+        &base.clone().read_only(),
+        crate::SecretOutputMode::Reference,
+    )
+    .unwrap();
     assert!(read.supports_json_file_output());
     let mut wire_read = serde_json::to_value(&read).unwrap();
     assert_eq!(wire_read["readOnly"], true);
     wire_read.as_object_mut().unwrap().remove("readOnly");
     assert!(serde_json::from_value::<ApiActionSpec>(wire_read).is_err());
-    let download = api_action_spec("files", &base.clone().raw_download()).unwrap();
+    let download = api_action_spec(
+        "files",
+        &base.clone().raw_download(),
+        crate::SecretOutputMode::Reference,
+    )
+    .unwrap();
     assert!(download.supports_file_output());
     assert!(!download.supports_json_file_output());
     let upload = api_action_spec(
         "files",
         &base.multipart_upload(agent_access_provider::attachment_upload_plan(&[], None)),
+        crate::SecretOutputMode::Reference,
     )
     .unwrap();
     assert!(upload.supports_json_file_output());
@@ -2342,6 +2378,7 @@ fn read_only_projection_does_not_advertise_broker_local_paths() {
             json!({"type":"object"}),
         )
         .read_only(),
+        crate::SecretOutputMode::Reference,
     )
     .unwrap();
     catalog.services.push(ApiServiceSpec {
@@ -2374,6 +2411,7 @@ fn send_output_requires_explicit_stdout_and_preserves_literal_dash_paths() {
             json!({"type":"object"}),
         )
         .read_only(),
+        crate::SecretOutputMode::Reference,
     )
     .unwrap();
     let mut specialized = invoke_send_variant("files", &read);
@@ -2645,13 +2683,13 @@ fn audit_query_routes_have_catalog_openapi_and_send_parity() {
 #[test]
 fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
     let mut action = ActionDescriptor::new("accepted.action", "Read", json!({"type":"object"}));
-    let builtin = api_action_spec("imported", &action).unwrap();
+    let builtin = api_action_spec("imported", &action, crate::SecretOutputMode::Reference).unwrap();
     assert_eq!(builtin.scoped_mcp_name.as_deref(), Some("accepted.action"));
     action.scoped_mcp_name_source = agent_access_provider::ScopedMcpNameSource::Imported {
         name: Some("Raw.Tool-Name".into()),
     };
     assert_eq!(
-        api_action_spec("imported", &action)
+        api_action_spec("imported", &action, crate::SecretOutputMode::Reference)
             .unwrap()
             .scoped_mcp_name
             .as_deref(),
@@ -2664,7 +2702,8 @@ fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
     ] {
         action.scoped_mcp_name_source =
             agent_access_provider::ScopedMcpNameSource::Imported { name };
-        let projected = api_action_spec("imported", &action).unwrap();
+        let projected =
+            api_action_spec("imported", &action, crate::SecretOutputMode::Reference).unwrap();
         assert_eq!(projected.scoped_mcp_name, None);
         let mut wire = serde_json::to_value(&projected).unwrap();
         assert!(wire.get("scopedMcpName").unwrap().is_null());
@@ -2760,8 +2799,89 @@ fn every_supported_io_kind_is_published_with_its_response_shape() {
         ),
     ] {
         assert!(supported_action_io(&descriptor.io));
-        let spec = api_action_spec("example", &descriptor).expect("supported I/O is published");
+        let spec = api_action_spec("example", &descriptor, crate::SecretOutputMode::Reference)
+            .expect("supported I/O is published");
         assert_eq!(spec.response_kind, response_kind);
         assert_eq!(spec.exit_policy, exit_policy);
+    }
+}
+
+#[test]
+fn transferable_secret_contract_reaches_catalog_openapi_send_and_mcp() {
+    use agent_access_provider::{SecretInputDescriptor, SecretOutputDescriptor};
+    let descriptor = ServiceDescriptor::new("secrets", "Secrets").with_actions(vec![
+        ActionDescriptor::new(
+            "copy",
+            "Copy one authorized value",
+            json!({
+                "type":"object", "additionalProperties":false, "required":["value"],
+                "properties":{"value":{"type":"string","minLength":3,"pattern":"^ok-"}}
+            }),
+        )
+        .credential_modes(["service"])
+        .secret_input(SecretInputDescriptor::new("/inputs/value"))
+        .secret_output(SecretOutputDescriptor::new("/result/issued", 512)),
+    ]);
+    for mode in [
+        crate::SecretOutputMode::Reference,
+        crate::SecretOutputMode::Raw,
+    ] {
+        let mut catalog = empty_catalog(json!({}));
+        catalog
+            .services
+            .push(api_service_spec(&descriptor, true, mode).unwrap());
+        let action = &catalog.services[0].actions[0];
+        assert_eq!(action.secret_output_mode, Some(mode));
+        assert_eq!(action.secret_input_pointers, ["/inputs/value"]);
+        assert!(
+            action
+                .sensitive_input_pointers
+                .contains(&"/inputs/value".to_owned())
+        );
+        assert_eq!(action.sensitive_output_pointers, ["/result/issued"]);
+        let validator = jsonschema::validator_for(&action.input_schema).unwrap();
+        assert!(validator.is_valid(&json!({"value":"ok-literal"})));
+        assert!(!validator.is_valid(&json!({"value":"invalid"})));
+        assert!(validator.is_valid(&json!({"value":{"secretRef":format!("sr_{}", "a".repeat(43)),"expiresAt":"informational"}})));
+        assert!(
+            !validator.is_valid(
+                &json!({"value":{"secretRef":format!("sr_{}", "a".repeat(43)),"raw":true}})
+            )
+        );
+        let wire_mode = serde_json::to_value(mode).unwrap();
+        let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "session");
+        let operation = &openapi["paths"]["/v1/invoke/secrets/copy"]["post"];
+        assert_eq!(operation["x-agent-access-secret-output-mode"], wire_mode);
+        assert_eq!(
+            operation["x-agent-access-secret-outputs"][0]["pointer"],
+            "/result/issued"
+        );
+        let send = send_schema_from_catalog(&catalog);
+        assert_eq!(
+            send["oneOf"][0]["x-agent-access-secret-output-mode"],
+            wire_mode
+        );
+        for projection in [
+            crate::mcp::ProjectionMode::Http,
+            crate::mcp::ProjectionMode::Stdio,
+        ] {
+            let registry = crate::mcp::ToolRegistry::build(
+                &catalog,
+                &crate::mcp::McpView::Aggregate,
+                projection,
+                crate::mcp::STDIO_MAX_CATALOG_BYTES,
+            )
+            .unwrap();
+            let definitions = registry.definitions();
+            let tool = definitions
+                .iter()
+                .find(|tool| tool["_meta"]["agent-access/action"] == "copy")
+                .unwrap();
+            assert_eq!(tool["_meta"]["agent-access/secret-output-mode"], wire_mode);
+            assert_eq!(
+                tool["_meta"]["agent-access/secret-input-pointers"],
+                json!(["/inputs/value"])
+            );
+        }
     }
 }

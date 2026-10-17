@@ -1836,8 +1836,11 @@ the testing guide for repository test workflows.
 Use `gitlab project access-token` for list/view/create/rotate/revoke and
 `gitlab service-account` for list/view/create/delete/member-set and token
 list/create/rotate/revoke. Token create/rotate require `--expires-at`;
-`--token-output PATH` writes the new secret to a new private file and keeps it
-out of stdout. Without that option the JSON response includes the issued token.
+the JSON response contains a temporary reference by default. In explicitly
+configured raw mode, `--token-output PATH` writes the new secret to a new private
+file and keeps it out of stdout; reference mode refuses this option before issuing.
+Use `gitlab project member view PROJECT USER_ID` to obtain a direct member's
+username independently of issuance.
 See [the full workflow](gitlab-bot-provisioning.md).
 
 
@@ -1942,3 +1945,9 @@ exports. Writes are reported as applied but unverified on upstream success; fail
 after dispatch may be uncertain and are never automatically replayed. Saving a local
 response is separate from operation success. See the imported-services guide in
 `docs/imported-services.md` for administrative setup and supported protocol limits.
+
+## Credential reference handoff
+
+`credentials put` and `admin credentials put` accept `--field-ref token=sr_...`. The Broker resolves and installs the value atomically; the CLI never receives plaintext. Only token fields support this source.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

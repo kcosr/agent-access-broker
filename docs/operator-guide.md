@@ -1648,3 +1648,9 @@ existing grants may already refer to those actions.
 - User credential/token workflows: [end-user-guide.md](end-user-guide.md)
 - Provider behavior and limits: [providers.md](providers.md) and its linked
   provider-specific docs.
+
+## Temporary secret operation
+
+Use reference mode with managed encrypted storage, monitor capacity, and install newly issued credentials promptly. Fixed expiry does not revoke upstream secrets. Cleanup and key rewrap cover retained temporary ciphertext.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

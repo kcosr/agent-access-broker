@@ -103,6 +103,7 @@ pub(crate) async fn invoke(
     request: InvokeRequest,
     control: InvocationControl,
 ) -> BrokerResponse<Value> {
+    let control = control.with_identity_proof(admitted.identity_proof.clone());
     let context = admitted.context.clone();
     let failed = || supervisor_failure(&context);
     let Some(registration) = state.reloadable.operations.register(control.clone()) else {

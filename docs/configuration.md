@@ -2431,3 +2431,9 @@ to `"explicit"`.
 OpenAPI imports use the compiled `openapi_http` adapter. Operator endpoint policy
 must cover both the API base and its definition document URL. See
 [OpenAPI imports](imported-openapi.md) for document authentication and scheme selection.
+
+## Temporary secret output policy
+
+The global `[secret_outputs]` table selects reference delivery by default or explicit raw delivery, with fixed TTL, per-principal/global count and byte quotas, and bounded receipt retention.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

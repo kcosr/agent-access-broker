@@ -863,7 +863,11 @@ impl BrokerRuntime {
                 });
                 (!descriptor.actions.is_empty())
                     .then(|| {
-                        api_service_spec(&descriptor, self.scoped_mcp_ready(&descriptor.service))
+                        api_service_spec(
+                            &descriptor,
+                            self.scoped_mcp_ready(&descriptor.service),
+                            self.config.secret_outputs.mode,
+                        )
                     })
                     .flatten()
             })

@@ -670,8 +670,9 @@ Agent Access Broker applies these controls in the request path:
   change takes effect on the next page. Process-local keys make tokens expire
   on reload or restart; durable handles require the configured stable key.
 - **Credential containment**: agents never receive broker-held execution
-  credentials. Deliberate GitLab token issuance/rotation returns a new token as
-  explicitly sensitive output; it does not reveal the broker execution credential.
+  credentials. GitLab token issuance/rotation returns an encrypted temporary
+  reference by default. Explicit raw mode exports only the newly issued token;
+  neither mode reveals the broker execution credential.
   Database-managed credentials are decrypted only inside the broker for the
   scoped provider operation.
 - **Upstream request confinement**: providers construct upstream requests and
@@ -1145,3 +1146,9 @@ these fields. This catches accidental echoes; it does not make an untrusted
 command safe, since a command can encode or exfiltrate what it receives in
 other ways. Stderr is not logged unless the operator enables
 `log_stderr` for a command, which can expose secrets the command prints.
+
+## Transferable secret references
+
+New provider secrets may be captured in encrypted temporary storage. Ordinary reuse is bound to origin authentication and execution context; a narrow authorized credential-management handoff can install the secret into a named connection.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

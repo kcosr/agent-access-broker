@@ -40,6 +40,7 @@ mod node_identity;
 pub mod oauth;
 mod resource_policy;
 mod runtime;
+mod secret_outputs_config;
 mod sqlite_support;
 mod state_lock;
 #[cfg(any(test, feature = "test-support"))]
@@ -69,6 +70,7 @@ pub use node_identity::*;
 pub use oauth::*;
 pub use resource_policy::*;
 pub use runtime::*;
+pub use secret_outputs_config::{SecretOutputMode, SecretOutputsConfig};
 pub use state_lock::*;
 
 pub const DEFAULT_MAX_SELF_ISSUED_AGENT_INVOKE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -551,6 +553,8 @@ pub struct BrokerConfig {
     pub identity: IdentityConfig,
     #[serde(default)]
     pub credentials: CredentialsConfig,
+    #[serde(default)]
+    pub secret_outputs: SecretOutputsConfig,
     #[serde(default)]
     pub imports: ImportsConfig,
     /// `[command_imports.<name>]`: operator-approved executables for the
@@ -1763,6 +1767,7 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_identity(&config.deployment, &config.identity, &mut errors);
     validate_network(&config.network, &mut errors);
     validate_managed_sections(config, &mut errors);
+    secret_outputs_config::validate(config, &mut errors);
     validate_browser_auth(config, &mut errors);
     validate_portal(config, &mut errors);
     mcp_config::validate(config, &mut errors);
@@ -4573,6 +4578,7 @@ pub fn credential_input_schema(
                     "env".to_string(),
                     "file".to_string(),
                     "stdin".to_string(),
+                    "secret_ref".to_string(),
                 ]),
             },
         ],
@@ -4587,6 +4593,7 @@ pub fn credential_input_schema(
                 "env".to_string(),
                 "file".to_string(),
                 "stdin".to_string(),
+                "secret_ref".to_string(),
             ]),
         }],
         _ => return None,

@@ -14,8 +14,8 @@ mapping, and raw-download negotiation.
 
 The broker is the only component that holds upstream credentials; the HTTP
 responses do not return broker-held execution credentials. Deliberate GitLab
-token issuance/rotation actions return the newly issued token under explicit
-sensitive-output contracts; see [issued credentials](#deliberately-issued-gitlab-credentials). For the
+token issuance/rotation actions return a temporary reference by default, or the
+new token in explicitly configured raw mode, under declared secret-output contracts; see [issued credentials](#deliberately-issued-gitlab-credentials). For the
 request lifecycle, identity, policy, credential, and audit models, see
 [design.md](design.md). For the CLI that calls these endpoints, see
 [cli.md](cli.md).
@@ -2549,19 +2549,19 @@ reason code in the sanitized portal error URL.
 | --- | --- |
 | 400 | `identity_assertion_invalid`, `identity_assertion_unsupported`, `request_id_missing`, `request_id_invalid`, `input_invalid`, `oidc_flow_invalid`, `oidc_flow_expired`, `invalid_draft_handle`, `policy_authority_unavailable`, `policy_validation_failed`, `body_malformed`, `gateway_host_invalid`, `gateway_query_denied`, `gateway_header_denied`, `gateway_request_body_denied`, `git_service_denied`, `git_pkt_line_malformed`, `config_parse_failed`, `config_validation_failed` |
 | 401 | `caller_authentication_required`, `caller_authentication_invalid`, `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_revoked`, `broker_token_paused`, `gateway_auth_required`, `gateway_auth_invalid`, `local_login_failed`, `local_login_locked`, `oidc_provider_denied`, `oidc_identity_invalid` |
-| 404 | `identity_binding_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
-| 403 | `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
+| 404 | `identity_binding_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `secret_reference_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
+| 403 | `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `secret_reference_expired`, `secret_reference_denied`, `git_ref_denied`, `git_capability_denied` |
 | 409 | `identity_binding_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
 | 405 | `gateway_method_denied` |
 | 408 | `operation_cancelled` |
 | 413 | `body_size_denied`, `attachment_size_denied`, `attachment_integrity_mismatch`, `gateway_request_cap_exceeded`, `git_prefix_cap_exceeded` |
 | 415 | `body_format_unsupported`, `response_format_unsupported`, `attachment_media_type_denied`, `gateway_content_type_denied` |
-| 429 | `rate_limited`, `concurrency_limited`, `upstream_rate_limited` |
+| 429 | `rate_limited`, `concurrency_limited`, `upstream_rate_limited`, `secret_reference_capacity` |
 | 424 | `upstream_unauthorized`, `upstream_forbidden`, `upstream_failed` |
 | 500 | `operation_failed`, `broker_provider_contract_failed` |
 | 502 | `upstream_connection_failed`, `upstream_protocol_failed`, `gateway_response_cap_exceeded`, `gateway_upstream_denied` |
 | 504 | `upstream_timeout`, `operation_timeout` |
-| 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
+| 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `credential_encrypt_failed`, `credential_decrypt_failed`, `secret_capture_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
 
 `broker_provider_contract_failed` (`decision = error`) means a provider
 reported an outcome its contract does not allow: a standard reason, decision,
@@ -3084,9 +3084,11 @@ record.
 
 ## Deliberately issued GitLab credentials
 
-GitLab token create/rotate actions return the newly issued secret at
-`/result/issuedToken`; the selected upstream execution credential stays private.
-The catalog marks this as `sensitiveOutputPointers`, and OpenAPI operations and
+GitLab token create/rotate actions return `{secretRef, expiresAt}` at
+`/result/issuedToken` in the default reference mode; explicit raw mode returns a
+string. The selected upstream execution credential stays private. The catalog
+advertises `secretOutputMode` and `secretOutputs` and marks the field with
+`sensitiveOutputPointers`, and OpenAPI operations and
 JSON send variants expose `x-agent-access-sensitive-output-pointers`. The
 pointers address the response envelope, not request inputs. Secret-bearing HTTP
 responses use `Cache-Control: no-store`. See [GitLab bot provisioning](gitlab-bot-provisioning.md)
@@ -3351,3 +3353,9 @@ include `scopedMcpWarnings: [{toolIndex, proposedAction, codes}]`, independently
 of the persisted manifest/hash. These warnings describe possible scoped MCP
 name conflicts, not unsupported aggregate operations. See
 [imported service readiness](imported-services.md#service-specific-mcp-readiness).
+
+## Temporary secret references
+
+Declared secret outputs advertise their delivery mode and field metadata in runtime discovery. Existing connection credential PUT endpoints accept a literal token or `{secretRef, expiresAt?}` in `secret.token`. All connection credential PUTs recheck the admitted runtime snapshot and current actor authority before committing. If a reload or policy publication changed that snapshot, HTTP 409 `version_conflict` means no credential was installed; retry the PUT against the current configuration. A reference must still be valid, and upstream issuance must not be repeated.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

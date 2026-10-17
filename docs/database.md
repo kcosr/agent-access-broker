@@ -59,7 +59,7 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `021_local_password_failures`, `022_principal_service_limits`, and
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
-`027_command_imports`, and `028_oauth_revocations` in order. The
+`027_command_imports`, `028_oauth_revocations`, and `029_secret_references` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -1089,3 +1089,18 @@ OAuth slots carry a non-secret semantic revision for imported-service discovery
 previews. Connection replacement,
 disconnect, scope/target changes, and access/refresh material changes fence previews;
 encryption-key rewrap and refresh cooldown bookkeeping preserve the revision.
+
+## Temporary transferable secrets
+
+Schema `029_secret_references` adds encrypted temporary output storage, bounded
+non-secret outcome receipts, reservations, and durable trusted-caller generations.
+References are stored by digest; encrypted payloads bind their origin and producer
+metadata using a separate AES-GCM authenticated-data domain. Expiry is absolute.
+Startup, periodic maintenance, and access-time checks remove expired material;
+expiry never revokes upstream credentials or installed durable copies.
+
+Retained ciphertext participates in readiness, used-key inventory, and credential
+rewrap. Reserve counts and bytes before dispatch. Rewrap preserves reference
+identity and expiry. Keep backups and encryption keys protected; rolling back to
+an older schema requires a pre-migration backup. See
+[temporary secret references](secret-references.md) for limits and failure semantics.

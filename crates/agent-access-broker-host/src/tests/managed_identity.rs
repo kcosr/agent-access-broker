@@ -238,6 +238,48 @@ async fn request(
 }
 const PROXY: &str = "Bearer trusted-proxy-credential-0123456789";
 #[tokio::test]
+async fn ordinary_http_invocation_resolves_broker_token_once() {
+    let f = fixture().await;
+    let conn = rusqlite::Connection::open(&f.runtime.config().managed_store.as_ref().unwrap().path)
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE test_token_admission_count (updates INTEGER NOT NULL);
+         INSERT INTO test_token_admission_count VALUES (0);
+         CREATE TRIGGER test_count_token_admission AFTER UPDATE OF last_used_at ON broker_tokens
+         BEGIN UPDATE test_token_admission_count SET updates=updates+1; END;",
+    )
+    .unwrap();
+    let authorization = format!("Bearer {}", f.agent_token);
+    for proxy in [None, Some(PROXY)] {
+        conn.execute("UPDATE test_token_admission_count SET updates=0", [])
+            .unwrap();
+        let response = request(
+            &f,
+            "/v1/invoke/fake/echo",
+            Method::POST,
+            proxy,
+            None,
+            Some(&authorization),
+            Some(json!({"inputs":{"project":"TEST","message":"counted"}})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["reasonCode"],
+            "service_action_denied"
+        );
+        let updates: i64 = conn
+            .query_row(
+                "SELECT updates FROM test_token_admission_count",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(updates, 1, "ordinary HTTP authentication must run once");
+    }
+}
+
+#[tokio::test]
 async fn managed_identity_ingress_rejects_spoofing_and_management_escalation() {
     let f = fixture().await;
     for p in [None, Some("Bearer wrong")] {

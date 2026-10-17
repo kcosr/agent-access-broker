@@ -746,3 +746,9 @@ and service view. Caller removal or secret/security changes invalidate sessions;
 ordinary grant/group changes are reauthorized on the next request. Stdio clients
 continue through their ordinary Broker REST ingress. See
 [identity lifetime](#trusted-identity-and-session-lifetime).
+
+## Temporary secret outputs
+
+HTTP and stdio MCP use the same configured reference/raw delivery as HTTP invocation. MCP metadata advertises secret output pointers and delivery mode. Reconnecting does not invalidate a reference when its original identity, caller contract, and execution context still match.
+See [temporary secret references](secret-references.md) for the supported contract,
+lifetime, permissions, and failure handling.

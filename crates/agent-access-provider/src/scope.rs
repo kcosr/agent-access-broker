@@ -7,7 +7,7 @@ use serde_json::Value;
 /// admitted execution authority and no execution credential. The lookup
 /// access, when present, is the one the host selected for this request; a
 /// provider never chooses another or falls back to a shared credential.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ScopeRequest<'a> {
     pub(crate) service: &'a str,
     pub(crate) action: &'a str,
@@ -16,6 +16,21 @@ pub struct ScopeRequest<'a> {
     pub(crate) identity: &'a InvocationIdentity,
     pub(crate) correlation: &'a CorrelationContext,
     pub(crate) lookup_access: Option<&'a LookupAccess>,
+}
+
+impl std::fmt::Debug for ScopeRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ScopeRequest")
+            .field("service", &self.service)
+            .field("action", &self.action)
+            .field("inputs", &"[REDACTED]")
+            .field("execution_context", &self.execution_context)
+            .field("identity", &self.identity)
+            .field("correlation", &self.correlation)
+            .field("lookup_access", &self.lookup_access)
+            .finish()
+    }
 }
 
 impl<'a> ScopeRequest<'a> {
@@ -27,7 +42,9 @@ impl<'a> ScopeRequest<'a> {
         self.action
     }
 
-    /// Inputs already validated against the action's schema.
+    /// Inputs at scope resolution. Declared secret payload fields can still
+    /// contain opaque references; validate them with the action's
+    /// `reference_input_schema` and do not use their values to resolve scope.
     pub fn inputs(&self) -> &'a Value {
         self.inputs
     }

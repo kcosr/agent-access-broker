@@ -18,6 +18,7 @@ const JIRA_PROFILE: &str = "atlassian-api-token";
 /// credential it verified.
 #[derive(Default)]
 struct ProbeJira {
+    capture_token: bool,
     verified: Mutex<Vec<ExecutionCredential>>,
     /// The execution credentials invocations received.
     invoked: Mutex<Vec<Option<ExecutionCredential>>>,
@@ -25,17 +26,22 @@ struct ProbeJira {
 
 impl agent_access_provider::test_support::DescribedProvider for ProbeJira {
     fn descriptor(&self) -> ServiceDescriptor {
+        let mut action = ActionDescriptor::new(
+            "issue.view",
+            "View an issue in connection tests",
+            json!({"type": "object"}),
+        )
+        .scope("project")
+        .credential_modes(["per_user"]);
+        if self.capture_token {
+            action = action.secret_output(agent_access_provider::SecretOutputDescriptor::new(
+                "/result/issuedToken",
+                1024,
+            ));
+        }
         ServiceDescriptor::new("jira", "Jira")
             .with_resource_scopes(fixture_scope_capabilities("project"))
-            .with_actions(vec![
-                ActionDescriptor::new(
-                    "issue.view",
-                    "View an issue in connection tests",
-                    json!({"type": "object"}),
-                )
-                .scope("project")
-                .credential_modes(["per_user"]),
-            ])
+            .with_actions(vec![action])
             .with_credentials(
                 CredentialDescriptor::default().profile(JIRA_PROFILE, "basic_api_token"),
             )
@@ -75,7 +81,12 @@ impl Provider for ProbeJira {
             .lock()
             .unwrap()
             .push(request.execution().static_credential().cloned());
-        Ok(ProviderResult::new(json!({"key": "TEST-1"})))
+        let result = ProviderResult::new(json!({"key": "TEST-1"}));
+        Ok(if self.capture_token {
+            result.with_secret_output("/result/issuedToken", "fixture-issued-secret-token".into())
+        } else {
+            result
+        })
     }
 }
 
@@ -90,6 +101,8 @@ struct Fixture {
     /// `user_manage` tokens of alice (granted on every consumer), bob (no
     /// grants) and gitter (granted only on GitLab Git).
     alice: String,
+    alice_invoke: String,
+    alice_invoke_id: String,
     bob: String,
     gitter: String,
     /// An administrator who holds a per_user Jira grant of its own, and an
@@ -103,12 +116,17 @@ struct Fixture {
 /// service account `robot` on Jira, and the administrator on Jira; bob and
 /// the service account `idle` hold none.
 async fn fixture(jira: &str) -> Fixture {
+    fixture_with_capture(jira, false).await
+}
+
+async fn fixture_with_capture(jira: &str, capture_token: bool) -> Fixture {
     let hash_key_path = temp_path("credential-connections-hash-key");
     let store_path = temp_path("credential-connections-store.sqlite");
     let audit_path = temp_path("credential-connections.audit.jsonl");
     std::fs::write(&hash_key_path, URL_SAFE_NO_PAD.encode([43_u8; 32])).unwrap();
 
     let mut config = fake_config(audit_path.to_str().unwrap());
+    config.secret_outputs.mode = agent_access_core::SecretOutputMode::Reference;
     config.identity = IdentityConfig {
         trusted_callers: Default::default(),
         mode: "required".to_string(),
@@ -239,11 +257,27 @@ async fn fixture(jira: &str) -> Fixture {
             .token
     };
     let alice = issue("alice", BrokerTokenClass::UserManage);
+    let alice_invoke = store
+        .issue_broker_token(
+            &hasher,
+            agent_access_core::BrokerTokenIssueRequest {
+                principal_id: "alice".into(),
+                name: "secret reference producer".into(),
+                token_class: BrokerTokenClass::AgentInvoke,
+                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                expires_at: None,
+                created_by: "test".into(),
+            },
+        )
+        .unwrap();
     let bob = issue("bob", BrokerTokenClass::UserManage);
     let gitter = issue("gitter", BrokerTokenClass::UserManage);
     let admin = issue("admin", BrokerTokenClass::Admin);
     let auditor = issue("auditor", BrokerTokenClass::Admin);
-    let probe = Arc::new(ProbeJira::default());
+    let probe = Arc::new(ProbeJira {
+        capture_token,
+        ..Default::default()
+    });
     let broker = TestBroker::start_with_providers(&config, vec![Arc::clone(&probe)]).await;
     let store = broker.runtime().managed_store().unwrap().clone();
     Fixture {
@@ -254,6 +288,8 @@ async fn fixture(jira: &str) -> Fixture {
         audit_path,
         jira: jira.to_string(),
         alice,
+        alice_invoke: alice_invoke.token,
+        alice_invoke_id: alice_invoke.record.token_id,
         bob,
         gitter,
         admin,
@@ -350,6 +386,380 @@ fn connection_row<'a>(list: &'a Value, connection: &str) -> &'a Value {
         .iter()
         .find(|row| row["connection"] == connection)
         .unwrap_or_else(|| panic!("{connection} missing from {list}"))
+}
+
+async fn captured_reference(fixture: &Fixture) -> Value {
+    fixture.store_row("alice", &fixture.jira, "default", JIRA_PROFILE);
+    let issued = fixture
+        .ok(
+            &fixture.alice_invoke,
+            Method::POST,
+            "/v1/invoke/jira/issue.view",
+            Some(json!({"inputs": {"project": "TEST"}})),
+        )
+        .await;
+    let reference = issued["issuedToken"].clone();
+    assert!(reference["secretRef"].as_str().unwrap().starts_with("sr_"));
+    assert!(reference["expiresAt"].is_string());
+    assert!(!issued.to_string().contains("fixture-issued-secret-token"));
+    reference
+}
+
+#[tokio::test]
+async fn secret_reference_import_installs_directly_for_owner_and_admin_target_with_safe_audit() {
+    let fixture = fixture_with_capture("jira", true).await;
+    let reference = captured_reference(&fixture).await;
+    for (actor, principal, path) in [
+        (&fixture.alice, "alice", fixture.connection()),
+        (&fixture.admin, "robot", fixture.admin_connection("robot")),
+    ] {
+        let response = fixture
+            .ok(
+                actor,
+                Method::PUT,
+                &path,
+                Some(json!({
+                    "secret": {"username": "new-bot", "token": reference},
+                    "metadata": {"displayName": "captured token"},
+                })),
+            )
+            .await;
+        assert_eq!(response["ownerPrincipal"], principal);
+        assert_eq!(response["connection"], "jira");
+        assert!(!response.to_string().contains("fixture-issued-secret-token"));
+        assert!(
+            !response
+                .to_string()
+                .contains(reference["secretRef"].as_str().unwrap())
+        );
+        fixture
+            .ok(actor, Method::POST, &format!("{path}/verify"), None)
+            .await;
+        assert_eq!(
+            fixture.probe.verified.lock().unwrap().last(),
+            Some(&basic_credential("new-bot", "fixture-issued-secret-token",))
+        );
+    }
+    let records = read_audit_records(&fixture.audit_path);
+    let imports = records
+        .iter()
+        .filter(|record| {
+            record["providerAudit"]["management"]["target"]["secretReferences"].is_array()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(imports.len(), 2);
+    for record in imports {
+        let target = &record["providerAudit"]["management"]["target"];
+        assert_eq!(
+            target["secretReferences"][0]["origin"]["principal"],
+            "alice"
+        );
+        assert!(target["secretReferences"][0]["receiptId"].is_string());
+        assert_eq!(target["connection"], "jira");
+    }
+    let audit = std::fs::read_to_string(&fixture.audit_path).unwrap();
+    assert!(!audit.contains("fixture-issued-secret-token"));
+    assert!(!audit.contains(reference["secretRef"].as_str().unwrap()));
+}
+
+#[tokio::test]
+async fn secret_reference_import_keeps_personal_ownership_and_management_authority() {
+    let fixture = fixture_with_capture("jira", true).await;
+    let reference = captured_reference(&fixture).await;
+    for (token, uri, body) in [
+        (
+            &fixture.gitter,
+            "/v1/credentials/connections/gitlab".to_string(),
+            json!({
+                "secret": {"token": reference},
+            }),
+        ),
+        (
+            &fixture.auditor,
+            fixture.admin_connection("robot"),
+            json!({
+                "secret": {"username": "new-bot", "token": reference},
+            }),
+        ),
+        (
+            &fixture.alice_invoke,
+            fixture.admin_connection("robot"),
+            json!({
+                "secret": {"username": "new-bot", "token": reference},
+            }),
+        ),
+    ] {
+        let (status, denied) = fixture.request(token, Method::PUT, &uri, Some(body)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+        assert!(
+            !denied
+                .to_string()
+                .contains(reference["secretRef"].as_str().unwrap())
+        );
+    }
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("gitter"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("robot"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn secret_reference_import_refuses_revoked_origin_without_writing_destination() {
+    let fixture = fixture_with_capture("jira", true).await;
+    let reference = captured_reference(&fixture).await;
+    fixture
+        .store
+        .revoke_broker_token(&fixture.alice_invoke_id, "admin")
+        .unwrap();
+    let (status, denied) = fixture
+        .request(
+            &fixture.admin,
+            Method::PUT,
+            &fixture.admin_connection("robot"),
+            Some(json!({"secret": {"username": "new-bot", "token": reference}})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert!(!denied.to_string().contains("fixture-issued-secret-token"));
+    assert!(
+        !denied
+            .to_string()
+            .contains(reference["secretRef"].as_str().unwrap())
+    );
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("robot"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn secret_reference_import_rechecks_management_token_after_route_admission() {
+    let fixture = fixture_with_capture("jira", true).await;
+    let reference = captured_reference(&fixture).await;
+    let runtime = fixture._broker.runtime();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        format!("Bearer {}", fixture.admin).parse().unwrap(),
+    );
+    let admitted = runtime.resolve_identity(&headers).unwrap();
+    fixture
+        .store
+        .revoke_broker_token(
+            admitted
+                .source
+                .as_ref()
+                .unwrap()
+                .token_id
+                .as_deref()
+                .unwrap(),
+            "admin",
+        )
+        .unwrap();
+    let result = runtime.store_connection_credential(
+        &admitted,
+        CredentialWriteRequest {
+            owner_principal_id: "robot".into(),
+            service: "jira".into(),
+            name: "default".into(),
+            profile: JIRA_PROFILE.into(),
+            credential_kind: "basic_api_token".into(),
+            secret: json!({"username":"new-bot","token":reference}),
+            metadata: json!({}),
+            actor: "admin".into(),
+        },
+        agent_access_core::CredentialManagementPurpose::Administrative,
+    );
+    assert!(matches!(
+        result,
+        Err(agent_access_core::ManagedStoreError::BrokerTokenRevoked)
+    ));
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("robot"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn secret_reference_import_rechecks_full_admin_role_after_route_admission() {
+    let fixture = fixture_with_capture("jira", true).await;
+    let reference = captured_reference(&fixture).await;
+    fixture
+        .store
+        .create_principal(agent_access_core::PrincipalWriteRequest {
+            principal_id: "keeper".into(),
+            kind: "user".into(),
+            role: PrincipalRole::Admin,
+            self_service_enabled: None,
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    let runtime = fixture._broker.runtime();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        format!("Bearer {}", fixture.admin).parse().unwrap(),
+    );
+    let admitted = runtime.resolve_identity(&headers).unwrap();
+    fixture
+        .store
+        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            principal_id: "admin".into(),
+            role: Some(PrincipalRole::Auditor),
+            self_service_enabled: None,
+            actor: "keeper".into(),
+        })
+        .unwrap();
+    let write = |actor: &str| CredentialWriteRequest {
+        owner_principal_id: "robot".into(),
+        service: "jira".into(),
+        name: "default".into(),
+        profile: JIRA_PROFILE.into(),
+        credential_kind: "basic_api_token".into(),
+        secret: json!({"username":"new-bot","token":reference}),
+        metadata: json!({}),
+        actor: actor.into(),
+    };
+    let result = runtime.store_connection_credential(
+        &admitted,
+        write("admin"),
+        agent_access_core::CredentialManagementPurpose::Administrative,
+    );
+    // Demoting an administrator revokes its admin-class tokens transactionally;
+    // a request admitted before the change must fail that first live check.
+    assert!(matches!(
+        result,
+        Err(agent_access_core::ManagedStoreError::BrokerTokenRevoked)
+    ));
+    // An auditor's still-valid admin-class token permits administrative reads,
+    // but the import sink independently requires the full administrator role.
+    headers.insert(
+        "Authorization",
+        format!("Bearer {}", fixture.auditor).parse().unwrap(),
+    );
+    let auditor = runtime.resolve_identity(&headers).unwrap();
+    assert!(matches!(
+        runtime.store_connection_credential(
+            &auditor,
+            write("auditor"),
+            agent_access_core::CredentialManagementPurpose::Administrative,
+        ),
+        Err(agent_access_core::ManagedStoreError::RightMissing)
+    ));
+    assert!(
+        fixture
+            .store
+            .list_credentials(Some("robot"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn secret_reference_import_rejects_wrong_profile_and_non_token_fields() {
+    let fixture = fixture_with_capture("jira", true).await;
+    let reference = captured_reference(&fixture).await;
+    for body in [
+        json!({"profile": "http-bearer-token", "secret": {"username": "new-bot", "token": reference}}),
+        json!({"secret": {"username": reference, "token": "literal"}}),
+        json!({"secret": {"username": "new-bot", "token": reference}, "metadata": {"displayName": reference}}),
+        json!({"secret": {"username": "new-bot", "token": {"secretRef": reference["secretRef"], "extra": true}}}),
+    ] {
+        let (status, denied) = fixture
+            .request(
+                &fixture.admin,
+                Method::PUT,
+                &fixture.admin_connection("robot"),
+                Some(body),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+        assert!(
+            !denied
+                .to_string()
+                .contains(reference["secretRef"].as_str().unwrap())
+        );
+        assert!(
+            fixture
+                .store
+                .list_credentials(Some("robot"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn secret_reference_cleanup_startup_pass_removes_ciphertext_in_raw_mode() {
+    let fixture = fixture_with_capture("jira", true).await;
+    captured_reference(&fixture).await;
+    let state = fixture._broker.state();
+    assert!(
+        state
+            .secret_reference_cleanup
+            .shutdown(std::time::Duration::from_secs(1))
+            .await
+    );
+    let mut config = fixture._broker.runtime().config().clone();
+    config.secret_outputs.mode = agent_access_core::SecretOutputMode::Raw;
+    config
+        .credentials
+        .service
+        .get_mut("fake")
+        .unwrap()
+        .token_ref = Some(synthetic_credential_ref());
+    fixture._broker.reload_config(&config).await;
+    let conn = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    conn.execute(
+        "UPDATE secret_reference_receipts SET expires_at='1970-01-01T00:00:00.000000000Z'",
+        [],
+    )
+    .unwrap();
+    state.secret_reference_cleanup.start(&state);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM secret_reference_material WHERE ciphertext IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            if count == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let receipts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM secret_reference_receipts WHERE outcome='expired'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipts, 1);
 }
 
 #[tokio::test]

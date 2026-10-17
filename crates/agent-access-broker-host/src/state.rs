@@ -62,6 +62,7 @@ pub(crate) struct ReloadableState {
     pub(crate) last_reload_attempt: Mutex<Option<ReloadAttemptSummary>>,
     /// The OAuth revocation worker, while serving.
     pub(crate) oauth_revocations: crate::oauth_revocations::RevocationWorkerSlot,
+    pub(crate) secret_reference_cleanup: crate::secret_references::CleanupWorkerSlot,
     #[cfg(test)]
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
     #[cfg(test)]
@@ -650,6 +651,7 @@ impl ReloadableState {
             audit_registry,
             last_reload_attempt: Mutex::new(None),
             oauth_revocations: Default::default(),
+            secret_reference_cleanup: Default::default(),
             #[cfg(test)]
             mcp_admission_barrier: Mutex::new(None),
             #[cfg(test)]
@@ -760,8 +762,31 @@ impl ReloadableState {
     /// Publish the loaded caller contract and its process-local epoch together.
     /// Comparing loaded secrets, rather than secret references, prevents an ABA
     /// rotation from restoring an earlier session's authority.
-    pub(crate) fn publish_snapshot(&self, mut next: Arc<RuntimeSnapshot>) -> Arc<RuntimeSnapshot> {
+    pub(crate) fn publish_snapshot(&self, next: Arc<RuntimeSnapshot>) -> Arc<RuntimeSnapshot> {
         let _publication = self.caller_security_publication.write().unwrap();
+        self.publish_snapshot_locked(next)
+    }
+
+    /// Atomic OAuth/caller activation is the final fallible reload step under
+    /// the caller publication fence. Rejection preserves the active runtime's
+    /// OAuth state, references, and ability to reserve new outputs.
+    pub(crate) fn publish_reload_snapshot(
+        &self,
+        mut next: Arc<RuntimeSnapshot>,
+    ) -> Result<Arc<RuntimeSnapshot>, agent_access_core::RuntimeError> {
+        let _publication = self.caller_security_publication.write().unwrap();
+        Arc::make_mut(&mut next)
+            .runtime
+            .activate_runtime_authority()?;
+        let previous = self.current();
+        previous.runtime.deactivate_oauth();
+        previous
+            .runtime
+            .retire_superseded_import_dispatch(&next.runtime);
+        Ok(self.publish_snapshot_locked(next))
+    }
+
+    fn publish_snapshot_locked(&self, mut next: Arc<RuntimeSnapshot>) -> Arc<RuntimeSnapshot> {
         let previous = self.current();
         let changed =
             previous.runtime.caller_security_binding() != next.runtime.caller_security_binding();

@@ -23,6 +23,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -857,6 +858,8 @@ struct CredentialPutArgs {
     username_file: Option<PathBuf>,
     #[arg(long = "field", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field literal as name=value")]
     field: Vec<NamedValue>,
+    #[arg(long = "field-ref", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Broker-held token reference as token=sr_...")]
+    field_ref: Vec<NamedValue>,
     #[arg(long = "field-env", value_parser = parse_named_value, help_heading = "Credential Field Options", help = "Credential field from environment as name=ENV_VAR")]
     field_env: Vec<NamedValue>,
     #[arg(long = "field-file", value_parser = parse_named_path, help_heading = "Credential Field Options", help = "Credential field from file as name=PATH")]
@@ -3499,6 +3502,10 @@ enum GitlabCommand {
 
 #[derive(Debug, Subcommand)]
 enum GitlabProjectCommand {
+    Member {
+        #[command(subcommand)]
+        command: gitlab_provisioning::ProjectMemberCommand,
+    },
     AccessToken {
         #[command(subcommand)]
         command: gitlab_provisioning::ProjectTokenCommand,
@@ -6890,6 +6897,9 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
             gitlab_provisioning::run_service_account(ctx, command).await
         }
         GitlabCommand::Project { command } => match command {
+            GitlabProjectCommand::Member { command } => {
+                gitlab_provisioning::run_project_member(ctx, command).await
+            }
             GitlabProjectCommand::AccessToken { command } => {
                 gitlab_provisioning::run_project_token(ctx, command).await
             }
@@ -10121,7 +10131,18 @@ async fn run_send_command(
     let sensitive_pointers = send_sensitive_pointers(&catalog, &request_value)?;
     reject_literal_identity_token_for_send_management(ctx, &catalog, &request_value)?;
     if source_kind == JsonInputSourceKind::Argv {
-        reject_inline_sensitive_values(&request_value, &sensitive_pointers)?;
+        let secret_input_pointers = match request_value.get("kind").and_then(Value::as_str) {
+            Some("invoke") => {
+                &catalog_action(
+                    &catalog,
+                    required_str_field(&request_value, "service")?,
+                    required_str_field(&request_value, "action")?,
+                )?
+                .secret_input_pointers[..]
+            }
+            _ => &[],
+        };
+        reject_inline_sensitive_values(&request_value, &sensitive_pointers, secret_input_pointers)?;
     }
     apply_secret_sources(&mut request_value, source_kind, &sensitive_pointers)?;
     let request = require_cli_input(parse_send_request(request_value));
@@ -10304,15 +10325,120 @@ fn required_str_field<'a>(value: &'a serde_json::Value, field: &str) -> Result<&
 fn reject_inline_sensitive_values(
     request: &serde_json::Value,
     sensitive_pointers: &[String],
+    secret_input_pointers: &[String],
 ) -> Result<()> {
+    if let Some(inputs) = request.get("inputs") {
+        validate_inline_secret_references(inputs, "/inputs", secret_input_pointers)?;
+    }
     for pointer in sensitive_pointers {
-        if json_pointer_or_descendant_exists(request, pointer) {
+        if json_pointer_or_descendant_exists(request, pointer)
+            && !request.pointer(pointer).is_some_and(|value| {
+                contains_only_declared_secret_references(value, pointer, secret_input_pointers)
+            })
+        {
             anyhow::bail!(
-                "--request-json cannot include sensitive field {pointer}; use secretSources"
+                "inline sensitive field {pointer} is not allowed; use secretSources for literals or a declared secret reference"
             );
         }
     }
     Ok(())
+}
+
+fn strict_secret_reference(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object
+        .keys()
+        .all(|key| key == "secretRef" || key == "expiresAt")
+        && object
+            .get("expiresAt")
+            .is_none_or(|value| value.as_str().is_some_and(|value| value.len() <= 64))
+        && object
+            .get("secretRef")
+            .and_then(Value::as_str)
+            .is_some_and(secret_reference_capability)
+}
+
+fn secret_reference_capability(value: &str) -> bool {
+    value.strip_prefix("sr_").is_some_and(|value| {
+        value.len() == 43
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    })
+}
+
+fn validate_inline_secret_references(
+    value: &Value,
+    pointer: &str,
+    declared: &[String],
+) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            if object
+                .get("secretRef")
+                .and_then(Value::as_str)
+                .is_some_and(secret_reference_capability)
+            {
+                if !declared.iter().any(|candidate| candidate == pointer)
+                    || !strict_secret_reference(value)
+                {
+                    anyhow::bail!(
+                        "secret references require a strict reference object at a catalog-declared secret input"
+                    );
+                }
+                return Ok(());
+            }
+            for (name, value) in object {
+                let name = name.replace('~', "~0").replace('/', "~1");
+                validate_inline_secret_references(value, &format!("{pointer}/{name}"), declared)?;
+            }
+        }
+        Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                validate_inline_secret_references(value, &format!("{pointer}/{index}"), declared)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// An enclosing sensitive object may contain only declared reference fields;
+/// adding any inline literal still requires a local secret source.
+fn contains_only_declared_secret_references(
+    value: &Value,
+    pointer: &str,
+    declared: &[String],
+) -> bool {
+    if declared.iter().any(|candidate| candidate == pointer) {
+        return strict_secret_reference(value);
+    }
+    match value {
+        Value::Object(object) => {
+            !object.is_empty()
+                && object.iter().all(|(name, value)| {
+                    let name = name.replace('~', "~0").replace('/', "~1");
+                    contains_only_declared_secret_references(
+                        value,
+                        &format!("{pointer}/{name}"),
+                        declared,
+                    )
+                })
+        }
+        Value::Array(values) => {
+            !values.is_empty()
+                && values.iter().enumerate().all(|(index, value)| {
+                    contains_only_declared_secret_references(
+                        value,
+                        &format!("{pointer}/{index}"),
+                        declared,
+                    )
+                })
+        }
+        _ => false,
+    }
 }
 
 fn json_pointer_or_descendant_exists(value: &serde_json::Value, pointer: &str) -> bool {
@@ -11648,6 +11774,7 @@ async fn put_connection_credential(
         username_env: &input.username_env,
         username_file: &input.username_file,
         field: &input.field,
+        field_ref: &input.field_ref,
         field_env: &input.field_env,
         field_file: &input.field_file,
         field_stdin: &input.field_stdin,
@@ -13666,6 +13793,7 @@ struct CredentialPutInput<'a> {
     username_env: &'a Option<String>,
     username_file: &'a Option<PathBuf>,
     field: &'a [NamedValue],
+    field_ref: &'a [NamedValue],
     field_env: &'a [NamedValue],
     field_file: &'a [NamedPath],
     field_stdin: &'a Option<String>,
@@ -13688,6 +13816,7 @@ struct PlannedCredentialField {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CredentialFieldInput {
     Literal(String),
+    SecretReference(String),
     Env(String),
     File(PathBuf),
     Stdin,
@@ -13696,6 +13825,7 @@ enum CredentialFieldInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CredentialFieldSource {
     Literal,
+    SecretReference,
     Env,
     File,
     Stdin,
@@ -13728,7 +13858,12 @@ fn credential_put_body(input: CredentialPutInput<'_>) -> Result<serde_json::Valu
     let mut secret = serde_json::Map::new();
     for field in &input.schema.fields {
         if let Some(value) = collected.get(&field.name) {
-            secret.insert(field.name.clone(), serde_json::json!(value.value));
+            let value = if value.source == CredentialFieldSource::SecretReference {
+                serde_json::json!({"secretRef": value.value})
+            } else {
+                serde_json::json!(value.value)
+            };
+            secret.insert(field.name.clone(), value);
         }
     }
     let mut metadata = serde_json::Map::new();
@@ -13778,6 +13913,22 @@ fn credential_field_source_plans(
             PlannedCredentialField {
                 source: CredentialFieldSource::Env,
                 input: CredentialFieldInput::Env(item.value.clone()),
+            },
+        )?;
+    }
+    for item in input.field_ref {
+        if item.name != "token" {
+            anyhow::bail!("only the token credential field accepts --field-ref");
+        }
+        if !item.value.starts_with("sr_") || item.value.len() <= 3 {
+            anyhow::bail!("credential token reference must be a Broker-issued sr_ reference");
+        }
+        insert_credential_field_plan(
+            &mut plans,
+            &item.name,
+            PlannedCredentialField {
+                source: CredentialFieldSource::SecretReference,
+                input: CredentialFieldInput::SecretReference(item.value.clone()),
             },
         )?;
     }
@@ -13911,7 +14062,9 @@ fn read_planned_credential_fields(
     let mut collected = BTreeMap::new();
     for (name, plan) in plans {
         let value = match &plan.input {
-            CredentialFieldInput::Literal(value) => value.clone(),
+            CredentialFieldInput::Literal(value) | CredentialFieldInput::SecretReference(value) => {
+                value.clone()
+            }
             CredentialFieldInput::Env(env_name) => env::var(env_name).map_err(|error| {
                 anyhow::anyhow!(
                     "failed to read credential field {name} from environment variable {env_name}: {error}"
@@ -13974,6 +14127,9 @@ fn credential_field_input_hint(field: &CredentialInputField) -> String {
     if credential_field_allows_source(field, CredentialFieldSource::Literal) {
         options.push(format!("--field {}=VALUE", field.name));
     }
+    if credential_field_allows_source(field, CredentialFieldSource::SecretReference) {
+        options.push(format!("--field-ref {}=sr_...", field.name));
+    }
     if credential_field_allows_source(field, CredentialFieldSource::Env) {
         options.push(format!("--field-env {}=ENV_VAR", field.name));
     }
@@ -14006,6 +14162,7 @@ impl CredentialFieldSource {
     fn input_method(self) -> &'static str {
         match self {
             Self::Literal => "literal",
+            Self::SecretReference => "secret_ref",
             Self::Env => "env",
             Self::File => "file",
             Self::Stdin => "stdin",
@@ -18441,6 +18598,9 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
             sensitive_input_pointers: Vec::new(),
             sensitive_output_pointers: Vec::new(),
+            secret_outputs: Vec::new(),
+            secret_input_pointers: Vec::new(),
+            secret_output_mode: None,
             io: ActionIo::Json,
             response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
@@ -22018,12 +22178,62 @@ upload_spool_dir = "upload-spool"
                 }
             }
         });
-        let error =
-            reject_inline_sensitive_values(&inline, &["/body/secret".to_string()]).unwrap_err();
+        let error = reject_inline_sensitive_values(&inline, &["/body/secret".to_string()], &[])
+            .unwrap_err();
         assert!(format!("{error:#}").contains("use secretSources"));
 
         let non_secret_parent = serde_json::json!({"body": {"secretless": "ok"}});
-        reject_inline_sensitive_values(&non_secret_parent, &["/body/secret".to_string()]).unwrap();
+        reject_inline_sensitive_values(&non_secret_parent, &["/body/secret".to_string()], &[])
+            .unwrap();
+    }
+
+    #[test]
+    fn send_inline_secret_references_require_declared_paths_and_strict_shapes() {
+        let reference = serde_json::json!({
+            "secretRef": format!("sr_{}", "A".repeat(43)),
+            "expiresAt": "2099-01-01T00:00:00Z",
+        });
+        let declared = vec!["/inputs/credentials/token".to_owned()];
+        let sensitive = vec!["/inputs/credentials".to_owned(), declared[0].clone()];
+        let request = serde_json::json!({"inputs":{"credentials":{"token":reference}}});
+        reject_inline_sensitive_values(&request, &sensitive, &declared).unwrap();
+
+        let mut literal_sibling = request.clone();
+        literal_sibling["inputs"]["credentials"]["password"] = serde_json::json!("inline-secret");
+        assert!(reject_inline_sensitive_values(&literal_sibling, &sensitive, &declared).is_err());
+        assert!(reject_inline_sensitive_values(&request, &sensitive, &[]).is_err());
+        assert!(
+            reject_inline_sensitive_values(
+                &serde_json::json!({"inputs":{"other":reference}}),
+                &sensitive,
+                &declared,
+            )
+            .is_err()
+        );
+        for invalid in [
+            serde_json::json!("inline-secret"),
+            serde_json::json!(format!("sr_{}", "A".repeat(43))),
+            serde_json::json!({"secretRef":"invalid"}),
+            serde_json::json!({"secretRef":format!("sr_{}", "A".repeat(43)),"token":"inline-secret"}),
+            serde_json::json!({"secretRef":format!("sr_{}", "A".repeat(43)),"expiresAt":7}),
+            serde_json::json!({"secretRef":format!("sr_{}", "A".repeat(43)),"expiresAt":"x".repeat(65)}),
+        ] {
+            let request = serde_json::json!({"inputs":{"credentials":{"token":invalid}}});
+            assert!(reject_inline_sensitive_values(&request, &sensitive, &declared).is_err());
+        }
+        // An application's ordinary object named secretRef is not a capability.
+        reject_inline_sensitive_values(
+            &serde_json::json!({"inputs":{"secretRef":{"name":"database"}}}),
+            &sensitive,
+            &declared,
+        )
+        .unwrap();
+        reject_inline_sensitive_values(
+            &serde_json::json!({"inputs":{"secretRef":"vault:application-name"}}),
+            &sensitive,
+            &declared,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -22094,6 +22304,9 @@ upload_spool_dir = "upload-spool"
                     input_schema: serde_json::json!({ "type": "object" }),
                     sensitive_input_pointers: vec!["/inputs/headers/X-Api-Key".to_string()],
                     sensitive_output_pointers: Vec::new(),
+                    secret_outputs: Vec::new(),
+                    secret_input_pointers: Vec::new(),
+                    secret_output_mode: None,
                     io: ActionIo::Json,
                     response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
                     exit_policy: ExitPolicy::InvokeDecision,
@@ -22124,7 +22337,7 @@ upload_spool_dir = "upload-spool"
             "/inputs/headers/x-api-key",
             &pointers
         ));
-        let error = reject_inline_sensitive_values(&inline, &pointers).unwrap_err();
+        let error = reject_inline_sensitive_values(&inline, &pointers, &[]).unwrap_err();
         assert!(format!("{error:#}").contains("use secretSources"));
 
         let mut sourced = serde_json::json!({
@@ -23248,6 +23461,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &fields,
+            field_ref: &[],
             field_env: &fields,
             field_file: &field_files,
             field_stdin: &field_stdin,
@@ -23261,6 +23475,134 @@ upload_spool_dir = "upload-spool"
         assert_eq!(body["secret"]["token"], "secret-token");
         assert_eq!(body["metadata"]["displayName"], "Alice Jira");
         fs::remove_file(token_path).unwrap();
+    }
+
+    #[test]
+    fn credential_put_body_keeps_secret_reference_structured() {
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "gitlab",
+                "GitLab",
+                "http-bearer-token",
+                "bearer_token",
+            )
+            .unwrap(),
+        );
+        let references = vec![NamedValue {
+            name: "token".to_string(),
+            value: "sr_test_capability".to_string(),
+        }];
+        let input = CredentialPutInput {
+            schema: &schema,
+            username: &None,
+            username_env: &None,
+            username_file: &None,
+            field: &[],
+            field_ref: &references,
+            field_env: &[],
+            field_file: &[],
+            field_stdin: &None,
+            display_name: &None,
+            expires_at: &None,
+        };
+        let body = credential_put_body(input).unwrap();
+        assert_eq!(
+            body["secret"]["token"],
+            serde_json::json!({"secretRef": "sr_test_capability"})
+        );
+        assert_eq!(body["metadata"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn credential_reference_sources_reject_metadata_usernames_and_duplicates() {
+        let schema = cli_input_schema(
+            agent_access_core::credential_input_schema(
+                "gitlab",
+                "GitLab",
+                "http-bearer-token",
+                "bearer_token",
+            )
+            .unwrap(),
+        );
+        for name in ["username", "displayName", "expiresAt"] {
+            let references = vec![NamedValue {
+                name: name.to_string(),
+                value: "sr_test_capability".to_string(),
+            }];
+            let error = credential_field_source_plans(&CredentialPutInput {
+                schema: &schema,
+                username: &None,
+                username_env: &None,
+                username_file: &None,
+                field: &[],
+                field_ref: &references,
+                field_env: &[],
+                field_file: &[],
+                field_stdin: &None,
+                display_name: &None,
+                expires_at: &None,
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains("only the token"));
+            assert!(!error.to_string().contains("sr_test_capability"));
+        }
+        let references = vec![NamedValue {
+            name: "token".to_string(),
+            value: "sr_test_capability".to_string(),
+        }];
+        let sources = vec![NamedValue {
+            name: "token".to_string(),
+            value: "AGENT_ACCESS_MISSING_REFERENCE_TEST_TOKEN".to_string(),
+        }];
+        let error = credential_put_body(CredentialPutInput {
+            schema: &schema,
+            username: &None,
+            username_env: &None,
+            username_file: &None,
+            field: &[],
+            field_ref: &references,
+            field_env: &sources,
+            field_file: &[],
+            field_stdin: &None,
+            display_name: &None,
+            expires_at: &None,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("provided more than once"));
+        assert!(!error.to_string().contains("sr_test_capability"));
+    }
+
+    #[test]
+    fn parses_personal_and_admin_credential_reference_flags() {
+        for prefix in [
+            vec!["agent-access", "credentials", "put", "gitlab"],
+            vec![
+                "agent-access",
+                "admin",
+                "credentials",
+                "put",
+                "robot",
+                "gitlab",
+            ],
+        ] {
+            let mut args = prefix;
+            args.extend(["--field-ref", "token=sr_test_capability"]);
+            let parsed = Cli::try_parse_from(args).unwrap();
+            let input = match parsed.command {
+                Command::Credentials {
+                    command: CredentialsCommand::Put { input, .. },
+                } => input,
+                Command::Admin {
+                    command:
+                        AdminCommand::Credentials {
+                            command: AdminCredentialsCommand::Put { input, .. },
+                        },
+                } => input,
+                _ => panic!("expected credential put"),
+            };
+            assert_eq!(input.field_ref[0].name, "token");
+            assert_eq!(input.field_ref[0].value, "sr_test_capability");
+        }
     }
 
     #[test]
@@ -23295,6 +23637,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &fields,
+            field_ref: &[],
             field_env: &field_env,
             field_file: &empty_paths,
             field_stdin: &field_stdin,
@@ -23333,6 +23676,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &empty_values,
+            field_ref: &[],
             field_env: &empty_values,
             field_file: &empty_paths,
             field_stdin: &field_stdin,
@@ -23372,6 +23716,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &fields,
+            field_ref: &[],
             field_env: &empty_values,
             field_file: &empty_paths,
             field_stdin: &field_stdin,
@@ -23414,6 +23759,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &empty_values,
+            field_ref: &[],
             field_env: &field_env,
             field_file: &field_file,
             field_stdin: &field_stdin,
@@ -23457,6 +23803,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &empty_values,
+            field_ref: &[],
             field_env: &duplicate,
             field_file: &empty_paths,
             field_stdin: &field_stdin,
@@ -23497,6 +23844,7 @@ upload_spool_dir = "upload-spool"
             username_env: &none_string,
             username_file: &None,
             field: &empty_values,
+            field_ref: &[],
             field_env: &empty_values,
             field_file: &field_files,
             field_stdin: &field_stdin,
@@ -23576,6 +23924,10 @@ upload_spool_dir = "upload-spool"
         assert!(!credential_field_allows_source(
             &secret,
             CredentialFieldSource::Prompt
+        ));
+        assert!(!credential_field_allows_source(
+            &secret,
+            CredentialFieldSource::SecretReference
         ));
     }
 

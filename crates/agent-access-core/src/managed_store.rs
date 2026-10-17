@@ -1,4 +1,12 @@
 mod connection_credentials;
+mod secret_reference_identity;
+mod secret_references;
+pub(crate) use secret_reference_identity::AttestedSecretReferencePin;
+pub use secret_references::{SecretCredentialWriteResult, SecretReferenceUse};
+pub(crate) use secret_references::{
+    SecretOutputCapture, SecretOutputReservation, SecretOutputReservationBatch,
+    SecretReferenceLimits, SecretReservationOutcome, SecretReservationRequest,
+};
 mod identity_access;
 mod identity_tokens;
 pub use identity_access::{
@@ -68,7 +76,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_OAUTH_REVOCATIONS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_SECRET_REFERENCES_VERSION;
+const MANAGED_STORE_SECRET_REFERENCES_VERSION: &str = "029_secret_references";
 const MANAGED_STORE_OAUTH_REVOCATIONS_VERSION: &str = "028_oauth_revocations";
 const MANAGED_STORE_COMMAND_IMPORTS_VERSION: &str = "027_command_imports";
 const MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION: &str = "026_trusted_user_identity";
@@ -228,6 +237,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/oauth_revocations.sql"),
         seed: None,
         structural_validation: imported_store::validate_oauth_revocations_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_SECRET_REFERENCES_VERSION,
+        checksum: "4c3fd69f149da35c06fabd9874cc980ac9b3386f5e85895313596e98d25657a7",
+        sql: include_str!("managed_store/secret_references.sql"),
+        seed: None,
+        structural_validation: secret_references::validate_structure,
     },
 ];
 
@@ -437,6 +453,16 @@ pub enum ManagedStoreError {
     CredentialNotFound,
     #[error("credential is expired")]
     CredentialExpired,
+    #[error("secret reference was not found")]
+    SecretReferenceNotFound,
+    #[error("secret reference expired; the upstream operation must not be repeated automatically")]
+    SecretReferenceExpired,
+    #[error("secret reference use is denied")]
+    SecretReferenceDenied,
+    #[error("temporary secret capacity is exhausted")]
+    SecretReferenceCapacity,
+    #[error("secret reservation is no longer writable")]
+    SecretReferenceStateConflict,
     #[error("input is invalid: {0}")]
     InputInvalid(String),
     #[error("input is invalid: {}", .0.message)]
@@ -499,6 +525,11 @@ impl ManagedStoreError {
             Self::OidcAdmissionDenied => ReasonCode::OidcAdmissionDenied,
             Self::CredentialNotFound => ReasonCode::CredentialNotFound,
             Self::CredentialExpired => ReasonCode::CredentialExpired,
+            Self::SecretReferenceNotFound => ReasonCode::SecretReferenceNotFound,
+            Self::SecretReferenceExpired => ReasonCode::SecretReferenceExpired,
+            Self::SecretReferenceDenied => ReasonCode::SecretReferenceDenied,
+            Self::SecretReferenceCapacity => ReasonCode::SecretReferenceCapacity,
+            Self::SecretReferenceStateConflict => ReasonCode::VersionConflict,
             Self::InputInvalid(_) | Self::ResourceConflict(_) | Self::ImportChangeBlocked(_) => {
                 ReasonCode::InputInvalid
             }
@@ -703,6 +734,7 @@ impl ManagedStore {
         oauth_revocation::check_ready(&conn, key_ring)?;
         resource_attributes::check_ready(&conn, key_ring)?;
         imported_store::check_ready(&conn, key_ring)?;
+        secret_references::check_ready(&conn, key_ring)?;
         let key_ids = active_credential_key_ids(&conn)?;
         match key_ring {
             Some(key_ring) => {
@@ -3821,27 +3853,8 @@ impl ManagedStore {
         service: &str,
         credential_name: &str,
     ) -> Result<bool, ManagedStoreError> {
-        validate_principal_id(principal_id)?;
-        validate_right_name(right)?;
-        validate_service_and_name(service, credential_name)?;
         let conn = self.connection.lock().unwrap();
-        let now = normalized_now_string();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(1)
-                 FROM rights
-                 WHERE principal_id = ?1
-                   AND right_name = ?2
-                   AND (service IS NULL OR service = ?3)
-                   AND (credential_name IS NULL OR credential_name = ?4)
-                   AND resource_scope_json IS NULL
-                   AND revoked_at IS NULL
-                   AND (expires_at IS NULL OR expires_at > ?5)",
-                params![principal_id, right, service, credential_name, now],
-                |row| row.get(0),
-            )
-            .map_err(sql_unavailable)?;
-        Ok(count > 0)
+        has_credential_right_conn(&conn, principal_id, right, service, credential_name)
     }
 
     pub fn require_credential_right(
@@ -3864,141 +3877,11 @@ impl ManagedStore {
         request: CredentialWriteRequest,
         purpose: CredentialManagementPurpose,
     ) -> Result<CredentialMetadata, ManagedStoreError> {
-        validate_credential_write_request(&request)?;
-        validate_credential_metadata(&request.metadata)?;
-        validate_credential_secret(&request.credential_kind, &request.secret)?;
-        let now = now_string();
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
-        purpose.check_active_owner(&tx, &request.owner_principal_id)?;
-        let existing: Option<(String, String, String, String)> = tx
-            .query_row(
-                "SELECT credential_id, created_at, secret_backend, secret_ref
-                 FROM credentials
-                 WHERE owner_kind = 'user'
-                   AND owner_principal_id = ?1
-                   AND service = ?2
-                   AND name = ?3",
-                params![request.owner_principal_id, request.service, request.name],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(sql_unavailable)?;
-        let (credential_id, created_at, secret_backend, secret_ref) = match existing {
-            Some((credential_id, created_at, secret_backend, secret_ref)) => {
-                if secret_backend != SQLITE_ENCRYPTED_BACKEND {
-                    return Err(ManagedStoreError::CredentialInvalid(
-                        "credential secret backend is not supported".to_string(),
-                    ));
-                }
-                validate_sqlite_secret_ref(&secret_ref)?;
-                (credential_id, created_at, secret_backend, secret_ref)
-            }
-            None => (
-                Uuid::new_v4().to_string(),
-                now.clone(),
-                SQLITE_ENCRYPTED_BACKEND.to_string(),
-                new_sqlite_secret_ref(),
-            ),
-        };
-        let material_version = Uuid::new_v4().to_string();
-        let key_id = key_ring.active_key_id().to_string();
-        let aad = CredentialAad {
-            credential_id: credential_id.clone(),
-            owner_kind: "user".to_string(),
-            owner_principal_id: request.owner_principal_id.clone(),
-            service: request.service.clone(),
-            name: request.name.clone(),
-            profile: request.profile.clone(),
-            credential_kind: request.credential_kind.clone(),
-            secret_backend: secret_backend.clone(),
-            secret_ref: secret_ref.clone(),
-            material_version: material_version.clone(),
-            key_id: key_id.clone(),
-        };
-        let encrypted = key_ring.encrypt(&request.secret, &aad)?;
-        let metadata_json = serde_json::to_string(&request.metadata)
-            .map_err(|_| input_invalid("metadata must be JSON serializable"))?;
-        tx.execute(
-            "INSERT INTO credentials
-             (credential_id, owner_principal_id, owner_kind, service, name, profile,
-              credential_kind, metadata_json, secret_backend, secret_ref, material_version,
-              status, created_at, updated_at, created_by, updated_by, last_used_at,
-              last_verified_at, verification_status, last_verification_attempt_at,
-              last_verification_error_code)
-             VALUES (?1, ?2, 'user', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active',
-                     ?11, ?12, ?13, ?14, NULL, NULL, 'not_verified', NULL, NULL)
-             ON CONFLICT(owner_kind, owner_principal_id, service, name)
-             DO UPDATE SET profile = excluded.profile,
-                           credential_kind = excluded.credential_kind,
-                           metadata_json = excluded.metadata_json,
-                           secret_backend = excluded.secret_backend,
-                           secret_ref = excluded.secret_ref,
-                           material_version = excluded.material_version,
-                           status = 'active',
-                           updated_at = excluded.updated_at,
-                           updated_by = excluded.updated_by,
-                           last_verified_at = NULL,
-                           verification_status = 'not_verified',
-                           last_verification_attempt_at = NULL,
-                           last_verification_error_code = NULL",
-            params![
-                credential_id,
-                request.owner_principal_id,
-                request.service,
-                request.name,
-                request.profile,
-                request.credential_kind,
-                metadata_json,
-                secret_backend,
-                secret_ref,
-                material_version,
-                created_at,
-                now,
-                request.actor,
-                request.actor
-            ],
-        )
-        .map_err(sql_unavailable)?;
-        let material_changed = tx
-            .execute(
-                "INSERT INTO credential_secret_material
-             (secret_ref, credential_id, backend, secret_ciphertext, secret_nonce, key_id,
-              created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(secret_ref)
-             DO UPDATE SET credential_id = excluded.credential_id,
-                           backend = excluded.backend,
-                           secret_ciphertext = excluded.secret_ciphertext,
-                           secret_nonce = excluded.secret_nonce,
-                           key_id = excluded.key_id,
-                           updated_at = excluded.updated_at
-             WHERE credential_secret_material.credential_id = excluded.credential_id",
-                params![
-                    aad.secret_ref,
-                    credential_id,
-                    SQLITE_ENCRYPTED_BACKEND,
-                    encrypted.ciphertext,
-                    encrypted.nonce,
-                    encrypted.key_id,
-                    created_at,
-                    now
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        if material_changed == 0 {
-            return Err(ManagedStoreError::SchemaInvalid(
-                "credential secret material is inconsistent".to_string(),
-            ));
-        }
-        let metadata = credential_metadata_by_tuple(
-            &tx,
-            &request.owner_principal_id,
-            &request.service,
-            &request.name,
-        )?;
+        let metadata = upsert_user_credential_conn(&tx, key_ring, request, purpose)?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(metadata)
     }
@@ -4464,6 +4347,7 @@ impl ManagedStore {
         rewrapped += oauth_revocation::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += resource_attributes::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += imported_store::rewrap(&mut conn, key_ring, from_key, to_key)?;
+        rewrapped += secret_references::rewrap(&mut conn, key_ring, from_key, to_key)?;
         Ok(RewrapSummary {
             from_key: from_key.to_string(),
             to_key: to_key.to_string(),
@@ -4747,6 +4631,9 @@ fn active_credential_key_ids(conn: &Connection) -> Result<Vec<String>, ManagedSt
              UNION SELECT key_id FROM oauth_revocations WHERE key_id IS NOT NULL
              UNION SELECT key_id FROM resource_secret_material
              UNION SELECT key_id FROM imported_secret_material
+             UNION SELECT origin_key_id FROM secret_reference_receipts
+             UNION SELECT key_id FROM secret_reference_material WHERE key_id IS NOT NULL
+             UNION SELECT key_id FROM secret_reference_caller_generations
              ORDER BY key_id",
         )
         .map_err(sql_unavailable)?;
@@ -8789,6 +8676,196 @@ fn credential_metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cre
     })
 }
 
+pub(crate) fn secret_reference_management_authority_conn(
+    conn: &Connection,
+    principal: &str,
+) -> Result<ManagedManagementAuthority, ManagedStoreError> {
+    management_authority_conn(conn, principal)
+}
+
+pub(crate) fn require_credential_right_conn(
+    conn: &Connection,
+    principal_id: &str,
+    right: &str,
+    service: &str,
+    credential_name: &str,
+) -> Result<(), ManagedStoreError> {
+    if has_credential_right_conn(conn, principal_id, right, service, credential_name)? {
+        Ok(())
+    } else {
+        Err(ManagedStoreError::RightMissing)
+    }
+}
+
+fn has_credential_right_conn(
+    conn: &Connection,
+    principal_id: &str,
+    right: &str,
+    service: &str,
+    credential_name: &str,
+) -> Result<bool, ManagedStoreError> {
+    validate_principal_id(principal_id)?;
+    validate_right_name(right)?;
+    validate_service_and_name(service, credential_name)?;
+    let now = normalized_now_string();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(1)
+                 FROM rights
+                 WHERE principal_id = ?1
+                   AND right_name = ?2
+                   AND (service IS NULL OR service = ?3)
+                   AND (credential_name IS NULL OR credential_name = ?4)
+                   AND resource_scope_json IS NULL
+                   AND revoked_at IS NULL
+                   AND (expires_at IS NULL OR expires_at > ?5)",
+            params![principal_id, right, service, credential_name, now],
+            |row| row.get(0),
+        )
+        .map_err(sql_unavailable)?;
+    Ok(count > 0)
+}
+
+fn upsert_user_credential_conn(
+    conn: &Connection,
+    key_ring: &CredentialKeyRing,
+    request: CredentialWriteRequest,
+    purpose: CredentialManagementPurpose,
+) -> Result<CredentialMetadata, ManagedStoreError> {
+    validate_credential_write_request(&request)?;
+    validate_credential_metadata(&request.metadata)?;
+    validate_credential_secret(&request.credential_kind, &request.secret)?;
+    let now = now_string();
+    purpose.check_active_owner(conn, &request.owner_principal_id)?;
+    let existing: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT credential_id, created_at, secret_backend, secret_ref
+                 FROM credentials
+                 WHERE owner_kind = 'user'
+                   AND owner_principal_id = ?1
+                   AND service = ?2
+                   AND name = ?3",
+            params![request.owner_principal_id, request.service, request.name],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    let (credential_id, created_at, secret_backend, secret_ref) = match existing {
+        Some((credential_id, created_at, secret_backend, secret_ref)) => {
+            if secret_backend != SQLITE_ENCRYPTED_BACKEND {
+                return Err(ManagedStoreError::CredentialInvalid(
+                    "credential secret backend is not supported".to_string(),
+                ));
+            }
+            validate_sqlite_secret_ref(&secret_ref)?;
+            (credential_id, created_at, secret_backend, secret_ref)
+        }
+        None => (
+            Uuid::new_v4().to_string(),
+            now.clone(),
+            SQLITE_ENCRYPTED_BACKEND.to_string(),
+            new_sqlite_secret_ref(),
+        ),
+    };
+    let material_version = Uuid::new_v4().to_string();
+    let key_id = key_ring.active_key_id().to_string();
+    let aad = CredentialAad {
+        credential_id: credential_id.clone(),
+        owner_kind: "user".to_string(),
+        owner_principal_id: request.owner_principal_id.clone(),
+        service: request.service.clone(),
+        name: request.name.clone(),
+        profile: request.profile.clone(),
+        credential_kind: request.credential_kind.clone(),
+        secret_backend: secret_backend.clone(),
+        secret_ref: secret_ref.clone(),
+        material_version: material_version.clone(),
+        key_id: key_id.clone(),
+    };
+    let encrypted = key_ring.encrypt(&request.secret, &aad)?;
+    let metadata_json = serde_json::to_string(&request.metadata)
+        .map_err(|_| input_invalid("metadata must be JSON serializable"))?;
+    conn.execute(
+        "INSERT INTO credentials
+             (credential_id, owner_principal_id, owner_kind, service, name, profile,
+              credential_kind, metadata_json, secret_backend, secret_ref, material_version,
+              status, created_at, updated_at, created_by, updated_by, last_used_at,
+              last_verified_at, verification_status, last_verification_attempt_at,
+              last_verification_error_code)
+             VALUES (?1, ?2, 'user', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active',
+                     ?11, ?12, ?13, ?14, NULL, NULL, 'not_verified', NULL, NULL)
+             ON CONFLICT(owner_kind, owner_principal_id, service, name)
+             DO UPDATE SET profile = excluded.profile,
+                           credential_kind = excluded.credential_kind,
+                           metadata_json = excluded.metadata_json,
+                           secret_backend = excluded.secret_backend,
+                           secret_ref = excluded.secret_ref,
+                           material_version = excluded.material_version,
+                           status = 'active',
+                           updated_at = excluded.updated_at,
+                           updated_by = excluded.updated_by,
+                           last_verified_at = NULL,
+                           verification_status = 'not_verified',
+                           last_verification_attempt_at = NULL,
+                           last_verification_error_code = NULL",
+        params![
+            credential_id,
+            request.owner_principal_id,
+            request.service,
+            request.name,
+            request.profile,
+            request.credential_kind,
+            metadata_json,
+            secret_backend,
+            secret_ref,
+            material_version,
+            created_at,
+            now,
+            request.actor,
+            request.actor
+        ],
+    )
+    .map_err(sql_unavailable)?;
+    let material_changed = conn
+        .execute(
+            "INSERT INTO credential_secret_material
+             (secret_ref, credential_id, backend, secret_ciphertext, secret_nonce, key_id,
+              created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(secret_ref)
+             DO UPDATE SET credential_id = excluded.credential_id,
+                           backend = excluded.backend,
+                           secret_ciphertext = excluded.secret_ciphertext,
+                           secret_nonce = excluded.secret_nonce,
+                           key_id = excluded.key_id,
+                           updated_at = excluded.updated_at
+             WHERE credential_secret_material.credential_id = excluded.credential_id",
+            params![
+                aad.secret_ref,
+                credential_id,
+                SQLITE_ENCRYPTED_BACKEND,
+                encrypted.ciphertext,
+                encrypted.nonce,
+                encrypted.key_id,
+                created_at,
+                now
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    if material_changed == 0 {
+        return Err(ManagedStoreError::SchemaInvalid(
+            "credential secret material is inconsistent".to_string(),
+        ));
+    }
+    let metadata = credential_metadata_by_tuple(
+        conn,
+        &request.owner_principal_id,
+        &request.service,
+        &request.name,
+    )?;
+    Ok(metadata)
+}
+
 fn encrypted_credential_by_tuple(
     conn: &Connection,
     owner_principal_id: &str,
@@ -9744,8 +9821,9 @@ mod tests {
         assert_eq!(rows[11].0, MANAGED_STORE_PRINCIPAL_ACCESS_VERSION);
         assert_eq!(rows[12].0, MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION);
         assert_eq!(rows[13].0, MANAGED_STORE_COMMAND_IMPORTS_VERSION);
-        assert_eq!(rows[14].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(rows[14].0, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION);
+        assert_eq!(rows[15].0, MANAGED_STORE_SECRET_REFERENCES_VERSION);
+        assert_eq!(rows[15].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

@@ -2150,3 +2150,14 @@ sessions. CLI smoke tests cover distinct reset/enable payloads, required
 acknowledgment, and rejection of unsupported password commands. Runtime
 projection tests cover both routes and their schemas in catalog, OpenAPI, and
 JSON send.
+
+## Temporary secret reference acceptance
+
+The default Rust suite covers SDK sidecar serialization/Debug isolation,
+reference-aware schema projections, managed reservations and expiry, key rewrap,
+identity/caller invalidation, capture failure and deadline outcomes, management
+handoff permissions, and the real Broker/CLI GitLab-to-connection workflow in
+`crates/agent-access/tests/secret_reference_credentials.rs`. Native GitLab tests
+exercise all four secret producers and the independent project-member read.
+The boundary check reserves `host::take_secret_outputs` and `SecretOutputValue`
+for the host; provider tests use `test_support::secret_outputs_match`.
