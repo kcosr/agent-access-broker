@@ -255,6 +255,7 @@ its builder methods:
 | --- | --- |
 | `.scope(name)` | The resource scope the action is authorized against. Without one the action is action-only. |
 | `.credential_modes(["service", "per_user"])` | The grant modes that may select its credentials. |
+| `.token_only()` | That the upstream accepts only a static (token) credential for the action, never delegated (OAuth) access. See [token-only actions](#token-only-actions). |
 | `.read_only()` | A reviewed read. Actions default to `read_only = false`; never infer it from a name. |
 | `.lookup(LookupRequirement::ScopeResolution)` | That scope resolution needs a host-selected lookup credential before policy. `LookupRequirement::Execution` asks for one only at execution. |
 | `.search_contained()` | That the host computes a search boundary and the provider constrains its query to it. |
@@ -284,6 +285,46 @@ with a token profile must declare authorities naming the same instance, and an
 OAuth connection's dialect checks each consumer's authority (see
 [delegated access](#delegated-access)). A service that declares none cannot
 share a token connection with another service.
+
+### Token-only actions
+
+Mark an action `.token_only()` when the upstream documents the operation as
+needing a token, such as one that accepts only a personal access token. The
+host applies the marker with the credential mode that wins each grant region,
+after grant precedence, never with the caller's personal method alone:
+
+- Where a `per_user` grant wins and the caller's credential connection selects
+  OAuth, discovery hides the action and invocation denies it without ever
+  acquiring, refreshing or using the caller's OAuth credential, and never falls
+  back to a lower grant or to another credential. When the action's lookup
+  would use the caller's own credential, the denial is
+  `credential_not_provisioned` before any lookup. When a shared lookup
+  credential resolves scope first, as with mixed `service` and `per_user`
+  grants, that lookup runs and final policy then denies the winning `per_user`
+  grant as `scope_unresolved`.
+- A `service` region with its static credential, and a `per_user` region whose
+  connection selects a stored token, keep the action usable, so the provider
+  receives only static execution material for it.
+
+The marker matters only for a service that also declares `.delegated(..)`; it
+is part of the native descriptor contract, and imported services' descriptors
+never carry it.
+
+```rust check
+use agent_access_provider::ActionDescriptor;
+use agent_access_provider::deps::serde_json::{Map, Value};
+
+/// Issuing a notebook API key needs a personal token upstream, so delegated
+/// access never reaches it.
+fn key_create() -> ActionDescriptor {
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), Value::String("object".to_owned()));
+    ActionDescriptor::new("key.create", "Issue an API key", schema.into())
+        .scope("notebook")
+        .credential_modes(["service", "per_user"])
+        .token_only()
+}
+```
 
 ### Typed resources
 
@@ -361,16 +402,17 @@ The host calls `resolve_scopes` for every ordinary action before it authorizes
 the action. The `ScopeRequest` carries the service and action, inputs validated
 against the schema, the host-selected execution context, the minimal caller
 identity, correlation and, only for `LookupRequirement::ScopeResolution`
-actions with a viable grant path, the host-selected lookup credential. It
-carries no admitted authority and no execution credential. A provider must not
-use another lookup credential or fall back to a shared one.
+actions with a viable grant path, the host-selected
+[lookup access](#lookup-access) (`lookup_access()`). It carries no admitted
+authority and no execution credential. A provider must not use another lookup
+credential or fall back to a shared one.
 
 - A local resolver parses the inputs and returns at once:
   `ScopeResolution::resources(scopes)`, where `ResourceScopes` maps each scope
   name to its canonical values.
 - An action-only provider returns `ScopeResolution::no_resources()`.
 - A provider that looks up upstream metadata must use only the lookup
-  credential.
+  access.
   The host keeps lookup failures concealed until resource authorization has
   succeeded.
 
@@ -453,7 +495,7 @@ only view of the operation:
 | `credential_mode()` | `CredentialMode::Service` or `CredentialMode::PerUser`. |
 | `authority()`, `resource_scopes()`, `search_authorization()` | The exact admitted authority. |
 | `inputs()` | Inputs validated against the action's schema. |
-| `execution()`, `lookup_credential()` | The selected execution material and any static lookup credential. |
+| `execution()`, `lookup_access()` | The selected execution material and any [lookup access](#lookup-access). |
 | `body_parts()`, `resource_attributes()`, `state()` | Staged body parts, the admitted resource's private attributes and provider state. |
 
 `context()` returns the shared `AdmittedContext`, which continuation bindings
@@ -548,9 +590,8 @@ resource, check that it equals the admitted value before you use it.
 Static and delegated material never coexist. The static kinds are exactly
 `basic_api_token` and `bearer_token`, and `ExecutionCredential::kind()` returns
 the `StaticCredentialKind`. Only the host constructs credentials, so the
-material a kind requires is always present. Provider-defined kinds, credential
-JSON and delegated lookup credentials are not supported. A lookup credential is
-static, is used only for lookup, and never stands in for execution material.
+material a kind requires is always present. Provider-defined kinds and
+credential JSON are not supported.
 
 Provider code never reads credential material and never holds a request that
 carries it. Neither an `ExecutionCredential` nor `DelegatedAccess` has a
@@ -732,6 +773,55 @@ subrequest once after a received HTTP 401, never after a transport error, 403,
 `binding_identity()` returns an opaque `DelegatedBindingId` for the lease. Routine
 refresh keeps it; new consent, replacement and reconnection change it. Bind
 continuation tokens to it (see [binding](#binding)).
+
+### Lookup access
+
+An action whose descriptor declares a `LookupRequirement` confirms what its
+inputs name with upstream metadata reads, before policy (scope resolution) or
+at execution. `ScopeRequest::lookup_access()` and the admitted request's
+`lookup_access()` return the host-selected `Option<&LookupAccess>`:
+
+- `LookupAccess::Static(ExecutionCredential)`: the service's shared lookup
+  credential or the caller's own token, presented as in
+  [static credentials](#static-credentials).
+- `LookupAccess::Delegated(DelegatedCredential)`: the caller's delegated
+  connection, lent only to a service that declares delegated credentials, for
+  a `per_user` lookup when the caller's credential connection selects OAuth.
+  It holds the operation's one lease, which execution shares, so the
+  operation has one `recover_after_unauthorized()` budget across its lookups
+  and its execution. Clones share the lease and never add a recovery. Use it
+  as in [delegated access](#delegated-access): call
+  `revalidated_access_for(target, audience)` immediately before each lookup
+  request, and return lease failures unchanged. The host conceals other scope
+  resolution failures, but passes on the lease's consent-pending, refresh-busy
+  and throttled-refresh failures, which describe the connection rather than
+  the resource.
+
+Lookup access is used only for lookups and never stands in for execution
+material. `LookupAccess` is non-exhaustive: a provider that accepts only some
+variants, such as one that declares no delegated credentials, matches with an
+arm that rejects the others instead of treating them as missing or as another
+variant.
+
+```rust check
+use agent_access_provider::{ExecutionCredential, LookupAccess, ProviderError, ReasonCode};
+
+/// The static lookup credential of a service that accepts no delegated
+/// credentials.
+fn static_lookup(lookup: Option<&LookupAccess>) -> Result<&ExecutionCredential, ProviderError> {
+    match lookup {
+        Some(LookupAccess::Static(credential)) => Ok(credential),
+        None => Err(ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            "lookup credential is not provisioned",
+        )),
+        Some(_) => Err(ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            "notes lookups do not accept delegated credentials",
+        )),
+    }
+}
+```
 
 An OAuth dialect whose grants act on one upstream instance or tenant overrides
 `OAuthDialect::check_consumer_authority(registration, profile, consumer)`. The
@@ -1075,7 +1165,11 @@ credentials). Add the resource identifiers and the normalized query, filter and
 output settings with `.text`, `.number`, `.flag`, `.optional_text`,
 `.optional_number`, `.texts` and `.bytes`, including defaulted values. For
 delegated access, `.delegated(&credential)` binds the lease's
-`DelegatedBindingId`, target and audience; routine refresh keeps all three.
+`DelegatedBindingId`, target and audience; routine refresh keeps all three. A
+provider that accepts both static credentials and delegated access binds the
+method it executes with, too: the static credential's `kind()`, or
+`.delegated(&credential)`, so a token does not open after a switch between
+them.
 
 The binding is a canonical, length-delimited encoding whose digest enters the
 MAC context. The token carries only its version, expiry, payload and MAC, so a
@@ -1255,7 +1349,12 @@ execution context, the configuration and the provider's fields. The token's owne
 travels inside it as a keyed ownership commitment. Scope resolution accepts the
 token only when the current principal could own it, and after admission the
 provider opens it again with `open`, which checks the admitted credential mode
-and principal.
+and principal. The host selects execution material only after scope
+resolution, so such a binding cannot cover it. To bind it, carry a keyed
+commitment in the payload, from `ContinuationSigner::commit` under the
+admitted binding extended with the material, and check it with
+`verify_commitment` when the token is opened after admission. Confluence draft
+handles do this.
 
 ## Reasons and outcomes
 
@@ -1473,11 +1572,12 @@ behavior:
   redirects. `built_clients()` records each requested label, base URL, profile
   and route.
 - `ScopeRequestFixture` builds a `ScopeRequest` for an anonymous caller in the
-  `internal` context, with an optional lookup credential.
+  `internal` context, with optional static (`lookup_credential`) or delegated
+  (`delegated_lookup`) lookup access.
 - `InvocationBuilder` builds an `AdmittedRequest` (`admitted()`) or a
   `ProviderInvocation` (`build()`) the way the host admits them: authority,
-  credential mode, static or delegated credentials, body parts, private
-  attributes and state.
+  credential mode, static or delegated credentials and lookup access, body
+  parts, private attributes and state.
 - `basic_credential`, `bearer_credential`, `delegated_binding_id` and
   `test_signing_key` construct host values. Test support reads no credential
   material either: with this feature, compare a credential a test double
@@ -1498,8 +1598,8 @@ behavior:
 `agent-access-conformance` is a test-only provider that uses every extension
 point: a namespace-capable resource type with an action-input projection and
 configured roots, typed configuration, a managed credential profile, JSON,
-raw-download and multipart-upload actions, embedded and whole-result
-presentation, and an endpoint type whose private key a single-attempt action
+raw-download and multipart-upload actions (the upload token-only), embedded
+and whole-result presentation, and an endpoint type whose private key a single-attempt action
 consumes. It depends only on the SDK. Its unit tests show how to drive each
 shape with `TestHost`, `InvocationBuilder` and a mock upstream, and the host's
 `tests::conformance` suite registers it beside the shipped providers to prove

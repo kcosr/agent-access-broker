@@ -308,12 +308,16 @@ impl BrokerRuntime {
             .map_err(|unavailable| unavailable.failure)
     }
 
+    /// Whether `identity`'s credential for `mode` is locally usable.
+    /// `personal_lookup` marks a `per_user` credential the action's lookups
+    /// also use, which is needed even when the service needs no execution
+    /// credential.
     fn check_discovery_credential(
         &self,
         service: &str,
         mode: &str,
         identity: &IdentityContext,
-        static_lookup: bool,
+        personal_lookup: bool,
     ) -> Result<(), UnavailableCredential> {
         if mode == "lookup" {
             return self
@@ -331,7 +335,7 @@ impl BrokerRuntime {
         {
             return Err(UnavailableCredential::unselected());
         }
-        if !static_lookup
+        if !personal_lookup
             && self
                 .services
                 .get(service)
@@ -369,7 +373,7 @@ impl BrokerRuntime {
         }
         .ok_or_else(UnavailableCredential::missing)?;
         if credential.kind == "connection" {
-            return self.check_connection_credential(service, identity, static_lookup);
+            return self.check_connection_credential(service, identity);
         }
         load_execution_credential(service, mode, credential, Some(identity))
             .map(drop)
@@ -380,13 +384,12 @@ impl BrokerRuntime {
 impl BrokerRuntime {
     /// The local availability of the method `identity` selects for
     /// `service`'s credential connection: the stored token row, or the OAuth
-    /// connection, which can never serve a static lookup. An unavailable
+    /// connection, which serves execution and lookups alike. An unavailable
     /// selection is reported as an administrator requirement.
     fn check_connection_credential(
         &self,
         service: &str,
         identity: &IdentityContext,
-        static_lookup: bool,
     ) -> Result<(), UnavailableCredential> {
         let (connection, selection) = self
             .personal_selection(service, identity)
@@ -394,9 +397,6 @@ impl BrokerRuntime {
         match selection {
             crate::Selection::Unavailable => Err(UnavailableCredential::unselected()),
             crate::Selection::OAuth(oauth) => {
-                if static_lookup {
-                    return Err(UnavailableCredential::missing());
-                }
                 let (true, Some(manager)) = (identity.authenticated, self.oauth.as_ref()) else {
                     return Err(UnavailableCredential::missing());
                 };

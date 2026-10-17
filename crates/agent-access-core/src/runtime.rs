@@ -4,6 +4,7 @@ pub use trusted_callers::{
     USER_HEADER, parse_assertion_bearer,
 };
 use trusted_callers::{ResolvedTrustedCaller, load_trusted_callers};
+mod action_eligibility;
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
@@ -21,6 +22,7 @@ mod import_control;
 mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
+mod lookup_access;
 mod mcp_views;
 mod owned;
 mod personal_credentials;
@@ -84,6 +86,7 @@ pub use discovery::{
 };
 use futures_util::Stream;
 use http::HeaderMap;
+use lookup_access::{PreScopeLookup, PreScopeLookupPlan};
 pub use resource_access::{
     EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, ResourceGroupOption,
 };
@@ -1310,10 +1313,15 @@ fn add_upstream_resource_ownership_hint(
 }
 
 /// The caller-facing form of a pre-authorization lookup failure: lookup
-/// concealment keeps only failures that reveal nothing about the resource.
+/// concealment keeps only failures that reveal nothing about the resource,
+/// including the delegated lease failures that describe the caller's OAuth
+/// connection.
 /// A concealed failure keeps its internal diagnostic code, such as a
 /// provider contract failure's, for the Broker's own records.
 fn public_lookup_scope_error(error: ProviderError) -> ProviderError {
+    if lookup_access::is_public_lease_failure(&error) {
+        return error;
+    }
     match error.reason_code().standard() {
         Some(
             ReasonCode::InputInvalid
@@ -1913,6 +1921,10 @@ struct FinalizeContext {
     source: SourceContext,
     execution_context: Option<ExecutionContext>,
     redact_error_resource_scopes: bool,
+    /// The credential connection whose material a personal lookup before
+    /// policy used, which the audit names even when the call ends before a
+    /// credential mode is selected.
+    personal_lookup_connection: Option<String>,
     started: Instant,
 }
 
@@ -3131,6 +3143,7 @@ impl BrokerRuntime {
                 source: context.source,
                 execution_context: None,
                 redact_error_resource_scopes: false,
+                personal_lookup_connection: None,
                 started: Instant::now(),
             },
             Err(error),
@@ -3180,6 +3193,7 @@ impl BrokerRuntime {
                 source: operation.source,
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: false,
+                personal_lookup_connection: None,
                 started: Instant::now(),
             },
             Err(error),
@@ -3805,6 +3819,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3834,6 +3849,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3864,6 +3880,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3894,6 +3911,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -3930,6 +3948,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
+                            personal_lookup_connection: None,
                             started,
                         },
                         Err(error),
@@ -3966,6 +3985,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(ProviderError::deny(
@@ -4003,6 +4023,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -4039,6 +4060,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
+                            personal_lookup_connection: None,
                             started,
                         },
                         Err(error),
@@ -4070,6 +4092,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(policy_planning_drift_error()),
@@ -4102,6 +4125,7 @@ impl BrokerRuntime {
                 source,
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: false,
+                personal_lookup_connection: None,
                 started,
             },
         })
@@ -4143,6 +4167,7 @@ impl BrokerRuntime {
                 &context.service,
                 context.credential_mode.as_deref(),
                 None,
+                context.personal_lookup_connection.clone(),
             ),
             decision: Decision::Allow,
             reason_code: None,
@@ -4633,6 +4658,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(ProviderError::deny(
@@ -4659,6 +4685,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(error),
@@ -4692,6 +4719,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -4724,6 +4752,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(ProviderError::deny(
@@ -4756,6 +4785,7 @@ impl BrokerRuntime {
                     source,
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
+                    personal_lookup_connection: None,
                     started,
                 },
                 Err(error),
@@ -4772,6 +4802,7 @@ impl BrokerRuntime {
                 &execution_context,
                 &service,
                 &action,
+                &correlation,
             )
             .await
         {
@@ -4794,6 +4825,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
+                        personal_lookup_connection: None,
                         started,
                     },
                     Err(error),
@@ -4801,6 +4833,8 @@ impl BrokerRuntime {
             }
         };
 
+        let personal_lookup_connection =
+            self.personal_lookup_connection(&service, &pre_scope_lookup);
         let mut audit_search_authorization = None;
         let mut command_authorization = None;
         let (scopes, policy, provider_state, search_authorization) =
@@ -4847,6 +4881,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: false,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(error),
@@ -4880,6 +4915,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: false,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(error),
@@ -4911,6 +4947,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
+                            personal_lookup_connection: personal_lookup_connection.clone(),
                             started,
                         },
                         Err(error),
@@ -4951,7 +4988,7 @@ impl BrokerRuntime {
                                 execution_context: execution_context.as_str(),
                                 identity: &scope_identity,
                                 correlation: &correlation,
-                                lookup_credential: pre_scope_lookup.as_ref(),
+                                lookup_access: pre_scope_lookup.access(),
                             },
                         )),
                     ),
@@ -4977,6 +5014,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: lookup_scopes_before_policy,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(if lookup_scopes_before_policy {
@@ -5021,6 +5059,7 @@ impl BrokerRuntime {
                             source,
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: lookup_scopes_before_policy,
+                            personal_lookup_connection: personal_lookup_connection.clone(),
                             started,
                         },
                         Err(error),
@@ -5054,6 +5093,7 @@ impl BrokerRuntime {
                                 source,
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: lookup_scopes_before_policy,
+                                personal_lookup_connection: personal_lookup_connection.clone(),
                                 started,
                             },
                             Err(if lookup_scopes_before_policy {
@@ -5134,6 +5174,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
+                        personal_lookup_connection: personal_lookup_connection.clone(),
                         started,
                     },
                     Err(error),
@@ -5141,12 +5182,12 @@ impl BrokerRuntime {
             }
         };
 
-        let (lookup_credential, credential_mode, authority) = match self
-            .resolve_lookup_credential_if_required(
+        let (lookup_access, credential_mode, authority) = match self
+            .resolve_lookup_access_if_required(
                 action_descriptor.lookup,
                 &service,
                 &policy,
-                credentials.static_credential(),
+                &credentials,
                 &pre_scope_lookup,
             )
             .await
@@ -5176,6 +5217,7 @@ impl BrokerRuntime {
                         source,
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
+                        personal_lookup_connection: personal_lookup_connection.clone(),
                         started,
                     },
                     Err(error),
@@ -5222,7 +5264,7 @@ impl BrokerRuntime {
                 authority,
                 inputs: request.inputs,
                 execution: credentials,
-                lookup_credential,
+                lookup_access,
             },
         );
         Ok(PreparedInvocation {
@@ -5250,6 +5292,7 @@ impl BrokerRuntime {
                 source,
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: lookup_scopes_before_policy,
+                personal_lookup_connection: personal_lookup_connection.clone(),
                 started,
             },
         })
@@ -5541,6 +5584,7 @@ impl BrokerRuntime {
                 "selected credential mode is not supported by this action",
             ));
         }
+        self.check_action_credential_eligibility(service, action, &credential_mode, identity)?;
         if !credential_mode_available(
             &self.effective_credentials,
             service,
@@ -5595,6 +5639,7 @@ impl BrokerRuntime {
         }
         let top_band = top_policy_band(candidates);
         let credential_mode = single_policy_credential_mode(&top_band)?;
+        self.check_action_credential_eligibility(service, action, &credential_mode, identity)?;
         if !credential_mode_available(
             &self.effective_credentials,
             service,
@@ -5734,8 +5779,10 @@ impl BrokerRuntime {
     }
 
     /// Selects the invocation's credential once policy has admitted it. A
-    /// per-user delegated (OAuth) credential is acquired here, so a denied
-    /// invocation never obtains or refreshes upstream access.
+    /// per-user delegated (OAuth) credential is acquired here, unless scope
+    /// resolution already holds the caller's lease, which execution then
+    /// reuses. An invocation without a candidate grant never obtains or
+    /// refreshes upstream access.
     #[allow(clippy::too_many_arguments)]
     async fn resolve_execution_credential_after_policy(
         &self,
@@ -5754,8 +5801,8 @@ impl BrokerRuntime {
             return Ok(ExecutionAccess::None);
         }
         if credential_mode == "per_user" {
-            if let PreScopeLookup::PerUser(credential) = pre_scope_lookup {
-                return Ok(ExecutionAccess::Static(credential.clone()));
+            if let Some(execution) = pre_scope_lookup.personal_execution() {
+                return execution;
             }
             if let Some((_, crate::Selection::OAuth(oauth))) =
                 self.personal_selection(service, identity)
@@ -5814,119 +5861,6 @@ impl BrokerRuntime {
             binding,
         )
         .await
-    }
-
-    async fn resolve_lookup_credential_if_required(
-        &self,
-        lookup: LookupRequirement,
-        service: &str,
-        policy: &PolicyDecision,
-        execution_credential: Option<&ExecutionCredential>,
-        pre_scope_lookup: &PreScopeLookup,
-    ) -> Result<Option<ExecutionCredential>, ProviderError> {
-        if !lookup.credential_required() {
-            return Ok(None);
-        }
-        match (policy.credential_mode.as_str(), pre_scope_lookup) {
-            ("per_user", PreScopeLookup::PerUser(credential)) => Ok(Some(credential.clone())),
-            ("per_user", _) => execution_credential.cloned().map(Some).ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialNotProvisioned,
-                    "selected credential mode is not provisioned",
-                )
-            }),
-            ("service", PreScopeLookup::Shared(credential)) => Ok(Some(credential.clone())),
-            ("service", PreScopeLookup::PerUser(_)) => Err(policy_planning_drift_error()),
-            ("service", PreScopeLookup::None) => self.resolve_lookup_credential(service).map(Some),
-            _ => Err(ProviderError::deny(
-                ReasonCode::CredentialNotProvisioned,
-                "selected credential mode is not provisioned",
-            )),
-        }
-    }
-
-    async fn resolve_pre_scope_lookup_if_required(
-        &self,
-        policy_snapshot: &PolicySnapshot,
-        lookup: LookupRequirement,
-        identity: &IdentityContext,
-        execution_context: &ExecutionContext,
-        service: &str,
-        action: &str,
-    ) -> Result<PreScopeLookup, ProviderError> {
-        if !lookup.before_policy() {
-            return Ok(PreScopeLookup::None);
-        }
-        match self.plan_pre_scope_lookup(
-            policy_snapshot,
-            identity,
-            execution_context,
-            service,
-            action,
-        ) {
-            PreScopeLookupPlan::NoCandidateGrant => Err(lookup_scope_denial()),
-            PreScopeLookupPlan::UsePerUserCredential => self
-                .resolve_execution_credential(service, "per_user", identity)
-                .await
-                .map(PreScopeLookup::PerUser),
-            PreScopeLookupPlan::UseSharedLookupCredential => self
-                .resolve_lookup_credential(service)
-                .map(PreScopeLookup::Shared),
-        }
-    }
-
-    fn plan_pre_scope_lookup(
-        &self,
-        policy_snapshot: &PolicySnapshot,
-        identity: &IdentityContext,
-        execution_context: &ExecutionContext,
-        service: &str,
-        action: &str,
-    ) -> PreScopeLookupPlan {
-        let candidates = self.policy_candidates_for_action(
-            policy_snapshot,
-            identity,
-            execution_context,
-            service,
-            action,
-        );
-        if candidates.is_empty() {
-            return PreScopeLookupPlan::NoCandidateGrant;
-        }
-        if !candidates
-            .iter()
-            .any(|candidate| candidate.credential_mode == "service")
-        {
-            return PreScopeLookupPlan::UsePerUserCredential;
-        }
-        let top_band = top_policy_band(candidates.clone());
-        let top_band_has_per_user_wildcard = top_band.iter().any(|candidate| {
-            candidate.credential_mode == "per_user" && candidate.boundary.is_universe()
-        });
-        let top_band_has_service = top_band
-            .iter()
-            .any(|candidate| candidate.credential_mode == "service");
-        if top_band_has_per_user_wildcard && !top_band_has_service {
-            return PreScopeLookupPlan::UsePerUserCredential;
-        }
-        PreScopeLookupPlan::UseSharedLookupCredential
-    }
-
-    fn resolve_lookup_credential(
-        &self,
-        service: &str,
-    ) -> Result<ExecutionCredential, ProviderError> {
-        let credential = self
-            .effective_credentials
-            .lookup
-            .get(service)
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::CredentialNotProvisioned,
-                    "lookup credential is not provisioned",
-                )
-            })?;
-        load_execution_credential(service, "lookup", credential, None)
     }
 
     async fn enforce_invocation_identity_admission(
@@ -6320,6 +6254,7 @@ impl BrokerRuntime {
             source,
             execution_context,
             redact_error_resource_scopes,
+            personal_lookup_connection,
             started,
         } = context;
         let upstream_resource_ownership = upstream_resource_ownership
@@ -6433,6 +6368,7 @@ impl BrokerRuntime {
             &service,
             credential_mode.as_deref(),
             command.as_ref(),
+            personal_lookup_connection,
         );
         let mut audit_record = AuditRecord {
             search_authorization,
@@ -7919,29 +7855,6 @@ struct ActionResourceScope {
 struct PolicyDecision {
     credential_mode: String,
     matched_grant: MatchedGrantAudit,
-}
-
-#[derive(Debug, Clone)]
-enum PreScopeLookup {
-    None,
-    PerUser(ExecutionCredential),
-    Shared(ExecutionCredential),
-}
-
-impl PreScopeLookup {
-    fn as_ref(&self) -> Option<&ExecutionCredential> {
-        match self {
-            Self::None => None,
-            Self::PerUser(credential) | Self::Shared(credential) => Some(credential),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreScopeLookupPlan {
-    UsePerUserCredential,
-    UseSharedLookupCredential,
-    NoCandidateGrant,
 }
 
 fn matched_grant_audit(

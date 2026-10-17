@@ -38,11 +38,20 @@ connection's `token_profile` when it sets one, and otherwise have no personal
 credential for its services. Nobody chooses between a token and OAuth, and the
 Broker never falls back from one to the other.
 
+Some upstream operations accept only a token, and their providers mark those
+actions token-only. Where a person's winning grant is `per_user` and their
+connection selects OAuth, a token-only action is hidden from discovery and
+denied before the Broker acquires, refreshes or looks anything up through the
+connection; a lower-priority grant never stands in. A `service` grant with its
+static credential keeps the action usable for the same person. See
+[token-only actions](provider-sdk.md#token-only-actions).
+
 Several credential connections, and therefore several services, may reference
 one registration. They must use the same permission profile, and they share
 each person's OAuth connection: one consent and one refresh family per owner
 and registration. Each service still acquires its own service-bound lease, and
-its own grants decide what it may do. Connecting, reconnecting or disconnecting
+its own grants decide what it may do. An invocation holds one lease for its
+metadata lookups and its execution. Connecting, reconnecting or disconnecting
 affects every service that uses a connection on that registration. Imported MCP
 OAuth services publish their own single-service connection; see
 [imported OAuth](imported-oauth.md).
@@ -405,12 +414,18 @@ HTTP caller disconnecting does not cancel an already-started refresh task. A
 successful rotated successor is committed before fallible target discovery;
 discovery can be retried without repeating that token exchange. A lease carries
 the configuration fingerprint, connection generation and access version. The
-runtime acquires it once policy has admitted the invocation and checks it again
-just before dispatch: access revoked, disconnected, or awaiting new consent
-since then stops the invocation, and access another invocation's refresh
-superseded moves to the current version. The records provider receives only
-this lease, never the manager; after an upstream 401 it may replace the access
-once and retry.
+runtime acquires it once a candidate grant exists: when policy has admitted the
+invocation, or earlier when an action's pre-authorization metadata lookup uses
+the caller's `per_user` credential. The same lease then serves the
+invocation's lookups and its execution, and the runtime checks it again just
+before dispatch: access revoked, disconnected, or awaiting new consent since
+then stops the invocation, and access another invocation's refresh superseded
+moves to the current version. A provider receives only this lease, never the
+manager; after an upstream 401 it may replace the access once per invocation,
+whether the 401 answered a lookup or execution, and retry. A
+pre-authorization lookup that fails because the connection awaits new consent,
+is being refreshed or has its refresh throttled reports that failure, with any
+retry time, instead of the concealed `scope_unresolved`.
 Cached reads only decrypt the stored snapshot; they do not rewrite or re-encrypt
 the slot. Expired consent flows are ignored for admission and pruned when a
 subsequent lifecycle change already needs to write the slot.

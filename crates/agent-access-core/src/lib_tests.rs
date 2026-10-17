@@ -6137,18 +6137,16 @@ fn oauth_connections_need_consumers_that_accept_delegation() {
             "credentials.connections.records.oauth requires every consumer to accept delegated credentials, which records does not"
         ]
     );
+    // The OAuth connection serves per-user lookups through the operation's
+    // delegated lease.
     let lookups = errors(delegated(vec![
         action("read").lookup(LookupRequirement::Execution),
+        action("locate").lookup(LookupRequirement::ScopeResolution),
         action("service_read")
             .lookup(LookupRequirement::ScopeResolution)
             .credential_modes(["service"]),
     ]));
-    assert_eq!(
-        lookups,
-        [
-            "credentials.connections.records.oauth: records action read needs a per-user lookup credential, which an OAuth credential cannot provide"
-        ]
-    );
+    assert!(lookups.is_empty(), "{lookups:?}");
     // A connection is only ever a per-user credential.
     let services = BTreeMap::from([(
         "records".to_string(),

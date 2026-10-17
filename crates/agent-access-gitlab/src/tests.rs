@@ -1180,7 +1180,7 @@ fn gitlab_page_tokens_reject_other_versions_purposes_and_oversize_and_keep_their
     ] {
         let foreign = signer
             .seal_at(
-                &gitlab_page_token_binding(&family, &context),
+                &gitlab_page_token_binding(&family, &context).unwrap(),
                 &2_u32.to_be_bytes(),
                 now.into(),
             )
@@ -1238,6 +1238,167 @@ fn gitlab_page_tokens_reject_other_versions_purposes_and_oversize_and_keep_their
             "GitLab pagination signing key is unavailable"
         );
     }
+}
+
+/// The GitLab instance a delegated lease's access is bound to.
+const GITLAB_INSTANCE: &str = "https://gitlab.example.com";
+
+/// A lease on the OAuth connection `binding` (the connection and its
+/// generation) holding access `version` for `target`.
+struct PageTokenLease {
+    binding: &'static str,
+    version: &'static str,
+    target: &'static str,
+}
+
+#[async_trait]
+impl DelegatedLease for PageTokenLease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new(
+            format!("token-{}", self.version),
+            self.target,
+            "gitlab",
+            self.version,
+            i64::MAX,
+        )
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id(self.binding)
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        Err(ProviderError::deny(
+            ReasonCode::CredentialInvalid,
+            "not recoverable",
+        ))
+    }
+}
+
+fn delegated_access(binding: &'static str, version: &'static str) -> ExecutionAccess {
+    delegated_access_for(binding, version, GITLAB_INSTANCE)
+}
+
+fn delegated_access_for(
+    binding: &'static str,
+    version: &'static str,
+    target: &'static str,
+) -> ExecutionAccess {
+    ExecutionAccess::Delegated(agent_access_provider::host::delegated_credential(Arc::new(
+        PageTokenLease {
+            binding,
+            version,
+            target,
+        },
+    )))
+}
+
+/// Page tokens bind the credential method and, for OAuth, the connection
+/// binding: a token replayed under another account, connection generation,
+/// principal, method or GitLab instance is rejected, while a routine refresh
+/// and a restart with the stable key keep it. GitLab does not yet execute
+/// with delegated access, so the binding is checked directly.
+#[test]
+fn gitlab_page_tokens_bind_the_credential_method_and_oauth_connection() {
+    let key = test_signing_key(6);
+    let signer = ContinuationSigner::new(Some(key.clone()));
+    let restarted = ContinuationSigner::new(Some(key));
+    let project = test_project();
+    let now = Utc::now();
+    let invocation = |principal: &str, access: ExecutionAccess| {
+        InvocationBuilder::from(test_invocation(
+            "issue.search",
+            json!({ "project": "sip/service" }),
+        ))
+        .principal(principal)
+        .credential_mode(CredentialMode::PerUser)
+        .execution(access)
+        .build()
+    };
+    fn under<'a>(
+        request: &'a ProviderInvocation,
+        project: &'a GitlabProject,
+    ) -> GitlabPageTokenContext<'a> {
+        GitlabPageTokenContext {
+            request,
+            project,
+            provider_fingerprint: "provider-fingerprint",
+            request_hash: "request-hash",
+            max_results: 20,
+        }
+    }
+    let context = |request| under(request, &project);
+
+    let issued = invocation("agent-1", delegated_access("agent-1-oauth-1", "v1"));
+    let token = encode_gitlab_page_token(&signer, &context(&issued), 2, now).unwrap();
+    let refreshed = invocation("agent-1", delegated_access("agent-1-oauth-1", "v2"));
+    for signer in [&signer, &restarted] {
+        assert_eq!(
+            decode_gitlab_page_token(signer, &token, &context(&refreshed), now).unwrap(),
+            2
+        );
+    }
+    for request in [
+        // Disconnect and reconnect (a new generation), or another upstream
+        // account.
+        invocation("agent-1", delegated_access("agent-1-oauth-2", "v1")),
+        invocation("agent-1", delegated_access("mallory-oauth-1", "v1")),
+        // Another principal, with its own connection or replaying this one.
+        invocation("agent-2", delegated_access("agent-2-oauth-1", "v1")),
+        invocation("agent-2", delegated_access("agent-1-oauth-1", "v1")),
+        // A switch to a stored token.
+        invocation("agent-1", ExecutionAccess::Static(test_credential())),
+        // Access for another GitLab instance.
+        invocation(
+            "agent-1",
+            delegated_access_for("agent-1-oauth-1", "v1", "https://gitlab.other.example"),
+        ),
+    ] {
+        let error =
+            decode_gitlab_page_token(&signer, &token, &under(&request, &project), now).unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(
+            error.message,
+            "GitLab pagination token is invalid or expired"
+        );
+    }
+
+    // A stored token's page token survives a restart and a replaced token
+    // value (the principal owns the token), but not a switch to OAuth or
+    // another credential kind.
+    let stored = invocation("agent-1", ExecutionAccess::Static(test_credential()));
+    let token = encode_gitlab_page_token(&signer, &context(&stored), 3, now).unwrap();
+    let rotated = invocation(
+        "agent-1",
+        ExecutionAccess::Static(bearer_credential("rotated-token")),
+    );
+    assert_eq!(
+        decode_gitlab_page_token(&restarted, &token, &context(&rotated), now).unwrap(),
+        3
+    );
+    for request in [
+        invocation("agent-1", delegated_access("agent-1-oauth-1", "v1")),
+        invocation(
+            "agent-1",
+            ExecutionAccess::Static(agent_access_provider::test_support::basic_credential(
+                "agent-1", "token",
+            )),
+        ),
+    ] {
+        assert!(
+            decode_gitlab_page_token(&signer, &token, &under(&request, &project), now).is_err()
+        );
+    }
+
+    // Execution material GitLab does not accept fails closed.
+    let none = invocation("agent-1", ExecutionAccess::None);
+    let error = encode_gitlab_page_token(&signer, &context(&none), 2, now).unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
 }
 
 #[test]
@@ -1791,6 +1952,15 @@ fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
         assert!(descriptor.action(action).is_some(), "{action}");
         assert_eq!(sensitive.contains(action), issues_token(action), "{action}");
     }
+    // Issuing and rotating tokens needs a token upstream; no other action
+    // is token-only.
+    let token_only = descriptor
+        .actions
+        .iter()
+        .filter(|action| action.token_only)
+        .map(|action| action.action.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(token_only, sensitive);
 
     let raw_downloads = [
         "file.raw.download",
@@ -6756,4 +6926,67 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
             (fate != WriteFate::Refused).then_some("POST /api/v4/projects/42/issues HTTP/1.1")
         );
     }
+}
+
+/// A delegated lease that no GitLab path may use.
+struct UnusedLease;
+
+#[async_trait]
+impl DelegatedLease for UnusedLease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("unused")
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        panic!("GitLab must not revalidate delegated lookup access");
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        panic!("GitLab must not mark delegated lookup access rejected");
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        panic!("GitLab must not recover delegated lookup access");
+    }
+}
+
+/// GitLab accepts no delegated credentials, so delegated lookup access fails
+/// closed in scope resolution and at execution, before any upstream call,
+/// instead of standing in for a static credential.
+#[tokio::test]
+async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
+    let server = MockServer::start().await;
+    let provider = provider_for_server(&server);
+    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
+    let inputs = json!({ "project": "sip/service" });
+    let assert_unsupported = |error: ProviderError| {
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+        assert_eq!(
+            error.message,
+            "GitLab lookups do not accept delegated credentials"
+        );
+    };
+
+    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "gitlab",
+        "project.view",
+        inputs.clone(),
+    )
+    .delegated_lookup(delegated.clone());
+    assert_unsupported(
+        provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err(),
+    );
+
+    let invocation = InvocationBuilder::new("gitlab", "project.view")
+        .inputs(inputs)
+        .resources(repository_scopes_from_path("sip/service"))
+        .credential(test_credential())
+        .delegated_lookup(delegated)
+        .build();
+    assert_unsupported(provider.invoke(invocation).await.unwrap_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

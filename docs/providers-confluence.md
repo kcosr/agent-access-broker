@@ -395,7 +395,7 @@ provider-side execution-time confirmation.
 
 Confluence draft grants require `[broker_tokens].hash_key_ref` to resolve to a
 valid 32-byte base64url signing key. A `draftHandle` (prefix
-`aab_confluence_draft_v3_`) is a durable broker continuation with no expiry,
+`aab_confluence_draft_v4_`) is a durable broker continuation with no expiry,
 signed only with that key scoped to the `confluence` service, so it survives
 reloads and restarts and no other backend's tokens verify as Confluence handles.
 Without the key, minting or presenting a handle fails explicitly with
@@ -409,13 +409,16 @@ and the content type and ID the action names; any draft action of that content
 accepts it. Its owner travels inside it as a keyed commitment: a handle minted
 in per-user mode belongs to that principal in per-user mode, while a service-mode
 handle intentionally belongs to no principal, so a service-mode draft can be
-handed off to any principal admitted in service mode within policy. Before
-policy, scope resolution verifies the handle, accepts it only when the caller
-could own it, and authorizes its space; after admission the handle is opened
-again and must match the admitted credential mode and principal. Any other
-context, tenant, content, owner, key, or handle version is rejected with
-`invalid_draft_handle`. Handles from earlier versions are not accepted; create
-or stage the draft again. Page draft view, update, publish, verify, discard, and
+handed off to any principal admitted in service mode within policy. It also
+carries a keyed commitment to the
+[credential binding](#continuation-credential-binding) it was minted with.
+Before policy, scope resolution verifies the handle, accepts it only when the
+caller could own it, and authorizes its space; after admission the handle is
+opened again and must match the admitted credential mode, principal and
+credential binding. Any other context, tenant, content, owner, credential
+binding, key, or handle version is rejected with `invalid_draft_handle`.
+Handles from earlier versions are not accepted; create or stage the draft
+again. Page draft view, update, publish, verify, discard, and
 attachment operations re-read the draft and reject placement drift from the
 bound parent.
 
@@ -621,9 +624,9 @@ unchanged as `nextPageToken` to the same action with the same search:
   cap.
 
 The continuation is also bound to the execution context, the principal and
-whether it authenticated, the credential mode, the selected credential's type
-(which chooses the tenant or gateway route), and the Confluence configuration
-the cursor depends on: `tenant_host`, `cloud_id`, and whether
+whether it authenticated, the credential mode, the
+[credential binding](#continuation-credential-binding), and the Confluence
+configuration the cursor depends on: `tenant_host`, `cloud_id`, and whether
 `api.atlassian.com` is allowed. Any change rejects the token with
 `input_invalid`. Continuations expire 15 minutes after they are issued. They are
 signed with a key generated for each broker runtime generation, so a
@@ -641,6 +644,27 @@ never sent with a different query. The broker adds no cursor length limit of its
 own: Confluence's cursor arrives in a response bounded by
 `limits.max_upstream_response_bytes`, and a continuation that would not fit that
 bound fails with `upstream_protocol_failed`, never truncated.
+
+### Continuation credential binding
+
+Search continuations, comment and attachment list tokens, and draft handles
+are bound to the credential method that reaches Confluence and:
+
+- for a stored or service token, its type, which chooses the tenant or gateway
+  route. The token value is not bound, so replacing a stored token with another
+  of the same type keeps them;
+- for delegated (OAuth) access, which Confluence does not yet accept, the OAuth
+  connection and its generation, never the current access token: a routine
+  refresh keeps them, while disconnecting and reconnecting or connecting
+  another Atlassian account invalidates them;
+- for a route through the Atlassian gateway (a bearer token or OAuth), the
+  site's `cloud_id`. A draft handle used with a Basic API token on the tenant
+  route therefore survives a `cloud_id` change.
+
+A switch between a token and OAuth, between token types, or to another account
+or gateway site rejects a continuation with `input_invalid` and a draft handle
+with `invalid_draft_handle`. Draft handles and list tokens signed with the
+stable key keep working across restarts while their binding is unchanged.
 
 ## Normalized read content and whole-result Markdown
 
@@ -983,8 +1007,8 @@ continuations carrying Confluence's cursor. Tokens expire 15 minutes after they
 are issued and are bound to the action, comment kind, container type and ID,
 parent comment for reply lists, requested filters and effective `maxResults`,
 authorized space, execution context, principal and whether it authenticated,
-credential mode, credential type and the Confluence route configuration, like
-[attachment list tokens](#attachments). Upstream next links are accepted only when
+credential mode, [credential binding](#continuation-credential-binding) and
+the Confluence route configuration, like [attachment list tokens](#attachments). Upstream next links are accepted only when
 they remain on the same Confluence v2 comment collection and contain no
 unsupported query parameters. Pagination may come from `_links.next`, `next`, or
 an RFC `Link` header with `rel="next"`; multiple next links, changed resources,
@@ -1016,9 +1040,10 @@ an opaque broker-signed continuation carrying Confluence's next position. It
 expires 15 minutes after it is issued and is bound to the action, the page ID
 and its space, the effective `maxResults` (an omitted value equals the
 configured default; larger values equal the cap), the execution context, the principal and whether it
-authenticated, the credential mode, the selected credential's type (tenant or
-gateway route), and the Confluence route configuration (`tenant_host`,
-`cloud_id`, and whether `api.atlassian.com` is allowed). `blog.attachment.list`
+authenticated, the credential mode, the
+[credential binding](#continuation-credential-binding) (which includes the
+tenant or gateway route), and the Confluence route configuration
+(`tenant_host`, `cloud_id`, and whether `api.atlassian.com` is allowed). `blog.attachment.list`
 tokens bind the blog ID, space key, and space ID instead of the page. When
 `broker_tokens.hash_key_ref` is configured, list tokens are signed with that
 stable key and validate across restarts and instances whose clocks differ by up

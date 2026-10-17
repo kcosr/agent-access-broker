@@ -57,9 +57,9 @@ use crate::{
     ClientProfile, CorrelationContext, CredentialMode, CredentialPlacement, Decision,
     DelegatedBindingId, DelegatedCredential, DelegatedLease, EgressDeclaration, EgressRoute,
     ExecutionAccess, ExecutionCredential, HookPhase, InvocationAuthority, InvocationIdentity,
-    ProviderAttributionConfig, ProviderError, ProviderFinalizationContext, ProviderInvocation,
-    ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode, ResourceAttributes,
-    ScopeRequest, StableSigningKey,
+    LookupAccess, ProviderAttributionConfig, ProviderError, ProviderFinalizationContext,
+    ProviderInvocation, ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode,
+    ResourceAttributes, ScopeRequest, StableSigningKey,
 };
 use serde_json::Value;
 use std::error::Error;
@@ -252,7 +252,7 @@ pub fn configure_client_profile(
 
 /// The host's inputs for one scope-resolution request: validated inputs, the
 /// host-selected execution context, minimal identity, correlation and the
-/// lookup credential the host selected, if any.
+/// lookup access the host selected, if any.
 ///
 /// Intentionally exhaustive: the host supplies every input, so a new one
 /// fails to compile until the host provides it.
@@ -264,7 +264,7 @@ pub struct ScopeRequestParts<'a> {
     pub execution_context: &'a str,
     pub identity: &'a InvocationIdentity,
     pub correlation: &'a CorrelationContext,
-    pub lookup_credential: Option<&'a ExecutionCredential>,
+    pub lookup_access: Option<&'a LookupAccess>,
 }
 
 /// The request a provider's scope resolution receives. It carries no admitted
@@ -277,7 +277,7 @@ pub fn scope_request(parts: ScopeRequestParts<'_>) -> ScopeRequest<'_> {
         execution_context,
         identity,
         correlation,
-        lookup_credential,
+        lookup_access,
     } = parts;
     ScopeRequest {
         service,
@@ -286,7 +286,7 @@ pub fn scope_request(parts: ScopeRequestParts<'_>) -> ScopeRequest<'_> {
         execution_context,
         identity,
         correlation,
-        lookup_credential,
+        lookup_access,
     }
 }
 
@@ -318,7 +318,9 @@ pub struct AdmittedRequestParts {
     pub authority: InvocationAuthority,
     pub inputs: Value,
     pub execution: ExecutionAccess,
-    pub lookup_credential: Option<ExecutionCredential>,
+    /// Delegated lookup access holds the same lease as delegated
+    /// execution material, never a second acquisition.
+    pub lookup_access: Option<LookupAccess>,
 }
 
 /// The read-only admitted request that multipart admission receives and the
@@ -334,7 +336,7 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
         authority,
         inputs,
         execution,
-        lookup_credential,
+        lookup_access,
     } = parts;
     AdmittedRequest::new(
         AdmittedContext::new(
@@ -348,7 +350,7 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
         ),
         inputs,
         execution,
-        lookup_credential,
+        lookup_access,
     )
 }
 

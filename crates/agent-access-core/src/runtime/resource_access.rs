@@ -442,6 +442,7 @@ impl BrokerRuntime {
             candidate_clauses_for_modes(&candidates, |mode| {
                 mode_available(mode)
                     && self.action_supports_mode(service, action, mode)
+                    && self.action_credential_eligible(service, action, mode, identity)
                     && credential_mode_available(
                         &self.effective_credentials,
                         service,

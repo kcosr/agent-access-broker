@@ -2203,6 +2203,13 @@ credential. No check contacts upstream or refreshes OAuth. A refreshable OAuth
 connection can pass locally even if its access token has expired. Local availability
 does not guarantee upstream acceptance.
 
+A token-only action, whose upstream accepts only a token, is omitted without a
+requirement wherever the winning grant is `per_user` and the caller's credential
+connection selects OAuth; regions a `service` grant wins keep it. Invoking it
+there is denied with `credential_not_provisioned` before any OAuth acquisition
+or lookup, or with `scope_unresolved` when a shared lookup resolved its resources
+before policy.
+
 A refresh running in this process keeps eligible OAuth capabilities visible:
 execution waits for the existing refresh. An interrupted refresh without a live
 owner remains hidden; its status identifies a transient provider failure for

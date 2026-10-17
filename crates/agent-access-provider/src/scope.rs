@@ -1,14 +1,12 @@
 //! Scope resolution: the one hook through which a provider names the
 //! canonical resources an action operates on, before the host authorizes it.
-use crate::{
-    CorrelationContext, ExecutionCredential, InvocationIdentity, ProviderState, ResourceScopes,
-};
+use crate::{CorrelationContext, InvocationIdentity, LookupAccess, ProviderState, ResourceScopes};
 use serde_json::Value;
 
 /// What a provider may use to resolve an action's resources. It carries no
 /// admitted execution authority and no execution credential. The lookup
-/// credential, when present, is the one the host selected for this request;
-/// a provider never chooses another or falls back to a shared credential.
+/// access, when present, is the one the host selected for this request; a
+/// provider never chooses another or falls back to a shared credential.
 #[derive(Debug, Clone, Copy)]
 pub struct ScopeRequest<'a> {
     pub(crate) service: &'a str,
@@ -17,7 +15,7 @@ pub struct ScopeRequest<'a> {
     pub(crate) execution_context: &'a str,
     pub(crate) identity: &'a InvocationIdentity,
     pub(crate) correlation: &'a CorrelationContext,
-    pub(crate) lookup_credential: Option<&'a ExecutionCredential>,
+    pub(crate) lookup_access: Option<&'a LookupAccess>,
 }
 
 impl<'a> ScopeRequest<'a> {
@@ -47,11 +45,12 @@ impl<'a> ScopeRequest<'a> {
         self.correlation
     }
 
-    /// The host-selected lookup credential, present only for actions whose
+    /// The host-selected lookup access, present only for actions whose
     /// descriptor requires lookup before policy and when a viable grant path
-    /// exists.
-    pub fn lookup_credential(&self) -> Option<&'a ExecutionCredential> {
-        self.lookup_credential
+    /// exists. Delegated lookup access holds the operation's lease, which
+    /// the same operation's execution reuses.
+    pub fn lookup_access(&self) -> Option<&'a LookupAccess> {
+        self.lookup_access
     }
 }
 

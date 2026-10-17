@@ -1916,7 +1916,7 @@ fn comment_pagination_token_is_bound_to_request_and_filters() {
             "maxResults": 2
         }),
     );
-    let credential = credential();
+    let credential = ExecutionAccess::Static(credential());
     let container = ConfluenceResolvedCommentContainer::Page(attachment_list_page());
     let inputs = CommentListInputs {
         container_id: "123456".to_string(),
@@ -2801,7 +2801,13 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
                 content_type,
                 content_id,
                 token: &str| {
-        continuations.open_draft_handle(request.context(), content_type, content_id, token)
+        continuations.open_draft_handle(
+            request.context(),
+            request.execution(),
+            content_type,
+            content_id,
+            token,
+        )
     };
 
     let handle = ConfluenceDraftHandle::new(
@@ -2813,9 +2819,9 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     assert_eq!(handle.base_version, None);
     assert_eq!(draft_publish_version(&handle).unwrap(), 1);
     let service_token = continuations
-        .seal_draft_handle(request.context(), &handle)
+        .seal_draft_handle(request.context(), request.execution(), &handle)
         .unwrap();
-    assert!(service_token.starts_with("aab_confluence_draft_v3_"));
+    assert!(service_token.starts_with("aab_confluence_draft_v4_"));
     assert!(service_token.len() <= DRAFT_HANDLE_MAX_BYTES);
     assert!(validate_draft_handle_input(&service_token).is_ok());
     // Service-mode handles are shared among service-mode principals.
@@ -2906,6 +2912,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     let wrong_space_token = continuations
         .seal_draft_handle(
             request.context(),
+            request.execution(),
             &ConfluenceDraftHandle::new(
                 ConfluenceDraftContentType::Page,
                 &wrong_space_content,
@@ -2939,7 +2946,11 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         .identity(identity("agent-one"))
         .build();
     let per_user_token = continuations
-        .seal_draft_handle(per_user_request.context(), &handle)
+        .seal_draft_handle(
+            per_user_request.context(),
+            per_user_request.execution(),
+            &handle,
+        )
         .unwrap();
     open(
         &continuations,
@@ -2979,7 +2990,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         ConfluenceContinuations::new(&confluence_config(), &ProviderLimits::default(), None);
     for error in [
         process_local
-            .seal_draft_handle(request.context(), &handle)
+            .seal_draft_handle(request.context(), request.execution(), &handle)
             .unwrap_err(),
         open(
             &process_local,
@@ -3003,9 +3014,11 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
 fn obsolete_and_oversized_draft_handles_are_rejected_before_decoding() {
     for value in [
         "aab_confluence_draft_v2_eyJ2IjoyfQ.c2ln".to_string(),
+        // Version 3 handles carry no commitment to their execution material.
+        format!("aab_confluence_draft_v3_{}", "A".repeat(64)),
         "draft".to_string(),
         format!(
-            "aab_confluence_draft_v3_{}",
+            "aab_confluence_draft_v4_{}",
             "A".repeat(DRAFT_HANDLE_MAX_BYTES)
         ),
     ] {
@@ -3022,7 +3035,7 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         &ProviderLimits::default(),
         Some(agent_access_provider::test_support::test_signing_key(8)),
     );
-    let credential = credential();
+    let credential = ExecutionAccess::Static(credential());
     let content = draft_content("123456", ConfluenceDraftContentType::Page);
     let mut request = invocation("page.draft.attachment.list", json!({}));
     request = InvocationBuilder::from(request)
@@ -4375,7 +4388,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
 fn attachment_list_tokens_reject_cross_bound_and_unsupported_positions() {
     let continuations =
         ConfluenceContinuations::new(&confluence_config(), &ProviderLimits::default(), None);
-    let credential = credential();
+    let credential = ExecutionAccess::Static(credential());
     let page = attachment_list_page();
     let request = invocation("attachment.list", json!({"pageId": "123456"}));
 
@@ -4420,7 +4433,9 @@ fn attachment_list_tokens_reject_cross_bound_and_unsupported_positions() {
         (
             request.clone(),
             page.clone(),
-            agent_access_provider::test_support::bearer_credential("token"),
+            ExecutionAccess::Static(agent_access_provider::test_support::bearer_credential(
+                "token",
+            )),
         ),
     ] {
         let error = continuations
@@ -9684,4 +9699,78 @@ fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
             .unwrap();
         assert_eq!(action.documentation, Some(documentation));
     }
+}
+
+/// A delegated lease that no Confluence path may use.
+struct UnusedLease;
+
+#[async_trait::async_trait]
+impl DelegatedLease for UnusedLease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("unused")
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        panic!("Confluence must not revalidate delegated lookup access");
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        panic!("Confluence must not mark delegated lookup access rejected");
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        panic!("Confluence must not recover delegated lookup access");
+    }
+}
+
+/// Confluence accepts no delegated credentials, so delegated lookup access
+/// fails closed in scope resolution and in body admission, before any
+/// upstream call, instead of standing in for a static credential.
+#[tokio::test]
+async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
+    let server = MockServer::start().await;
+    let provider = ConfluenceProvider::with_backend(
+        confluence_config(),
+        ProviderLimits::default(),
+        Arc::new(http_confluence_backend_for_server(&server)),
+    );
+    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
+    let assert_unsupported = |error: ProviderError| {
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+        assert_eq!(
+            error.message,
+            "Confluence lookups do not accept delegated credentials"
+        );
+    };
+
+    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "confluence",
+        "page.view",
+        json!({ "pageId": "123456" }),
+    )
+    .delegated_lookup(delegated.clone());
+    assert_unsupported(
+        provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err(),
+    );
+
+    let admitted = InvocationBuilder::new("confluence", "attachment.add")
+        .inputs(json!({ "pageId": "123456", "attachments": [] }))
+        .resources(ResourceScopes::from([(
+            "space".to_string(),
+            vec!["ENG".to_string()],
+        )]))
+        .credential(credential())
+        .delegated_lookup(delegated)
+        .admitted();
+    assert_unsupported(
+        provider
+            .authorize_body_parts(&admitted, None)
+            .await
+            .unwrap_err(),
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

@@ -97,7 +97,8 @@ authorization, except for the minimal pre-authorization metadata lookup used to
 resolve Jira, Confluence, and GitLab REST scopes. That lookup uses either a
 separate read-only lookup credential or the caller's per-user credential
 according to the policy shape described under
-[Credential model](#credential-model-service-per_user-lookup).
+[Credential model](#credential-model-service-per_user-lookup), and only once a
+candidate grant exists.
 
 ## Workspace and crate responsibilities
 
@@ -174,8 +175,9 @@ also includes a same-origin browser portal frontend:
   host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — helpers shared by the Jira and Confluence
   backends: Atlassian gateway credential rules, request authorization, the
-  tenant/gateway client routes selected by credential type, and the route
-  fingerprint their relayed continuations bind.
+  tenant/gateway client routes selected by credential type, the route
+  fingerprint their relayed continuations bind, and the credential binding
+  (`bind_atlassian_access`) of every continuation and draft handle.
 - **`agent-access-broker-host`** — the broker host library: module
   composition (`BrokerComposition`), the application (`BrokerApplication`:
   command parsing, configuration validation, audit verification, and the
@@ -423,7 +425,14 @@ mode, the principal (a family that deliberately shares service-mode tokens
 binds it only in per-user mode), the provider's configuration fingerprint, and
 the resource identifiers and normalized query, filter and output settings the
 provider adds. Delegated families also bind the lease's `DelegatedBindingId`,
-target and audience, which routine token refresh keeps. The binding is a
+target and audience, which routine token refresh keeps. Providers of services
+whose credential connections can select either a token or OAuth (GitLab, Jira
+and Confluence) bind the execution material's method in every family: a static
+credential's kind, or the lease's binding, target and audience, plus the
+gateway cloud ID for Atlassian gateway routes. A method switch, account
+replacement, disconnect and reconnect, or tenant change therefore invalidates
+their tokens, while routine refresh and, for stable-key families, a restart
+keep them; static token values are not bound. The binding is a
 canonical, length-delimited encoding whose digest enters the HMAC context with
 the service, purpose and version; the token itself carries only the version,
 the expiry, the provider payload and the MAC. Any other binding, purpose, key
@@ -449,7 +458,10 @@ knows: service, action or handle scope, execution context, configuration and
 the provider's fields. Its owner travels in the token as a keyed ownership
 commitment: scope resolution accepts the token only when the current principal
 could own it, and the provider opens it again after admission, when the
-commitment must match the admitted credential mode and principal.
+commitment must match the admitted credential mode and principal. Confluence
+draft handles also carry a keyed commitment (`ContinuationSigner::commit`) to
+the execution material they were minted with, which scope resolution cannot
+know; it is checked when the handle is opened after admission.
 
 ### Assembly identity
 
@@ -868,9 +880,11 @@ sequenceDiagram
    resolve scopes, the runtime first plans from grants matching the caller,
    service, action, and execution context. If no grant matches, it denies with
    `ScopeUnresolved` without performing any upstream lookup.
-7. **Pre-scope lookup credential.** When required, the runtime uses the caller's
+7. **Pre-scope lookup access.** When required, the runtime uses the caller's
    `per_user` credential when no service-mode grant can be viable for the
-   caller/action. If a service-mode grant can be viable, it uses the shared
+   caller/action: their token, or a lease on their OAuth connection, acquired
+   here (refreshing when due) because a candidate grant exists. If a
+   service-mode grant can be viable, it uses the shared
    `credentials.lookup.<service>` credential for the pre-authorization metadata
    lookup.
 8. **Scope resolution.** For search-contained actions, the runtime builds the
@@ -881,8 +895,8 @@ sequenceDiagram
    the audit record's `searchAuthorization`. For
    other actions, the provider's single `resolve_scopes` hook receives the
    action, validated inputs, host-selected execution context, minimal caller
-   identity, correlation, and only the lookup credential the runtime selected;
-   it never receives execution authority or an execution credential. It
+   identity, correlation, and only the lookup access the runtime selected; it
+   never receives execution authority or an execution credential. It
    returns canonical scopes and optional in-process `ProviderState`. That state
    stays with the prepared operation, which pins the provider instance, so it
    never reaches another generation's provider. Body-part admission explicitly
@@ -907,10 +921,15 @@ sequenceDiagram
    next start is refused and names the grants to fix first.
 10. **Execution-credential resolution.** The credential for the selected mode is
    loaded; for `per_user`, the method the service's credential connection
-   selects for the caller's principal kind.
-11. **Lookup-credential resolution.** If final policy selects `per_user`, any
+   selects for the caller's principal kind. A `per_user` operation whose scope
+   resolution used the caller's token or lease keeps that same material. Final
+   policy selecting `service` after a personal pre-scope lookup, static or
+   delegated, is rejected as planning drift; the runtime never switches to
+   service credentials.
+11. **Lookup-access resolution.** If final policy selects `per_user`, any
    provider-side execution-time confirmation uses the caller's per-user
-   credential. If final policy selects `service`, it uses the shared lookup
+   material: the pre-scope token or lease, or else the execution token or
+   lease. If final policy selects `service`, it uses the shared lookup
    credential.
 12. **Admitted request.** The runtime builds one read-only, shared admitted
    context: service and action, execution context, minimal identity,
@@ -935,8 +954,8 @@ sequenceDiagram
    `operation_cancelled`; a write that never started a process reports
    `not_applied`.
 
-The lookup credential is never returned to the caller; the execution credential
-is placed only into the `ProviderInvocation`.
+Lookup material is never returned to the caller; the execution credential is
+placed only into the `ProviderInvocation`.
 
 ## Identity model
 
@@ -1188,6 +1207,10 @@ resource region. Missing or locally unusable execution or lookup material hides
 that authority from service details, action/resource lists, runtime catalog,
 OpenAPI/send schemas, and native MCP tools. An unavailable winning grant still
 suppresses lower-ranked grants: discovery never falls back to shared authority.
+A [token-only action](#credential-model-service-per_user-lookup) is hidden in
+each region whose winning `per_user` grant would use the caller's OAuth
+connection, without a requirement, and stays listed for regions a `service`
+grant wins.
 Search actions retain their action-wide credential selection. Providers that do
 not require a separate execution credential need no dummy secret.
 
@@ -1262,8 +1285,8 @@ this path with its admitted resource's signed endpoint.
   `Bearer { token }`); `Debug` shows only the kind, and it never serializes.
 - A provider receives `ExecutionAccess`: `None` (a backend declaring no
   execution credential), `Static`, or `Delegated`. Static and delegated material
-  never coexist, and the separate lookup credential is static only and never
-  stands in for execution material. The selected credential mode reaches the
+  never coexist. Lookup material arrives separately as `LookupAccess`
+  (`Static` or `Delegated`) and never stands in for execution material. The selected credential mode reaches the
   provider as the typed `CredentialMode` (`service` or `per_user` on the wire).
 
 **`per_user` `secret_store`** (provider `local_file`) requires an authenticated
@@ -1323,24 +1346,51 @@ registration, so connections sharing a registration share it. It applies only
 to services whose descriptor declares `CredentialDescriptor::delegated`, with a
 short description of what connecting allows; management shows it under the
 service's display name, so it names no service itself.
-After policy admits the invocation, the runtime acquires the caller's current
-access from the OAuth manager (refreshing it when due) inside the invocation's
-correlation context, so a denied invocation never obtains or refreshes upstream
-access. The provider receives it as `ExecutionAccess::Delegated`, a lease it
-can read (`access()`: token, target, audience, version, expiry) and, after an
-upstream 401, replace once (`recover_after_unauthorized`). Immediately before
+The runtime acquires the caller's current access from the OAuth manager
+(refreshing it when due) inside the invocation's correlation context, and only
+once a candidate grant exists: after policy admits the invocation, or for a
+pre-authorization lookup the lookup plan assigns to the caller's `per_user`
+credential. An invocation without a candidate grant never obtains or refreshes
+upstream access. One invocation holds at most one lease: a lease acquired for
+scope resolution is the one execution and its lookups use, and otherwise the
+lease acquired after final policy serves execution's lookups too. The provider
+receives it as `ExecutionAccess::Delegated` and `LookupAccess::Delegated`, a
+lease it can read (`access()`: token, target, audience, version, expiry) and,
+after an upstream 401, replace once per invocation
+(`recover_after_unauthorized`), whether the 401 answered a lookup or
+execution. Immediately before
 dispatch the runtime revalidates the lease: access revoked, disconnected, or
 awaiting new consent since preparation stops the invocation, and access
 superseded by another invocation's refresh moves to the current version.
 Providers never hold the OAuth manager or refresh material.
 
+**Token-only actions.** A native backend marks an action whose upstream
+accepts only a token, never delegated access, with
+`ActionDescriptor::token_only`; imported descriptors never carry it. The check
+uses the credential mode each grant region selects, after grant precedence:
+the action is ineligible only where the winning grant is `per_user` and the
+caller's connection selects OAuth. A `service` region with its static
+credential, and a `per_user` region whose connection selects a stored token,
+keep it usable. Every selection applies the check beside the action's
+supported modes: native selection, search planning, the command-enforced
+planner (which omits an ineligible grant as it omits an unsupported mode) and
+the discovery clauses. An ineligible winning grant still suppresses lower
+grants, so there is no fallback to another region or credential. When the
+pre-scope lookup plan is to use the caller's own credential, final policy can
+select only `per_user`, so an ineligible action is denied before any
+acquisition, refresh or lookup; without a pre-scope lookup it is denied after
+policy selection and before acquisition. After a shared pre-scope lookup, a
+winning ineligible `per_user` grant is denied by final policy, concealed as
+`scope_unresolved` like every final-policy denial of a lookup-resolved action.
+The other denials report `credential_not_provisioned`.
+
 **Lookup credentials** (`credentials.lookup.<service>`, `read_only = true`) are
 separate read-only credentials used before authorization solely to resolve
 scopes when service-mode lookup-backed policy can be viable. They are never
 returned to the caller. In per-user-only Jira, Confluence, and GitLab REST
-policy paths, the runtime uses the caller's `per_user` execution credential for
-pre-authorization metadata lookup instead of requiring
-`credentials.lookup.<service>`.
+policy paths, the runtime uses the caller's `per_user` execution credential (a
+token or an OAuth lease) for pre-authorization metadata lookup instead of
+requiring `credentials.lookup.<service>`.
 
 Static config validation is conservative: Jira, Confluence, and GitLab REST
 configs require `credentials.lookup.<service>` when any lookup-backed grant for
@@ -1569,10 +1619,12 @@ configured by `[audit]`. The record is camelCase and carries: `auditId`,
 `groups`, `service`, `action`, `resourceScopes`, `matchedGrant`,
 `credentialMode` (`Option<Option<String>>`: `service`/`per_user` on allow, null
 for admin records), `credentialConnection` (the credential connection a personal
-credential came from; present when the selected mode is `per_user`, or when a
+credential came from; present when the selected mode is `per_user`, when a
 command call passes a `per_user` grant even though mixed modes leave
-`credentialMode` null, and absent when only service credentials are used or for
-management and authentication records), `decision`, `reasonCode`, `upstreamStatus`,
+`credentialMode` null, or when a pre-authorization lookup used the caller's
+token or OAuth lease, even if policy then denies the call with no credential
+mode; absent when only service credentials are used or for management and
+authentication records), `decision`, `reasonCode`, `upstreamStatus`,
 `upstreamDurationMs`, `objectIds`, `identitySource`, optional `callerId`, `source`,
 `executionContext`, `searchAuthorization` (search actions), and
 `providerAudit`. When present, `matchedGrant` carries `subject`, `priority`,
@@ -1703,7 +1755,9 @@ each batch commit.
 **Redaction of the pre-authorization path.** On the lookup-before-policy path,
 `redact_error_resource_scopes` empties the response envelope's `resourceScopes`
 and normalizes the error to `ScopeUnresolved` (except input, locator, and
-credential reason codes), while the audit record still records the real resolved
+credential reason codes, and the delegated lease's own consent-pending,
+refresh-busy and throttled-refresh failures, which describe the caller's OAuth
+connection), while the audit record still records the real resolved
 `resourceScopes`. Secrets never enter audit: `ExecutionCredential` and
 `EgressProxyConfig` `Debug` impls redact, and only `tokenId` and `tokenClass`
 appear in `identitySource`.

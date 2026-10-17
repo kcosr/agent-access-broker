@@ -81,6 +81,9 @@ pub struct ActionDescriptor {
     /// Resolve private attributes for exactly one admitted resource of this backend.
     pub requires_resource_attributes: bool,
     pub credential_modes: Vec<String>,
+    /// The upstream accepts only a static (token) credential for this action,
+    /// never delegated (OAuth) access; see [`Self::token_only`].
+    pub token_only: bool,
     pub lookup: LookupRequirement,
     /// The broker computes the search boundary from policy and hands it to
     /// the provider, which must constrain its upstream query and results.
@@ -248,6 +251,7 @@ impl ActionDescriptor {
             resource_scope: None,
             requires_resource_attributes: false,
             credential_modes: Vec::new(),
+            token_only: false,
             lookup: LookupRequirement::None,
             search_contained: false,
             upstream_resource_ownership: None,
@@ -282,6 +286,26 @@ impl ActionDescriptor {
         S: Into<String>,
     {
         self.credential_modes = modes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Mark an action whose upstream operation accepts only a static (token)
+    /// credential, never delegated (OAuth) access, such as one the upstream
+    /// documents as requiring a personal access token.
+    ///
+    /// The host checks it for each grant region with the credential mode
+    /// that region's winning grant selects. Where a `per_user` grant wins and
+    /// the caller's credential connection selects OAuth, discovery hides the
+    /// action and invocation denies it without acquiring, refreshing or using
+    /// the caller's OAuth credential; it never falls back to another grant or
+    /// credential. The denial precedes any lookup when the lookup would use
+    /// the caller's own credential; after a shared lookup credential resolved
+    /// scope, final policy denies it as `scope_unresolved`. A `service`
+    /// region with a static credential, and a
+    /// `per_user` region whose connection selects a stored token, keep it
+    /// usable. Only native descriptors carry it; imported services' never do.
+    pub fn token_only(mut self) -> Self {
+        self.token_only = true;
         self
     }
 
@@ -871,6 +895,14 @@ mod tests {
         assert!(reviewed.read_only);
         assert_eq!(serde_json::to_value(unreviewed).unwrap()["readOnly"], false);
         assert_eq!(serde_json::to_value(reviewed).unwrap()["readOnly"], true);
+    }
+
+    #[test]
+    fn token_only_is_an_explicit_opt_in() {
+        assert!(!action("item.token").token_only);
+        let marked = action("item.token").token_only();
+        assert!(marked.token_only);
+        assert_eq!(errors(vec![marked]), Vec::<String>::new());
     }
 
     #[test]

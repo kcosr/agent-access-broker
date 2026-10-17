@@ -5,7 +5,7 @@
 use crate::host::{AdmittedRequestParts, admitted_request, invocation};
 use crate::{
     AdmittedRequest, BrokerBodyPart, CorrelationContext, CredentialMode, DelegatedCredential,
-    ExecutionAccess, ExecutionCredential, InvocationAuthority, InvocationIdentity,
+    ExecutionAccess, ExecutionCredential, InvocationAuthority, InvocationIdentity, LookupAccess,
     ProviderInvocation, ProviderState, ResourceAttributes, ResourceScopes, SearchAuthorization,
 };
 use serde_json::{Value, json};
@@ -21,7 +21,7 @@ pub struct InvocationBuilder {
     credential_mode: CredentialMode,
     authority: InvocationAuthority,
     execution: ExecutionAccess,
-    lookup_credential: Option<ExecutionCredential>,
+    lookup_access: Option<LookupAccess>,
     body_parts: Vec<BrokerBodyPart>,
     resource_attributes: ResourceAttributes,
     state: Option<ProviderState>,
@@ -39,7 +39,7 @@ impl InvocationBuilder {
             credential_mode: CredentialMode::Service,
             authority: InvocationAuthority::ActionOnly,
             execution: ExecutionAccess::None,
-            lookup_credential: None,
+            lookup_access: None,
             body_parts: Vec::new(),
             resource_attributes: ResourceAttributes::default(),
             state: None,
@@ -131,13 +131,20 @@ impl InvocationBuilder {
         self
     }
 
-    pub fn lookup_credential(mut self, credential: ExecutionCredential) -> Self {
-        self.lookup_credential = Some(credential);
-        self
+    /// Static lookup access, replacing any other lookup access.
+    pub fn lookup_credential(self, credential: ExecutionCredential) -> Self {
+        self.lookup_access(Some(LookupAccess::Static(credential)))
     }
 
-    pub fn without_lookup_credential(mut self) -> Self {
-        self.lookup_credential = None;
+    /// Delegated lookup access, replacing any other lookup access. Pass a
+    /// clone of the delegated execution credential to share its lease, as
+    /// the host does.
+    pub fn delegated_lookup(self, credential: DelegatedCredential) -> Self {
+        self.lookup_access(Some(LookupAccess::Delegated(credential)))
+    }
+
+    pub fn lookup_access(mut self, lookup_access: Option<LookupAccess>) -> Self {
+        self.lookup_access = lookup_access;
         self
     }
 
@@ -179,7 +186,7 @@ impl InvocationBuilder {
             authority: self.authority.clone(),
             inputs: self.inputs.clone(),
             execution: self.execution.clone(),
-            lookup_credential: self.lookup_credential.clone(),
+            lookup_access: self.lookup_access.clone(),
         })
     }
 
@@ -208,7 +215,7 @@ impl From<ProviderInvocation> for InvocationBuilder {
             credential_mode: context.credential_mode(),
             authority: context.authority().clone(),
             execution: invocation.execution().clone(),
-            lookup_credential: invocation.lookup_credential().cloned(),
+            lookup_access: invocation.lookup_access().cloned(),
             body_parts: invocation.body_parts().to_vec(),
             resource_attributes: invocation.resource_attributes().clone(),
             state: invocation.state().cloned(),

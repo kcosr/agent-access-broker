@@ -9374,3 +9374,72 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
     assert_eq!(events[0]["reasonCode"], "upstream_timeout");
     server.abort();
 }
+
+/// A delegated lease that no Jira path may use.
+struct UnusedLease;
+
+#[async_trait::async_trait]
+impl DelegatedLease for UnusedLease {
+    fn access(&self) -> DelegatedAccess {
+        DelegatedAccess::new("unused", "target", "audience", "v1", i64::MAX)
+    }
+    fn binding_identity(&self) -> DelegatedBindingId {
+        agent_access_provider::test_support::delegated_binding_id("unused")
+    }
+    async fn revalidate(&self) -> Result<(), ProviderError> {
+        panic!("Jira must not revalidate delegated lookup access");
+    }
+    fn mark_rejected(&self, _: &str) -> Result<(), ProviderError> {
+        panic!("Jira must not mark delegated lookup access rejected");
+    }
+    async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
+        panic!("Jira must not recover delegated lookup access");
+    }
+}
+
+/// Jira accepts no delegated credentials, so delegated lookup access fails
+/// closed in scope resolution and at execution, before any upstream call,
+/// instead of standing in for a static credential.
+#[tokio::test]
+async fn delegated_lookup_access_fails_closed_before_upstream_calls() {
+    let mut backend = StubJiraBackend::default();
+    backend.issues.insert("PROJ-1".to_string(), visible_issue());
+    let backend = Arc::new(backend);
+    let provider =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+    let delegated = agent_access_provider::host::delegated_credential(Arc::new(UnusedLease));
+    let inputs = json!({"issue": "PROJ-1"});
+    let assert_unsupported = |error: ProviderError| {
+        assert_eq!(error.decision(), Decision::Deny);
+        assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+        assert_eq!(
+            error.message,
+            "Jira lookups do not accept delegated credentials"
+        );
+    };
+
+    let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+        "jira",
+        "issue.view",
+        inputs.clone(),
+    )
+    .delegated_lookup(delegated.clone());
+    assert_unsupported(
+        provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err(),
+    );
+
+    let invocation = InvocationBuilder::new("jira", "issue.view")
+        .inputs(inputs)
+        .resources(BTreeMap::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
+        .credential(test_credential())
+        .delegated_lookup(delegated)
+        .build();
+    assert_unsupported(provider.invoke(invocation).await.unwrap_err());
+    assert_credential_observations(&backend, &[]);
+}

@@ -388,7 +388,7 @@ report.
 | `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right on the connection, its expiry, and revocation; these rights do not govern OAuth |
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
 | `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |
-| `credential_not_provisioned` | The service's credential connection offers no personal credential for your account type, or the service has none; ask the administrator |
+| `credential_not_provisioned` | The service's credential connection offers no personal credential for your account type, or the service has none; or the action accepts only a token and your connection uses OAuth. Ask the administrator |
 | `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions |
 | `execution_context_denied` | Use the correct ingress and a token/grant authorized for that context; token selection cannot attest context |
 | `broker_token_paused` | Resume only if the secret remains trusted; otherwise replace and revoke it |

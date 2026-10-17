@@ -6052,7 +6052,12 @@ mod tests {
             self.seen
                 .lock()
                 .unwrap()
-                .push(request.lookup_credential().cloned());
+                .push(request.lookup_access().map(|access| {
+                    access
+                        .static_credential()
+                        .expect("GitLab REST receives only static lookup access")
+                        .clone()
+                }));
             let project = request.inputs()["project"].as_str().unwrap().to_owned();
             Ok(agent_access_provider::ScopeResolution::resources(
                 ResourceScopes::from([("repository".to_string(), vec![project])]),

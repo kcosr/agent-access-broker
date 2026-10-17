@@ -3943,6 +3943,44 @@ pub(crate) mod tests {
         assert_eq!(revoked.reason_code(), ReasonCode::CredentialInvalid);
     }
 
+    /// Lookup access lent with an operation's lease shares its one recovery
+    /// budget: neither a clone of the lookup access nor the execution
+    /// material holding the same lease gets another recovery.
+    #[tokio::test]
+    async fn lookup_access_shares_the_operation_lease_and_recovery_budget() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        successive_refreshes(&server).await;
+        let credential =
+            ManagedOAuthLease::acquire(manager.clone(), "records".into(), "user".into(), binding())
+                .await
+                .unwrap();
+        let lookup = agent_access_provider::LookupAccess::Delegated(credential.clone());
+        let copy = lookup.clone();
+        let execution = agent_access_provider::ExecutionAccess::Delegated(credential);
+
+        let recovered = copy
+            .delegated()
+            .unwrap()
+            .recover_after_unauthorized()
+            .await
+            .unwrap();
+        assert_eq!(execution.delegated().unwrap().access(), recovered);
+        assert_eq!(lookup.delegated().unwrap().access(), recovered);
+        for exhausted in [lookup.delegated(), execution.delegated()] {
+            let error = exhausted
+                .unwrap()
+                .recover_after_unauthorized()
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
+            assert_eq!(
+                error.message,
+                "delegated credential was already recovered for this invocation"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn delegated_binding_identity_survives_refresh_and_changes_on_reconnect() {
         let (_dir, _store, _ring, manager, server) = fixture().await;

@@ -72,6 +72,13 @@ alone authorizes no action. Jira, Confluence, and GitLab lookup-backed service
 mode also requires the configured shared metadata-lookup credential; per-user-only
 lookup uses the user's credential. Provider guides document those requirements.
 
+Token-only actions, such as GitLab's project and service-account token creation
+and rotation, run only with a token, never with delegated OAuth access. Under a
+`per_user` grant they work for principals whose connection selects a stored
+token, and are hidden and denied for people whose connection uses OAuth,
+without falling back to a lower-priority grant. Where people connect through
+OAuth, grant them in `service` mode or only to principals with tokens.
+
 Per-user credentials come from **credential connections**. A connection is one
 credential slot per principal that one or more services consume. For example,
 Jira and Confluence on one Atlassian site can let each principal store one

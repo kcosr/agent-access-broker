@@ -2,9 +2,10 @@
 //! contract: a namespace-capable resource type with an action-input
 //! projection and configured roots, typed configuration, a
 //! managed credential profile, JSON, raw-download, and multipart-upload
-//! actions, a presenter with an embedded body and a whole-result Markdown
-//! renderer, and (when `endpoints` is enabled) a resource type whose entries
-//! keep a private attribute that a single-attempt action consumes. Its writes
+//! actions (the upload token-only), a presenter with an embedded body and a
+//! whole-result Markdown renderer, and (when `endpoints` is enabled) a
+//! resource type whose entries keep a private attribute that a
+//! single-attempt action consumes. Its writes
 //! report a request the SDK proved unsent with a mutation receipt. Broker
 //! acceptance tests register it beside the linked
 //! backends; that it needs nothing outside this crate and the registration
@@ -262,12 +263,15 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         action("item.download", "Download an item's content", &locator)
             .read_only()
             .raw_download(),
+        // A write the upstream accepts only with a token, never with
+        // delegated access.
         action(
             "item.upload",
             "Replace an item's content with one file",
             &upload,
         )
-        .multipart_upload(attachment_upload_plan(&["item"], Some(1))),
+        .multipart_upload(attachment_upload_plan(&["item"], Some(1)))
+        .token_only(),
     ];
     if config.endpoints {
         resource_scopes.insert(
@@ -1359,6 +1363,7 @@ mod tests {
             action("item.upload").io,
             ActionIo::MultipartUpload { .. }
         ));
+        assert!(action("item.upload").token_only && !action("item.view").token_only);
         assert_eq!(
             descriptor.credential_profile_kind("api_token"),
             Some("bearer_token")

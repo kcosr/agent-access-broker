@@ -411,10 +411,16 @@ fn personal_space_draft_handles_preserve_space_and_reject_other_exact_grants() {
         let handle =
             ConfluenceDraftHandle::new(content_type, &content, ConfluenceDraftOrigin::New, None);
         let token = continuations
-            .seal_draft_handle(request.context(), &handle)
+            .seal_draft_handle(request.context(), request.execution(), &handle)
             .unwrap();
         let opened = continuations
-            .open_draft_handle(request.context(), content_type, "123456", &token)
+            .open_draft_handle(
+                request.context(),
+                request.execution(),
+                content_type,
+                "123456",
+                &token,
+            )
             .unwrap();
         assert_eq!(opened.space, "~alice");
         ensure_authorized_draft_handle(&opened, request.resource_scopes().unwrap()).unwrap();

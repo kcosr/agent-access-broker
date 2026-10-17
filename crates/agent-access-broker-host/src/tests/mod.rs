@@ -15080,7 +15080,9 @@ impl Provider for TestJiraParentInvokeProvider {
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
         assert_eq!(
-            request.lookup_credential(),
+            request
+                .lookup_access()
+                .and_then(agent_access_provider::LookupAccess::static_credential),
             Some(&basic_credential("lookup@example.com", "lookup-token"))
         );
         self.local_scopes(request.action(), request.inputs())

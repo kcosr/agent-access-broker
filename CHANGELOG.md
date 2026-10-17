@@ -12,8 +12,8 @@ All notable changes to this project are documented in this file.
     and `resolve_scopes_with_lookup_context` are replaced by one required
     `async fn resolve_scopes(&self, request: ScopeRequest<'_>) -> Result<ScopeResolution, ProviderError>`.
     `ScopeRequest` carries the action, validated inputs, host-selected execution
-    context, minimal identity, correlation and an optional host-selected lookup
-    credential. `ScopeResolution` returns canonical resource scopes
+    context, minimal identity, correlation and optional host-selected lookup
+    access. `ScopeResolution` returns canonical resource scopes
     (`resources`/`no_resources`) and optional provider state (`with_state`).
   - **Provider state.** JSON `provider_preflight` is replaced by the in-process
     `ProviderState` (typed `new`, `downcast_ref`, `require` and `optional`, with
@@ -46,8 +46,11 @@ All notable changes to this project are documented in this file.
     the crate-boundary check rejects in native, adapter, reference and helper
     crates. Debug output is redacted. Credentials compare with `==` only under
     the `test-support` feature, in constant time. Execution material is
-    selected through `ExecutionAccess::{None, Static, Delegated}`. Lookup
-    credentials are static-only. Stored credential rows and the
+    selected through `ExecutionAccess::{None, Static, Delegated}`, and lookup
+    material through the non-exhaustive `LookupAccess::{Static, Delegated}`
+    (`lookup_access()` on scope and admitted requests). Delegated lookup
+    access holds the operation's one delegated lease, shared with execution,
+    so its clones never add a 401 recovery. Stored credential rows and the
     `basic_api_token`/`bearer_token` kind spellings are unchanged, so stored
     credentials keep working.
   - **Delegated leases.** `DelegatedLease` gains the required
@@ -382,6 +385,19 @@ All notable changes to this project are documented in this file.
   stay stored, still decrypt for rewrap, and are listed as retained rows, but
   are never read: people store their Atlassian token once, one token where they
   stored two, and administrators re-provision service accounts' tokens.
+- GitLab page tokens, Jira search continuations, and Confluence search
+  continuations, list tokens and draft handles are bound to the credential
+  method that reaches the upstream: for a stored or service token, its type
+  (not its value); for delegated (OAuth) access, the OAuth connection and its
+  generation, never the access version; and the configured `cloud_id` on
+  Atlassian gateway routes. A switch between a token and OAuth, another token
+  type, another account, a reconnected connection or another gateway site
+  rejects them with the existing `input_invalid` or `invalid_draft_handle`,
+  while a routine OAuth refresh keeps them. Confluence draft handles carry a
+  keyed commitment to that binding, checked after admission, and use the
+  prefix `aab_confluence_draft_v4_`. Tokens and draft handles issued before
+  the upgrade are rejected: repeat the search or listing without the token,
+  and create or stage the draft again.
 
 ### Added
 
@@ -695,9 +711,11 @@ All notable changes to this project are documented in this file.
 
 - Invocation and Git gateway audit records carry `credentialConnection`, the
   credential connection a personal credential came from. It is present when the
-  selected credential mode is `per_user`, and when a command call passes a
-  `per_user` grant even though mixed modes leave `credentialMode` null; it is
-  absent when only service credentials are used.
+  selected credential mode is `per_user`; when a command call passes a
+  `per_user` grant even though mixed modes leave `credentialMode` null; and
+  when a metadata lookup before policy used the caller's token or OAuth lease,
+  even if the call is then denied without a credential mode. It is absent when
+  only service credentials are used.
 
 - The provider SDK adds `UpstreamAuthority` and
   `ServiceDescriptor::with_upstream_authority`, through which a backend
@@ -710,6 +728,37 @@ All notable changes to this project are documented in this file.
   `with_per_user_delegated` builder, which reports that a credential connection
   also offers OAuth; `per_user` reports the token profile's kind, or `oauth`
   for an OAuth-only connection.
+
+- Delegated (OAuth) credential connections serve metadata lookups. A
+  lookup-backed action whose `per_user` grant selects an OAuth connection
+  looks up with a lease on the caller's connection, acquired only once a
+  candidate grant exists, and execution reuses that lease, so one invocation
+  has one 401 recovery across its lookups and execution. When scope
+  resolution used the shared lookup credential and final policy selects the
+  OAuth connection, execution's lookups use the lease acquired after policy.
+  An OAuth connection may serve consumers with `per_user` lookup-backed
+  actions, and caller discovery offers those actions once the caller has
+  connected. A lookup that fails because the
+  connection awaits new consent, is being refreshed or has its refresh
+  throttled reports that failure, with any retry time, instead of the
+  concealed `scope_unresolved`.
+
+- Native backends can mark an action token-only with
+  `ActionDescriptor::token_only()` (the `token_only` field) when the upstream
+  accepts only a token for it, never delegated access. Eligibility uses the
+  credential mode each grant region selects: where the winning grant is
+  `per_user` and the caller's credential connection selects OAuth, discovery
+  hides the action and invocation denies it, never falling back to a lower
+  grant; `service` regions and stored-token selections keep it usable. A
+  pre-scope plan that uses the caller's own credential is denied before any
+  acquisition, refresh or lookup, and actions without a pre-scope lookup are
+  denied after policy and before acquisition, with `credential_not_provisioned`;
+  a winning `per_user` grant after a shared pre-scope lookup is denied by final
+  policy as `scope_unresolved`. The command-enforced planner omits such grants
+  like any unsupported mode. Imported descriptors never carry the marker. The
+  conformance backend's `item.upload` uses it. GitLab's
+  `project.access_token.create`/`rotate` and
+  `service_account.token.create`/`rotate` are token-only.
 
 ### Changed
 

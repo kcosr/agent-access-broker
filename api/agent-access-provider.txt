@@ -100,7 +100,7 @@ pub agent_access_provider::host::AdmittedRequestParts::execution: agent_access_p
 pub agent_access_provider::host::AdmittedRequestParts::execution_context: alloc::string::String
 pub agent_access_provider::host::AdmittedRequestParts::identity: agent_access_provider::InvocationIdentity
 pub agent_access_provider::host::AdmittedRequestParts::inputs: serde_json::value::Value
-pub agent_access_provider::host::AdmittedRequestParts::lookup_credential: core::option::Option<agent_access_provider::ExecutionCredential>
+pub agent_access_provider::host::AdmittedRequestParts::lookup_access: core::option::Option<agent_access_provider::LookupAccess>
 pub agent_access_provider::host::AdmittedRequestParts::service: alloc::string::String
 impl core::fmt::Debug for agent_access_provider::host::AdmittedRequestParts
 pub fn agent_access_provider::host::AdmittedRequestParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -157,7 +157,7 @@ pub agent_access_provider::host::ScopeRequestParts::correlation: &'a agent_acces
 pub agent_access_provider::host::ScopeRequestParts::execution_context: &'a str
 pub agent_access_provider::host::ScopeRequestParts::identity: &'a agent_access_provider::InvocationIdentity
 pub agent_access_provider::host::ScopeRequestParts::inputs: &'a serde_json::value::Value
-pub agent_access_provider::host::ScopeRequestParts::lookup_credential: core::option::Option<&'a agent_access_provider::ExecutionCredential>
+pub agent_access_provider::host::ScopeRequestParts::lookup_access: core::option::Option<&'a agent_access_provider::LookupAccess>
 pub agent_access_provider::host::ScopeRequestParts::service: &'a str
 impl<'a> core::clone::Clone for agent_access_provider::host::ScopeRequestParts<'a>
 pub fn agent_access_provider::host::ScopeRequestParts<'a>::clone(&self) -> agent_access_provider::host::ScopeRequestParts<'a>
@@ -169,8 +169,8 @@ impl<'a> core::marker::Send for agent_access_provider::host::ScopeRequestParts<'
 impl<'a> core::marker::Sync for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> core::marker::Unpin for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::host::ScopeRequestParts<'a>
-impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::ScopeRequestParts<'a>
-impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::ScopeRequestParts<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::ScopeRequestParts<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::ScopeRequestParts<'a>
 pub struct agent_access_provider::host::TransportClient
 impl agent_access_provider::host::TransportClient
 pub fn agent_access_provider::host::TransportClient::into_parts(self) -> (reqwest::async_impl::client::Client, agent_access_provider::EgressRoute)
@@ -1005,6 +1005,23 @@ impl core::marker::Unpin for agent_access_provider::IssuedRefreshToken
 impl core::marker::UnsafeUnpin for agent_access_provider::IssuedRefreshToken
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::IssuedRefreshToken
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::IssuedRefreshToken
+#[non_exhaustive] pub enum agent_access_provider::LookupAccess
+pub agent_access_provider::LookupAccess::Delegated(agent_access_provider::DelegatedCredential)
+pub agent_access_provider::LookupAccess::Static(agent_access_provider::ExecutionCredential)
+impl agent_access_provider::LookupAccess
+pub fn agent_access_provider::LookupAccess::delegated(&self) -> core::option::Option<&agent_access_provider::DelegatedCredential>
+pub fn agent_access_provider::LookupAccess::static_credential(&self) -> core::option::Option<&agent_access_provider::ExecutionCredential>
+impl core::clone::Clone for agent_access_provider::LookupAccess
+pub fn agent_access_provider::LookupAccess::clone(&self) -> agent_access_provider::LookupAccess
+impl core::fmt::Debug for agent_access_provider::LookupAccess
+pub fn agent_access_provider::LookupAccess::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::LookupAccess
+impl core::marker::Send for agent_access_provider::LookupAccess
+impl core::marker::Sync for agent_access_provider::LookupAccess
+impl core::marker::Unpin for agent_access_provider::LookupAccess
+impl core::marker::UnsafeUnpin for agent_access_provider::LookupAccess
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LookupAccess
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::LookupAccess
 #[non_exhaustive] pub enum agent_access_provider::LookupRequirement
 pub agent_access_provider::LookupRequirement::Execution
 pub agent_access_provider::LookupRequirement::None
@@ -1691,6 +1708,7 @@ pub agent_access_provider::ActionDescriptor::resource_scope: core::option::Optio
 pub agent_access_provider::ActionDescriptor::scoped_mcp_name_source: agent_access_provider::ScopedMcpNameSource
 pub agent_access_provider::ActionDescriptor::search_contained: bool
 pub agent_access_provider::ActionDescriptor::sensitive_output_pointers: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::ActionDescriptor::token_only: bool
 pub agent_access_provider::ActionDescriptor::upstream_resource_ownership: core::option::Option<agent_access_provider::UpstreamResourceOwnership>
 impl agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::attribution(self, agent_access_provider::AttributionCapability) -> Self
@@ -1710,6 +1728,7 @@ pub fn agent_access_provider::ActionDescriptor::resource_attributes(self) -> Sel
 pub fn agent_access_provider::ActionDescriptor::scope(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::search_contained(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::sensitive_output(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::ActionDescriptor::token_only(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::upstream_resource_ownership(self, agent_access_provider::UpstreamResourceOwnership) -> Self
 impl core::clone::Clone for agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::clone(&self) -> agent_access_provider::ActionDescriptor
@@ -1769,7 +1788,7 @@ pub fn agent_access_provider::AdmittedRequest::execution(&self) -> &agent_access
 pub fn agent_access_provider::AdmittedRequest::execution_context(&self) -> &str
 pub fn agent_access_provider::AdmittedRequest::identity(&self) -> &agent_access_provider::InvocationIdentity
 pub fn agent_access_provider::AdmittedRequest::inputs(&self) -> &serde_json::value::Value
-pub fn agent_access_provider::AdmittedRequest::lookup_credential(&self) -> core::option::Option<&agent_access_provider::ExecutionCredential>
+pub fn agent_access_provider::AdmittedRequest::lookup_access(&self) -> core::option::Option<&agent_access_provider::LookupAccess>
 pub fn agent_access_provider::AdmittedRequest::resource_scopes(&self) -> core::result::Result<&agent_access_provider::ResourceScopes, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedRequest::search_authorization(&self) -> core::result::Result<&agent_access_provider::SearchAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedRequest::service(&self) -> &str
@@ -2886,7 +2905,7 @@ pub fn agent_access_provider::ProviderInvocation::execution(&self) -> &agent_acc
 pub fn agent_access_provider::ProviderInvocation::execution_context(&self) -> &str
 pub fn agent_access_provider::ProviderInvocation::identity(&self) -> &agent_access_provider::InvocationIdentity
 pub fn agent_access_provider::ProviderInvocation::inputs(&self) -> &serde_json::value::Value
-pub fn agent_access_provider::ProviderInvocation::lookup_credential(&self) -> core::option::Option<&agent_access_provider::ExecutionCredential>
+pub fn agent_access_provider::ProviderInvocation::lookup_access(&self) -> core::option::Option<&agent_access_provider::LookupAccess>
 pub fn agent_access_provider::ProviderInvocation::resource_attributes(&self) -> &agent_access_provider::ResourceAttributes
 pub fn agent_access_provider::ProviderInvocation::resource_scopes(&self) -> core::result::Result<&agent_access_provider::ResourceScopes, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::ProviderInvocation::search_authorization(&self) -> core::result::Result<&agent_access_provider::SearchAuthorization, agent_access_provider::AuthorityMismatch>
@@ -3386,7 +3405,7 @@ pub fn agent_access_provider::ScopeRequest<'a>::correlation(&self) -> &'a agent_
 pub fn agent_access_provider::ScopeRequest<'a>::execution_context(&self) -> &'a str
 pub fn agent_access_provider::ScopeRequest<'a>::identity(&self) -> &'a agent_access_provider::InvocationIdentity
 pub fn agent_access_provider::ScopeRequest<'a>::inputs(&self) -> &'a serde_json::value::Value
-pub fn agent_access_provider::ScopeRequest<'a>::lookup_credential(&self) -> core::option::Option<&'a agent_access_provider::ExecutionCredential>
+pub fn agent_access_provider::ScopeRequest<'a>::lookup_access(&self) -> core::option::Option<&'a agent_access_provider::LookupAccess>
 pub fn agent_access_provider::ScopeRequest<'a>::service(&self) -> &'a str
 impl<'a> core::clone::Clone for agent_access_provider::ScopeRequest<'a>
 pub fn agent_access_provider::ScopeRequest<'a>::clone(&self) -> agent_access_provider::ScopeRequest<'a>
@@ -3398,8 +3417,8 @@ impl<'a> core::marker::Send for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Sync for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Unpin for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::ScopeRequest<'a>
-impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopeRequest<'a>
-impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeRequest<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopeRequest<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeRequest<'a>
 pub struct agent_access_provider::ScopeResolution
 impl agent_access_provider::ScopeResolution
 pub fn agent_access_provider::ScopeResolution::into_parts(self) -> (agent_access_provider::ResourceScopes, core::option::Option<agent_access_provider::ProviderState>)
@@ -3954,6 +3973,7 @@ enum agent_access_provider::HeaderEncoding: non-exhaustive
 enum agent_access_provider::HookPhase: non-exhaustive
 enum agent_access_provider::InvocationAuthority: non-exhaustive
 enum agent_access_provider::IssuedRefreshToken: exhaustive
+enum agent_access_provider::LookupAccess: non-exhaustive
 enum agent_access_provider::LookupRequirement: non-exhaustive
 enum agent_access_provider::MutationStatus: non-exhaustive
 enum agent_access_provider::OAuthClientAuth: non-exhaustive
