@@ -37,7 +37,9 @@ export type ImportActionDefinition = {
   annotations: unknown;
   readOnly: boolean;
 };
+export type ImportSecretInput = { pointer: string };
 export type ImportActionRecord = {
+  secretInputs: ImportSecretInput[];
   definition: ImportActionDefinition;
   status: ImportActionStatus;
   version: number;
@@ -193,6 +195,7 @@ export type ImportRecordResult = {
 };
 export type ImportPreviewResult = ImportRecordResult & {
   scopedMcpWarnings: ImportScopedMcpWarning[];
+  secretInputCandidates: Array<{ toolIndex: number; pointers: string[] }>;
   preview: ImportPreview | null;
   /** Command imports: the preview's resource type decisions; empty otherwise. */
   resourceTypeChanges?: ImportResourceTypeChange[];
@@ -200,6 +203,6 @@ export type ImportPreviewResult = ImportRecordResult & {
   affectedGrantsByAction: Record<string, string[]>;
 };
 export type ImportVersions = { expectedVersion: number; expectedCatalogRevision: number };
-export type ImportSelection = { source: Record<string, unknown>; action: string; label?: string; readOnly: boolean };
+export type ImportSelection = { source: Record<string, unknown>; action: string; label?: string; readOnly: boolean; secretInputs: ImportSecretInput[] };
 /** Broker type IDs chosen for added resource types, by the source's type id. */
 export type ImportResourceTypeIds = Record<string, string>;

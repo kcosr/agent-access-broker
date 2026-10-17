@@ -10,9 +10,11 @@ mod command_facts;
 mod command_registry;
 mod command_request;
 mod definition;
+mod dispatch;
 mod metadata;
 mod registration;
 mod schema;
+mod secret_inputs;
 mod type_changes;
 
 pub use adapter::*;
@@ -30,11 +32,16 @@ pub(crate) use command_request::{
     VerifyRequest, wire_deadline, wire_mode,
 };
 pub use definition::*;
+pub use dispatch::ImportedDispatchGuard;
 pub use metadata::*;
 pub use registration::{
     ImportOAuthCompanion, ImportedAdapterRegistration, imported_adapter_registration,
 };
 pub use schema::*;
+pub use secret_inputs::{
+    IMPORT_MAX_SECRET_INPUT_BYTES, RECEIVER_OUTPUT_NOTICE, receiver_candidates,
+    receiver_descriptor, validate_mcp_receivers, validate_receiver_storage,
+};
 pub use type_changes::*;
 
 /// The implementation an imported protocol client names itself as, such as

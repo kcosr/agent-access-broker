@@ -516,7 +516,7 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
             .unwrap()
             .iter()
             .map(|tool| json!({"source": tool["definition"]["source"],
-                "action": tool["definition"]["action"], "readOnly": true}))
+                "action": tool["definition"]["action"], "readOnly": true,"secretInputs":[]}))
             .collect::<Vec<_>>()
     );
     accept["confirmAffectedGrants"] = json!(true);

@@ -175,6 +175,7 @@ fn golden_definitions() -> Vec<ImportedServiceDefinition> {
 fn golden_actions() -> Vec<ImportedActionWrite> {
     vec![
         ImportedActionWrite {
+                secret_inputs: Vec::new(),
             definition: ImportedActionDefinition {
                 action: "item.get".into(),
                 source: json!({"operationId":"get_item"}),
@@ -190,6 +191,7 @@ fn golden_actions() -> Vec<ImportedActionWrite> {
             status: ImportedActionStatus::Enabled,
         },
         ImportedActionWrite {
+                secret_inputs: Vec::new(),
             definition: ImportedActionDefinition {
                 action: "item.update".into(),
                 source: json!({"method":"PUT","path":"/items/{id}"}),
@@ -398,6 +400,7 @@ fn baseline_imported_rows_remain_readable() {
         .actions
         .iter()
         .map(|record| ImportedActionWrite {
+                secret_inputs: Vec::new(),
             definition: record.definition.clone(),
             status: record.status,
         })

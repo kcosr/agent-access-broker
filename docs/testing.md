@@ -2038,6 +2038,13 @@ connection, including scope omission on consent, code exchange and refresh,
 known/unknown scope display, credential isolation and action-grant enforcement.
 The Gmail regression suite retains its stricter initial refresh-token requirement.
 
+Imported MCP receiver coverage includes schema eligibility, migration from schema
+029 with unchanged source rows and ciphertext, required acceptance arrays,
+affected-grant confirmation, real host reference resolution and owner denial,
+literal and omitted optional receiver calls, encoded and binary response echoes,
+malformed responses, and publication races before and after final MCP dispatch.
+The portal tests cover retained invalid selections and receiver-contract changes.
+
 ## Imported OpenAPI services
 
 The adapter suite uses synthetic OpenAPI 3.1 documents and HTTP servers to test

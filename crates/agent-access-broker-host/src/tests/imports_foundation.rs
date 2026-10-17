@@ -55,6 +55,7 @@ pub(super) fn update(
             .actions
             .iter()
             .map(|a| ImportedActionWrite {
+                secret_inputs: Vec::new(),
                 definition: a.definition.clone(),
                 status: a.status,
             })
@@ -184,6 +185,7 @@ pub(super) fn fixture() -> Fixture {
         .catalog;
     let mut accept = update(&configured, ImportedServiceStatus::Enabled);
     accept.actions = vec![ImportedActionWrite {
+        secret_inputs: Vec::new(),
         definition: conformance_import_action(),
         status: ImportedActionStatus::Enabled,
     }];

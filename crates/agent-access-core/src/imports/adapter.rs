@@ -53,6 +53,10 @@ pub struct ImportedDiscovery {
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct ImportedAdapterContext<'a> {
+    /// Accepted receiver overlays, independent of source definitions.
+    pub receiver_actions: &'a [crate::ImportedActionRecord],
+    /// The same generation fence used by core publication.
+    pub dispatch_guard: Option<&'a super::ImportedDispatchGuard>,
     /// The service-level metadata accepted with the import's actions; `None`
     /// before the first acceptance and for adapters that record none.
     /// Discovery compares a refreshed source against it.
@@ -74,9 +78,28 @@ impl<'a> ImportedAdapterContext<'a> {
     ) -> Self {
         Self {
             accepted_metadata,
+            receiver_actions: &[],
+            dispatch_guard: None,
             command,
             command_registry: None,
         }
+    }
+
+    pub fn with_receivers(mut self, actions: &'a [crate::ImportedActionRecord]) -> Self {
+        self.receiver_actions = actions;
+        self
+    }
+
+    pub fn with_dispatch_guard(mut self, guard: &'a super::ImportedDispatchGuard) -> Self {
+        self.dispatch_guard = Some(guard);
+        self
+    }
+
+    pub fn secret_inputs(&self, action: &str) -> &[agent_access_provider::SecretInputDescriptor] {
+        self.receiver_actions
+            .iter()
+            .find(|row| row.definition.action == action)
+            .map_or(&[], |row| row.secret_inputs.as_slice())
     }
 
     /// This context with the Broker's command budgets, for discovery.
@@ -170,6 +193,18 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         &["/result"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String>;
+    /// Only adapters with receipt-only response handling may accept receivers.
+    fn validate_secret_inputs(
+        &self,
+        _action: &ImportedActionDefinition,
+        inputs: &[agent_access_provider::SecretInputDescriptor],
+    ) -> Result<(), String> {
+        if inputs.is_empty() {
+            Ok(())
+        } else {
+            Err("import adapter does not support secret receiver fields".into())
+        }
+    }
     /// The resources an accepted action names and the credential modes it
     /// supports, read offline from its definition; core maps them onto the
     /// action's descriptor. The default declares neither: the action is

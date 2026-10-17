@@ -115,7 +115,7 @@ impl Imports {
                 .iter()
                 .map(|tool| json!({"source": tool["definition"]["source"],
                     "action": tool["definition"]["action"],
-                    "readOnly": tool["definition"]["action"] == "ticket.list"}))
+                    "readOnly": tool["definition"]["action"] == "ticket.list", "secretInputs":[]}))
                 .collect::<Vec<_>>()
         );
         let (status, accepted) = request(

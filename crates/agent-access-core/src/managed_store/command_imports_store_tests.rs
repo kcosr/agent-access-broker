@@ -35,6 +35,7 @@ fn command_metadata(kind: Option<ImportedCredentialKind>) -> ImportedServiceMeta
 
 fn command_action() -> ImportedActionWrite {
     ImportedActionWrite {
+                secret_inputs: Vec::new(),
         definition: ImportedActionDefinition {
             action: "issue.view".into(),
             source: json!({"name":"issue.view"}),

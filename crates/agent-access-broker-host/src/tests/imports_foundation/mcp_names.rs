@@ -9,6 +9,7 @@ fn request(record: &ImportedServiceRecord, revision: u64) -> ImportedServiceUpda
             .actions
             .iter()
             .map(|action| ImportedActionWrite {
+                secret_inputs: Vec::new(),
                 definition: action.definition.clone(),
                 status: action.status,
             })
@@ -58,6 +59,7 @@ fn accept(runtime: &BrokerRuntime, service: &str, name: &str) -> ImportedService
     let mut record = runtime.imported_catalog().service(service).unwrap().clone();
     record.status = ImportedServiceStatus::Enabled;
     record.actions.push(ImportedActionRecord {
+        secret_inputs: Vec::new(),
         definition: agent_access_core::imports::ImportedActionDefinition {
             action: name.into(),
             ..conformance_import_action()
@@ -191,6 +193,7 @@ fn retained_overlength_import_survives_restart_and_supports_recovery() {
     record.actions[0].status = ImportedActionStatus::Retired;
     record.status = ImportedServiceStatus::Enabled;
     record.actions.push(ImportedActionRecord {
+        secret_inputs: Vec::new(),
         definition: conformance_import_action(),
         status: ImportedActionStatus::Enabled,
         version: 1,

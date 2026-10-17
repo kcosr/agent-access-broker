@@ -11,7 +11,7 @@ use crate::{
     },
     schema::encode_header,
 };
-use agent_access_core::imports::HOST_IMPLEMENTATION;
+use agent_access_core::imports::{HOST_IMPLEMENTATION, ImportedDispatchGuard};
 use agent_access_provider::{
     CredentialPlacement, DelegatedAccessError, DelegatedCredential, InvocationScope, ProviderError,
     ProviderFinalizationContext, ReasonCode, UpstreamAuthorization, UpstreamCall, UpstreamClient,
@@ -33,6 +33,39 @@ use std::{
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use zeroize::{Zeroize, Zeroizing};
+
+/// Adapter-owned JSON is never Debug and erases string copies when discarded.
+pub(crate) struct PrivateJson(pub Value);
+impl std::ops::Deref for PrivateJson {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for PrivateJson {
+    fn deref_mut(&mut self) -> &mut Value {
+        &mut self.0
+    }
+}
+impl Drop for PrivateJson {
+    fn drop(&mut self) {
+        clear_json(&mut self.0);
+    }
+}
+fn clear_json(value: &mut Value) {
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Array(values) => values.iter_mut().for_each(clear_json),
+        Value::Object(values) => {
+            for (mut key, mut value) in std::mem::take(values) {
+                key.zeroize();
+                clear_json(&mut value);
+            }
+        }
+        _ => {}
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct WireClient {
@@ -47,6 +80,13 @@ pub(crate) struct CallArguments {
     pub arguments: Value,
     pub modern_arguments: Value,
     pub headers: HeaderMap,
+}
+
+impl Drop for CallArguments {
+    fn drop(&mut self) {
+        clear_json(&mut self.arguments);
+        clear_json(&mut self.modern_arguments);
+    }
 }
 
 #[derive(Default)]
@@ -71,6 +111,14 @@ pub(crate) struct WireState {
     dispatch_pause: Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>,
 }
 
+impl Drop for WireState {
+    fn drop(&mut self) {
+        if let Some(result) = &mut self.result {
+            clear_json(result);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ProbeOutcome {
     Current,
@@ -90,6 +138,7 @@ struct OperationContext {
     auth: Vec<UpstreamAuthorization>,
     delegated: Option<(DelegatedCredential, String)>,
     call: Option<Arc<CallArguments>>,
+    dispatch_guard: Option<ImportedDispatchGuard>,
     state: Arc<Mutex<WireState>>,
     parent: CancellationToken,
     deadline: Instant,
@@ -118,6 +167,7 @@ impl Operation {
                 auth,
                 delegated,
                 call: call.map(Arc::new),
+                dispatch_guard: None,
                 state: state.clone(),
                 parent: CancellationToken::new(),
                 deadline,
@@ -126,6 +176,13 @@ impl Operation {
             }),
             state,
         }
+    }
+
+    pub fn with_dispatch_guard(mut self, guard: Option<ImportedDispatchGuard>) -> Self {
+        Arc::get_mut(&mut self.context)
+            .expect("operation not shared before startup")
+            .dispatch_guard = guard;
+        self
     }
 
     pub fn attempt(&self, lifecycle: Lifecycle) -> (HostTransport, CancellationToken) {
@@ -367,11 +424,8 @@ impl OperationContext {
         method: &str,
         sent_version: Option<String>,
     ) -> Result<HttpReply, ProviderError> {
+        let body = PrivateJson(body);
         let session_attached = headers.contains_key("mcp-session-id");
-        let request = self
-            .request(reqwest::Method::POST, headers)
-            .header("accept", "application/json, text/event-stream")
-            .json(&body);
         #[cfg(test)]
         {
             let pause = self
@@ -385,14 +439,27 @@ impl OperationContext {
                 pause.1.wait();
             }
         }
-        {
+        let admit = || {
             let mut state = self.state.lock().expect("wire state");
             self.admit(&mut state, false)?;
             state.status = None;
             if method == "tools/call" {
                 state.call_dispatched = true;
             }
+            Ok(())
+        };
+        // Fence first, operation state second; release both before awaiting I/O.
+        if method == "tools/call"
+            && let Some(guard) = &self.dispatch_guard
+        {
+            guard.admit(admit)?;
+        } else {
+            admit()?;
         }
+        let request = self
+            .request(reqwest::Method::POST, headers)
+            .header("accept", "application/json, text/event-stream")
+            .json(&body.0);
         let mut response = self
             .wire
             .client
@@ -910,14 +977,14 @@ async fn read_bytes(
     response: &mut reqwest::Response,
     max_bytes: u64,
     state: &Mutex<WireState>,
-) -> Result<Vec<u8>, ProviderError> {
+) -> Result<Zeroizing<Vec<u8>>, ProviderError> {
     if response
         .content_length()
         .is_some_and(|length| length > max_bytes)
     {
         return Err(protocol_error());
     }
-    let mut body = Vec::new();
+    let mut body = Zeroizing::new(Vec::new());
     while let Some(chunk) = response
         .chunk()
         .await
@@ -963,8 +1030,8 @@ async fn read_sse(
 /// Bounded by the entire HTTP response budget, including comments and notifications.
 #[derive(Default)]
 struct SseDecoder {
-    line: Vec<u8>,
-    data: String,
+    line: Zeroizing<Vec<u8>>,
+    data: Zeroizing<String>,
     after_cr: bool,
     initial: bool,
 }
@@ -981,12 +1048,12 @@ impl SseDecoder {
                 self.after_cr = *byte == b'\r';
                 if self.line.is_empty() {
                     if self.data.trim().is_empty() {
-                        self.data.clear();
+                        self.data.zeroize();
                         continue;
                     }
                     let data = std::mem::take(&mut self.data);
-                    let message: Value =
-                        serde_json::from_str(&data).map_err(|_| protocol_error())?;
+                    let mut message =
+                        PrivateJson(serde_json::from_str(&data).map_err(|_| protocol_error())?);
                     if message.get("method").is_some() {
                         if message.get("id").is_some()
                             || message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
@@ -996,7 +1063,7 @@ impl SseDecoder {
                         // No notifications enter SDK logs, callbacks, or cache state.
                         continue;
                     }
-                    return Ok(Some(message));
+                    return Ok(Some(std::mem::take(&mut message.0)));
                 }
                 let bytes = std::mem::take(&mut self.line);
                 let line = std::str::from_utf8(&bytes).map_err(|_| protocol_error())?;
