@@ -304,3 +304,11 @@ upstream token. MCP reconnects preserve references when origin authentication,
 trusted caller, and execution context still match. Only explicitly declared
 payload input fields accept reference objects. Management credential installation
 is outside the MCP tool catalog.
+
+## GitLab role selection
+
+GitLab `project.access_token.create` and `service_account.member.set` require
+`inputs.role` with an exact built-in name: `guest`, `planner`, `reporter`,
+`security_manager`, `developer`, or `maintainer`. Use the tool's advertised enum,
+which is limited by operator `max_role`. Custom roles are unsupported.
+Numeric `accessLevel` is upstream result metadata only, not a tool input.

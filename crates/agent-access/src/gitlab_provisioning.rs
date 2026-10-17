@@ -35,8 +35,9 @@ pub(super) enum ProjectTokenCommand {
         project: String,
         #[arg(long)]
         name: String,
-        #[arg(long)]
-        access_level: u32,
+        /// Built-in GitLab project role, subject to the Broker operator cap.
+        #[arg(long, value_parser = ["guest", "planner", "reporter", "security_manager", "developer", "maintainer"])]
+        role: String,
         #[arg(long, value_delimiter = ',', required = true)]
         scopes: Vec<String>,
         #[command(flatten)]
@@ -78,8 +79,9 @@ pub(super) enum ServiceAccountCommand {
     MemberSet {
         project: String,
         user_id: u64,
-        #[arg(long)]
-        access_level: u32,
+        /// Built-in GitLab project role, subject to the Broker operator cap.
+        #[arg(long, value_parser = ["guest", "planner", "reporter", "security_manager", "developer", "maintainer"])]
+        role: String,
     },
     Token {
         #[command(subcommand)]
@@ -159,12 +161,12 @@ pub(super) async fn run_project_token(
         Create {
             project,
             name,
-            access_level,
+            role,
             scopes,
             delivery,
         } => (
             "create",
-            json!({"project":project,"name":name,"accessLevel":access_level,"scopes":scopes}),
+            json!({"project":project,"name":name,"role":role,"scopes":scopes}),
             Some(delivery),
         ),
         Rotate {
@@ -217,10 +219,10 @@ pub(super) async fn run_service_account(
         MemberSet {
             project,
             user_id,
-            access_level,
+            role,
         } => (
             "member.set",
-            json!({"project":project,"userId":user_id,"accessLevel":access_level}),
+            json!({"project":project,"userId":user_id,"role":role}),
         ),
         Token { command } => return run_service_account_token(ctx, command).await,
     };
@@ -403,4 +405,147 @@ fn remove_reserved_token_output(file: &fs::File, path: &Path) -> std::io::Result
     #[cfg(not(unix))]
     let _ = file;
     fs::remove_file(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn provisioning_cli_role_choices_match_provider_schema_and_reject_old_flags() {
+        let config: agent_access_gitlab::GitlabProviderConfig = serde_json::from_value(json!({
+            "api_base_url":"https://gitlab.example.test/api/v4",
+            "web_base_url":"https://gitlab.example.test",
+            "provisioning":{"max_role":"maintainer"},
+        }))
+        .unwrap();
+        let descriptor = agent_access_gitlab::gitlab_descriptor(&config);
+        let command = Cli::command();
+        let gitlab = command.find_subcommand("gitlab").unwrap();
+        for (action, path, arguments) in [
+            (
+                "project.access_token.create",
+                vec!["project", "access-token", "create"],
+                vec![
+                    "agent-access",
+                    "gitlab",
+                    "project",
+                    "access-token",
+                    "create",
+                    "team/repo",
+                    "--name",
+                    "reviewer",
+                    "--scopes",
+                    "api",
+                    "--expires-at",
+                    "2099-01-01",
+                ],
+            ),
+            (
+                "service_account.member.set",
+                vec!["service-account", "member-set"],
+                vec![
+                    "agent-access",
+                    "gitlab",
+                    "service-account",
+                    "member-set",
+                    "team/repo",
+                    "70",
+                ],
+            ),
+        ] {
+            let mut leaf = gitlab;
+            for name in path {
+                leaf = leaf.find_subcommand(name).unwrap();
+            }
+            let argument = leaf
+                .get_arguments()
+                .find(|arg| arg.get_id() == "role")
+                .unwrap();
+            let choices = argument
+                .get_value_parser()
+                .possible_values()
+                .unwrap()
+                .map(|value| value.get_name().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                json!(choices),
+                descriptor.action(action).unwrap().input_schema["properties"]["role"]["enum"]
+            );
+            for role in &choices {
+                let mut args = arguments.clone();
+                args.extend(["--role", role]);
+                assert!(Cli::try_parse_from(args).is_ok(), "{action}: {role}");
+            }
+            for role in [
+                "30",
+                "Developer",
+                " developer",
+                "developer ",
+                "security-manager",
+                "owner",
+                "custom",
+            ] {
+                let mut args = arguments.clone();
+                args.extend(["--role", role]);
+                assert!(Cli::try_parse_from(args).is_err(), "{action}: {role}");
+            }
+            for value in ["30", "developer"] {
+                let mut old = arguments.clone();
+                old.extend(["--access-level", value]);
+                assert!(Cli::try_parse_from(old).is_err());
+            }
+            let mut help_args = arguments;
+            help_args.push("--help");
+            let help = Cli::try_parse_from(help_args).unwrap_err();
+            assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+            let text = help.to_string();
+            for role in choices {
+                assert!(text.contains(&role));
+            }
+            assert!(text.contains("--role"));
+            assert!(!text.contains("--access-level"));
+        }
+    }
+
+    #[test]
+    fn provisioning_toml_requires_named_role_caps() {
+        use agent_access_gitlab::GitlabProvisioningConfig;
+        let default: GitlabProvisioningConfig = toml::from_str("").unwrap();
+        assert_eq!(default.max_role.as_str(), "developer");
+        for role in [
+            "guest",
+            "planner",
+            "reporter",
+            "security_manager",
+            "developer",
+            "maintainer",
+        ] {
+            let config: GitlabProvisioningConfig =
+                toml::from_str(&format!("max_role = {role:?}")).unwrap();
+            assert_eq!(config.max_role.as_str(), role);
+        }
+        for input in [
+            "max_access_level = 30",
+            "max_access_level = \"developer\"",
+            "max_access_level = 30\nmax_role = \"developer\"",
+            "max_role = 30",
+            "max_role = true",
+            "max_role = []",
+            "max_role = {}",
+            "max_role = { developer = {} }",
+            "max_role = \"30\"",
+            "max_role = \"Developer\"",
+            "max_role = \"developer \"",
+            "max_role = \"security-manager\"",
+            "max_role = \"owner\"",
+            "max_role = \"custom\"",
+        ] {
+            assert!(
+                toml::from_str::<GitlabProvisioningConfig>(input).is_err(),
+                "{input}"
+            );
+        }
+    }
 }

@@ -209,6 +209,9 @@ Newly issued GitLab tokens can stay encrypted in the Broker while an agent
 receives a [temporary reference](docs/secret-references.md). Authorized credential
 management can install that reference into a connection without exposing the
 token. Operators can explicitly select raw delivery for scripting workflows.
+[GitLab provisioning](docs/gitlab-bot-provisioning.md) uses built-in role names
+such as `developer` for token creation and service-account membership; live
+tool schemas show the choices allowed by the operator's `max_role` cap.
 
 ## Documentation reference
 

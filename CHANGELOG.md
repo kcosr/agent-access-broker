@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- GitLab project access-token creation and service-account membership replace
+  the numeric `accessLevel` input and `--access-level` flag with strict built-in
+  `role` names and `--role`. Provisioning configuration replaces
+  `max_access_level` with `max_role` (default `"developer"`). Numeric role
+  inputs and old spellings are rejected; numeric `accessLevel` result metadata
+  is unchanged. Discovery advertises only roles permitted by the configured cap.
+
 - Connection credential PUTs, including literal tokens, return `409 version_conflict` before writing when a runtime publication overtakes admission; retry the PUT using current configuration.
 
 - Declared transferable provider secrets default to encrypted temporary reference

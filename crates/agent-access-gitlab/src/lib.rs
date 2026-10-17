@@ -28,7 +28,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 pub use provisioning::{
-    GitlabProvisioningConfig, GitlabProvisioningOperation, GitlabProvisioningRequest,
+    GitlabProjectRole, GitlabProvisioningConfig, GitlabProvisioningOperation,
+    GitlabProvisioningRequest,
 };
 pub(crate) use provisioning::{PROVISIONING_ACTIONS, issues_token};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
@@ -296,7 +297,7 @@ fn gitlab_config_fingerprint(config: &GitlabProviderConfig) -> String {
     let fields = json!({
         "apiBaseUrl": config.api_base_url,
         "webBaseUrl": config.web_base_url,
-        "provisioning": { "enabled":config.provisioning.enabled, "maxAccessLevel":config.provisioning.max_access_level, "maxTokenLifetimeDays":config.provisioning.max_token_lifetime_days, "allowedTokenScopes":config.provisioning.allowed_token_scopes },
+        "provisioning": { "enabled":config.provisioning.enabled, "maxRole":config.provisioning.max_role, "maxTokenLifetimeDays":config.provisioning.max_token_lifetime_days, "allowedTokenScopes":config.provisioning.allowed_token_scopes },
         "webhooks": {
             "allowedDestinations": config.webhooks.allowed_destinations,
             "allowDisableSslVerification": config.webhooks.allow_disable_ssl_verification,
@@ -7160,7 +7161,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
     ];
     actions.extend(PROVISIONING_ACTIONS.iter().map(|action| {
         let schema = provisioning::provisioning_schema(action, config);
-        if issues_token(action) {
+        let descriptor = if issues_token(action) {
             // GitLab documents project token creation and rotation as
             // personal-access-token only; service-account tokens are
             // treated alike. OAuth access never reaches them.
@@ -7189,7 +7190,8 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 "Manage GitLab project automation identities and token metadata",
                 schema,
             )
-        }
+        };
+        descriptor.documentation(json!({"roleSelection": provisioning::ROLE_DOCUMENTATION}))
     }));
     let descriptor = ServiceDescriptor::new("gitlab", "GitLab")
         .with_resource_scopes(BTreeMap::from([(
@@ -8944,6 +8946,13 @@ fn project_locator_for_action(
     config: &GitlabProviderConfig,
 ) -> Result<ProjectLocator, ProviderError> {
     if PROVISIONING_ACTIONS.contains(&action) {
+        // Scope resolution can precede invoke-time validation. Reject invalid
+        // roles and other schema violations before selecting lookup access or
+        // contacting GitLab, including when the caller invokes this hook directly.
+        provisioning::validate_provisioning_inputs(
+            inputs,
+            &provisioning::provisioning_schema(action, config),
+        )?;
         return parse_required_project_locator(inputs);
     }
     match action {

@@ -15,7 +15,7 @@ limits in TOML:
 ```toml
 [providers.gitlab.provisioning]
 enabled = true
-max_access_level = 30
+max_role = "developer"
 max_token_lifetime_days = 30
 allowed_token_scopes = ["api", "read_api", "read_repository"]
 ```
@@ -24,9 +24,30 @@ Defaults are shown except for `enabled`, which defaults to `false`. Disabling
 provisioning denies all operations in this document, including metadata reads
 and revocation. Revocation remains available directly in GitLab.
 
-`max_access_level` accepts GitLab project roles 10, 15, 20, 25, 30, or 40, and
-caps both project token roles and service-account membership changes. Role 30
-is Developer. The allowed token scopes are a nonempty subset of `api`,
+`max_role` accepts the built-in role names below and caps both project token
+roles and service-account membership changes. Action inputs use the required
+`role` string; typed commands use `--role`. Names are exact and lowercase.
+Discovery advertises only the roles at or below the configured cap.
+
+| Role name | GitLab built-in role | Upstream access level |
+| --- | --- | --- |
+| `guest` | Guest | 10 |
+| `planner` | Planner | 15 |
+| `reporter` | Reporter | 20 |
+| `security_manager` | Security Manager | 25 |
+| `developer` | Developer | 30 |
+| `maintainer` | Maintainer | 40 |
+
+The cap follows GitLab's numeric base access-level ordering. For example,
+`max_role = "developer"` permits the first five roles. It does not describe
+all effective permissions an upstream account might have. Owner is not an
+assignable role through Broker. GitLab custom-role names and IDs are not
+accepted; custom-role discovery, assignment, and removal are not exposed.
+See the [project token API](https://docs.gitlab.com/api/project_access_tokens/),
+[project member API](https://docs.gitlab.com/api/project_members/), and
+[custom roles](https://docs.gitlab.com/user/custom_roles/).
+
+The allowed token scopes are a nonempty subset of `api`,
 `read_api`, `read_repository`, `write_repository`, `read_registry`,
 `write_registry`, and `self_rotate`. Scopes are explicit, nonempty, and unique.
 A token's `expiresAt` is required on both creation and rotation; it must be a
@@ -88,7 +109,7 @@ before unrelated work. In an explicitly configured raw-mode deployment, adding
 
 ```bash
 agent-access gitlab project access-token create team/repo \
-  --name code-review-bot --access-level 30 --scopes api \
+  --name code-review-bot --role developer --scopes api \
   --expires-at YYYY-MM-DD
 
 agent-access gitlab project access-token list team/repo --max-results 20
@@ -122,7 +143,7 @@ and [service account membership rules](https://docs.gitlab.com/user/profile/serv
 agent-access gitlab service-account create team/repo \
   --name code-review-bot --username code-review-bot
 # Use the returned result.serviceAccount.id in subsequent commands.
-agent-access gitlab service-account member-set team/repo 70 --access-level 30
+agent-access gitlab service-account member-set team/repo 70 --role developer
 agent-access gitlab service-account token create team/repo 70 \
   --name reviewer-tool --scopes api --expires-at YYYY-MM-DD
 
@@ -158,14 +179,14 @@ All inputs use `project` (the full repository path). IDs are positive integers;
 | --- | --- | --- |
 | `project.access_token.list` | — | `maxResults`, `pageToken` |
 | `project.access_token.view` | `tokenId` | — |
-| `project.access_token.create` | `name`, `accessLevel`, `scopes`, `expiresAt` | — |
+| `project.access_token.create` | `name`, `role`, `scopes`, `expiresAt` | — |
 | `project.access_token.rotate` | `tokenId`, `expiresAt` | — |
 | `project.access_token.revoke` | `tokenId` | — |
 | `service_account.list` | — | `maxResults`, `pageToken` |
 | `service_account.view` | `userId` | — |
 | `service_account.create` | `name` | `username` |
 | `service_account.delete` | `userId` | — |
-| `service_account.member.set` | `userId`, `accessLevel` | — |
+| `service_account.member.set` | `userId`, `role` | — |
 | `service_account.token.list` | `userId` | `maxResults`, `pageToken` |
 | `service_account.token.create` | `userId`, `name`, `scopes`, `expiresAt` | — |
 | `service_account.token.rotate` | `userId`, `tokenId`, `expiresAt` | — |
@@ -198,7 +219,7 @@ For JSON `send`, use the normal request document:
   "inputs": {
     "project": "team/repo",
     "name": "code-review-bot",
-    "accessLevel": 30,
+    "role": "developer",
     "scopes": ["api"],
     "expiresAt": "YYYY-MM-DD"
   }
@@ -215,7 +236,11 @@ Only token creation and rotation return `result.issuedToken`. Metadata is in
 `result.accessToken`; account operations use `result.serviceAccount`, membership
 changes use `result.member`. Metadata reads and audit records do not include raw
 tokens. Unexpected upstream fields are discarded. Execution and lookup
-credentials are never returned.
+credentials are never returned. Result `accessLevel` remains numeric upstream
+metadata, including Owner (50) or other unsigned levels reported by metadata
+reads. It describes the base access level, not a custom role or complete
+permissions inventory; it is not an action input. Metadata reads and revocation
+remain available for roles above the issuance cap.
 
 The global [temporary secret reference policy](secret-references.md) controls
 these four outputs. The default reference mode returns `{secretRef, expiresAt}`;

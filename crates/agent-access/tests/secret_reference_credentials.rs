@@ -81,6 +81,20 @@ fn action_tool<'a>(listing: &'a Value, action: &str) -> &'a Value {
 
 fn issuance_tool(listing: &Value) -> &str {
     let tool = action_tool(listing, "project.access_token.create");
+    let inputs = &tool["inputSchema"]["properties"]["inputs"];
+    assert_eq!(inputs["properties"]["role"]["type"], "string");
+    assert_eq!(
+        inputs["properties"]["role"]["enum"],
+        json!([
+            "guest",
+            "planner",
+            "reporter",
+            "security_manager",
+            "developer"
+        ])
+    );
+    assert!(inputs["properties"].get("accessLevel").is_none());
+    assert!(tool.get("documentation").is_none());
     assert_eq!(
         tool["_meta"]["agent-access/secret-output-mode"],
         "reference"
@@ -506,8 +520,8 @@ credential_mode = "per_user"
             "acme/portal",
             "--name",
             "typed-reviewer",
-            "--access-level",
-            "30",
+            "--role",
+            "developer",
             "--scopes",
             "read_api",
             "--expires-at",
@@ -519,7 +533,7 @@ credential_mode = "per_user"
     let inputs = |name: &str| {
         json!({
             "project":"acme/portal", "name":name, "scopes":["read_api"],
-            "accessLevel":30, "expiresAt":expiry,
+            "role":"developer", "expiresAt":expiry,
         })
     };
     let invoked = result(cli(

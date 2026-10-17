@@ -10114,7 +10114,7 @@ fn gitlab_provider_toml(config: &GitlabProviderConfig) -> String {
 api_base_url = {api_base_url}
 web_base_url = {web_base_url}
 allowed_upstream_hosts = {allowed_upstream_hosts}
-provisioning = {{ enabled = {enabled}, max_access_level = {max_access_level}, max_token_lifetime_days = {max_token_lifetime_days}, allowed_token_scopes = {allowed_token_scopes} }}
+provisioning = {{ enabled = {enabled}, max_role = {max_role}, max_token_lifetime_days = {max_token_lifetime_days}, allowed_token_scopes = {allowed_token_scopes} }}
 attachments = {{ max_bytes = {max_bytes}, max_total_bytes = {max_total_bytes}, media_types = {media_types} }}
 webhooks = {{ allowed_destinations = {allowed_destinations}, allow_disable_ssl_verification = {allow_disable_ssl_verification} }}
 content = {{ max_body_bytes = {max_body_bytes}, max_commit_actions = {max_commit_actions}, max_file_bytes = {max_file_bytes}, max_raw_download_bytes = {max_raw_download_bytes} }}
@@ -10124,7 +10124,7 @@ search = {{ max_results = {max_results} }}
         web_base_url = toml_string(web_base_url),
         allowed_upstream_hosts = toml_strings(allowed_upstream_hosts),
         enabled = provisioning.enabled,
-        max_access_level = provisioning.max_access_level,
+        max_role = toml_string(provisioning.max_role.as_str()),
         max_token_lifetime_days = provisioning.max_token_lifetime_days,
         allowed_token_scopes = toml_strings(&provisioning.allowed_token_scopes),
         max_bytes = attachments.max_bytes,
