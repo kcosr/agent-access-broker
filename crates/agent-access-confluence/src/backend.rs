@@ -498,6 +498,9 @@ pub struct ConfluencePage {
     pub space: String,
     pub web_url: Option<String>,
     pub space_web_url: Option<String>,
+    /// The URL alias a v2 space object reports for `space`; see
+    /// [`ConfluenceSpace::alias`].
+    pub space_alias: Option<String>,
     pub status: Option<String>,
     pub version: u64,
     pub created_at: Option<String>,
@@ -4291,6 +4294,7 @@ pub(crate) fn page_from_value(value: Value) -> Result<ConfluencePage, Confluence
         space,
         web_url,
         space_web_url,
+        space_alias: None,
         status,
         version,
         created_at: confluence_created_at(&value),
@@ -4340,6 +4344,7 @@ pub(crate) fn page_from_v2_value(
         space: expected_space.to_string(),
         web_url: confluence_webui_link(&value),
         space_web_url: None,
+        space_alias: None,
         status: Some(hierarchy.status),
         version: hierarchy.version,
         created_at: confluence_created_at(&value),

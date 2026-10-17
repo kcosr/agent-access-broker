@@ -564,3 +564,119 @@ fn fallback_audit_keeps_a_bounded_count_and_sample() {
     let long = format!("/spaces/A/{}", "x/".repeat(40));
     assert!(browser_link_shape(&long, &config).ends_with("/..."));
 }
+
+/// `page.create` reads the v2 space object before creating; the v2 create
+/// response names no space, so the created page's links take that space's
+/// alias, with or without a space browser link.
+#[tokio::test]
+async fn page_create_keeps_aliased_links_from_the_resolved_space() {
+    const CREATED_LINK: &str = "/spaces/VLABS/pages/900001/Child";
+    for space_link in [Some("/spaces/VLABS"), None] {
+        let server = MockServer::start().await;
+        let mut space = json!({
+            "id": SPACE_ID,
+            "key": "RAILS",
+            "status": "current",
+            "homepageId": "55555",
+            "currentActiveAlias": "VLABS"
+        });
+        if let Some(link) = space_link {
+            space["_links"] = json!({ "webui": link });
+        }
+        mount_json(
+            &server,
+            "/wiki/api/v2/spaces".to_string(),
+            json!({ "results": [space] }),
+        )
+        .await;
+        let created = json!({
+            "id": "900001",
+            "type": "page",
+            "status": "current",
+            "title": "Child",
+            "spaceId": SPACE_ID,
+            "parentId": "55555",
+            "parentType": "page",
+            "version": { "number": 1 },
+            "_links": { "webui": CREATED_LINK }
+        });
+        Mock::given(method("POST"))
+            .and(path("/wiki/api/v2/pages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(created.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        mount_json(&server, "/wiki/api/v2/pages/900001".to_string(), created).await;
+
+        let result = alias_provider(&server)
+            .invoke(alias_invocation(
+                "page.create",
+                json!({
+                    "space": "RAILS",
+                    "title": "Child",
+                    "contentFormat": "storage",
+                    "content": "<p>child</p>"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.result["space"], "RAILS", "{space_link:?}");
+        assert_eq!(result.result["webUrl"], format!("{SITE}{CREATED_LINK}"));
+        let space_url = match space_link {
+            Some(_) => format!("{SITE}/spaces/VLABS"),
+            None => format!("{SITE}/spaces/RAILS"),
+        };
+        assert_eq!(result.result["spaceUrl"], space_url);
+        let audit = result.audit.as_ref().unwrap();
+        assert_eq!(audit["space"], "RAILS");
+        assert!(audit.get("browserUrlFallbacks").is_none(), "{audit}");
+    }
+}
+
+/// An update response whose space carries no browser link keeps its aliased
+/// content link through the confirmed page's space object.
+#[tokio::test]
+async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/wiki/rest/api/content/{PAGE_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rails_page(ALIASED_PAGE_LINK)))
+        .mount(&server)
+        .await;
+    let mut updated = rails_page(ALIASED_PAGE_LINK);
+    updated["space"] = json!({ "key": "RAILS" });
+    updated["version"] = json!({ "number": 4 });
+    Mock::given(method("PUT"))
+        .and(path(format!("/wiki/rest/api/content/{PAGE_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(updated))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = alias_provider(&server)
+        .invoke(alias_invocation(
+            "page.update",
+            json!({
+                "pageId": PAGE_ID,
+                "baseVersion": 3,
+                "contentFormat": "storage",
+                "content": "<p>updated</p>"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(result.result["space"], "RAILS");
+    assert_eq!(
+        result.result["webUrl"],
+        format!("{SITE}{ALIASED_PAGE_LINK}")
+    );
+    assert_eq!(result.result["spaceUrl"], format!("{SITE}/spaces/VLABS"));
+    assert!(
+        result
+            .audit
+            .as_ref()
+            .unwrap()
+            .get("browserUrlFallbacks")
+            .is_none()
+    );
+}

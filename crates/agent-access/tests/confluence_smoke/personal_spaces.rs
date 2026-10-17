@@ -13,6 +13,7 @@ fn personal_page(id: &str, space: &str) -> ConfluencePage {
         space: space.into(),
         web_url: None,
         space_web_url: None,
+        space_alias: None,
         status: Some("current".into()),
         version: 1,
         created_at: None,

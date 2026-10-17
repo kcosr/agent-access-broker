@@ -3336,13 +3336,17 @@ impl ConfluenceProvider {
             }
         };
         after_accepted_write("mutation_response", write.locators(), async {
-        let page = response.value;
+        let mut page = response.value;
         if page.space != inputs.space {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
                 "Confluence created page did not match the authorized space",
             ));
         }
+        // The v2 create response names no space: the resolved space object
+        // carries its alias and browser link.
+        page.space_alias = space.alias.clone();
+        page.space_web_url = space.web_url.clone();
         let readback_response = match self
             .backend
             .page_hierarchy(&page.id, false, credential)
@@ -3900,12 +3904,18 @@ impl ConfluenceProvider {
             Err(error) => return Err(write.failed(error)),
         };
         after_accepted_write("mutation_response", write.locators(), async {
-            let page = response.value;
+            let mut page = response.value;
             if page.id != metadata.id || page.space != metadata.space {
                 return Err(ProviderError::deny(
                     ReasonCode::ScopeUnresolved,
                     "Confluence updated page did not match the authorized scope",
                 ));
+            }
+            // When the update response omits its space link, the confirmed
+            // page's space object names the same space.
+            if page.space_web_url.is_none() {
+                page.space_alias = metadata.space_alias.clone();
+                page.space_web_url = metadata.space_web_url.clone();
             }
             if page.version != inputs.base_version + 1 {
                 return Err(ProviderError::error(
@@ -11155,7 +11165,12 @@ impl<'a> ConfluenceSpaceUrlNames<'a> {
     }
 
     fn of_page(page: &'a ConfluencePage, config: &ConfluenceProviderConfig) -> Self {
-        Self::new(&page.space, None, page.space_web_url.as_deref(), config)
+        Self::new(
+            &page.space,
+            page.space_alias.as_deref(),
+            page.space_web_url.as_deref(),
+            config,
+        )
     }
 
     fn of_blog(blog: &'a ConfluenceBlog, config: &ConfluenceProviderConfig) -> Self {

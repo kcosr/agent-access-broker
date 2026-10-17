@@ -569,9 +569,11 @@ space key, for example `RAILS`, while browser links use the URL alias, for
 example `/spaces/VLABS/pages/...`. A browser link's space segment is accepted
 when it equals the result's space key or that space's alias. The alias is the
 v2 space object's `currentActiveAlias` where the broker already reads that
-object (blog, blog draft, and page draft results), and otherwise the
-`/spaces/<alias>` or `/spaces/<alias>/overview` path of the space object's own
-`_links.webui` on the configured site. An alias must be one ASCII letter or
+object (page create, blog, blog draft, and page draft results), and otherwise
+the `/spaces/<alias>` or `/spaces/<alias>/overview` path of the space object's
+own `_links.webui` on the configured site. A write result whose upstream
+response names no space link takes the space object the broker resolved before
+the write. An alias must be one ASCII letter or
 digit followed by letters, digits, `_`, or `-`, up to 255 characters, and
 matches exactly, including case. Resolving an alias needs no extra upstream
 request. Results, scopes, grants, exclusions, and audit records always carry the

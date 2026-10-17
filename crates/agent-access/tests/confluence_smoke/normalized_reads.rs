@@ -201,6 +201,7 @@ fn normalized_page(bodies: BTreeMap<String, String>) -> ConfluencePage {
         space: "ENG".to_string(),
         web_url: None,
         space_web_url: None,
+        space_alias: None,
         status: Some("current".to_string()),
         version: 7,
         created_at: Some("2026-08-29T10:00:00Z".to_string()),

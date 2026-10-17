@@ -51,6 +51,7 @@ fn page() -> ConfluencePage {
         space: "ENG".to_string(),
         web_url: None,
         space_web_url: None,
+        space_alias: None,
         status: Some("current".to_string()),
         version: 7,
         created_at: None,
