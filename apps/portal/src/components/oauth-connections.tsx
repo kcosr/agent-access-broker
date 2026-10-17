@@ -1,7 +1,8 @@
 // OAuth connections for the signed-in user, one per registration that their
 // credential connections use: connect, reconnect, replace an account without
 // identity evidence, and disconnect. Used on Credentials and on an imported
-// service's Import tab.
+// service's Import tab. An administered principal's registrations are shown
+// read-only, with their remote revocation.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { brokerApi, type OAuthReturnPath } from "../api";
 import type { OAuthConnectionTarget, RemoteRevocation } from "../types";
@@ -10,7 +11,7 @@ import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
 import { usePortalInvalidation } from "../data/invalidation";
 import { refreshOAuthOnReturn, reserveOAuthWindow } from "../lib/oauth-window";
-import { consumerSummary } from "../lib/credentials";
+import { consumerSummary, type AdministeredOAuth } from "../lib/credentials";
 
 const STATUS: Record<string, { label: string; tone: Tone }> = {
   ready: { label: "Connected", tone: "success" },
@@ -34,24 +35,34 @@ const PROVIDER_APPLICATIONS = "in GitLab: Preferences › Applications › Autho
 // by a lost renewal. It never describes the current connection, which may
 // use another account.
 const REVOKE_ENDED = `Revoke the broker application's access at the provider, signed in to the account that connection used (${PROVIDER_APPLICATIONS}).`;
-const REMOTE_REVOCATION: Record<Exclude<RemoteRevocation, "not_requested">, { label: string; tone: Tone; message: string }> = {
-  pending: {
-    label: "Revocation pending",
-    tone: "warning",
-    message: "The broker is still revoking the tokens of an ended connection at the provider and retries while the provider is unavailable."
-  },
-  revoked: { label: "Revoked at provider", tone: "success", message: "The provider revoked the tokens of the connections the broker ended." },
-  failed: {
-    label: "Revocation failed",
-    tone: "danger",
-    message: `The provider did not revoke every token of an ended connection. ${REVOKE_ENDED}`
-  },
-  unconfirmed: {
-    label: "Revocation unconfirmed",
-    tone: "danger",
-    message: `A token renewal's outcome was lost for an ended connection, so the provider may hold a token the broker never received. ${REVOKE_ENDED}`
-  }
-};
+// An administrator cannot act on the person's account and does not see its
+// current connection.
+const REVOKE_ENDED_ADMINISTERED = `The user must revoke the broker application's access at the provider, signed in to the account that connection used (${PROVIDER_APPLICATIONS}), or a provider administrator must revoke it. That also ends a current connection of the same account, which the user then reconnects.`;
+function remoteRevocationStates(revokeEnded: string): Record<Exclude<RemoteRevocation, "not_requested">, { label: string; tone: Tone; message: string }> {
+  return {
+    pending: {
+      label: "Revocation pending",
+      tone: "warning",
+      message: "The broker is still revoking the tokens of an ended connection at the provider and retries while the provider is unavailable."
+    },
+    revoked: { label: "Revoked at provider", tone: "success", message: "The provider revoked the tokens of the connections the broker ended." },
+    failed: {
+      label: "Revocation failed",
+      tone: "danger",
+      message: `The provider did not revoke every token of an ended connection. ${revokeEnded}`
+    },
+    unconfirmed: {
+      label: "Revocation unconfirmed",
+      tone: "danger",
+      message: `A token renewal's outcome was lost for an ended connection, so the provider may hold a token the broker never received. ${revokeEnded}`
+    }
+  };
+}
+const REMOTE_REVOCATION = remoteRevocationStates(REVOKE_ENDED);
+const ADMINISTERED_REVOCATION = remoteRevocationStates(REVOKE_ENDED_ADMINISTERED);
+/** The status of an administered principal's registration, whose connection only its owner sees. */
+export const ADMINISTERED_OAUTH_STATUS: { label: string; tone: Tone } = { label: "Managed by user", tone: "neutral" };
+export const ADMINISTERED_OAUTH_NOTICE = "Only the user can connect, reconnect or disconnect this account, from their own Credentials page.";
 // After a disconnect, the result also covers the account just disconnected.
 const REVOKE_AT_PROVIDER = `Revoke the broker application's access in your account settings at the provider (${PROVIDER_APPLICATIONS}).`;
 const DISCONNECT_REVOCATION: Record<Exclude<RemoteRevocation, "not_requested">, string> = {
@@ -99,6 +110,20 @@ export function oauthRemoteRevocation(target: Pick<OAuthConnectionTarget, "remot
       ? "The current connection keeps working, but revoking at the provider ends it too when it uses the same account; reconnect afterwards."
       : "The current connection is not affected.";
   return { ...revocation, message: `${revocation.message} ${current}` };
+}
+
+/** Whether a registration's ended connections need provider-side cleanup: their revocation failed or is unconfirmed. */
+export function oauthRevocationNeedsAttention(state: RemoteRevocation | null) {
+  return state === "failed" || state === "unconfirmed";
+}
+
+/**
+ * The remote revocation of an administered principal's registration, worded
+ * for administrators and auditors; none when nothing was kept to revoke or
+ * the state is unknown. It makes no claim about a current connection.
+ */
+export function administeredRemoteRevocation(state: RemoteRevocation | null) {
+  return state && state !== "not_requested" ? ADMINISTERED_REVOCATION[state] ?? null : null;
 }
 
 /** The notice after a disconnect, by its remote revocation result. */
@@ -293,6 +318,29 @@ export function OAuthConnectionDetails({ target, pending }: { target: OAuthConne
         identity ? { label: "Identity", value: identity } : null,
         unavailable ? { label: "Connect", value: unavailable } : null,
         pending ? { label: "Authorization", value: AUTHORIZATION_TAB_NOTICE } : null
+      ]}
+    />
+  );
+}
+
+/**
+ * Registration, connections and remote revocation of an administered
+ * principal's registration (the Credentials drawer). The administrator list
+ * carries no connection status or account, so neither is shown.
+ */
+export function AdministeredOAuthDetails({ oauth }: { oauth: AdministeredOAuth }) {
+  const revocation = administeredRemoteRevocation(oauth.remoteRevocation);
+  const remote = revocation
+    ? `${revocation.label}. ${revocation.message}`
+    : oauth.remoteRevocation === "not_requested"
+      ? "Not requested: the broker kept nothing to revoke at the provider."
+      : "Unknown: OAuth is inactive or its state is unavailable.";
+  return (
+    <KeyValue
+      items={[
+        { label: "Registration", value: <span className="wb-mono">{oauth.registration}</span> },
+        { label: oauth.connections.length === 1 ? "Connection" : "Connections", value: <span className="wb-mono">{oauth.connections.join(", ")}</span> },
+        { label: "Remote revocation", value: remote }
       ]}
     />
   );

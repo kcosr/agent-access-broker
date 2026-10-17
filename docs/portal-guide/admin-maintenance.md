@@ -97,6 +97,15 @@ Review the breadth of the delegation before saving it. Use the
    a stored token, and any stored credentials the configuration no longer
    selects (**Not used**). Replace or delete a token when its purpose changes;
    provision a service account's tokens here. Delete unused rows by ID.
+   A person's OAuth connections are listed read-only, one row per OAuth
+   registration marked **Managed by user**, with the services using it and the
+   remote revocation of the connections the Broker ended: **Revoked at
+   provider**, **Revocation pending**, **Revocation failed** or **Revocation
+   unconfirmed**. The tab does not show their connection status or connected
+   account, and only the person can connect, reconnect or disconnect them.
+   A registration whose revocation is pending, failed or unconfirmed stays
+   listed after the person lost its grants, and **Needs attention** includes
+   every one whose revocation failed or is unconfirmed.
 5. Return to **Access** and confirm that current grants still match the intended
    service/action/resource boundary.
 
@@ -124,7 +133,11 @@ and the [end-user guide](../end-user-guide.md#rotate-pause-and-revoke).
    Revoke a token that may have been compromised.
 3. Remove directory/JIT eligibility when it could admit the person again.
 4. Revoke exposed upstream credentials at their service and remove obsolete
-   broker credential copies and personal credential rights.
+   broker credential copies and personal credential rights. Disabling ends the
+   person's OAuth connections and, for GitLab, revokes their tokens there:
+   open **Credentials** and check each OAuth row's remote revocation. Where it
+   shows **Revocation failed** or **Revocation unconfirmed**, have the person
+   or a GitLab administrator revoke the Broker application in GitLab.
 5. Review direct grants and group memberships; remove obsolete access while
    preserving other subjects that share a grant.
 6. Review **Admin > Audit** by principal, token, and request ID and preserve the
