@@ -3136,10 +3136,10 @@ impl ConfluenceProvider {
         let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_spaces(&inputs)?;
         let authorization = search_authorization(&request)?;
+        let authorized_scope = authorized_search_scope(&authorization)?;
         let effective_scope = effective_search_scope(&authorization, &requested)?;
         let query =
             build_confluence_search_query(&inputs.query, &effective_scope, &self.config.search)?;
-        let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let pages = SearchPageRequest {
             context: request.context(),
@@ -3158,7 +3158,7 @@ impl ConfluenceProvider {
             .search(
                 ConfluenceSearchRequest {
                     cql: query.cql.clone(),
-                    spaces: response_scope.values_for_backend(),
+                    spaces: effective_scope.values_for_backend(),
                     max_results,
                     next_page_token: upstream_page_token,
                 },
@@ -3177,7 +3177,7 @@ impl ConfluenceProvider {
             if !is_page_id(&page.id)
                 || !is_space_key(&page.space)
                 || page.status.as_deref() != Some("current")
-                || !response_scope.authorizes_value(&page.space)
+                || !authorized_scope.authorizes_value(&page.space)
             {
                 return Err(ProviderError::deny(
                     ReasonCode::ScopeUnresolved,
@@ -3211,7 +3211,7 @@ impl ConfluenceProvider {
                 "provider": "confluence",
                 "operation": "search",
                 "requestedSpaces": requested,
-                "effectiveSearchScope": response_scope.audit_value("space"),
+                "effectiveSearchScope": effective_scope.audit_value("space"),
                 "queryType": query.kind,
                 "queryAstVersion": CONFLUENCE_QUERY_AST_VERSION,
                 "canonicalCallerCqlHash": query.canonical_caller_cql_hash,
@@ -5831,13 +5831,13 @@ impl ConfluenceProvider {
         let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_spaces(&inputs)?;
         let authorization = search_authorization(&request)?;
+        let authorized_scope = authorized_search_scope(&authorization)?;
         let effective_scope = effective_search_scope(&authorization, &requested)?;
         let query = build_confluence_blog_search_query(
             &inputs.query,
             &effective_scope,
             &self.config.search,
         )?;
-        let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let pages = SearchPageRequest {
             context: request.context(),
@@ -5856,7 +5856,7 @@ impl ConfluenceProvider {
             .search_blogs(
                 ConfluenceSearchRequest {
                     cql: query.cql.clone(),
-                    spaces: response_scope.values_for_backend(),
+                    spaces: effective_scope.values_for_backend(),
                     max_results,
                     next_page_token: upstream_page_token,
                 },
@@ -5874,7 +5874,7 @@ impl ConfluenceProvider {
             if !is_blog_id(&blog.id)
                 || !is_space_key(&blog.space)
                 || blog.status.as_deref() != Some("current")
-                || !response_scope.authorizes_value(&blog.space)
+                || !authorized_scope.authorizes_value(&blog.space)
             {
                 return Err(ProviderError::deny(
                     ReasonCode::ScopeUnresolved,
@@ -5906,7 +5906,7 @@ impl ConfluenceProvider {
                 "provider": "confluence",
                 "operation": "blog.search",
                 "requestedSpaces": requested,
-                "effectiveSearchScope": response_scope.audit_value("space"),
+                "effectiveSearchScope": effective_scope.audit_value("space"),
                 "queryType": query.kind,
                 "queryAstVersion": CONFLUENCE_QUERY_AST_VERSION,
                 "canonicalCallerCqlHash": query.canonical_caller_cql_hash,

@@ -2247,7 +2247,7 @@ fn blog_cql_composes_blogpost_type_and_rejects_page_hierarchy_fields() {
 }
 
 #[test]
-fn all_except_cql_preserves_caller_grouping_and_response_exclusions() {
+fn all_except_cql_preserves_caller_grouping_and_exclusions() {
     let excluded = BTreeSet::from(["PRIVATE".to_string(), "IN".to_string()]);
     let boundary = EffectiveSearchScope::AllExcept(excluded);
     let query = build_confluence_search_query(
@@ -2263,12 +2263,13 @@ fn all_except_cql_preserves_caller_grouping_and_response_exclusions() {
         "(space = PRIVATE OR title ~ \"runbook\") AND space NOT IN (\"IN\", PRIVATE) AND type = page ORDER BY title ASC"
     );
     assert_eq!(query.injected_space_predicate, "space_not_in");
-    assert!(!query.response_scope.authorizes_value("PRIVATE"));
-    assert!(query.response_scope.authorizes_value("NEW"));
+    assert!(!boundary.authorizes_value("PRIVATE"));
+    assert!(boundary.authorizes_value("NEW"));
     assert_eq!(
-        query.response_scope.audit_value("space")["excludedValues"],
+        boundary.audit_value("space")["excludedValues"],
         json!(["IN", "PRIVATE"])
     );
+    // A caller's space predicate narrows the query and keeps the exclusions.
     let narrowed = build_confluence_search_query(
         &ConfluenceSearchQueryInput::Cql {
             value: "space IN (PRIVATE, ENG)".to_string(),
@@ -2277,9 +2278,12 @@ fn all_except_cql_preserves_caller_grouping_and_response_exclusions() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert_eq!(
-        narrowed.response_scope,
-        EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()]))
+    assert!(
+        narrowed
+            .cql
+            .ends_with(") AND space NOT IN (\"IN\", PRIVATE) AND type = page"),
+        "{}",
+        narrowed.cql
     );
     let blog = build_confluence_blog_search_query(
         &ConfluenceSearchQueryInput::Cql {
@@ -2416,7 +2420,7 @@ fn cql_quote_style_hashes_are_stable_for_equivalent_canonical_queries() {
 }
 
 #[test]
-fn wildcard_cql_derives_response_scope_from_positive_space_predicates() {
+fn wildcard_cql_space_predicates_narrow_the_query_not_containment() {
     let narrowed = build_confluence_search_query(
         &ConfluenceSearchQueryInput::Cql {
             value: r#"space = ENG AND title ~ "runbook""#.to_string(),
@@ -2426,31 +2430,21 @@ fn wildcard_cql_derives_response_scope_from_positive_space_predicates() {
     )
     .unwrap();
     assert_eq!(
-        narrowed.response_scope,
-        EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()]))
-    );
-    assert_eq!(narrowed.response_scope.values_for_backend(), vec!["ENG"]);
-    assert_eq!(
         narrowed.cql,
         r#"(space = ENG AND title ~ "runbook") AND type = page"#
     );
-
-    let broad = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: r#"title ~ "runbook""#.to_string(),
+    // Returned content is checked against the authorization boundary, not
+    // against the space the caller named.
+    let boundary = authorized_search_scope(&SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::AllExcept {
+            excluded_values: Vec::new(),
         },
-        &EffectiveSearchScope::AllExcept(BTreeSet::new()),
-        &SearchLimitsConfig::default(),
-    )
+    ))
     .unwrap();
-    assert_eq!(
-        broad.response_scope,
-        EffectiveSearchScope::AllExcept(BTreeSet::new())
-    );
-    assert_eq!(
-        broad.response_scope.values_for_backend(),
-        Vec::<String>::new()
-    );
+    assert_eq!(boundary, EffectiveSearchScope::AllExcept(BTreeSet::new()));
+    assert!(boundary.authorizes_value("RAILS"));
+    assert_eq!(boundary.values_for_backend(), Vec::<String>::new());
 }
 
 #[test]
@@ -9818,7 +9812,6 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
                     query.cql,
                     format!("{prefix}type = {}{suffix}", kind.cql_type())
                 );
-                assert_eq!(query.response_scope, scope);
                 assert!(query.query_shape["filter"].is_null());
                 assert!(query.text_operand_hashes.is_empty());
             }

@@ -680,3 +680,144 @@ async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link(
             .is_none()
     );
 }
+
+/// Searches that name a space by its URL alias, in CQL or `spaces`, against
+/// an upstream that resolves the alias to `RAILS`. Returned content is checked
+/// against the authorization boundary, so the alias neither widens nor narrows
+/// access, and an exclusion of `RAILS` holds whichever name the caller used.
+#[tokio::test]
+async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() {
+    let all_except = |excluded: &[&str]| SearchAuthorizationScope::AllExcept {
+        excluded_values: excluded.iter().map(ToString::to_string).collect(),
+    };
+    let finite = |values: &[&str]| SearchAuthorizationScope::Finite {
+        values: values.iter().map(ToString::to_string).collect(),
+    };
+    let alias_cql = json!({ "query": { "type": "cql", "value": "space = VLABS" } });
+    let alias_spaces = json!({ "query": { "type": "cql", "value": "" }, "spaces": ["VLABS"] });
+    for (action, scope, inputs, cql, outcome) in [
+        (
+            "search",
+            all_except(&[]),
+            &alias_cql,
+            Some("(space = VLABS) AND type = page"),
+            Ok(()),
+        ),
+        (
+            "blog.search",
+            all_except(&[]),
+            &alias_cql,
+            Some("(space = VLABS) AND type = blogpost"),
+            Ok(()),
+        ),
+        (
+            "search",
+            all_except(&[]),
+            &alias_spaces,
+            Some("space IN (VLABS) AND type = page"),
+            Ok(()),
+        ),
+        (
+            "search",
+            finite(&["ENG", "RAILS"]),
+            &alias_cql,
+            Some("(space = VLABS) AND space IN (ENG, RAILS) AND type = page"),
+            Ok(()),
+        ),
+        // A finite boundary admits only granted keys in `spaces`.
+        (
+            "search",
+            finite(&["ENG", "RAILS"]),
+            &alias_spaces,
+            None,
+            Err(ReasonCode::ServiceActionDenied),
+        ),
+        (
+            "search",
+            finite(&["ENG"]),
+            &alias_cql,
+            Some("(space = VLABS) AND space IN (ENG) AND type = page"),
+            Err(ReasonCode::ScopeUnresolved),
+        ),
+        (
+            "search",
+            all_except(&["RAILS"]),
+            &alias_cql,
+            Some("(space = VLABS) AND space NOT IN (RAILS) AND type = page"),
+            Err(ReasonCode::ScopeUnresolved),
+        ),
+        (
+            "search",
+            all_except(&["RAILS"]),
+            &alias_spaces,
+            Some("space IN (VLABS) AND type = page"),
+            Err(ReasonCode::ScopeUnresolved),
+        ),
+        (
+            "blog.search",
+            all_except(&["RAILS"]),
+            &alias_cql,
+            Some("(space = VLABS) AND space NOT IN (RAILS) AND type = blogpost"),
+            Err(ReasonCode::ScopeUnresolved),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let content = if action == "search" {
+            rails_page(ALIASED_PAGE_LINK)
+        } else {
+            v1_content(
+                "blogpost",
+                BLOG_ID,
+                "Release notes",
+                ALIASED_BLOG_LINK,
+                ("RAILS", "/spaces/VLABS"),
+            )
+        };
+        mount_json(
+            &server,
+            "/wiki/rest/api/content/search".to_string(),
+            json!({ "results": [{ "content": content }] }),
+        )
+        .await;
+        let request = InvocationBuilder::new("confluence", action)
+            .inputs(inputs.clone())
+            .credential(credential())
+            .lookup_credential(credential())
+            .search(SearchAuthorization::new("space".to_string(), scope.clone()))
+            .build();
+        let result = alias_provider(&server).invoke(request).await;
+        let case = format!("{action} {scope:?} {inputs}");
+        match outcome {
+            Ok(()) => {
+                let result = result.unwrap_or_else(|error| panic!("{case}: {error:?}"));
+                let field = if action == "search" { "pages" } else { "blogs" };
+                assert_eq!(result.result[field][0]["space"], "RAILS", "{case}");
+                assert_eq!(
+                    result.audit.as_ref().unwrap()["observedSpaces"],
+                    json!(["RAILS"]),
+                    "{case}"
+                );
+            }
+            Err(reason) => {
+                let error = result.unwrap_err();
+                assert_eq!(error.reason_code(), reason, "{case}");
+                assert!(error.result.is_none(), "{case}");
+            }
+        }
+        let sent = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .find(|(name, _)| name == "cql")
+                    .map(|(_, value)| value.into_owned())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sent, cql.into_iter().collect::<Vec<_>>(), "{case}");
+    }
+}

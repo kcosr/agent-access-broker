@@ -1256,6 +1256,14 @@ All notable changes to this project are documented in this file.
   `viewpage.action?pageId=` or `/spaces/<key>` URL instead of failing the
   operation, and is recorded in its audit under `browserUrlFallbacks` with the
   rule it failed and a masked link shape.
+- Confluence search and blog search checked returned content against the space
+  names the caller wrote rather than the authorization boundary. With
+  all-space access, `space = VLABS` in CQL, or `spaces: ["VLABS"]`, narrowed
+  the check to `VLABS`. A result that Confluence resolved to the space's key,
+  such as `RAILS`, then failed the whole search with `scope_unresolved`.
+  Returned content is now checked against the granted space keys or all-except
+  exclusions, as `docs/design.md` describes. A caller-written name still
+  narrows the query, but cannot widen access or lift an exclusion.
 
 ### Removed
 

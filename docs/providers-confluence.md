@@ -708,9 +708,13 @@ expected upstream incompatibility when present.
 
 Scope composition adds `space IN (...)` for finite space coverage or
 `space NOT IN (...)` for all-except coverage, grouped with the caller query,
-and always injects `type = page`. Positive caller space predicates narrow the
-authorized boundary without losing exclusions. Every returned page is validated
-against the effective space boundary. Backend search
+and always injects `type = page`. Explicit `spaces` and caller space predicates
+narrow the query without losing all-except exclusions. Every returned page is
+validated against the authorization boundary, the granted space keys or the
+all-except exclusions, not against the space names the caller wrote: Confluence
+may resolve a [space URL alias](#space-url-aliases) to its key, so a caller who
+names `VLABS` receives content of space `RAILS` when that space is authorized,
+and an excluded `RAILS` stays excluded whichever name the caller used. Backend search
 GETs `content/search` with `cql=<composed>`, `limit=<max>`,
 `expand=space,version,history`, and an optional `cursor`. As with Jira, `<max>` (the
 caller's `maxResults`) defaults to `providers.confluence.search.max_results`
@@ -718,7 +722,8 @@ caller's `maxResults`) defaults to `providers.confluence.search.max_results`
 is bounded by `limits.max_upstream_response_bytes`. Page status is read from the
 base content item. Every result must be a current page in an authorized space;
 otherwise the request denies with `scope_unresolved` and returns no partial
-results.
+results. `spaces` accepts only space keys; with a finite boundary each must be
+a granted key, so an alias there is denied with `service_action_denied`.
 
 Personal-space keys are also quoted in injected scope constraints. For example,
 `--space '~alice' --cql ''` emits `space IN ("~alice") AND type = page`.
