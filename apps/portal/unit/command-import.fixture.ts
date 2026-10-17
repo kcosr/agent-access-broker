@@ -80,7 +80,7 @@ function change(entry: Partial<ImportResourceTypeChange> & Pick<ImportResourceTy
 }
 
 function record(id: string, status: ImportActionRecord["status"], definition: ImportActionDefinition, readOnly: boolean): ImportActionRecord {
-  return { definition: { ...definition, readOnly }, status, version: 1, definitionHash: `hash-${id}` };
+  return { definition: { ...definition, readOnly }, status, version: 1, secretInputs: [], definitionHash: `hash-${id}` };
 }
 
 /** A new draft before discovery. */
@@ -92,7 +92,7 @@ export function commandDraft(definition = commandDefinition()): ImportPreviewRes
     unavailableReason: "Imported service is not enabled.",
     importAuthentication: [],
     scopedMcp: { ready: true, issues: [], truncated: false },
-    scopedMcpWarnings: [],
+    secretInputCandidates: [], scopedMcpWarnings: [],
     service: { definition, status: "draft", version: 1, actions: [], slotVersions: {}, ...stamp },
     preview: null,
     resourceTypeChanges: [],

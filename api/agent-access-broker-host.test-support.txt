@@ -1076,6 +1076,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::
 pub struct agent_access_core::managed_store::imported_store::ImportedActionRecord
 pub agent_access_core::managed_store::imported_store::ImportedActionRecord::definition: agent_access_core::imports::definition::ImportedActionDefinition
 pub agent_access_core::managed_store::imported_store::ImportedActionRecord::definition_hash: alloc::string::String
+pub agent_access_core::managed_store::imported_store::ImportedActionRecord::secret_inputs: alloc::vec::Vec<agent_access_provider::secret::SecretInputDescriptor>
 pub agent_access_core::managed_store::imported_store::ImportedActionRecord::status: agent_access_core::managed_store::imported_store::ImportedActionStatus
 pub agent_access_core::managed_store::imported_store::ImportedActionRecord::version: u64
 impl core::clone::Clone for agent_access_core::managed_store::imported_store::ImportedActionRecord

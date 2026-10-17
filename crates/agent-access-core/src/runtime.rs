@@ -1728,7 +1728,7 @@ pub struct BrokerRuntime {
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
     imported_catalog: Arc<crate::ImportedCatalog>,
     effective_credentials: Arc<crate::CredentialsConfig>,
-    import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
+    import_dispatch: Arc<BTreeMap<String, crate::imports::ImportedDispatchGuard>>,
     /// Command-import budgets and live process supervisors, carried from
     /// each generation to the next, as import dispatch fences are.
     command_registry: crate::imports::CommandRegistry,
@@ -1948,6 +1948,7 @@ enum AuditAppendMode {
 
 #[derive(Clone)]
 struct FinalizeContext {
+    secret_input_provenance: secret_references::SecretInputProvenance,
     search_authorization: Option<SearchAuthorizationPlan>,
     /// A command-import call from admission on: its authority, the resources
     /// its request names and its process facts, which finalization audits
@@ -2279,6 +2280,7 @@ impl BrokerRuntime {
                 .check_active_credential_keys(ring)
                 .map_err(runtime_managed_store_error)?;
         }
+        let mut import_dispatch = imports::prepare_dispatch(&config, &imported_catalog, previous);
         let imported_providers = imports::build_providers(
             &config,
             &imported_catalog,
@@ -2286,7 +2288,15 @@ impl BrokerRuntime {
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
             &network,
+            &import_dispatch,
         )?;
+        // A failed rebuild must retire the previous available provider even when
+        // the stored contract itself did not change.
+        for (service, guard) in &mut import_dispatch {
+            if !imported_providers.contains_key(service) {
+                *guard = crate::imports::ImportedDispatchGuard::new();
+            }
+        }
         let mut command_providers = BTreeMap::new();
         for (service, provider) in imported_providers {
             if let Some(command) = provider.command() {
@@ -2354,7 +2364,7 @@ impl BrokerRuntime {
             command_providers: Arc::new(command_providers),
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
-            import_dispatch: Arc::new(BTreeMap::new()),
+            import_dispatch: Arc::new(import_dispatch),
             command_registry: previous
                 .map(|previous| previous.command_registry.clone())
                 .unwrap_or_default(),
@@ -2378,7 +2388,6 @@ impl BrokerRuntime {
             config_generation: None,
             provider_fixtures,
         };
-        runtime.initialize_import_dispatch(previous);
         runtime.initialize_scoped_mcp_readiness(None);
         runtime
             .check_import_catalog_budgets()
@@ -3174,6 +3183,7 @@ impl BrokerRuntime {
         let policy_generation = self.policy_generation();
         self.finalize(
             FinalizeContext {
+                secret_input_provenance: Default::default(),
                 search_authorization: None,
                 command: None,
                 agent_request_id: context.agent_request_id,
@@ -3217,6 +3227,16 @@ impl BrokerRuntime {
         context: GovernedOperationContext,
         error: ProviderError,
     ) -> BrokerResponse<Value> {
+        self.governed_operation_error_response_with_provenance(context, error, Default::default())
+            .await
+    }
+
+    async fn governed_operation_error_response_with_provenance(
+        &self,
+        context: GovernedOperationContext,
+        error: ProviderError,
+        secret_input_provenance: secret_references::SecretInputProvenance,
+    ) -> BrokerResponse<Value> {
         let policy_generation = self.policy_generation();
         let GovernedOperationContext {
             operation,
@@ -3224,6 +3244,7 @@ impl BrokerRuntime {
         } = context;
         self.finalize(
             FinalizeContext {
+                secret_input_provenance,
                 search_authorization: None,
                 command: None,
                 agent_request_id: operation.agent_request_id,
@@ -3845,6 +3866,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3875,6 +3897,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3906,6 +3929,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3937,6 +3961,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3974,6 +3999,7 @@ impl BrokerRuntime {
                 return Err(Box::new(
                     self.finalize_pre_dispatch(
                         FinalizeContext {
+                            secret_input_provenance: Default::default(),
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -4011,6 +4037,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4049,6 +4076,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4086,6 +4114,7 @@ impl BrokerRuntime {
                 return Err(Box::new(
                     self.finalize_pre_dispatch(
                         FinalizeContext {
+                            secret_input_provenance: Default::default(),
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -4118,6 +4147,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        secret_input_provenance: Default::default(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4151,6 +4181,7 @@ impl BrokerRuntime {
             credential_mode: policy.credential_mode.clone(),
             matched_grant: policy.matched_grant.clone(),
             finalize_context: FinalizeContext {
+                secret_input_provenance: Default::default(),
                 search_authorization: None,
                 command: None,
                 agent_request_id,
@@ -4655,18 +4686,24 @@ impl BrokerRuntime {
             &context.operation.service,
             &context.operation.action,
         );
+        let secret_input_provenance = self.secret_input_provenance(
+            &context.operation.service,
+            &context.operation.action,
+            &request.inputs,
+        );
         let preparation = self.prepare_invoke(context.clone(), request, None, None);
         let result = if let Some(deadline) = deadline {
             match tokio::time::timeout_at(deadline, preparation).await {
                 Ok(result) => result,
                 Err(_) => {
                     return Err(Box::new(
-                        self.governed_operation_error_response(
+                        self.governed_operation_error_response_with_provenance(
                             context,
                             owned::interrupted_error(
                                 (ReasonCode::OperationTimeout, "operation deadline exceeded"),
                                 false,
                             ),
+                            secret_input_provenance,
                         )
                         .await,
                     ));
@@ -4694,6 +4731,11 @@ impl BrokerRuntime {
         identity_proof: Option<&crate::AttestedIdentityProof>,
         local_host: Option<Arc<dyn crate::LocalOperationHost>>,
     ) -> Result<PreparedInvocation, Box<owned::PreparationFailure>> {
+        let secret_input_provenance = self.secret_input_provenance(
+            &context.operation.service,
+            &context.operation.action,
+            &request.inputs,
+        );
         let GovernedOperationContext {
             operation:
                 OperationContext {
@@ -4716,6 +4758,7 @@ impl BrokerRuntime {
         let Some(registration) = self.service_registration(&service) else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    secret_input_provenance: secret_input_provenance.clone(),
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4743,6 +4786,7 @@ impl BrokerRuntime {
         if let Err(error) = self.enforce_invocation_identity_admission(&identity).await {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    secret_input_provenance: secret_input_provenance.clone(),
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4777,6 +4821,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        secret_input_provenance: secret_input_provenance.clone(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4810,6 +4855,7 @@ impl BrokerRuntime {
         else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    secret_input_provenance: secret_input_provenance.clone(),
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4874,6 +4920,7 @@ impl BrokerRuntime {
         if let Err(error) = request_contract {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    secret_input_provenance: secret_input_provenance.clone(),
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4914,6 +4961,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        secret_input_provenance: secret_input_provenance.clone(),
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4975,6 +5023,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                secret_input_provenance: secret_input_provenance.clone(),
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -5009,6 +5058,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                secret_input_provenance: secret_input_provenance.clone(),
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -5041,6 +5091,7 @@ impl BrokerRuntime {
                 ) {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
+                            secret_input_provenance: secret_input_provenance.clone(),
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -5122,6 +5173,7 @@ impl BrokerRuntime {
                         Err(error) => {
                             return Err(Box::new(owned::PreparationFailure::new(
                                 FinalizeContext {
+                                    secret_input_provenance: secret_input_provenance.clone(),
                                     search_authorization: None,
                                     command: None,
                                     agent_request_id,
@@ -5167,6 +5219,7 @@ impl BrokerRuntime {
                     };
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
+                            secret_input_provenance: secret_input_provenance.clone(),
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -5201,6 +5254,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                secret_input_provenance: secret_input_provenance.clone(),
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -5282,6 +5336,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        secret_input_provenance: secret_input_provenance.clone(),
                         search_authorization: audit_search_authorization,
                         command,
                         agent_request_id,
@@ -5325,6 +5380,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        secret_input_provenance: secret_input_provenance.clone(),
                         search_authorization: audit_search_authorization,
                         command,
                         agent_request_id,
@@ -5374,6 +5430,7 @@ impl BrokerRuntime {
             None
         };
         let finalize_context = FinalizeContext {
+            secret_input_provenance: secret_input_provenance.clone(),
             search_authorization: audit_search_authorization,
             command,
             agent_request_id,
@@ -6549,6 +6606,7 @@ impl BrokerRuntime {
         append_mode: AuditAppendMode,
     ) -> BrokerResponse<Value> {
         let FinalizeContext {
+            secret_input_provenance,
             search_authorization,
             command,
             agent_request_id,
@@ -6674,6 +6732,7 @@ impl BrokerRuntime {
         } else {
             provider_audit
         };
+        let provider_audit = secret_input_provenance.add_to_audit(provider_audit);
         let credential_connection = self.audit_credential_connection(
             &service,
             credential_mode.as_deref(),

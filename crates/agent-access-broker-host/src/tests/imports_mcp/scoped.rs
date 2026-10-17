@@ -19,6 +19,7 @@ async fn fixture_http() -> Fixture {
                 let mut definition = action.definition.clone();
                 definition.annotations = json!({"toolAnnotations":{},"execution":null});
                 ImportedActionWrite {
+                    secret_inputs: Vec::new(),
                     definition,
                     status: action.status,
                 }
@@ -335,8 +336,7 @@ async fn scoped_imports_refresh_quarantine_same_id_review_and_replacement_rechec
     );
     let mut accept = versions(&preview);
     accept["manifestHash"] = preview["preview"]["manifestHash"].clone();
-    accept["selections"] =
-        json!([{"source":{"toolName":"read_item"},"action":"inspect","readOnly":true}]);
+    accept["selections"] = json!([{"source":{"toolName":"read_item"},"action":"inspect","readOnly":true,"secretInputs":[]}]);
     accept["confirmAffectedGrants"] = json!(true);
     let accepted = management(&fixture, &admin, Method::POST, "/accept", Some(accept)).await;
     assert_eq!(
@@ -388,8 +388,7 @@ async fn scoped_imports_refresh_quarantine_same_id_review_and_replacement_rechec
     assert_ne!(replacement_action, "inspect");
     let mut accept = versions(&replacement);
     accept["manifestHash"] = replacement["preview"]["manifestHash"].clone();
-    accept["selections"] =
-        json!([{"source":{"toolName":"read_item"},"action":replacement_action,"readOnly":true}]);
+    accept["selections"] = json!([{"source":{"toolName":"read_item"},"action":replacement_action,"readOnly":true,"secretInputs":[]}]);
     accept["confirmAffectedGrants"] = json!(true);
     management(&fixture, &admin, Method::POST, "/accept", Some(accept)).await;
     // A cached raw name cannot inherit the retired canonical action's grants.

@@ -1045,3 +1045,10 @@ covering every required target. Credential installation accepts a temporary
 reference only; child token creation returns a reference and cannot be replayed
 to recover a lost response. Use independently granted view actions to reconcile.
 See [Broker administration](../../docs/broker-management.md).
+
+Reviewed imported MCP actions may advertise secret receiver input fields. Supply
+reference objects only at the advertised paths. Every call to a marked action
+returns a completion receipt and hides all upstream response content, including
+literal calls. A reported success does not prove storage; use a separately
+authorized metadata read with a caller-known identifier, and do not automatically
+repeat an uncertain write.

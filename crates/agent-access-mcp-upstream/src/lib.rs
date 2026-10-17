@@ -62,6 +62,14 @@ impl ImportedAdapter for McpAdapter {
         CompiledAction::new(action).map(|_| ())
     }
 
+    fn validate_secret_inputs(
+        &self,
+        action: &ImportedActionDefinition,
+        inputs: &[SecretInputDescriptor],
+    ) -> Result<(), String> {
+        validate_mcp_receivers(action, inputs)
+    }
+
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         source_tool_name(action).map(str::to_owned)
     }
@@ -71,14 +79,23 @@ impl ImportedAdapter for McpAdapter {
         definition: &ImportedServiceDefinition,
         actions: &[ImportedActionDefinition],
         transport_credential: Option<ExecutionCredential>,
-        _import: &ImportedAdapterContext<'_>,
+        import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
     ) -> Result<ImportedProvider, ProviderBuildError> {
         let mut compiled = BTreeMap::new();
         for action in actions {
             self.scoped_mcp_name(action)
                 .map_err(ProviderBuildError::invalid)?;
-            let value = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
+            let receivers = import.secret_inputs(&action.action);
+            self.validate_secret_inputs(action, receivers)
+                .map_err(ProviderBuildError::invalid)?;
+            if !receivers.is_empty() && import.dispatch_guard.is_none() {
+                return Err(ProviderBuildError::invalid(
+                    "receiver action requires a host dispatch guard",
+                ));
+            }
+            let value = CompiledAction::with_receivers(action, receivers)
+                .map_err(ProviderBuildError::invalid)?;
             if compiled.insert(action.action.clone(), value).is_some() {
                 return Err(ProviderBuildError::invalid("duplicate imported action"));
             }
@@ -88,6 +105,7 @@ impl ImportedAdapter for McpAdapter {
             definition: definition.clone(),
             actions: compiled,
             transport_credential,
+            dispatch_guard: import.dispatch_guard.cloned(),
             timeout: Duration::from_millis(host.limits().request_timeout_ms),
         })))
     }
@@ -177,6 +195,8 @@ struct CompiledAction {
     definition: ImportedActionDefinition,
     name: String,
     input: CompiledSchema,
+    admission: CompiledSchema,
+    receipt_only: bool,
     output: Option<CompiledSchema>,
 }
 
@@ -199,6 +219,13 @@ fn source_tool_name(definition: &ImportedActionDefinition) -> Result<&str, Strin
 
 impl CompiledAction {
     fn new(definition: &ImportedActionDefinition) -> Result<Self, String> {
+        Self::with_receivers(definition, &[])
+    }
+
+    fn with_receivers(
+        definition: &ImportedActionDefinition,
+        receivers: &[SecretInputDescriptor],
+    ) -> Result<Self, String> {
         if serde_json::to_vec(definition)
             .map_err(|_| "invalid tool definition")?
             .len()
@@ -212,6 +239,12 @@ impl CompiledAction {
             definition: definition.clone(),
             name,
             input: CompiledSchema::input(&definition.input_schema)?,
+            admission: CompiledSchema::input(
+                &receiver_descriptor(definition, receivers)?
+                    .reference_input_schema()
+                    .map_err(|error| error.to_string())?,
+            )?,
+            receipt_only: !receivers.is_empty(),
             output: definition
                 .output_schema
                 .as_ref()
@@ -226,6 +259,7 @@ struct McpProvider {
     definition: ImportedServiceDefinition,
     actions: BTreeMap<String, CompiledAction>,
     transport_credential: Option<ExecutionCredential>,
+    dispatch_guard: Option<ImportedDispatchGuard>,
     timeout: Duration,
 }
 
@@ -247,7 +281,14 @@ impl Provider for McpProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
-        self.validate_action_inputs(request.action(), request.inputs())?;
+        let action = self.actions.get(request.action()).ok_or_else(input_error)?;
+        if !action.admission.valid(request.inputs()) {
+            return Err(input_error());
+        }
+        action
+            .input
+            .headers(request.inputs())
+            .map_err(|_| input_error())?;
         Ok(ScopeResolution::no_resources())
     }
 
@@ -341,7 +382,8 @@ impl Provider for McpProvider {
                 .map(|credential| (credential, self.definition.endpoint.clone())),
             Some(call),
             self.timeout,
-        );
+        )
+        .with_dispatch_guard(self.dispatch_guard.clone());
         let state = Arc::clone(&operation.state);
         let started = Instant::now();
         let work = async {
@@ -395,6 +437,11 @@ impl Provider for McpProvider {
                     if let Some(result) = error.result.as_deref_mut() {
                         result["toolDispatched"] = json!(state.call_dispatched);
                     }
+                }
+                if action.receipt_only {
+                    let result = error.result.get_or_insert_with(|| Box::new(json!({})));
+                    result["responseSuppressed"] = json!(true);
+                    result["toolDispatched"] = json!(state.call_dispatched);
                 }
                 Err(error
                     .with_upstream(state.status, Some(elapsed))
@@ -684,6 +731,7 @@ fn discovered_tool(raw: &Value) -> Result<ImportedDiscoveredTool, ProviderError>
 }
 
 fn normalize_result(raw: Value, action: &CompiledAction) -> Result<Value, ProviderError> {
+    let raw = transport::PrivateJson(raw);
     // Explicit null is deliberately tested and copied from raw, because SDK Option<Value>
     // collapses it into absence. Typed content parsing checks every standard block shape.
     if raw.get("content").is_some_and(|v| !v.is_array())
@@ -691,7 +739,7 @@ fn normalize_result(raw: Value, action: &CompiledAction) -> Result<Value, Provid
     {
         return Err(protocol_error());
     }
-    let mut for_validation = raw.clone();
+    let mut for_validation = raw.0.clone();
     for_validation
         .as_object_mut()
         .ok_or_else(protocol_error)?
@@ -706,7 +754,8 @@ fn normalize_result(raw: Value, action: &CompiledAction) -> Result<Value, Provid
             return Err(protocol_error());
         }
     }
-    let mut content = serde_json::to_value(result.content).map_err(|_| protocol_error())?;
+    let mut content =
+        transport::PrivateJson(serde_json::to_value(result.content).map_err(|_| protocol_error())?);
     for block in content.as_array_mut().ok_or_else(protocol_error)? {
         drop_protocol_meta(block);
         if let Some(encoded) = block
@@ -715,12 +764,26 @@ fn normalize_result(raw: Value, action: &CompiledAction) -> Result<Value, Provid
             .and_then(Value::as_str)
         {
             // Already bounded by the encoded HTTP body; decoding cannot enlarge that bound.
-            BASE64_STANDARD
-                .decode(encoded)
-                .map_err(|_| protocol_error())?;
+            let _decoded = zeroize::Zeroizing::new(
+                BASE64_STANDARD
+                    .decode(encoded)
+                    .map_err(|_| protocol_error())?,
+            );
         }
     }
-    let mut upstream = json!({"content":content,"isError":failed});
+    if action.receipt_only {
+        let receipt = json!({"receiverOutcome": if failed { "reported_error" } else { "reported_success" }, "responseSuppressed":true});
+        return if failed {
+            Err(ProviderError::error(
+                ReasonCode::UpstreamFailed,
+                "upstream MCP tool reported an error",
+            )
+            .with_result(receipt))
+        } else {
+            Ok(receipt)
+        };
+    }
+    let mut upstream = json!({"content":std::mem::take(&mut content.0),"isError":failed});
     if let Some(structured) = raw.get("structuredContent") {
         upstream["structuredContent"] = structured.clone();
     }

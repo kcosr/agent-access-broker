@@ -1555,6 +1555,15 @@ async fn raw_output_mode_preserves_held_reference_install_and_reference_only_met
     let mut config = (*fixture.runtime.config).clone();
     config.secret_outputs.mode = crate::SecretOutputMode::Raw;
     fixture.runtime = BrokerRuntime::new(config).unwrap();
+    assert!(
+        fixture
+            .runtime
+            .action_descriptor(SERVICE_ID, "credential.install")
+            .unwrap()
+            .secret_inputs
+            .is_empty(),
+        "the local sink must never request generic provider-side decryption"
+    );
 
     let services = fixture.runtime.api_services_for_identity(
         &fixture.identity,
@@ -1655,6 +1664,79 @@ async fn raw_output_mode_preserves_held_reference_install_and_reference_only_met
             .list_broker_tokens_for_principal("worker")
             .unwrap()
             .is_empty()
+    );
+
+    let audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
+    assert!(!audit.contains(private_token));
+    assert!(!audit.contains(&reference));
+    let inputs = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| {
+            record["service"] == SERVICE_ID
+                && record["action"] == "credential.install"
+                && record["providerAudit"]["phase"] != "preflight"
+        })
+        .map(|record| record["providerAudit"]["secretInputs"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inputs,
+        [
+            json!([{"pointer":"/inputs/token","kind":"literal"}]),
+            json!([{"pointer":"/inputs/token","kind":"reference"}]),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn retained_secret_input_provenance_survives_early_cancellation() {
+    let fixture = fixture(false);
+    let private_token = "retained-reference-cancelled-before-admission";
+    let reference = capture_reference(&fixture, private_token);
+    let control = InvocationControl::default();
+    control.cancel();
+    let response = fixture
+        .runtime
+        .invoke_owned_json(
+            GovernedOperationContext {
+                operation: OperationContext {
+                    agent_request_id: "cancelled-local-test".into(),
+                    broker_request_id: Uuid::new_v4().to_string(),
+                    identity: fixture.identity.clone(),
+                    service: SERVICE_ID.into(),
+                    action: "credential.install".into(),
+                    source: SourceContext::unknown(),
+                },
+                execution_context: ExecutionContext::new("default").unwrap(),
+            },
+            InvokeRequest::new(json!({
+                "principalId":"worker", "connectionId":"gitlab-main",
+                "token":{"secretRef":reference}
+            })),
+            control,
+        )
+        .await;
+    assert_eq!(
+        response.envelope.reason_code,
+        Some(ReasonCode::OperationCancelled.into())
+    );
+    assert!(
+        fixture
+            .runtime
+            .managed_store()
+            .unwrap()
+            .list_credentials(Some("worker"))
+            .unwrap()
+            .is_empty()
+    );
+    assert_reference_value(&fixture, &reference, private_token);
+    let audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
+    assert!(!audit.contains(private_token));
+    assert!(!audit.contains(&reference));
+    let terminal: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+    assert_eq!(
+        terminal["providerAudit"]["secretInputs"],
+        json!([{"pointer":"/inputs/token","kind":"reference"}])
     );
 }
 

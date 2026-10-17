@@ -50,6 +50,7 @@ struct Selection {
     action: String,
     label: Option<String>,
     read_only: bool,
+    secret_inputs: Vec<agent_access_provider::SecretInputDescriptor>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -271,6 +272,7 @@ fn mutation_request(
             .actions
             .iter()
             .map(|action| ImportedActionWrite {
+                secret_inputs: action.secret_inputs.clone(),
                 definition: action.definition.clone(),
                 status: action.status,
             })
@@ -437,7 +439,8 @@ async fn preview_response(
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
         let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
-        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        let candidates = secret_input_candidates(&runtime, record, preview.as_ref())?;
+        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings,"secretInputCandidates":candidates});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
         }
@@ -450,6 +453,44 @@ async fn preview_response(
         Ok(result) => management_success_response(context, operation, target, result).await,
         Err(e) => management_store_error_response(context, operation, target, e).await,
     }
+}
+
+fn secret_input_candidates(
+    runtime: &BrokerRuntime,
+    record: &ImportedServiceRecord,
+    preview: Option<&ImportedPreview>,
+) -> Result<Value, ManagedStoreError> {
+    let Some(preview) = preview else {
+        return Ok(json!([]));
+    };
+    let Some(adapter) = runtime
+        .config()
+        .providers
+        .registry()
+        .imported_adapter(&record.definition.adapter_kind)
+    else {
+        return Ok(json!([]));
+    };
+    let manifest: ImportedDiscovery = serde_json::from_value(preview.manifest.clone())
+        .map_err(|_| invalid("stored discovery preview is invalid"))?;
+    Ok(json!(manifest.tools.iter().enumerate().map(|(index, tool)| json!({"toolIndex":index,"pointers":if tool.unsupported_reason.is_none() { receiver_candidate_pointers(adapter, &tool.definition) } else { Vec::new() }})).collect::<Vec<_>>()))
+}
+
+fn receiver_candidate_pointers(
+    adapter: &dyn agent_access_core::imports::ImportedAdapter,
+    definition: &ImportedActionDefinition,
+) -> Vec<String> {
+    agent_access_core::imports::receiver_candidates(definition)
+        .into_iter()
+        .filter(|pointer| {
+            adapter
+                .validate_secret_inputs(
+                    definition,
+                    &[agent_access_provider::SecretInputDescriptor::new(pointer)],
+                )
+                .is_ok()
+        })
+        .collect()
 }
 
 enum Change {
@@ -813,6 +854,7 @@ async fn change(
                             .actions
                             .iter()
                             .map(|a| ImportedActionRecord {
+                                secret_inputs: a.secret_inputs.clone(),
                                 definition: a.definition.clone(),
                                 status: a.status,
                                 version: 0,
@@ -1106,7 +1148,7 @@ fn prepare_update(
                 .registry()
                 .imported_adapter(&record.definition.adapter_kind)
                 .ok_or_else(|| invalid("import adapter is not linked"))?;
-            for selection in body.selections {
+            for mut selection in body.selections {
                 if !sources.insert(selection.source.to_string())
                     || !names.insert(selection.action.clone())
                 {
@@ -1130,6 +1172,12 @@ fn prepare_update(
                 adapter
                     .validate_action(&definition)
                     .map_err(ManagedStoreError::InputInvalid)?;
+                selection
+                    .secret_inputs
+                    .sort_by(|left, right| left.pointer().cmp(right.pointer()));
+                adapter
+                    .validate_secret_inputs(&definition, &selection.secret_inputs)
+                    .map_err(ManagedStoreError::InputInvalid)?;
                 // Adapter source validation is independent of the scoped naming
                 // profile. A valid but out-of-profile name remains acceptable.
                 adapter
@@ -1147,6 +1195,7 @@ fn prepare_update(
                     }
                     if source_changed(&old.definition, &definition)
                         || old.definition.read_only != definition.read_only
+                        || old.secret_inputs != selection.secret_inputs
                         || old.status != ImportedActionStatus::Enabled
                     {
                         changed.insert(definition.action.clone());
@@ -1156,6 +1205,7 @@ fn prepare_update(
                         .iter_mut()
                         .find(|a| a.definition.action == definition.action)
                         .expect("retained action");
+                    action.secret_inputs = selection.secret_inputs;
                     action.definition = definition;
                     action.status = ImportedActionStatus::Enabled;
                 } else {
@@ -1167,6 +1217,7 @@ fn prepare_update(
                         return Err(invalid("action name already belongs to another source"));
                     }
                     request.actions.push(ImportedActionWrite {
+                        secret_inputs: selection.secret_inputs,
                         definition,
                         status: ImportedActionStatus::Enabled,
                     });
@@ -1325,6 +1376,8 @@ pub(crate) async fn discover(
                         record,
                         preview.as_ref(),
                     )?;
+                    response["secretInputCandidates"] =
+                        secret_input_candidates(&mutation.value, record, preview.as_ref())?;
                     response["preview"] = json!(preview);
                     response["affectedGrants"] = json!(affected);
                     response["affectedGrantsByAction"] = json!(by_action);
@@ -1372,6 +1425,26 @@ mod tests {
     use agent_access_core::imports::ImportedDiscoveredTool;
 
     #[test]
+    fn receiver_candidates_follow_the_adapter_validation_hook() {
+        let mut action = crate::tests::conformance_import::conformance_import_action();
+        action.input_schema["properties"]["header"] =
+            json!({"type":"string", "x-mcp-header":"Region"});
+        let registry = crate::backend_registry();
+        let mcp = registry.imported_adapter("mcp_http").unwrap();
+        assert_eq!(
+            receiver_candidate_pointers(mcp, &action),
+            vec!["/inputs/message"]
+        );
+        assert!(
+            receiver_candidate_pointers(
+                &crate::tests::conformance_import::CONFORMANCE_IMPORT_ADAPTER,
+                &action
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn scoped_preview_warnings_are_provisional_and_do_not_change_the_manifest() {
         let action = |id: &str, name: &str| {
             let mut definition = crate::tests::conformance_import::conformance_import_action();
@@ -1413,6 +1486,7 @@ mod tests {
             ("same", "same", ImportedActionStatus::Enabled),
         ] {
             record.actions.push(ImportedActionRecord {
+                secret_inputs: Vec::new(),
                 definition: action(id, name),
                 status,
                 version: 1,

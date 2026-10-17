@@ -58,9 +58,9 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut accept = versioned_request();
     accept["properties"]["manifestHash"] = json!({"type":"string","minLength":1,"maxLength":128});
     accept["properties"]["selections"] = json!({"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":{
-        "type":"object","additionalProperties":false,"required":["source","action","readOnly"],"properties":{
+        "type":"object","additionalProperties":false,"required":["source","action","readOnly","secretInputs"],"properties":{
             "source":{"type":"object","minProperties":1},"action":action_name(),
-            "label":{"type":["string","null"],"maxLength":256},"readOnly":{"type":"boolean"}
+            "label":{"type":["string","null"],"maxLength":256},"readOnly":{"type":"boolean"},"secretInputs":secret_inputs()
         }
     }});
     accept["properties"]["confirmAffectedGrants"] = json!({"type":"boolean","default":false});
@@ -252,6 +252,9 @@ fn stored_service_definition() -> Value {
     }
     schema
 }
+fn secret_inputs() -> Value {
+    json!({"type":"array","maxItems":16,"uniqueItems":true,"items":{"type":"object","additionalProperties":false,"required":["pointer"],"properties":{"pointer":{"type":"string","maxLength":1024}}},"description":"Complete operator-owned receiver field set; empty clears it. MCP fixed string payload properties only. Every marked action call returns a completion receipt with upstream content suppressed."})
+}
 fn action_definition() -> Value {
     json!({"type":"object","additionalProperties":false,
     "required":["action","source","description","inputSchema","readOnly"],"properties":{
@@ -264,9 +267,9 @@ fn service_record() -> Value {
     "required":["definition","status","version","actions","slotVersions","createdAt","createdBy","updatedAt","updatedBy"],"properties":{
         "definition":stored_service_definition(),"status":{"enum":["draft","disabled","enabled","retired"]},"version":version(),
         "actions":{"type":"array","items":{"type":"object","additionalProperties":false,
-            "required":["definition","status","version","definitionHash"],"properties":{
+            "required":["definition","status","version","definitionHash","secretInputs"],"properties":{
                 "definition":action_definition(),"status":{"enum":["enabled","disabled","quarantined","retired"]},
-                "version":version(),"definitionHash":{"type":"string"}
+                "version":version(),"definitionHash":{"type":"string"},"secretInputs":secret_inputs()
             }}},
         "slotVersions":{"type":"object","additionalProperties":{"type":"string"},"description":"Opaque credential slot versions; no token values."},
         "acceptedMetadata":accepted_metadata(),
@@ -409,8 +412,9 @@ fn preview_record() -> Value {
     }})
 }
 fn preview_result() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings","resourceTypeChanges"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings","resourceTypeChanges","secretInputCandidates"],"properties":{
         "resourceTypeChanges":resource_type_change_status(),
+        "secretInputCandidates":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["toolIndex","pointers"],"properties":{"toolIndex":{"type":"integer","minimum":0},"pointers":{"type":"array","items":{"type":"string"}}}}},
         "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_record(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
@@ -610,7 +614,7 @@ mod tests {
             .as_ref()
             .unwrap();
         let validator = jsonschema::validator_for(schema).unwrap();
-        let mut request = json!({"expectedVersion":1,"expectedCatalogRevision":0,"manifestHash":"hash","selections":[{"source":{"toolName":"search"},"action":"search","readOnly":true}]});
+        let mut request = json!({"expectedVersion":1,"expectedCatalogRevision":0,"manifestHash":"hash","selections":[{"source":{"toolName":"search"},"action":"search","readOnly":true,"secretInputs":[]}]});
         assert!(validator.is_valid(&request));
         request["selections"][0]
             .as_object_mut()

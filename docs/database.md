@@ -59,7 +59,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `021_local_password_failures`, `022_principal_service_limits`, and
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
-`027_command_imports`, `028_oauth_revocations`, and `029_secret_references` in order. The
+`027_command_imports`, `028_oauth_revocations`, `029_secret_references`, and
+`030_imported_secret_inputs` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -1104,3 +1105,17 @@ rewrap. Reserve counts and bytes before dispatch. Rewrap preserves reference
 identity and expiry. Keep backups and encryption keys protected; rolling back to
 an older schema requires a pre-migration backup. See
 [temporary secret references](secret-references.md) for limits and failure semantics.
+
+### Imported MCP receiver overlays
+
+Schema `030_imported_secret_inputs` adds `imported_actions.secret_inputs_json`,
+a required JSON array defaulting to `[]`. The canonical sorted SDK descriptors
+are bounded to 16 pointers and 65536 serialized UTF-8 bytes. Existing source
+JSON, definition hashes, action versions, previews and credential ciphertext/AAD
+remain unchanged during migration. Subsequent receiver edits advance the action,
+service and catalog versions without changing the source definition hash.
+
+Structurally corrupt receiver rows fail managed-store admission. Well-formed
+retained settings unsupported by the linked adapter remain inspectable and
+retirable but cannot execute. Older binaries reject this schema; restore the
+pre-migration backup when rolling back. See [secret receiver fields](imported-services.md#secret-receiver-fields).

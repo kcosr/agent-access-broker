@@ -30,6 +30,7 @@ fn command_record(
         status: ImportedServiceStatus::Enabled,
         version: 1,
         actions: vec![ImportedActionRecord {
+            secret_inputs: Vec::new(),
             definition: ImportedActionDefinition {
                 action: "issue.view".into(),
                 source: json!({"name":"issue.view"}),

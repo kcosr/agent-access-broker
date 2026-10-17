@@ -1153,6 +1153,22 @@ New provider secrets may be captured in encrypted temporary storage. Ordinary re
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
 
+### Imported MCP secret receivers
+
+Only full administrators can accept fixed string payload fields as MCP secret
+receivers. Receiver overlays remain separate from the upstream source schema,
+require fresh preview/version checks, and participate in affected-grant review.
+Reference delivery retains the exact origin authentication and execution context
+checks used for native receivers; marking a field grants no reveal authority.
+
+Every marked action invocation suppresses all remote-controlled response content,
+including error details, transformed strings and binary blocks, and returns only
+fixed outcome fields. No exact-byte scanning guarantee is assumed. The final MCP
+call gate shares a generation fence with publication and retirement; already
+admitted calls retain their original endpoint and receipt policy. The receiver
+obtains the intended plaintext, and its independent storage, logging and later
+reads remain outside this invocation's suppression boundary.
+
 ## Local delegated administration
 
 The core-owned `broker_management` service does not expose a management facade to

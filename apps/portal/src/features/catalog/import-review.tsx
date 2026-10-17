@@ -1,3 +1,4 @@
+import { RECEIVER_NOTICE, receiverFieldSchema, receiverSchemaPreview } from "../../lib/imports";
 import { useSession } from "../../app/session";
 import { canWriteAdmin } from "../../lib/capabilities";
 import { AdminButton } from "../../components/admin-access";
@@ -602,6 +603,22 @@ function ReviewRow({
           </Select>
         </Field>
       </div>
+      {row.secretInputCandidates.length || row.secretInputs.length ? (
+        <fieldset className="pt-fieldset">
+          <legend>Accept secret references</legend>
+          <p className="pt-prose wb-small">Choose the string fields intended to receive a secret value. Eligibility does not mean the field should contain a secret.</p>
+          {[...new Set([...row.secretInputCandidates, ...row.secretInputs.map(({ pointer }) => pointer)])].map((pointer) => {
+            const field = receiverFieldSchema(row.tool.definition.inputSchema, pointer);
+            const eligible = row.secretInputCandidates.includes(pointer);
+            return <div key={pointer}>
+              <Checkbox label={`${pointer} · string${eligible ? "" : " · no longer eligible; remove to accept"}`} checked={row.secretInputs.some((input) => input.pointer === pointer)} disabled={pending} onChange={(event) => update(row.key, { secretInputs: event.target.checked ? [...row.secretInputs, { pointer }] : row.secretInputs.filter((input) => input.pointer !== pointer) })} />
+              {typeof field?.description === "string" ? <p className="pt-prose wb-small">{field.description}</p> : null}
+            </div>;
+          })}
+          {row.secretInputs.length ? <Banner tone="warning" slim>{RECEIVER_NOTICE}</Banner> : row.existing?.secretInputs.length ? <Banner tone="warning" slim>Accepting this empty selection restores upstream response content for every call to this action.</Banner> : null}
+        </fieldset>
+      ) : null}
+      {row.secretInputs.length ? <Disclosure summary="Broker input schema preview"><pre className="wb-code pt-catalog-code">{JSON.stringify(receiverSchemaPreview(row), null, 2)}</pre></Disclosure> : null}
       <Disclosure summary="Schemas and source">
         <pre className="wb-code pt-catalog-code">
           {JSON.stringify(

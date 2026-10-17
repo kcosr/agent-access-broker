@@ -15,8 +15,8 @@ import { inlineFrame } from "../src/features/catalog/catalog-ui";
 const tool = (action: string, readOnly = false): ImportActionDefinition => ({ action, source: { toolName: action }, description: action, inputSchema: { type: "object" }, annotations: {}, readOnly });
 function fixture(): ImportPreviewResult {
   return {
-    operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], catalogRevision: 4, affectedGrants: ["grant1", "removed-grant"], affectedGrantsByAction: { read: ["grant1"], removed: ["removed-grant"] },
-    service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint: "https://example.test/mcp", executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], connectionSettings: {}, discovery: { kind: "execution" }, transportAuth: false }, status: "enabled", version: 2, actions: [{ definition: tool("read", true), status: "enabled", version: 1, definitionHash: "old" }, { definition: tool("removed", true), status: "quarantined", version: 1, definitionHash: "old" }], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" },
+    operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, secretInputCandidates: [], scopedMcpWarnings: [], importAuthentication: [], catalogRevision: 4, affectedGrants: ["grant1", "removed-grant"], affectedGrantsByAction: { read: ["grant1"], removed: ["removed-grant"] },
+    service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint: "https://example.test/mcp", executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], connectionSettings: {}, discovery: { kind: "execution" }, transportAuth: false }, status: "enabled", version: 2, actions: [{ definition: tool("read", true), status: "enabled", version: 1, secretInputs: [], definitionHash: "old" }, { definition: tool("removed", true), status: "quarantined", version: 1, secretInputs: [], definitionHash: "old" }], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" },
     preview: { service: "metrics", serviceVersion: 2, catalogRevision: 4, configRevision: "cfg", credentialVersions: {}, manifestHash: "hash", manifest: { protocolVersion: "fixture", metadata: {}, tools: [{ definition: tool("read"), unsupportedReason: null, readOnlyHint: false }, { definition: tool("new"), unsupportedReason: null, readOnlyHint: true }, { definition: tool("unsupported"), unsupportedReason: "Requires streaming", readOnlyHint: true }] }, createdAt: "", expiresAt: "", createdBy: "admin" },
   };
 }
@@ -29,11 +29,33 @@ describe("import review", () => {
       { change: "Unsupported", selected: false, readOnly: false, selectable: false },
       { change: "Removed", selected: false, readOnly: true, selectable: false },
     ]);
-    expect(selectedImportActions(rows)).toEqual([{ source: { toolName: "read" }, action: "read", readOnly: true }]);
+    expect(selectedImportActions(rows)).toEqual([{ source: { toolName: "read" }, action: "read", readOnly: true, secretInputs: [] }]);
     rows[1].selected = true;
     rows[1].action = "query.metrics";
     rows[1].label = " Query ";
-    expect(selectedImportActions(rows)[1]).toEqual({ source: { toolName: "new" }, action: "query.metrics", label: "Query", readOnly: false });
+    expect(selectedImportActions(rows)[1]).toEqual({ source: { toolName: "new" }, action: "query.metrics", label: "Query", readOnly: false, secretInputs: [] });
+  });
+  test("receiver edits preserve source schemas, require grant review, and retain invalid old selections", () => {
+    const data = fixture();
+    const original = { type: "object", properties: { token: { type: "string", description: "Value to store" }, label: { type: "string" } } };
+    data.preview!.manifest.tools[0].definition.inputSchema = structuredClone(original);
+    data.service.actions[0].definition.inputSchema = structuredClone(original);
+    data.secretInputCandidates = [{ toolIndex: 0, pointers: ["/inputs/label", "/inputs/token"] }];
+    let rows = importReviewRows(data);
+    rows[0].secretInputs = [{ pointer: "/inputs/token" }];
+    expect(importSelectionError(data, rows)).toBeNull();
+    expect(affectedImportGrants(data, rows)).toEqual(["grant1"]);
+    expect(selectedImportActions(rows)[0].secretInputs).toEqual([{ pointer: "/inputs/token" }]);
+    expect(rows[0].tool.definition.inputSchema).toEqual(original);
+    data.service.actions[0].secretInputs = [{ pointer: "/inputs/token" }];
+    data.secretInputCandidates = [{ toolIndex: 0, pointers: ["/inputs/label"] }];
+    rows = importReviewRows(data);
+    expect(rows[0].secretInputs).toEqual([{ pointer: "/inputs/token" }]);
+    expect(importSelectionError(data, rows)).toContain("no longer eligible");
+    rows[0].secretInputs = [];
+    expect(importSelectionError(data, rows)).toBeNull();
+    expect(affectedImportGrants(data, rows)).toEqual(["grant1"]);
+    expect(selectedImportActions(rows)[0].secretInputs).toEqual([]);
   });
   test("changed schemas reset selection and read-only review; description-only edits preserve both", () => {
     const data = fixture();
@@ -138,7 +160,7 @@ describe("catalog service index", () => {
   };
   test("merges built-in and imported services with status, action and manager counts", () => {
     const list = imports();
-    list.services[0].actions.push({ definition: tool("old"), status: "retired", version: 1, definitionHash: "old" });
+    list.services[0].actions.push({ definition: tool("old"), status: "retired", version: 1, secretInputs: [], definitionHash: "old" });
     const catalog: PolicyCatalogResult = { ...policyCatalog, services: [...policyCatalog.services, { ...policyCatalog.services[0], service: "jira", displayName: "Jira", available: true, unavailableReason: undefined }] };
     const managers = [{ assignmentId: "a", service: "jira", principalId: "bob", principalStatus: "active", serviceConfigured: true, createdAt: "", createdBy: "admin" }];
     const services = buildCatalogServices(catalog, list, managers);
