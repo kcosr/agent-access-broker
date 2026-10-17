@@ -76,6 +76,7 @@ const ENDPOINT: &str = "https://auth.example.test/records";
 
 fn registration(adapter: &str, base_url: &str) -> OAuthRegistrationConfig {
     OAuthRegistrationConfig {
+        login_binding: None,
         adapter: OAuthAdapter::new(adapter),
         base_url: base_url.into(),
         redirect_uri: "https://broker.example.test/v1/oauth/callback/records".into(),

@@ -1,17 +1,21 @@
 //! GitLab backend: project, issue, merge-request, note, discussion, review,
 //! branch, file, commit, pipeline, job, webhook, and provisioning actions
 //! against the GitLab REST API, authorized against `git_repository`
-//! resources.
+//! resources, and the `gitlab` OAuth dialect ([`GITLAB_OAUTH_DIALECT`]).
+mod access;
 mod backend;
 mod config;
+mod oauth;
 mod present;
 mod provisioning;
 #[cfg(test)]
 mod tests;
 mod validation;
 
+pub use access::GitlabCredential;
 pub use backend::*;
 pub use config::*;
+pub use oauth::GITLAB_OAUTH_DIALECT;
 use validation::*;
 
 use agent_access_content::append_gitlab_markdown_attribution;
@@ -157,6 +161,9 @@ const GITLAB_JOB_SCOPES: &[&str] = &[
 pub struct GitlabProvider {
     config: GitlabProviderConfig,
     config_fingerprint: String,
+    /// The OAuth target of the GitLab instance `api_base_url` names, which
+    /// delegated access must be pinned to; `None` when it names none.
+    instance_target: Option<Arc<str>>,
     limits: ProviderLimits,
     backend: Arc<dyn GitlabBackend>,
     pagination_signer: ContinuationSigner,
@@ -197,6 +204,7 @@ impl GitlabProvider {
         )?);
         let config_fingerprint = gitlab_config_fingerprint(&config);
         Ok(Self {
+            instance_target: gitlab_instance_target(&config),
             config,
             config_fingerprint,
             limits,
@@ -209,6 +217,7 @@ impl GitlabProvider {
     pub fn with_backend(config: GitlabProviderConfig, backend: Arc<dyn GitlabBackend>) -> Self {
         let config_fingerprint = gitlab_config_fingerprint(&config);
         Self {
+            instance_target: gitlab_instance_target(&config),
             config,
             config_fingerprint,
             limits: ProviderLimits::default(),
@@ -464,7 +473,7 @@ impl Provider for GitlabProvider {
     ) -> Result<ScopeResolution, ProviderError> {
         let (action, inputs) = (request.action(), request.inputs());
         let locator = project_locator_for_action(action, inputs, &self.config)?;
-        let credential = required_lookup_credential(request.lookup_access())?;
+        let credential = &self.required_lookup_credential(request.lookup_access())?;
         let project = self
             .backend
             .project(&locator.project, credential)
@@ -558,6 +567,7 @@ impl Provider for GitlabProvider {
         credential: &ExecutionCredential,
         _correlation: &crate::CorrelationContext,
     ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
+        let credential = &GitlabCredential::from_static(credential.clone());
         let response = self
             .backend
             .current_user(credential)
@@ -756,7 +766,7 @@ impl GitlabProvider {
         lookup_access: Option<&LookupAccess>,
     ) -> Result<GitlabProject, ProviderError> {
         let locator = project_locator_for_action(action, inputs, &self.config)?;
-        let credential = required_lookup_credential(lookup_access)?;
+        let credential = &self.required_lookup_credential(lookup_access)?;
         Ok(self
             .backend
             .project(&locator.project, credential)
@@ -777,7 +787,7 @@ impl GitlabProvider {
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
         ensure_upload_project_scope(&project, request.resource_scopes()?)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(json!({ "project": project.path_with_namespace }));
         let response = self
             .backend
@@ -804,7 +814,7 @@ impl GitlabProvider {
         let lookup_project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .project(&lookup_project.path_with_namespace, credential)
@@ -830,7 +840,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .issue(project.id, inputs.iid, credential)
@@ -861,7 +871,7 @@ impl GitlabProvider {
             .await?;
         let page_token = inputs.page_token;
         let max_results = capped_max_results(inputs.max_results, self.config.search.max_results)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let mut search = GitlabIssueSearchRequest {
             state: inputs.state,
             labels: inputs.labels,
@@ -946,7 +956,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(json!({ "project": project.path_with_namespace }));
         let response = self
             .backend
@@ -999,14 +1009,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
             .issue(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &existing.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "issueIid": inputs.iid }),
         );
@@ -1047,7 +1057,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
             .issue(project.id, inputs.iid, lookup_credential)
@@ -1062,7 +1072,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .issue_notes(project.id, inputs.clone(), credential)
@@ -1135,14 +1145,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
             .issue(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &issue.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "issueIid": inputs.iid }),
         );
@@ -1180,11 +1190,11 @@ impl GitlabProvider {
             .await?;
         let issue = self
             .backend
-            .issue(project.id, inputs.iid, lookup_credential(&request)?)
+            .issue(project.id, inputs.iid, &self.lookup_credential(&request)?)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &issue.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .issue_note(project.id, inputs.clone(), credential)
@@ -1227,14 +1237,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
             .issue(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &issue.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "issueIid": inputs.iid, "noteId": inputs.note_id }),
         );
@@ -1282,14 +1292,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let issue = self
             .backend
             .issue(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_issue_in_project(&project, &issue.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let proof = self
             .backend
             .issue_note(project.id, inputs.clone(), credential)
@@ -1345,7 +1355,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request(project.id, inputs.iid, credential)
@@ -1379,7 +1389,7 @@ impl GitlabProvider {
             .await?;
         let page_token = inputs.page_token;
         let max_results = capped_max_results(inputs.max_results, self.config.search.max_results)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let mut search = GitlabMergeRequestSearchRequest {
             state: inputs.state,
             source_branch: inputs.source_branch,
@@ -1472,7 +1482,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         self.backend
             .branch(project.id, &inputs.source_branch, lookup_credential)
             .await
@@ -1481,7 +1491,7 @@ impl GitlabProvider {
             .branch(project.id, &inputs.target_branch, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "sourceBranch": inputs.source_branch, "targetBranch": inputs.target_branch }),
         );
@@ -1541,7 +1551,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
@@ -1554,7 +1564,7 @@ impl GitlabProvider {
                 .await
                 .map_err(gitlab_lookup_backend_error)?;
         }
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
         );
@@ -1598,7 +1608,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
@@ -1613,7 +1623,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_notes(project.id, inputs.clone(), credential)
@@ -1686,14 +1696,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
         );
@@ -1731,11 +1741,11 @@ impl GitlabProvider {
             .await?;
         let merge_request = self
             .backend
-            .merge_request(project.id, inputs.iid, lookup_credential(&request)?)
+            .merge_request(project.id, inputs.iid, &self.lookup_credential(&request)?)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_note(project.id, inputs.clone(), credential)
@@ -1778,14 +1788,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "noteId": inputs.note_id }),
         );
@@ -1833,14 +1843,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let proof = self
             .backend
             .merge_request_note(project.id, inputs.clone(), credential)
@@ -1897,7 +1907,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
@@ -1912,7 +1922,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_discussions_page(project.id, inputs.clone(), credential)
@@ -1958,14 +1968,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup = lookup_credential(&request)?;
+        let lookup = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_discussion(project.id, inputs.iid, &inputs.discussion_id, credential)
@@ -2011,7 +2021,7 @@ impl GitlabProvider {
             attribution_audit_applied(attribution.as_ref()),
         )?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2119,7 +2129,7 @@ impl GitlabProvider {
             attribution_audit_applied(attribution.as_ref()),
         )?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2234,7 +2244,7 @@ impl GitlabProvider {
         let mut inputs =
             parse_draft_note_list_inputs(request.inputs(), self.config.search.max_results)?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2312,7 +2322,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_draft_note_object_inputs(request.inputs())?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2362,7 +2372,7 @@ impl GitlabProvider {
             attribution_audit_applied(attribution.as_ref()),
         )?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2480,7 +2490,7 @@ impl GitlabProvider {
         let inputs =
             parse_draft_note_update_inputs(request.inputs(), self.config.content.max_body_bytes)?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2629,7 +2639,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_draft_note_object_inputs(request.inputs())?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2804,7 +2814,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_draft_note_object_inputs(request.inputs())?;
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -2873,7 +2883,7 @@ impl GitlabProvider {
         project: &GitlabProject,
         merge_request: &GitlabMergeRequest,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<PublicationDiscussionSnapshot, ProviderError> {
         let mut snapshot = PublicationDiscussionSnapshot {
             notes: BTreeMap::new(),
@@ -2920,7 +2930,7 @@ impl GitlabProvider {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<Vec<GitlabDraftNote>, ProviderError> {
         self.backend
             .merge_request_draft_notes(
@@ -2984,7 +2994,7 @@ impl GitlabProvider {
             )?;
         }
         let (project, merge_request) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -3045,6 +3055,11 @@ impl GitlabProvider {
             Err(GitlabBackendError::NotSent { timed_out }) => {
                 return Err(mutation_not_sent(timed_out));
             }
+            // Delegated access that could not be presented, or that GitLab
+            // rejected, applied nothing: the failure keeps its own reason
+            // rather than reading as unverified when the probe below fails
+            // the same way.
+            Err(GitlabBackendError::Credential(error)) => return Err(error),
             Err(error) => {
                 let remaining = self
                     .all_current_drafts(project.id, inputs.iid, credential)
@@ -3223,7 +3238,7 @@ impl GitlabProvider {
         project_id: u64,
         iid: u64,
         actor_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<String, ProviderError> {
         let mut found = None;
         for page in 1..=10 {
@@ -3291,7 +3306,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_reviewers(project.id, inputs.clone(), credential)
@@ -3318,7 +3333,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_merge_request_subresource_inputs(request.inputs())?;
         let (project, _) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_approval_summary(project.id, inputs.iid, credential)
@@ -3341,7 +3356,7 @@ impl GitlabProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_merge_request_subresource_inputs(request.inputs())?;
         let (project, _) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_approval_state(project.id, inputs.iid, credential)
@@ -3383,7 +3398,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_approval_rules(project.id, inputs.clone(), credential)
@@ -3420,7 +3435,7 @@ impl GitlabProvider {
             ));
         }
         let (project, _) = self.review_read_project(&request, inputs.iid).await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_approval_rule(project.id, inputs.iid, inputs.object_id, credential)
@@ -3449,7 +3464,7 @@ impl GitlabProvider {
         let lookup_project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let project = self
             .backend
             .project(&lookup_project.path_with_namespace, credential)
@@ -3517,6 +3532,11 @@ impl GitlabProvider {
             Err(GitlabBackendError::NotSent { timed_out }) => {
                 return Err(mutation_not_sent(timed_out));
             }
+            // Delegated access that could not be presented, or that GitLab
+            // rejected, applied nothing: the failure keeps its own reason
+            // rather than reading as unverified when the probe below fails
+            // the same way.
+            Err(GitlabBackendError::Credential(error)) => return Err(error),
             Err(error) => {
                 let unchanged = self
                     .backend
@@ -3598,7 +3618,7 @@ impl GitlabProvider {
         &self,
         project_id: u64,
         merge_request: &GitlabMergeRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabDiffVersionSummary, ProviderError> {
         let refs = merge_request
             .diff_refs
@@ -3659,7 +3679,7 @@ impl GitlabProvider {
         let lookup_project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let actor = self
             .backend
             .current_user(credential)
@@ -3701,6 +3721,11 @@ impl GitlabProvider {
             Err(GitlabBackendError::NotSent { timed_out }) => {
                 return Err(mutation_not_sent(timed_out));
             }
+            // Delegated access that could not be presented, or that GitLab
+            // rejected, applied nothing: the failure keeps its own reason
+            // rather than reading as unverified when the probe below fails
+            // the same way.
+            Err(GitlabBackendError::Credential(error)) => return Err(error),
             Err(error) => {
                 let unchanged = self
                     .ensure_suggestions_state(&project, &merge_request, &inputs, credential, false)
@@ -3778,7 +3803,7 @@ impl GitlabProvider {
         iid: u64,
         expected_head_sha: &str,
         authorized_scopes: &ResourceScopes,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<(GitlabProject, GitlabMergeRequest, GitlabProject), ProviderError> {
         let project = self
             .backend
@@ -3836,7 +3861,7 @@ impl GitlabProvider {
         project: &GitlabProject,
         merge_request: &GitlabMergeRequest,
         inputs: &GitlabSuggestionApplyInputs,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
         expected_applied: bool,
     ) -> Result<(), ProviderError> {
         for locator in &inputs.locators {
@@ -3909,7 +3934,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_commits(project.id, inputs.clone(), credential)
@@ -3949,7 +3974,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_pipelines(project.id, inputs.clone(), credential)
@@ -3990,7 +4015,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_diffs(project.id, inputs.clone(), credential)
@@ -4031,7 +4056,7 @@ impl GitlabProvider {
             &request_hash,
             inputs.max_results,
         )?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_diff_versions(project.id, inputs.clone(), credential)
@@ -4067,7 +4092,7 @@ impl GitlabProvider {
             .await?;
         let preflight = self
             .backend
-            .merge_request(project.id, inputs.iid, lookup_credential(&request)?)
+            .merge_request(project.id, inputs.iid, &self.lookup_credential(&request)?)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &preflight.value)?;
@@ -4077,7 +4102,7 @@ impl GitlabProvider {
                 "GitLab merge request id was missing",
             )
         })?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .merge_request_diff_version(project.id, inputs.clone(), credential)
@@ -4111,7 +4136,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup = lookup_credential(&request)?;
+        let lookup = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup)
@@ -4124,7 +4149,7 @@ impl GitlabProvider {
             .as_ref()
             .map(|refs| refs.head_sha.clone())
             .or_else(|| merge_request.value.sha.clone());
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let byte_cap = self
             .config
             .content
@@ -4187,7 +4212,7 @@ impl GitlabProvider {
             .await?;
         let merge_request = self
             .backend
-            .merge_request(project.id, iid, lookup_credential(request)?)
+            .merge_request(project.id, iid, &self.lookup_credential(request)?)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
@@ -4200,7 +4225,7 @@ impl GitlabProvider {
         merge_request: &GitlabMergeRequest,
         expected_head_sha: &str,
         input: &GitlabPositionInput,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabDiffPosition, ProviderError> {
         require_current_position_triplet(merge_request, expected_head_sha)?;
         let refs = merge_request
@@ -4324,7 +4349,7 @@ impl GitlabProvider {
         max_results: u32,
         status: u16,
         duration_ms: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
         projection: Option<GitlabCollectionProjection>,
     ) -> Result<ProviderResult, ProviderError> {
         validate_gitlab_page_count(items.len(), max_results)?;
@@ -4377,14 +4402,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
         );
@@ -4429,14 +4454,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let proof = self
             .backend
             .merge_request_discussion(project.id, inputs.iid, &inputs.discussion_id, credential)
@@ -4500,14 +4525,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let proof = self
             .backend
             .merge_request_discussion(project.id, inputs.iid, &inputs.discussion_id, credential)
@@ -4569,14 +4594,14 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let merge_request = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
             .await
             .map_err(gitlab_lookup_backend_error)?;
         ensure_merge_request_in_project(&project, &merge_request.value)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid, "discussionId": inputs.discussion_id }),
         );
@@ -4628,7 +4653,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
             .merge_request(project.id, inputs.iid, lookup_credential)
@@ -4637,7 +4662,7 @@ impl GitlabProvider {
             .value;
         ensure_merge_request_in_project(&project, &existing)?;
         require_matching_merge_request_sha(&inputs.sha, &existing)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "mergeRequestIid": inputs.iid }),
         );
@@ -4673,7 +4698,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .branches(
@@ -4709,7 +4734,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .branch(project.id, &inputs.branch, credential)
@@ -4736,7 +4761,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         self.ensure_source_ref_exists(project.id, &inputs.ref_name, lookup_credential)
             .await?;
         let safety = self
@@ -4749,7 +4774,7 @@ impl GitlabProvider {
             lookup_credential,
         )
         .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "branch": inputs.branch }),
         );
@@ -4780,7 +4805,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .protected_branches(
@@ -4815,7 +4840,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .protected_branch(project.id, &inputs.name, credential)
@@ -4842,7 +4867,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .protected_branches(
@@ -4877,7 +4902,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .file(
@@ -4917,7 +4942,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let metadata = self
             .backend
             .file(
@@ -4937,7 +4962,7 @@ impl GitlabProvider {
             self.config.content.max_raw_download_bytes,
         )?;
         let resolved_ref = required_file_commit_id(&metadata)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .raw_file(
@@ -5012,7 +5037,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
             .await?;
@@ -5033,7 +5058,7 @@ impl GitlabProvider {
             lookup_credential,
         )
         .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "branch": inputs.branch, "path": inputs.path }),
         );
@@ -5067,7 +5092,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
             .await?;
@@ -5095,7 +5120,7 @@ impl GitlabProvider {
             .value;
         ensure_file_path_matches(&inputs.path, &existing)?;
         require_matching_last_commit_id(inputs.last_commit_id.as_deref(), &existing)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "branch": inputs.branch, "path": inputs.path }),
         );
@@ -5126,7 +5151,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
             .await?;
@@ -5154,7 +5179,7 @@ impl GitlabProvider {
             .value;
         ensure_file_path_matches(&inputs.path, &existing)?;
         require_matching_last_commit_id(inputs.last_commit_id.as_deref(), &existing)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "branch": inputs.branch, "path": inputs.path }),
         );
@@ -5184,7 +5209,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .commits(
@@ -5223,7 +5248,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .commit(project.id, &inputs.sha, credential)
@@ -5255,7 +5280,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_branch_write_allowed(&project, &inputs.branch, lookup_credential)
             .await?;
@@ -5282,7 +5307,7 @@ impl GitlabProvider {
             lookup_credential,
         )
         .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "branch": inputs.branch }),
         );
@@ -5312,7 +5337,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .pipelines(
@@ -5353,7 +5378,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .pipeline(project.id, inputs.pipeline_id, credential)
@@ -5379,11 +5404,11 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let safety = self
             .ensure_ci_ref_execution_allowed(&project, &inputs.ref_name, lookup_credential)
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "ref": inputs.ref_name }),
         );
@@ -5439,7 +5464,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
             .pipeline(project.id, inputs.pipeline_id, lookup_credential)
@@ -5447,7 +5472,7 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?
             .value;
         ensure_pipeline_in_project(&project, &existing)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "pipelineId": inputs.pipeline_id }),
         );
@@ -5486,7 +5511,7 @@ impl GitlabProvider {
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
         if let Some(pipeline_id) = inputs.pipeline_id {
-            let lookup_credential = lookup_credential(&request)?;
+            let lookup_credential = &self.lookup_credential(&request)?;
             let pipeline = self
                 .backend
                 .pipeline(project.id, pipeline_id, lookup_credential)
@@ -5495,7 +5520,7 @@ impl GitlabProvider {
                 .value;
             ensure_pipeline_in_project(&project, &pipeline)?;
         }
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .jobs(
@@ -5532,7 +5557,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .job(project.id, inputs.job_id, credential)
@@ -5558,7 +5583,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let metadata = self
             .backend
             .job(project.id, inputs.job_id, lookup_credential)
@@ -5572,7 +5597,7 @@ impl GitlabProvider {
                 self.config.content.max_raw_download_bytes,
             )?;
         }
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let response = self
             .backend
             .job_trace(
@@ -5661,7 +5686,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
             .job(project.id, inputs.job_id, lookup_credential)
@@ -5692,7 +5717,7 @@ impl GitlabProvider {
         let safety = self
             .ensure_ci_ref_execution_allowed(&project, ref_name, lookup_credential)
             .await?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "jobId": inputs.job_id }),
         );
@@ -5724,7 +5749,7 @@ impl GitlabProvider {
         let project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let lookup_credential = lookup_credential(&request)?;
+        let lookup_credential = &self.lookup_credential(&request)?;
         let existing = self
             .backend
             .job(project.id, inputs.job_id, lookup_credential)
@@ -5732,7 +5757,7 @@ impl GitlabProvider {
             .map_err(gitlab_lookup_backend_error)?
             .value;
         ensure_job_in_project(&project, &existing)?;
-        let credential = execution_credential(&request)?;
+        let credential = &self.execution_credential(&request)?;
         let write = PlainWrite::new(
             json!({ "project": project.path_with_namespace, "jobId": inputs.job_id }),
         );
@@ -5762,17 +5787,17 @@ impl GitlabProvider {
         ))
     }
 
-    async fn webhook_project_and_credential<'a>(
+    async fn webhook_project_and_credential(
         &self,
-        request: &'a ProviderInvocation,
-    ) -> Result<(GitlabProject, &'a ExecutionCredential), ProviderError> {
+        request: &ProviderInvocation,
+    ) -> Result<(GitlabProject, GitlabCredential), ProviderError> {
         let lookup_project = self
             .lookup_project_for_invoke(request.action(), request.inputs(), request.lookup_access())
             .await?;
-        let credential = execution_credential(request)?;
+        let credential = self.execution_credential(request)?;
         let project = self
             .backend
-            .project(&lookup_project.path_with_namespace, credential)
+            .project(&lookup_project.path_with_namespace, &credential)
             .await
             .map_err(gitlab_backend_error)?
             .value;
@@ -5785,7 +5810,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_list_inputs(request.inputs(), self.config.search.max_results)?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let request_hash = sha256_serialized(&json!({ "collection": "webhooks" }));
         let page = self.page_from_token(
             inputs.page_token.as_deref(),
@@ -5848,7 +5873,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_object_inputs(request.inputs())?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let response = self
             .backend
             .webhook(project.id, inputs.webhook_id, credential)
@@ -5877,7 +5902,7 @@ impl GitlabProvider {
         let (destination, matched_pattern) = self.authorize_webhook_destination(url)?;
         let enable_ssl_verification = inputs.enable_ssl_verification.unwrap_or(true);
         self.authorize_webhook_tls(&destination, enable_ssl_verification)?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let write = webhook_write_request(&inputs, url.to_string(), Some(enable_ssl_verification));
         let response = self
             .backend
@@ -5953,7 +5978,7 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
         )?;
         let webhook_id = inputs.webhook_id.expect("update webhook id was validated");
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let existing = self
             .backend
             .webhook(project.id, webhook_id, credential)
@@ -6082,7 +6107,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_object_inputs(request.inputs())?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let existing = self
             .backend
             .webhook(project.id, inputs.webhook_id, credential)
@@ -6130,7 +6155,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_test_inputs(request.inputs())?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let hook = self
             .backend
             .webhook(project.id, inputs.webhook_id, credential)
@@ -6174,7 +6199,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_event_list_inputs(request.inputs())?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let hook = self
             .backend
             .webhook(project.id, inputs.webhook_id, credential)
@@ -6250,7 +6275,7 @@ impl GitlabProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_event_resend_inputs(request.inputs())?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let hook = self
             .backend
             .webhook(project.id, inputs.webhook_id, credential)
@@ -6309,7 +6334,7 @@ impl GitlabProvider {
         set: bool,
     ) -> Result<ProviderResult, ProviderError> {
         let inputs = parse_webhook_custom_header_inputs(request.inputs(), set)?;
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let existing = self
             .backend
             .webhook(project.id, inputs.webhook_id, credential)
@@ -6415,7 +6440,7 @@ impl GitlabProvider {
         &self,
         project_id: u64,
         ref_name: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<(), ProviderError> {
         match self.backend.branch(project_id, ref_name, credential).await {
             Ok(_) => Ok(()),
@@ -6433,7 +6458,7 @@ impl GitlabProvider {
         &self,
         project: &GitlabProject,
         branch: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBranchSafety, ProviderError> {
         validate_branch_name(branch)?;
         let mut safety = GitlabBranchSafety {
@@ -6487,7 +6512,7 @@ impl GitlabProvider {
         &self,
         project: &GitlabProject,
         ref_name: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabCiRefSafety, ProviderError> {
         validate_branch_name(ref_name)?;
         let mut safety = GitlabCiRefSafety {
@@ -7269,13 +7294,25 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 .collect(),
         )
         .with_credentials(
-            CredentialDescriptor::default().profile("gitlab-access-token", "bearer_token"),
+            CredentialDescriptor::default()
+                .profile("gitlab-access-token", "bearer_token")
+                .delegated(
+                    "Lets agents act on GitLab projects as your GitLab account. Agent access is limited by your Broker grants. GitLab's authorization page lists the broader scopes the connection grants.",
+                ),
         )
         .with_presentation_body_limit(config.content.max_body_bytes);
     match gitlab_upstream_authority(&config.api_base_url) {
         Some(authority) => descriptor.with_upstream_authority(authority),
         None => descriptor,
     }
+}
+
+/// The OAuth target of the GitLab instance `api_base_url` names: what a
+/// `gitlab` registration's profile targets, and what delegated access is
+/// pinned to before each request.
+fn gitlab_instance_target(config: &GitlabProviderConfig) -> Option<Arc<str>> {
+    gitlab_upstream_authority(&config.api_base_url)
+        .map(|instance| Arc::from(oauth::oauth_target(&instance)))
 }
 
 /// The GitLab instance `api_base_url` belongs to: the REST v4 API root
@@ -11961,40 +11998,6 @@ fn capped_max_results(requested: Option<u32>, configured_max: u32) -> Result<u32
     Ok(requested.min(configured_max).min(GITLAB_MAX_PER_PAGE))
 }
 
-fn execution_credential(
-    request: &ProviderInvocation,
-) -> Result<&ExecutionCredential, ProviderError> {
-    request.execution().static_credential().ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "selected credential mode is not provisioned",
-        )
-    })
-}
-
-fn lookup_credential(request: &ProviderInvocation) -> Result<&ExecutionCredential, ProviderError> {
-    required_lookup_credential(request.lookup_access())
-}
-
-/// The static lookup credential the host selected. GitLab does not accept
-/// delegated credentials, so delegated or unknown lookup access fails closed
-/// instead of standing in for a static credential.
-fn required_lookup_credential(
-    lookup_access: Option<&LookupAccess>,
-) -> Result<&ExecutionCredential, ProviderError> {
-    match lookup_access {
-        Some(LookupAccess::Static(credential)) => Ok(credential),
-        None => Err(ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "lookup credential is not provisioned",
-        )),
-        Some(_) => Err(ProviderError::deny(
-            ReasonCode::CredentialNotProvisioned,
-            "GitLab lookups do not accept delegated credentials",
-        )),
-    }
-}
-
 fn repository_scopes_from_project(project: &GitlabProject) -> ResourceScopes {
     repository_scopes_from_path(&project.path_with_namespace)
 }
@@ -12673,7 +12676,12 @@ fn mutation_backend_error(
         // Throttling rejects the mutation request itself, but a throttled
         // readback leaves an applied mutation unverified. It must not read as
         // upstream_rate_limited: waiting and retrying would repeat the write.
-        GitlabBackendError::RateLimited(_)
+        // Likewise, delegated access that cannot be presented (an OAuth
+        // refresh throttled, busy or uncertain, or a reconnect required) or
+        // that GitLab rejected: stopping the write itself, it applied nothing
+        // and keeps its own reason; stopping the readback, it leaves the
+        // applied write unverified.
+        GitlabBackendError::RateLimited(_) | GitlabBackendError::Credential(_)
             if stage != MutationVerificationStage::MutationResponse =>
         {
             mutation_verification_failed(stage, locators)
@@ -12916,7 +12924,7 @@ async fn ensure_branch_absent(
     backend: &dyn GitlabBackend,
     project_id: u64,
     branch: &str,
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
 ) -> Result<(), ProviderError> {
     match backend.branch(project_id, branch, credential).await {
         Ok(_) => Err(ProviderError::deny(
@@ -12932,7 +12940,7 @@ async fn ensure_optional_start_branch(
     backend: &dyn GitlabBackend,
     project_id: u64,
     start_branch: Option<&str>,
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
 ) -> Result<(), ProviderError> {
     if let Some(start_branch) = start_branch {
         backend
@@ -12948,7 +12956,7 @@ async fn ensure_file_absent(
     project_id: u64,
     path: &str,
     ref_name: &str,
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
 ) -> Result<(), ProviderError> {
     match backend
         .file(
@@ -12976,7 +12984,7 @@ async fn ensure_commit_start_ref(
     branch: &str,
     start_branch: Option<&str>,
     start_sha: Option<&str>,
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
 ) -> Result<(), ProviderError> {
     match backend.branch(project_id, branch, credential).await {
         Ok(_) => {}
@@ -13009,7 +13017,7 @@ async fn validate_commit_action_preconditions(
     project_id: u64,
     branch: &str,
     actions: &[GitlabCommitActionRequest],
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
 ) -> Result<(), ProviderError> {
     for action in actions {
         match action.action.as_str() {
@@ -13062,7 +13070,7 @@ async fn existing_file_for_action(
     project_id: u64,
     path: &str,
     ref_name: &str,
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
 ) -> Result<GitlabFile, ProviderError> {
     let file = backend
         .file(
@@ -14066,6 +14074,7 @@ impl PlainWrite {
             | GitlabBackendError::DraftPositionShapeInvalid
             | GitlabBackendError::Protocol(_) => self.unverified(gitlab_backend_error(error)),
             GitlabBackendError::RequestUnbuilt(_)
+            | GitlabBackendError::Credential(_)
             | GitlabBackendError::Unauthorized
             | GitlabBackendError::Forbidden
             | GitlabBackendError::NotFound
@@ -14086,14 +14095,22 @@ impl PlainWrite {
     }
 }
 
+/// The failure of the version check before a review submission. Throttling,
+/// and delegated access that could not be presented (an OAuth refresh
+/// throttled or busy, consent pending, a reconnect required) or that GitLab
+/// rejected again, keep their own reason and retry metadata; anything else is
+/// a failed version discovery.
 fn gitlab_review_submit_version_backend_error(error: GitlabBackendError) -> ProviderError {
-    if let GitlabBackendError::RateLimited(retry_after) = error {
-        return upstream_rate_limited("gitlab", retry_after);
+    match error {
+        GitlabBackendError::RateLimited(retry_after) => {
+            upstream_rate_limited("gitlab", retry_after)
+        }
+        GitlabBackendError::Credential(error) => error,
+        _ => ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "GitLab version discovery failed",
+        ),
     }
-    ProviderError::error(
-        ReasonCode::UpstreamProtocolFailed,
-        "GitLab version discovery failed",
-    )
 }
 
 fn gitlab_backend_error(error: GitlabBackendError) -> ProviderError {
@@ -14146,6 +14163,7 @@ fn gitlab_backend_error(error: GitlabBackendError) -> ProviderError {
             ReasonCode::UpstreamProtocolFailed,
             "GitLab response protocol error",
         ),
+        GitlabBackendError::Credential(error) => error,
     }
 }
 

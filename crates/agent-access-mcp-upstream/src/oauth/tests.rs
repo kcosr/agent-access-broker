@@ -65,6 +65,7 @@ impl Fixture {
         let resource = endpoint("mcp");
         let issuer = endpoint("issuer");
         let config = OAuthRegistrationConfig {
+            login_binding: None,
             adapter: OAuthAdapter::new("mcp_oauth"),
             base_url: issuer.clone(),
             redirect_uri: "http://127.0.0.1:8787/v1/oauth/callback/mcp".into(),

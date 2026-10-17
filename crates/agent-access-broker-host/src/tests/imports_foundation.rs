@@ -796,6 +796,7 @@ fn mcp_oauth_config(fixture: &Fixture) -> BrokerConfig {
     config.oauth.registrations.insert(
         "tools".into(),
         agent_access_provider::OAuthRegistrationConfig {
+            login_binding: None,
             adapter: agent_access_provider::OAuthAdapter::new("mcp_oauth"),
             base_url: "https://login.example.test/issuer".into(),
             redirect_uri: "https://broker.example.test/v1/oauth/callback/tools".into(),

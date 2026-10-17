@@ -3,8 +3,10 @@
 //! protocol comes from its registered dialect.
 //! Provider material never crosses the Broker credential boundary.
 mod lease;
+mod login_binding;
 
 pub(crate) use lease::ManagedOAuthLease;
+pub(crate) use login_binding::validate_config as validate_login_binding;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
@@ -187,6 +189,13 @@ pub enum OAuthError {
     Stale,
     #[error("OAuth account identity does not match the connected account")]
     IdentityMismatch,
+    /// The registration binds connections to a Broker sign-in the owner
+    /// has not linked.
+    #[error("OAuth connection requires a linked Broker sign-in")]
+    LoginBindingRequired,
+    /// The upstream account is not linked to the owner's Broker sign-in.
+    #[error("OAuth account is not linked to the owner's Broker sign-in")]
+    LoginBindingMismatch,
     #[error("OAuth target or permission is not authorized")]
     Permission,
     #[error("OAuth personal connection setup is not authorized")]
@@ -234,6 +243,8 @@ impl OAuthError {
             Self::InvalidFlow => "oauth_flow_invalid",
             Self::Stale => "oauth_stale",
             Self::IdentityMismatch => "oauth_identity_mismatch",
+            Self::LoginBindingRequired => "oauth_login_binding_required",
+            Self::LoginBindingMismatch => "oauth_login_binding_mismatch",
             Self::Permission => "oauth_permission_denied",
             Self::SetupDenied => "oauth_setup_denied",
             Self::SelfServiceDisabled => "self_service_disabled",
@@ -295,6 +306,13 @@ impl OAuthConfig {
                 &registration.redirect_uri,
                 registration.allow_insecure_loopback,
             )?;
+            if registration
+                .login_binding
+                .as_ref()
+                .is_some_and(|binding| !login_binding::well_formed(binding))
+            {
+                return Err(OAuthError::Configuration);
+            }
             let reference = &registration.client_secret_ref;
             if registration.client_auth == agent_access_provider::OAuthClientAuth::None {
                 if !reference.is_empty() {
@@ -648,6 +666,9 @@ impl OAuthManager {
             {
                 return Err(OAuthError::Configuration);
             }
+            if registration.login_binding.is_some() && !dialect.supports_login_binding() {
+                return Err(OAuthError::Configuration);
+            }
             dialect
                 .validate_registration(registration)
                 .map_err(|_| OAuthError::Configuration)?;
@@ -918,6 +939,15 @@ impl OAuthManager {
                 binding,
                 &runtime(),
             )?;
+            // A principal without the bound sign-in cannot start consent.
+            if let Some(login) = &r.config.login_binding {
+                let linked = crate::managed_store::oauth::linked_login_subject(
+                    conn,
+                    owner,
+                    login_binding::login_provider(login)?,
+                )?;
+                login_binding::owner_id(login, linked.as_deref())?;
+            }
             let mut slot =
                 current.unwrap_or_else(|| SlotState::empty(&r.fingerprint, &r.credential_revision));
             if intent == OAuthConnectIntent::Connect && slot.connection.is_some() {
@@ -1137,6 +1167,14 @@ impl OAuthManager {
         {
             return Err(OAuthError::InvalidResponse);
         }
+        // Checked again inside the install transaction.
+        if let Some(login) = &r.config.login_binding {
+            let linked = self
+                .inner
+                .store
+                .oauth_linked_login_subject(owner, login_binding::login_provider(login)?)?;
+            login_binding::check(login, linked.as_deref(), &identity.linked_identities)?;
+        }
         let targets = validate_targets(
             r.dialect
                 .discover_targets(&r.http, &client, &grant.access_token, &scopes)
@@ -1161,6 +1199,14 @@ impl OAuthManager {
                 &binding,
                 &runtime(),
             )?;
+            if let Some(login) = &r.config.login_binding {
+                let linked = crate::managed_store::oauth::linked_login_subject(
+                    conn,
+                    owner,
+                    login_binding::login_provider(login)?,
+                )?;
+                login_binding::check(login, linked.as_deref(), &identity.linked_identities)?;
+            }
             if slot.generation != flow.generation
                 || !slot
                     .flows
@@ -1203,6 +1249,21 @@ impl OAuthManager {
             let public = public_connection(registration, &slot);
             Ok((slot, public))
         })
+    }
+    /// Whether `owner` has the Broker sign-in `registration` binds
+    /// connections to: `Ok` without a `login_binding`, and
+    /// [`OAuthError::LoginBindingRequired`] when they cannot connect for
+    /// lack of it. Consent start and installation check it again.
+    pub fn check_login_binding(&self, owner: &str, registration: &str) -> Result<(), OAuthError> {
+        let r = self.registration(registration)?;
+        let Some(login) = &r.config.login_binding else {
+            return Ok(());
+        };
+        let linked = self
+            .inner
+            .store
+            .oauth_linked_login_subject(owner, login_binding::login_provider(login)?)?;
+        login_binding::owner_id(login, linked.as_deref()).map(|_| ())
     }
     pub fn list(&self, owner: &str) -> Result<Vec<OAuthConnection>, OAuthError> {
         self.active()?;
@@ -1980,6 +2041,7 @@ fn make_lease(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    mod login_binding_lifecycle;
     use crate::managed_store::oauth::{test_fixture, test_sql};
     use crate::network::EgressProxyEnvironment;
     use crate::{OutboundTlsConfig, PreparedOutboundTls};
@@ -2106,11 +2168,16 @@ pub(crate) mod tests {
     }
 
     /// The selections these tests configure: the development records
-    /// backend, its `stub` dialect and the default-scope fixture dialect.
+    /// backend, its `stub` dialect and the default-scope and
+    /// linked-identity fixture dialects.
     fn test_registry() -> BackendRegistry {
         BackendRegistry::new([&OAUTH_STUB_BACKEND])
             .unwrap()
-            .with_oauth_dialects([&STUB_OAUTH_DIALECT, &DEFAULT_SCOPE_DIALECT])
+            .with_oauth_dialects([
+                &STUB_OAUTH_DIALECT,
+                &DEFAULT_SCOPE_DIALECT,
+                &login_binding_lifecycle::LINKED_IDENTITY_DIALECT,
+            ])
             .unwrap()
     }
 
@@ -2145,6 +2212,7 @@ pub(crate) mod tests {
     #[test]
     fn registration_fingerprints_never_drift() {
         let registration = OAuthRegistrationConfig {
+            login_binding: None,
             adapter_settings: Default::default(),
             adapter: OAuthAdapter::new("stub"),
             base_url: "https://stub.example/".into(),
@@ -2170,6 +2238,95 @@ pub(crate) mod tests {
             registration_fingerprint(&registration).unwrap(),
             "e77c185f9dc0231eeefbeb48cccc745033fc8bd172fa06a9af13a983d4a7e1fb"
         );
+    }
+
+    /// The sample registration of each dialect the Broker binary selects,
+    /// as `agent-access-broker.sample.toml` documents it, keeps the
+    /// fingerprint it had before registrations could set `login_binding`.
+    /// A changed digest would discard every stored connection at activation.
+    #[test]
+    fn sample_registration_fingerprints_survive_added_registration_keys() {
+        let samples = [
+            (
+                r#"
+                adapter = "gitlab"
+                base_url = "https://gitlab.example.com"
+                redirect_uri = "https://broker.example.com/v1/oauth/callback/gitlab"
+                client_id = "YOUR_GITLAB_APPLICATION_ID"
+                client_secret_ref = "env:GITLAB_OAUTH_CLIENT_SECRET"
+                client_auth = "client_secret_post"
+                rotation = "rotate_both"
+                [permission_profiles.default]
+                scopes = ["api", "write_repository"]
+                audience = "gitlab"
+                target = "https://gitlab.example.com"
+                "#,
+                "d11c02781d5768a3b87793792b940453b12faf457979621c595b76cb8873765d",
+            ),
+            (
+                r#"
+                adapter = "stub"
+                base_url = "http://127.0.0.1:8099"
+                redirect_uri = "http://127.0.0.1:8080/v1/oauth/callback/stub"
+                client_id = "broker-local"
+                client_secret_ref = "env:OAUTH_STUB_CLIENT_SECRET"
+                allow_insecure_loopback = true
+                [permission_profiles.read]
+                scopes = ["records.read", "offline_access"]
+                audience = "records-api"
+                target = "workspace-one"
+                "#,
+                "eb91a1126b88020df9993fe938a7a0ec65916b80d92c0f3a1f3f5ae85b2b3732",
+            ),
+            (
+                r#"
+                adapter = "mcp_oauth"
+                base_url = "https://login.example.com/issuer"
+                redirect_uri = "https://broker.example.com/v1/oauth/callback/internal_tools"
+                client_id = "registered-broker-client"
+                client_auth = "none"
+                rotation = "preserve_old"
+                [adapter_settings]
+                resource = "https://tools.example.com/mcp"
+                protected_resource_metadata_url = "https://tools.example.com/.well-known/oauth-protected-resource/mcp"
+                authorization_server_metadata_url = "https://login.example.com/.well-known/oauth-authorization-server/issuer"
+                authorization_endpoint = "https://login.example.com/authorize"
+                token_endpoint = "https://login.example.com/token"
+                [permission_profiles.default]
+                scope_mode = "server_default"
+                audience = "https://tools.example.com/mcp"
+                target = "https://tools.example.com/mcp"
+                "#,
+                "dbb0bd4450a6e16fe1ef6a4d0f6f1ce22b59420bb04e828ece786053768faeb5",
+            ),
+            (
+                r#"
+                adapter = "google"
+                base_url = "https://accounts.google.com"
+                redirect_uri = "http://127.0.0.1:8787/v1/oauth/callback/google"
+                client_id = "YOUR_CLIENT_ID.apps.googleusercontent.com"
+                client_secret_ref = "env:GOOGLE_CLIENT_SECRET"
+                client_auth = "client_secret_post"
+                encoding = "form"
+                rotation = "preserve_old"
+                allow_insecure_loopback = true
+                [permission_profiles.mail]
+                scopes = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+                audience = "https://gmail.googleapis.com/"
+                target = "me"
+                "#,
+                "73d9a234167662c0506d55e4843d857e94cde76d1e0468c4219afb5e400a337f",
+            ),
+        ];
+        for (sample, fingerprint) in samples {
+            let registration: OAuthRegistrationConfig = toml::from_str(sample).unwrap();
+            assert_eq!(
+                registration_fingerprint(&registration).unwrap(),
+                fingerprint,
+                "{}",
+                registration.adapter.as_str()
+            );
+        }
     }
     fn binding() -> OAuthBinding {
         OAuthBinding {
@@ -2243,6 +2400,22 @@ pub(crate) mod tests {
         )
         .unwrap();
         config.oauth = manager.config().clone();
+        // A login binding needs the Broker's Microsoft sign-in in its tenant.
+        if let Some(login) = config
+            .oauth
+            .registrations
+            .values()
+            .find_map(|registration| registration.login_binding.as_ref())
+        {
+            config.browser_auth.oidc.microsoft = crate::MicrosoftOidcConfig {
+                enabled: true,
+                tenant_id: Some(login.upstream_tenant_id.clone()),
+                client_id: Some("dddddddd-dddd-4ddd-8ddd-ddddddddddd4".into()),
+                client_secret_ref: Some(key_ref.clone()),
+                flow_key_ref: Some(key_ref.clone()),
+                ..Default::default()
+            };
+        }
         let runtime = Arc::new(crate::BrokerRuntime::new(config).unwrap());
         Arc::new(move || Arc::clone(&runtime))
     }
@@ -2251,6 +2424,7 @@ pub(crate) mod tests {
             registrations: BTreeMap::from([(
                 "stub".into(),
                 OAuthRegistrationConfig {
+                    login_binding: None,
                     adapter_settings: Default::default(),
                     adapter: OAuthAdapter::new("stub"),
                     base_url: server.uri(),
@@ -4442,6 +4616,62 @@ pub(crate) mod tests {
         assert_eq!(
             restarted.status("user", "stub").unwrap().reason.as_deref(),
             Some("oauth_refresh_uncertain")
+        );
+    }
+
+    /// A second Broker process on the same store finds the first one's
+    /// refresh persisted and in flight: it reports `RefreshBusy` at once,
+    /// neither waiting nor spending the consuming refresh token again, and
+    /// uses the successor once the first process stores it.
+    #[tokio::test]
+    async fn a_second_process_reports_refresh_busy_while_another_refreshes() {
+        let (_dir, store, ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        expire(&manager);
+        server.reset().await;
+        identity(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(token(1))
+                    .set_delay(std::time::Duration::from_millis(1500)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let other = stub_manager(store, ring, manager.config().clone()).unwrap();
+        other.activate().unwrap();
+        let refreshing = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.acquire("user", &binding()).await })
+        };
+        let persisted = || {
+            manager
+                .read("user", "stub")
+                .unwrap()
+                .connection
+                .unwrap()
+                .family
+                .attempt
+                .is_some()
+        };
+        let started = std::time::Instant::now();
+        while !persisted() {
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            other.acquire("user", &binding()).await.unwrap_err(),
+            OAuthError::RefreshBusy
+        );
+        assert_eq!(
+            refreshing.await.unwrap().unwrap().token(),
+            "protected-access-1"
+        );
+        assert_eq!(
+            other.acquire("user", &binding()).await.unwrap().token(),
+            "protected-access-1"
         );
     }
 

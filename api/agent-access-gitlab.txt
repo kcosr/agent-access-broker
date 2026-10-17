@@ -3,3 +3,4 @@
 
 pub mod agent_access_gitlab
 pub static agent_access_gitlab::GITLAB_BACKEND: agent_access_provider::backend::BackendRegistration
+pub static agent_access_gitlab::GITLAB_OAUTH_DIALECT: agent_access_provider::oauth_dialect::OAuthDialectRegistration

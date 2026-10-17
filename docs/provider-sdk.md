@@ -830,6 +830,19 @@ each service that consumes a credential connection using the registration, with
 that service's declared authority (`None` when it declares none). The default
 accepts every consumer.
 
+A registration's optional `login_binding` (`OAuthLoginBinding`: the Broker
+sign-in `provider`, the upstream's `upstream_identity_provider` name and the
+attested `upstream_tenant_id`) makes the host install only upstream accounts
+linked to the owner's Broker sign-in. A dialect whose `identity` can report the
+account's links overrides `OAuthDialect::supports_login_binding` to return
+`true` and returns them with
+`ConnectedIdentity::with_linked_identities([LinkedIdentity::new(provider, external_id)])`,
+leaving out entries it cannot read rather than failing. The host compares them;
+`validate_registration` need not check the field, and the host rejects a
+`login_binding` on a dialect that does not opt in. The field is omitted from a
+registration's serialized form when unset, so existing registrations keep their
+fingerprints.
+
 ### Credential verification
 
 `verify_execution_credential(&ExecutionCredential, &CorrelationContext)` checks

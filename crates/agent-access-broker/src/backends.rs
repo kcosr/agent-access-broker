@@ -4,7 +4,7 @@ use agent_access_broker_host::{BrokerComposition, CompositionError};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_confluence::CONFLUENCE_BACKEND;
 use agent_access_fake::{FAKE_BACKEND, OAUTH_STUB_BACKEND, STUB_OAUTH_DIALECT};
-use agent_access_gitlab::GITLAB_BACKEND;
+use agent_access_gitlab::{GITLAB_BACKEND, GITLAB_OAUTH_DIALECT};
 use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
 use agent_access_jira::JIRA_BACKEND;
 use agent_access_provider::{BackendRegistration, OAuthDialectRegistration};
@@ -25,8 +25,11 @@ static NATIVES: [&BackendRegistration; 8] = [
 ];
 /// OAuth dialects selected on their own. The MCP import selection
 /// contributes its `mcp_oauth` companion, so it is not listed here.
-static OAUTH_DIALECTS: [&OAuthDialectRegistration; 2] =
-    [&GOOGLE_OAUTH_DIALECT, &STUB_OAUTH_DIALECT];
+static OAUTH_DIALECTS: [&OAuthDialectRegistration; 3] = [
+    &GOOGLE_OAUTH_DIALECT,
+    &GITLAB_OAUTH_DIALECT,
+    &STUB_OAUTH_DIALECT,
+];
 
 /// Shipped import adapters, selected through their registrations.
 fn import_adapters() -> [ImportedAdapterRegistration; 3] {
@@ -81,6 +84,7 @@ mod tests {
             ]
         );
         assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
+        assert!(composition.oauth_dialect_ids().any(|id| id == "gitlab"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "mcp_oauth"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "stub"));
         assert_eq!(
@@ -137,7 +141,7 @@ mod tests {
                 "agent-access-command-import: import command",
                 "agent-access-confluence: native confluence",
                 "agent-access-fake: native fake, native oauth_stub, oauth stub",
-                "agent-access-gitlab: native gitlab",
+                "agent-access-gitlab: native gitlab, oauth gitlab",
                 "agent-access-gmail: native gmail, oauth google",
                 "agent-access-jira: native jira",
                 "agent-access-mcp-upstream: oauth mcp_oauth, import mcp_http",

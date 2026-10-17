@@ -621,7 +621,7 @@ impl GitlabProvider {
         if let Some(scopes) = inputs.get("scopes") {
             check_scopes(scopes, &self.config.provisioning)?;
         }
-        let (project, credential) = self.webhook_project_and_credential(&request).await?;
+        let (project, ref credential) = self.webhook_project_and_credential(&request).await?;
         let call = |op, body| {
             self.backend.provisioning(
                 project.id,
@@ -807,7 +807,7 @@ impl GitlabProvider {
         project_id: u64,
         user_id: u64,
         token_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<Value, ProviderError> {
         let mut page = 1;
         for _ in 0..100 {
@@ -862,7 +862,7 @@ impl HttpGitlabBackend {
         project_id: u64,
         op: GitlabProvisioningOperation,
         request: GitlabProvisioningRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         use GitlabProvisioningOperation::*;
         let prefix = format!("projects/{project_id}");

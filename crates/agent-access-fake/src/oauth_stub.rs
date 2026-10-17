@@ -318,6 +318,7 @@ mod tests {
 
     fn registration(rotation: OAuthRotation) -> OAuthRegistrationConfig {
         OAuthRegistrationConfig {
+            login_binding: None,
             adapter: OAuthAdapter::new("stub"),
             base_url: "https://stub.example/".into(),
             redirect_uri: "https://broker.example/v1/oauth/callback/stub".into(),

@@ -70,7 +70,7 @@ connection still needs its own grant. Service-mode actions use the configured
 shared identity and may not require a personal credential. Teams destination
 URLs are managed by administrators.
 
-For Gmail and other supported OAuth-backed services, your administrator enables
+For Gmail, GitLab and other supported OAuth-backed services, your administrator enables
 self-service, configures the connection's OAuth registration, and grants you or
 one of your current groups an active `per_user` action grant on a service that
 uses it. No separate
@@ -87,8 +87,8 @@ registration.
 See [administrator OAuth setup](administrator-guide.md#enable-personal-oauth-connections).
 Do not paste an OAuth access token into a generic API-token field. OAuth consent requires a
 signed-in browser session; the CLI setup token alone cannot authorize it. See
-[Gmail](providers-gmail.md), [OAuth connections](oauth.md), and
-[imported OAuth](imported-oauth.md).
+[Gmail](providers-gmail.md), [GitLab](oauth.md#gitlab),
+[OAuth connections](oauth.md), and [imported OAuth](imported-oauth.md).
 
 An imported MCP connection may show **Server-default permissions**. Its
 authorization server chooses the permissions for that service. **Known scopes**
@@ -385,6 +385,7 @@ report.
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |
+| `oauth_login_binding_required` or `oauth_login_binding_mismatch` | The registration accepts only an upstream account linked to your Broker account's Microsoft sign-in. Ask an administrator to link your Microsoft sign-in, or connect the upstream account you sign in to through Microsoft |
 | `right_missing` during classless static credential management | Ask the administrator to inspect the scoped right on the connection, its expiry, and revocation; these rights do not govern OAuth |
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
 | `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |

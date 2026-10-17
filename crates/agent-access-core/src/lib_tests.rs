@@ -3350,12 +3350,17 @@ fn rejects_oauth_connections_consumers_cannot_use() {
     let errors = validation_errors(validate_broker_config(&config));
     for needle in [
         "credentials.connections.gitlab.oauth must name a configured registration and permission profile",
-        "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab does not",
-        "credentials.connections.gitlab.oauth requires every consumer to accept delegated credentials, which gitlab_git does not",
         "credential connections gitlab and gitlab_projects share OAuth registration gitlab with different permission profiles (default and projects); connections sharing a registration must use the same profile",
     ] {
         assert_contains(&errors, needle);
     }
+    // GitLab REST and a per_user Git gateway both accept delegated access.
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.contains("requires every consumer to accept delegated credentials")),
+        "{errors:#?}"
+    );
 }
 
 #[test]

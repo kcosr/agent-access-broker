@@ -8,33 +8,33 @@ pub trait GitlabBackend: Send + Sync {
         _project_id: u64,
         _operation: GitlabProvisioningOperation,
         _request: GitlabProvisioningRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab provisioning backend is unavailable".into(),
         ))
     }
 
-    fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
+    fn egress_proxy_audit(&self, _credential: &GitlabCredential) -> Value {
         EgressRoute::direct().audit_value()
     }
 
     async fn current_user(
         &self,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabUser>, GitlabBackendError>;
 
     async fn project(
         &self,
         project: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProject>, GitlabBackendError>;
 
     async fn upload_project(
         &self,
         _project_id: u64,
         _upload: BrokerBodyPart,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProjectUpload>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project upload is unavailable".to_string(),
@@ -45,7 +45,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabWebhookListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhook>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook listing is unavailable".to_string(),
@@ -56,7 +56,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _webhook_id: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook view is unavailable".to_string(),
@@ -67,7 +67,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabWebhookWriteRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook creation is unavailable".to_string(),
@@ -79,7 +79,7 @@ pub trait GitlabBackend: Send + Sync {
         _project_id: u64,
         _webhook_id: u64,
         _request: GitlabWebhookWriteRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook update is unavailable".to_string(),
@@ -90,7 +90,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _webhook_id: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook deletion is unavailable".to_string(),
@@ -102,7 +102,7 @@ pub trait GitlabBackend: Send + Sync {
         _project_id: u64,
         _webhook_id: u64,
         _trigger: &str,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook testing is unavailable".to_string(),
@@ -115,7 +115,7 @@ pub trait GitlabBackend: Send + Sync {
         _request: GitlabWebhookEventListRequest,
         _redacted_header_names: &BTreeSet<String>,
         _field_byte_cap: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhookDeliveryEvent>>, GitlabBackendError>
     {
         Err(GitlabBackendError::Protocol(
@@ -128,7 +128,7 @@ pub trait GitlabBackend: Send + Sync {
         _project_id: u64,
         _webhook_id: u64,
         _webhook_event_id: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook resend is unavailable".to_string(),
@@ -139,7 +139,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabWebhookCustomHeaderRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook custom-header update is unavailable".to_string(),
@@ -150,7 +150,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabWebhookCustomHeaderRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab project webhook custom-header deletion is unavailable".to_string(),
@@ -161,140 +161,140 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError>;
 
     async fn issues(
         &self,
         project_id: u64,
         request: GitlabIssueSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabIssue>>, GitlabBackendError>;
 
     async fn create_issue(
         &self,
         project_id: u64,
         request: GitlabIssueCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError>;
 
     async fn update_issue(
         &self,
         project_id: u64,
         request: GitlabIssueUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError>;
 
     async fn issue_notes(
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError>;
 
     async fn create_issue_note(
         &self,
         project_id: u64,
         request: GitlabIssueNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn issue_note(
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn update_issue_note(
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn delete_issue_note(
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError>;
 
     async fn merge_request(
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError>;
 
     async fn merge_requests(
         &self,
         project_id: u64,
         request: GitlabMergeRequestSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabMergeRequest>>, GitlabBackendError>;
 
     async fn create_merge_request(
         &self,
         project_id: u64,
         request: GitlabMergeRequestCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError>;
 
     async fn update_merge_request(
         &self,
         project_id: u64,
         request: GitlabMergeRequestUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError>;
 
     async fn merge_request_notes(
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError>;
 
     async fn create_merge_request_note(
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn merge_request_note(
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn update_merge_request_note(
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn delete_merge_request_note(
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError>;
 
     async fn merge_request_discussions_page(
         &self,
         project_id: u64,
         request: GitlabDiscussionListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiscussion>>, GitlabBackendError>;
 
     async fn create_merge_request_inline_discussion(
         &self,
         _project_id: u64,
         _request: GitlabPositionedDiscussionCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab inline discussion creation is unavailable".to_string(),
@@ -305,7 +305,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDiscussionReplyRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab discussion replies are unavailable".to_string(),
@@ -316,7 +316,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftNoteListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDraftNote>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab draft note listing is unavailable".to_string(),
@@ -327,7 +327,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftNoteObjectRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab draft note view is unavailable".to_string(),
@@ -338,7 +338,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftNoteCreateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab draft note creation is unavailable".to_string(),
@@ -349,7 +349,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftNoteUpdateRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab draft note update is unavailable".to_string(),
@@ -360,7 +360,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftNoteObjectRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab draft note deletion is unavailable".to_string(),
@@ -371,7 +371,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftNoteObjectRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab draft note publication is unavailable".to_string(),
@@ -382,7 +382,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabDraftBulkPublishRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab bulk draft publication is unavailable".to_string(),
@@ -393,7 +393,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabReviewSummaryNoteRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab review summary creation is unavailable".to_string(),
@@ -402,7 +402,7 @@ pub trait GitlabBackend: Send + Sync {
 
     async fn gitlab_version(
         &self,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabServerVersion>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab version discovery is unavailable".to_string(),
@@ -413,7 +413,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _iid: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request approval summary is unavailable".to_string(),
@@ -424,7 +424,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _iid: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalState>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request approval state is unavailable".to_string(),
@@ -435,7 +435,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabApprovalRuleListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabApprovalRule>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request approval rules are unavailable".to_string(),
@@ -447,7 +447,7 @@ pub trait GitlabBackend: Send + Sync {
         _project_id: u64,
         _iid: u64,
         _rule_id: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalRule>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request approval rule is unavailable".to_string(),
@@ -458,7 +458,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabApprovalMutationRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request approval mutation is unavailable".to_string(),
@@ -468,7 +468,7 @@ pub trait GitlabBackend: Send + Sync {
     async fn apply_suggestions(
         &self,
         _request: GitlabSuggestionApplyRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabSuggestion>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab suggestion application is unavailable".to_string(),
@@ -479,7 +479,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabMergeRequestListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabReviewer>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request reviewer listing is unavailable".to_string(),
@@ -490,7 +490,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabMergeRequestListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabCommit>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request commit listing is unavailable".to_string(),
@@ -501,7 +501,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabMergeRequestListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabPipeline>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request pipeline listing is unavailable".to_string(),
@@ -512,7 +512,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabMergeRequestListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffFile>>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request diff listing is unavailable".to_string(),
@@ -524,7 +524,7 @@ pub trait GitlabBackend: Send + Sync {
         _project_id: u64,
         _iid: u64,
         _byte_cap: u64,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request raw diff download is unavailable".to_string(),
@@ -535,7 +535,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabMergeRequestListRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffVersionSummary>>, GitlabBackendError>
     {
         Err(GitlabBackendError::Protocol(
@@ -547,7 +547,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         _project_id: u64,
         _request: GitlabMergeRequestObjectRequest,
-        _credential: &ExecutionCredential,
+        _credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiffVersion>, GitlabBackendError> {
         Err(GitlabBackendError::Protocol(
             "GitLab merge request diff version view is unavailable".to_string(),
@@ -558,7 +558,7 @@ pub trait GitlabBackend: Send + Sync {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError>;
 
     async fn merge_request_discussion(
@@ -566,77 +566,77 @@ pub trait GitlabBackend: Send + Sync {
         project_id: u64,
         iid: u64,
         discussion_id: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError>;
 
     async fn update_merge_request_discussion_note(
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError>;
 
     async fn delete_merge_request_discussion_note(
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError>;
 
     async fn set_merge_request_discussion_resolved(
         &self,
         project_id: u64,
         request: GitlabDiscussionStateChangeRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError>;
 
     async fn merge_merge_request(
         &self,
         project_id: u64,
         request: GitlabMergeRequestMergeRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError>;
 
     async fn branches(
         &self,
         project_id: u64,
         request: GitlabBranchListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabBranch>>, GitlabBackendError>;
 
     async fn branch(
         &self,
         project_id: u64,
         branch: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError>;
 
     async fn create_branch(
         &self,
         project_id: u64,
         request: GitlabBranchCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError>;
 
     async fn protected_branches(
         &self,
         project_id: u64,
         request: GitlabProtectedBranchListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabProtectedBranch>>, GitlabBackendError>;
 
     async fn protected_branch(
         &self,
         project_id: u64,
         name: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProtectedBranch>, GitlabBackendError>;
 
     async fn file(
         &self,
         project_id: u64,
         request: GitlabFileRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFile>, GitlabBackendError>;
 
     async fn raw_file(
@@ -644,98 +644,98 @@ pub trait GitlabBackend: Send + Sync {
         project_id: u64,
         request: GitlabFileRequest,
         byte_cap: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError>;
 
     async fn create_file(
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError>;
 
     async fn update_file(
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError>;
 
     async fn delete_file(
         &self,
         project_id: u64,
         request: GitlabFileDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError>;
 
     async fn commits(
         &self,
         project_id: u64,
         request: GitlabCommitListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabCommit>>, GitlabBackendError>;
 
     async fn commit(
         &self,
         project_id: u64,
         sha: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError>;
 
     async fn create_commit(
         &self,
         project_id: u64,
         request: GitlabCommitCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError>;
 
     async fn pipelines(
         &self,
         project_id: u64,
         request: GitlabPipelineListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabPipeline>>, GitlabBackendError>;
 
     async fn pipeline(
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError>;
 
     async fn run_pipeline(
         &self,
         project_id: u64,
         request: GitlabPipelineRunRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError>;
 
     async fn retry_pipeline(
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError>;
 
     async fn cancel_pipeline(
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError>;
 
     async fn jobs(
         &self,
         project_id: u64,
         request: GitlabJobListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabJob>>, GitlabBackendError>;
 
     async fn job(
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError>;
 
     async fn job_trace(
@@ -743,28 +743,28 @@ pub trait GitlabBackend: Send + Sync {
         project_id: u64,
         job_id: u64,
         byte_cap: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError>;
 
     async fn retry_job(
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError>;
 
     async fn cancel_job(
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError>;
 
     async fn play_job(
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError>;
 }
 
@@ -2103,6 +2103,12 @@ pub enum GitlabBackendError {
     DraftPositionShapeInvalid,
     #[error("GitLab response protocol error: {0}")]
     Protocol(String),
+    /// The credential could not be presented: the delegated lease's own
+    /// failure (revalidation, recovery, or an operation that already
+    /// recovered), delegated access for another instance, or delegated
+    /// access GitLab rejected again. Reported unchanged.
+    #[error("GitLab credential could not be presented")]
+    Credential(ProviderError),
 }
 
 impl GitlabBackendError {
@@ -2174,7 +2180,7 @@ impl HttpGitlabBackend {
         &self,
         operation: &'static str,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         let started = Instant::now();
         let response = send_gitlab_request(
@@ -2202,7 +2208,7 @@ impl HttpGitlabBackend {
         &self,
         operation: &'static str,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<Value>>, GitlabBackendError> {
         let started = Instant::now();
         let response = send_gitlab_request(
@@ -2235,7 +2241,7 @@ impl HttpGitlabBackend {
         operation: &'static str,
         url: Url,
         body: Value,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         self.send_json_body(operation, "POST", url, body, credential)
             .await
@@ -2245,7 +2251,7 @@ impl HttpGitlabBackend {
         &self,
         operation: &'static str,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         let started = Instant::now();
         let response = send_gitlab_request(
@@ -2274,7 +2280,7 @@ impl HttpGitlabBackend {
         operation: &'static str,
         url: Url,
         body: Value,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         self.send_json_body(operation, "PUT", url, body, credential)
             .await
@@ -2285,7 +2291,7 @@ impl HttpGitlabBackend {
         operation: &'static str,
         url: Url,
         body: Value,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         self.send_json_body(operation, "DELETE", url, body, credential)
             .await
@@ -2295,7 +2301,7 @@ impl HttpGitlabBackend {
         &self,
         operation: &'static str,
         url: Url,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         let started = Instant::now();
         let response = send_gitlab_request(
@@ -2329,7 +2335,7 @@ impl HttpGitlabBackend {
         method: &'static str,
         url: Url,
         body: Value,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         let started = Instant::now();
         let builder = match method {
@@ -2366,7 +2372,7 @@ impl HttpGitlabBackend {
         method: &'static str,
         url: Url,
         body: Value,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         let started = Instant::now();
         let builder = match method {
@@ -2399,13 +2405,59 @@ impl HttpGitlabBackend {
         })
     }
 
+    /// One attempt's multipart upload of `upload` to `url`, with the
+    /// progress of its body. A spooled file is reopened for each attempt.
+    async fn upload_request(
+        &self,
+        url: &Url,
+        upload: &BrokerBodyPart,
+    ) -> Result<(reqwest::RequestBuilder, UploadProgress), GitlabBackendError> {
+        let (part, progress) = if let Some(path) = upload.temp_file_path() {
+            let (body, progress) = file_upload_body(path).await.map_err(|_| {
+                GitlabBackendError::Transport("GitLab upload file could not be opened".to_string())
+                    .unbuilt()
+            })?;
+            (
+                reqwest::multipart::Part::stream_with_length(body, upload.size()),
+                progress,
+            )
+        } else {
+            // A body held in memory reports no progress: its closed channel
+            // leaves only the response deadline.
+            let (_, progress) = tokio::sync::watch::channel(tokio::time::Instant::now());
+            (
+                reqwest::multipart::Part::bytes(upload.bytes.clone()),
+                progress,
+            )
+        };
+        let part = part
+            .file_name(upload.file_name.clone().unwrap_or_default())
+            .mime_str(
+                upload
+                    .content_type
+                    .as_deref()
+                    .unwrap_or("application/octet-stream"),
+            )
+            .map_err(|_| {
+                GitlabBackendError::Protocol("GitLab upload media type is invalid".to_string())
+                    .unbuilt()
+            })?;
+        Ok((
+            self.upload_client
+                .request(Method::POST, url.clone())
+                .header("Accept", "application/json")
+                .multipart(reqwest::multipart::Form::new().part("file", part)),
+            progress,
+        ))
+    }
+
     pub(crate) async fn get_raw(
         &self,
         operation: &'static str,
         url: Url,
         byte_cap: u64,
         allow_known_oversize: bool,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         let started = Instant::now();
         let response = send_gitlab_request(
@@ -2456,19 +2508,19 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         operation: GitlabProvisioningOperation,
         request: GitlabProvisioningRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Value>, GitlabBackendError> {
         self.provisioning_request(project_id, operation, request, credential)
             .await
     }
 
-    fn egress_proxy_audit(&self, _credential: &ExecutionCredential) -> Value {
+    fn egress_proxy_audit(&self, _credential: &GitlabCredential) -> Value {
         self.client.egress_route().audit_value()
     }
 
     async fn current_user(
         &self,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabUser>, GitlabBackendError> {
         let response = self
             .get_json("credential.verify", self.endpoint("user")?, credential)
@@ -2479,7 +2531,7 @@ impl GitlabBackend for HttpGitlabBackend {
     async fn project(
         &self,
         project: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProject>, GitlabBackendError> {
         let encoded = encoded_path_segment(project);
         let response = self
@@ -2496,49 +2548,15 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         upload: BrokerBodyPart,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProjectUpload>, GitlabBackendError> {
         let url = self.endpoint(&format!("projects/{project_id}/uploads"))?;
-        let (part, progress) = if let Some(path) = upload.temp_file_path() {
-            let (body, progress) = file_upload_body(path).await.map_err(|_| {
-                GitlabBackendError::Transport("GitLab upload file could not be opened".to_string())
-                    .unbuilt()
-            })?;
-            (
-                reqwest::multipart::Part::stream_with_length(body, upload.size()),
-                progress,
-            )
-        } else {
-            // A body held in memory reports no progress: its closed channel
-            // leaves only the response deadline.
-            let (_, progress) = tokio::sync::watch::channel(tokio::time::Instant::now());
-            (
-                reqwest::multipart::Part::bytes(upload.bytes.clone()),
-                progress,
-            )
-        };
-        let part = part
-            .file_name(upload.file_name.clone().unwrap_or_default())
-            .mime_str(
-                upload
-                    .content_type
-                    .as_deref()
-                    .unwrap_or("application/octet-stream"),
-            )
-            .map_err(|_| {
-                GitlabBackendError::Protocol("GitLab upload media type is invalid".to_string())
-                    .unbuilt()
-            })?;
         let started = Instant::now();
         let response = send_gitlab_upload(
             &self.upload_client,
             credential,
-            self.upload_client
-                .request(Method::POST, url.clone())
-                .header("Accept", "application/json")
-                .multipart(reqwest::multipart::Form::new().part("file", part)),
+            || self.upload_request(&url, &upload),
             "project.upload",
-            progress,
             Duration::from_millis(self.limits.streaming_idle_timeout_ms),
             self.limits.max_upstream_response_bytes,
         )
@@ -2561,7 +2579,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabWebhookListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhook>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/hooks"))?;
         url.query_pairs_mut()
@@ -2576,7 +2594,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         webhook_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         self.get_json(
             "webhook.view",
@@ -2591,7 +2609,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabWebhookWriteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         self.post_json(
             "webhook.create",
@@ -2608,7 +2626,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         webhook_id: u64,
         request: GitlabWebhookWriteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         self.put_json(
             "webhook.update",
@@ -2624,7 +2642,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         webhook_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         let url = self.endpoint(&format!("projects/{project_id}/hooks/{webhook_id}"))?;
         let started = Instant::now();
@@ -2664,7 +2682,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         webhook_id: u64,
         trigger: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         self.post_json_without_body(
             "webhook.test",
@@ -2683,7 +2701,7 @@ impl GitlabBackend for HttpGitlabBackend {
         request: GitlabWebhookEventListRequest,
         redacted_header_names: &BTreeSet<String>,
         field_byte_cap: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhookDeliveryEvent>>, GitlabBackendError>
     {
         let mut url = self.endpoint(&format!(
@@ -2712,7 +2730,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         webhook_id: u64,
         webhook_event_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         self.post_json_without_body(
             "webhook.event.resend",
@@ -2729,7 +2747,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabWebhookCustomHeaderRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         let encoded_key = encoded_path_segment(&request.key);
         self.send_json_no_content(
@@ -2749,7 +2767,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabWebhookCustomHeaderRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         let encoded_key = encoded_path_segment(&request.key);
         self.delete_no_content(
@@ -2767,7 +2785,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -2783,7 +2801,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabIssue>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/issues"))?;
         append_issue_query(&mut url, &request);
@@ -2795,7 +2813,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -2812,7 +2830,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -2829,7 +2847,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/issues/{}/notes",
@@ -2846,7 +2864,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -2866,7 +2884,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -2885,7 +2903,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -2905,7 +2923,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.delete_no_content(
             "issue.note.delete",
@@ -2922,7 +2940,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -2938,7 +2956,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestSearchRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabMergeRequest>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/merge_requests"))?;
         append_merge_request_query(&mut url, &request);
@@ -2952,7 +2970,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -2969,7 +2987,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -2989,7 +3007,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/notes",
@@ -3006,7 +3024,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3026,7 +3044,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3045,7 +3063,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -3065,7 +3083,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.delete_no_content(
             "merge_request.note.delete",
@@ -3082,7 +3100,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiscussion>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/discussions",
@@ -3099,7 +3117,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPositionedDiscussionCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3119,7 +3137,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionReplyRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3140,7 +3158,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDraftNote>>, GitlabBackendError> {
         let url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/draft_notes",
@@ -3155,7 +3173,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3174,7 +3192,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3194,7 +3212,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -3214,7 +3232,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.delete_no_content(
             "merge_request.draft_note.delete",
@@ -3231,7 +3249,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.send_json_no_content(
             "merge_request.draft_note.publish",
@@ -3250,7 +3268,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftBulkPublishRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         let mut body = serde_json::Map::new();
         if let Some(reviewer_state) = &request.reviewer_state {
@@ -3277,7 +3295,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabReviewSummaryNoteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let mut body = serde_json::Map::from_iter([("body".to_string(), json!(request.body))]);
         if let Some(internal) = request.internal {
@@ -3299,7 +3317,7 @@ impl GitlabBackend for HttpGitlabBackend {
 
     async fn gitlab_version(
         &self,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabServerVersion>, GitlabBackendError> {
         let response = self
             .get_json("gitlab.version", self.endpoint("version")?, credential)
@@ -3311,7 +3329,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3329,7 +3347,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalState>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3347,7 +3365,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabApprovalRuleListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabApprovalRule>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/approval_rules",
@@ -3364,7 +3382,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         iid: u64,
         rule_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalRule>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3382,7 +3400,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabApprovalMutationRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         let (operation, path, body) = if let Some(head_sha) = request.head_sha {
             (
@@ -3412,7 +3430,7 @@ impl GitlabBackend for HttpGitlabBackend {
     async fn apply_suggestions(
         &self,
         request: GitlabSuggestionApplyRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabSuggestion>>, GitlabBackendError> {
         let single = !request.batch;
         if single && request.suggestion_ids.len() != 1 {
@@ -3472,7 +3490,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabReviewer>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/reviewers",
@@ -3488,7 +3506,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabCommit>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/commits",
@@ -3504,7 +3522,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabPipeline>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/pipelines",
@@ -3520,7 +3538,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffFile>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/diffs",
@@ -3537,7 +3555,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         iid: u64,
         byte_cap: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.get_raw(
             "merge_request.diff.raw.download",
@@ -3555,7 +3573,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffVersionSummary>>, GitlabBackendError>
     {
         let mut url = self.endpoint(&format!(
@@ -3572,7 +3590,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestObjectRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiffVersion>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/merge_requests/{}/versions/{}",
@@ -3592,7 +3610,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3613,7 +3631,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         iid: u64,
         discussion_id: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3632,7 +3650,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteUpdateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -3654,7 +3672,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.delete_no_content(
             "merge_request.discussion.note.delete",
@@ -3673,7 +3691,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionStateChangeRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -3694,7 +3712,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestMergeRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -3714,7 +3732,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabBranchListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabBranch>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/repository/branches"))?;
         {
@@ -3735,7 +3753,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         branch: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3754,7 +3772,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabBranchCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3774,7 +3792,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabProtectedBranchListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabProtectedBranch>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/protected_branches"))?;
         {
@@ -3826,7 +3844,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         name: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProtectedBranch>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3845,7 +3863,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFile>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/repository/files/{}",
@@ -3861,7 +3879,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         request: GitlabFileRequest,
         byte_cap: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         let mut url = self.endpoint(&format!(
             "projects/{project_id}/repository/files/{}/raw",
@@ -3876,7 +3894,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3896,7 +3914,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         let response = self
             .put_json(
@@ -3916,7 +3934,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileDeleteRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         let response = self
             .delete_json(
@@ -3936,7 +3954,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabCommitListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabCommit>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/repository/commits"))?;
         append_commit_query(&mut url, &request);
@@ -3948,7 +3966,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         sha: &str,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -3967,7 +3985,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabCommitCreateRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -3984,7 +4002,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPipelineListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabPipeline>>, GitlabBackendError> {
         let mut url = self.endpoint(&format!("projects/{project_id}/pipelines"))?;
         append_pipeline_query(&mut url, &request);
@@ -3996,7 +4014,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -4012,7 +4030,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPipelineRunRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -4029,7 +4047,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -4048,7 +4066,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -4067,7 +4085,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabJobListRequest,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabJob>>, GitlabBackendError> {
         let mut url = if let Some(pipeline_id) = request.pipeline_id {
             self.endpoint(&format!(
@@ -4085,7 +4103,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         let response = self
             .get_json(
@@ -4102,7 +4120,7 @@ impl GitlabBackend for HttpGitlabBackend {
         project_id: u64,
         job_id: u64,
         byte_cap: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.get_raw(
             "job.trace.download",
@@ -4118,7 +4136,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -4135,7 +4153,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -4152,7 +4170,7 @@ impl GitlabBackend for HttpGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &ExecutionCredential,
+        credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         let response = self
             .post_json(
@@ -4726,50 +4744,97 @@ pub(crate) fn gitlab_authorization(
     }
 }
 
-pub(crate) async fn send_gitlab_upload(
+/// Sends one upload through `client` and records the trace with the
+/// response status. Its body is a stream that cannot be repeated, so
+/// `prepare` builds the request and its progress for each attempt; a
+/// delegated 401 repeats the upload at most once, as
+/// [`send_gitlab_request`] does.
+pub(crate) async fn send_gitlab_upload<F, Fut>(
     client: &UpstreamClient,
-    credential: &ExecutionCredential,
-    request: reqwest::RequestBuilder,
+    credential: &GitlabCredential,
+    mut prepare: F,
     operation: &str,
-    progress: UploadProgress,
     idle_timeout: Duration,
     response_byte_cap: u64,
-) -> Result<reqwest::Response, GitlabBackendError> {
-    let authorization = gitlab_authorization(credential)?;
-    // Upload responses expose no upstream validation bodies.
-    let mut response = client
-        .send_upload(
-            request,
-            Some(progress),
-            idle_timeout,
-            UpstreamCall::new(operation).with_authorization(&authorization),
-        )
-        .await
-        .map_err(gitlab_upstream_error)?;
-    complete_upstream_trace(&mut response, None);
-    map_gitlab_status(response, None, response_byte_cap).await
+) -> Result<reqwest::Response, GitlabBackendError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<
+            Output = Result<(reqwest::RequestBuilder, UploadProgress), GitlabBackendError>,
+        >,
+{
+    let mut attempt = 1;
+    loop {
+        let presented = credential.present().await?;
+        let (request, progress) = prepare().await?;
+        // Upload responses expose no upstream validation bodies.
+        let mut response = client
+            .send_upload(
+                request,
+                Some(progress),
+                idle_timeout,
+                UpstreamCall::new(operation)
+                    .with_attempt(attempt)
+                    .with_authorization(&presented.authorization),
+            )
+            .await
+            .map_err(gitlab_upstream_error)?;
+        if response.status().as_u16() == 401 && presented.is_delegated() {
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+            credential
+                .rejected(&presented, (attempt == 1).then_some(()))
+                .await?;
+            attempt += 1;
+            continue;
+        }
+        complete_upstream_trace(&mut response, None);
+        return map_gitlab_status(response, None, response_byte_cap).await;
+    }
 }
 
 /// Sends through `client`, records the trace with the response status, and
-/// maps error statuses.
+/// maps error statuses. Delegated access is pinned immediately before each
+/// attempt. GitLab answering it with 401 authenticated nothing and so
+/// applied nothing: the presented version is marked rejected and, when the
+/// operation's lease can still recover, the request is repeated once with
+/// the renewed access ([`GitlabCredential::rejected`]). A static token's 401
+/// is never repeated.
 pub(crate) async fn send_gitlab_request(
     client: &UpstreamClient,
-    credential: &ExecutionCredential,
+    credential: &GitlabCredential,
     request: reqwest::RequestBuilder,
     operation: &str,
     validation_fields: Option<&'static [&'static str]>,
     response_byte_cap: u64,
 ) -> Result<reqwest::Response, GitlabBackendError> {
-    let authorization = gitlab_authorization(credential)?;
-    let mut response = client
-        .send(
-            request,
-            UpstreamCall::new(operation).with_authorization(&authorization),
-        )
-        .await
-        .map_err(gitlab_upstream_error)?;
-    complete_upstream_trace(&mut response, None);
-    map_gitlab_status(response, validation_fields, response_byte_cap).await
+    let mut request = request;
+    let mut attempt = 1;
+    loop {
+        let presented = credential.present().await?;
+        // A copy for the one repeat a delegated 401 permits.
+        let replay = if attempt == 1 && presented.is_delegated() {
+            request.try_clone()
+        } else {
+            None
+        };
+        let mut response = client
+            .send(
+                request,
+                UpstreamCall::new(operation)
+                    .with_attempt(attempt)
+                    .with_authorization(&presented.authorization),
+            )
+            .await
+            .map_err(gitlab_upstream_error)?;
+        if response.status().as_u16() == 401 && presented.is_delegated() {
+            complete_upstream_trace(&mut response, Some(ReasonCode::CredentialInvalid.into()));
+            request = credential.rejected(&presented, replay).await?;
+            attempt += 1;
+            continue;
+        }
+        complete_upstream_trace(&mut response, None);
+        return map_gitlab_status(response, validation_fields, response_byte_cap).await;
+    }
 }
 
 pub(crate) fn gitlab_upstream_error(error: UpstreamError) -> GitlabBackendError {

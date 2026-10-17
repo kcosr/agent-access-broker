@@ -523,8 +523,10 @@ Validation rules:
   under [`upstream_token_auth`](#gateways).
 - **OAuth.** Every consumer must accept delegated credentials. The OAuth
   connection serves a consumer's metadata lookups as well as its execution.
-  Today these consumers are `gmail` and the development `oauth_stub` service;
-  see [oauth.md](oauth.md).
+  Today these consumers are `gmail`, GitLab REST (`gitlab`), Git gateways
+  whose `credential_modes` include `per_user`, and the development
+  `oauth_stub` service; see [oauth.md](oauth.md) and
+  [Git gateway OAuth connections](git-http-gateway.md#oauth-connections).
 - **Shared registrations.** Connections that reference the same OAuth
   registration must use the same permission profile. They then share each
   person's OAuth connection for that registration, so connecting or
@@ -532,15 +534,16 @@ Validation rules:
 - **Upstream authority.** Each service declares the upstream instance its
   credentials act on: GitLab REST the instance of its `api_base_url` (without
   `/api/v4`), a Git gateway its `upstream_base_url`, Jira and Confluence their
-  site with the configured cloud ID and Atlassian gateway, and an HTTP import its
-  endpoint. A token connection with several consumers requires each to declare
+  site with the configured cloud ID and Atlassian gateway, an HTTP import its
+  endpoint, and the development `oauth_stub` service its `base_url`. A token connection with several consumers requires each to declare
   an authority, with one origin and instance path; otherwise validation reports
   `credentials.connections.<id>: <service> declares no upstream authority, so it
   cannot share a token connection` or `... <a> acts on <origin> but <b> acts on
   <origin>; a token connection's consumers must act on one upstream`. An OAuth
   connection requires the registration's dialect to accept each consumer, or
   reports `credentials.connections.<id>.oauth: <service> does not act on the
-  upstream registration <registration> grants access to: <reason>`. These checks
+  upstream registration <registration> grants access to: <reason>`; the
+  `gitlab` dialect accepts only consumers on its registration's instance. These checks
   run at `config validate`, at startup and reload, and whenever the imported
   catalog is published, including import creation, without contacting
   upstream. Stored tokens are not bound to an upstream: changing the consumers'
@@ -1576,7 +1579,7 @@ allowed_upstream_hosts = ["https://gitlab.example.com/**"]
 auth_modes = ["basic_broker_token"]
 basic_broker_token_username = "agent-access" # default
 credential_modes = ["service"]               # service and/or per_user
-upstream_token_auth = { scheme = "bearer" }  # default; for bearer_token credentials
+upstream_token_auth = { scheme = "bearer" }  # default; for tokens and OAuth access
 redirect_policy = "none"                     # default; only supported value
 correlation_headers = true                   # default
 request_body_max_bytes = 536870912           # optional
@@ -1644,8 +1647,9 @@ Gateway keys (`[gateways.<name>]`):
 - `credential_modes` is required (non-empty); each value must be `service` or
   `per_user` and must have a matching configured credential for the gateway
   service.
-- `upstream_token_auth` selects how the gateway presents a `bearer_token`
-  upstream credential, service or per-user, as one table tagged by `scheme`:
+- `upstream_token_auth` selects how the gateway presents token material, a
+  `bearer_token` upstream credential (service or per-user) or a person's OAuth
+  access token, as one table tagged by `scheme`:
   `{ scheme = "bearer" }`, the default, sends `Authorization: Bearer <token>`,
   and `{ scheme = "basic", username = "<name>" }` sends the token as the HTTP
   Basic password under `username`, as GitLab requires. `scheme` is required in
@@ -1696,7 +1700,9 @@ For per-user Git gateway credentials, credential verification requires a
 repository input and performs a read-only `repo.fetch` authorization check before
 probing upstream with `git-upload-pack` discovery. The verification probe uses
 `streaming_idle_timeout_ms` for stalled response header waits and discovery body
-reads.
+reads. It verifies stored tokens only. A gateway whose connection selects OAuth
+for the caller presents their OAuth access instead; see
+[OAuth connections](git-http-gateway.md#oauth-connections).
 
 ## Egress proxy configuration
 
@@ -2253,9 +2259,18 @@ The `[oauth.registrations]` configuration is documented in [oauth.md](oauth.md).
 A [credential connection](#credential-connections) binds services to a
 registration and permission profile with its `oauth` key. Registrations require
 managed storage/encryption and browser management. A registration's `adapter` must name an OAuth dialect the
-binary selects: `google` for Gmail, `mcp_oauth` for approved imported MCP
-services, or the development-only `stub`. The Broker core defines no dialect of
+binary selects: `google` for Gmail, [`gitlab`](oauth.md#gitlab) for GitLab
+REST and Git, `mcp_oauth` for approved imported MCP services, or the
+development-only `stub`. The Broker core defines no dialect of
 its own. This is separate from Microsoft OIDC browser login.
+A registration may set `login_binding = { provider = "microsoft",
+upstream_identity_provider = "<name>", upstream_tenant_id = "<tenant>" }` to
+install only upstream accounts linked to the owner's Broker Microsoft sign-in.
+It requires `browser_auth.oidc.microsoft.enabled`, a canonical lowercase
+`upstream_tenant_id` equal to `browser_auth.oidc.microsoft.tenant_id`, a dialect
+that reports linked identities (today only `gitlab`), and accepts no other keys.
+It is off when omitted; adding, changing or removing it makes every owner of
+the registration reconnect. See [GitLab login binding](oauth.md#gitlab-login-binding).
 Each approved OAuth destination origin (issuer, metadata, token, identity or
 target endpoint) follows the global egress proxy resolution independently. Only
 literal IPv4/IPv6 loopback addresses connect directly, and a loopback issuer

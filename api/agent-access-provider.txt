@@ -1125,6 +1125,28 @@ impl core::marker::Unpin for agent_access_provider::OAuthDialectError
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthDialectError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthDialectError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthDialectError
+#[non_exhaustive] pub enum agent_access_provider::OAuthLoginProvider
+pub agent_access_provider::OAuthLoginProvider::Microsoft
+impl core::clone::Clone for agent_access_provider::OAuthLoginProvider
+pub fn agent_access_provider::OAuthLoginProvider::clone(&self) -> agent_access_provider::OAuthLoginProvider
+impl core::cmp::Eq for agent_access_provider::OAuthLoginProvider
+impl core::cmp::PartialEq for agent_access_provider::OAuthLoginProvider
+pub fn agent_access_provider::OAuthLoginProvider::eq(&self, &agent_access_provider::OAuthLoginProvider) -> bool
+impl core::fmt::Debug for agent_access_provider::OAuthLoginProvider
+pub fn agent_access_provider::OAuthLoginProvider::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::OAuthLoginProvider
+impl core::marker::StructuralPartialEq for agent_access_provider::OAuthLoginProvider
+impl serde_core::ser::Serialize for agent_access_provider::OAuthLoginProvider
+pub fn agent_access_provider::OAuthLoginProvider::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::OAuthLoginProvider
+pub fn agent_access_provider::OAuthLoginProvider::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::OAuthLoginProvider
+impl core::marker::Send for agent_access_provider::OAuthLoginProvider
+impl core::marker::Sync for agent_access_provider::OAuthLoginProvider
+impl core::marker::Unpin for agent_access_provider::OAuthLoginProvider
+impl core::marker::UnsafeUnpin for agent_access_provider::OAuthLoginProvider
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthLoginProvider
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthLoginProvider
 #[non_exhaustive] pub enum agent_access_provider::OAuthRotation
 pub agent_access_provider::OAuthRotation::PreserveOld
 pub agent_access_provider::OAuthRotation::RotateBoth
@@ -2044,9 +2066,11 @@ impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Code
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::CodeExchange<'a>
 #[non_exhaustive] pub struct agent_access_provider::ConnectedIdentity
 pub agent_access_provider::ConnectedIdentity::display_name: alloc::string::String
+pub agent_access_provider::ConnectedIdentity::linked_identities: alloc::vec::Vec<agent_access_provider::LinkedIdentity>
 pub agent_access_provider::ConnectedIdentity::subject: core::option::Option<alloc::string::String>
 impl agent_access_provider::ConnectedIdentity
 pub fn agent_access_provider::ConnectedIdentity::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::ConnectedIdentity::with_linked_identities(self, impl core::iter::traits::collect::IntoIterator<Item = agent_access_provider::LinkedIdentity>) -> Self
 pub fn agent_access_provider::ConnectedIdentity::with_subject(self, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::marker::Freeze for agent_access_provider::ConnectedIdentity
 impl core::marker::Send for agent_access_provider::ConnectedIdentity
@@ -2433,6 +2457,26 @@ impl core::marker::Unpin for agent_access_provider::InvocationScope
 impl core::marker::UnsafeUnpin for agent_access_provider::InvocationScope
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::InvocationScope
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::InvocationScope
+#[non_exhaustive] pub struct agent_access_provider::LinkedIdentity
+pub agent_access_provider::LinkedIdentity::external_id: alloc::string::String
+pub agent_access_provider::LinkedIdentity::provider: alloc::string::String
+impl agent_access_provider::LinkedIdentity
+pub fn agent_access_provider::LinkedIdentity::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::LinkedIdentity
+pub fn agent_access_provider::LinkedIdentity::clone(&self) -> agent_access_provider::LinkedIdentity
+impl core::cmp::Eq for agent_access_provider::LinkedIdentity
+impl core::cmp::PartialEq for agent_access_provider::LinkedIdentity
+pub fn agent_access_provider::LinkedIdentity::eq(&self, &agent_access_provider::LinkedIdentity) -> bool
+impl core::fmt::Debug for agent_access_provider::LinkedIdentity
+pub fn agent_access_provider::LinkedIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::LinkedIdentity
+impl core::marker::Freeze for agent_access_provider::LinkedIdentity
+impl core::marker::Send for agent_access_provider::LinkedIdentity
+impl core::marker::Sync for agent_access_provider::LinkedIdentity
+impl core::marker::Unpin for agent_access_provider::LinkedIdentity
+impl core::marker::UnsafeUnpin for agent_access_provider::LinkedIdentity
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LinkedIdentity
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LinkedIdentity
 #[non_exhaustive] pub struct agent_access_provider::ModuleMetadata
 impl agent_access_provider::ModuleMetadata
 pub const fn agent_access_provider::ModuleMetadata::crate_name(&self) -> &'static str
@@ -2649,6 +2693,29 @@ impl core::marker::Unpin for agent_access_provider::OAuthHttp
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthHttp
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthHttp
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthHttp
+pub struct agent_access_provider::OAuthLoginBinding
+pub agent_access_provider::OAuthLoginBinding::provider: agent_access_provider::OAuthLoginProvider
+pub agent_access_provider::OAuthLoginBinding::upstream_identity_provider: alloc::string::String
+pub agent_access_provider::OAuthLoginBinding::upstream_tenant_id: alloc::string::String
+impl core::clone::Clone for agent_access_provider::OAuthLoginBinding
+pub fn agent_access_provider::OAuthLoginBinding::clone(&self) -> agent_access_provider::OAuthLoginBinding
+impl core::cmp::Eq for agent_access_provider::OAuthLoginBinding
+impl core::cmp::PartialEq for agent_access_provider::OAuthLoginBinding
+pub fn agent_access_provider::OAuthLoginBinding::eq(&self, &agent_access_provider::OAuthLoginBinding) -> bool
+impl core::fmt::Debug for agent_access_provider::OAuthLoginBinding
+pub fn agent_access_provider::OAuthLoginBinding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::OAuthLoginBinding
+impl serde_core::ser::Serialize for agent_access_provider::OAuthLoginBinding
+pub fn agent_access_provider::OAuthLoginBinding::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::OAuthLoginBinding
+pub fn agent_access_provider::OAuthLoginBinding::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::OAuthLoginBinding
+impl core::marker::Send for agent_access_provider::OAuthLoginBinding
+impl core::marker::Sync for agent_access_provider::OAuthLoginBinding
+impl core::marker::Unpin for agent_access_provider::OAuthLoginBinding
+impl core::marker::UnsafeUnpin for agent_access_provider::OAuthLoginBinding
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthLoginBinding
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthLoginBinding
 pub struct agent_access_provider::OAuthPermissionProfile
 pub agent_access_provider::OAuthPermissionProfile::audience: alloc::string::String
 pub agent_access_provider::OAuthPermissionProfile::scope_mode: agent_access_provider::OAuthScopeMode
@@ -2680,6 +2747,7 @@ pub agent_access_provider::OAuthRegistrationConfig::client_auth: agent_access_pr
 pub agent_access_provider::OAuthRegistrationConfig::client_id: alloc::string::String
 pub agent_access_provider::OAuthRegistrationConfig::client_secret_ref: alloc::string::String
 pub agent_access_provider::OAuthRegistrationConfig::encoding: agent_access_provider::OAuthTokenEncoding
+pub agent_access_provider::OAuthRegistrationConfig::login_binding: core::option::Option<agent_access_provider::OAuthLoginBinding>
 pub agent_access_provider::OAuthRegistrationConfig::permission_profiles: alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::OAuthPermissionProfile>
 pub agent_access_provider::OAuthRegistrationConfig::redirect_uri: alloc::string::String
 pub agent_access_provider::OAuthRegistrationConfig::rotation: agent_access_provider::OAuthRotation
@@ -3874,6 +3942,7 @@ pub fn agent_access_provider::OAuthDialect::identity<'life0, 'life1, 'life2, 'li
 pub fn agent_access_provider::OAuthDialect::prepare_authorization<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, &'life4 agent_access_provider::OAuthPermissionProfile, agent_access_provider::AuthorizationRequest<'life5>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::PreparedAuthorization, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait
 pub fn agent_access_provider::OAuthDialect::refresh<'life0, 'life1, 'life2, 'life3, 'life4, 'life5, 'life6, 'async_trait>(&'life0 self, &'life1 agent_access_provider::OAuthHttp, &'life2 agent_access_provider::OAuthClient<'life3>, &'life4 agent_access_provider::OAuthPermissionProfile, &'life5 str, &'life6 alloc::collections::btree::set::BTreeSet<alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::TokenGrant, agent_access_provider::OAuthDialectError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait, 'life5: 'async_trait, 'life6: 'async_trait
 pub fn agent_access_provider::OAuthDialect::refresh_replay(&self, &agent_access_provider::OAuthRegistrationConfig) -> agent_access_provider::RefreshReplay
+pub fn agent_access_provider::OAuthDialect::supports_login_binding(&self) -> bool
 pub fn agent_access_provider::OAuthDialect::supports_server_default_scopes(&self) -> bool
 pub fn agent_access_provider::OAuthDialect::upstream_allowlist(&self, &agent_access_provider::OAuthRegistrationConfig) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::OAuthDialect::validate_registration(&self, &agent_access_provider::OAuthRegistrationConfig) -> core::result::Result<(), alloc::string::String>
@@ -3978,6 +4047,7 @@ enum agent_access_provider::LookupRequirement: non-exhaustive
 enum agent_access_provider::MutationStatus: non-exhaustive
 enum agent_access_provider::OAuthClientAuth: non-exhaustive
 enum agent_access_provider::OAuthDialectError: non-exhaustive
+enum agent_access_provider::OAuthLoginProvider: non-exhaustive
 enum agent_access_provider::OAuthRotation: non-exhaustive
 enum agent_access_provider::OAuthScopeMode: non-exhaustive
 enum agent_access_provider::OAuthTokenEncoding: non-exhaustive
@@ -4036,6 +4106,7 @@ struct agent_access_provider::ExecutionCredential: named fields, private fields
 struct agent_access_provider::InvalidReasonCodeId: unit
 struct agent_access_provider::InvocationIdentity: named fields, non-exhaustive
 struct agent_access_provider::InvocationScope: named fields, private fields
+struct agent_access_provider::LinkedIdentity: named fields, non-exhaustive
 struct agent_access_provider::ModuleMetadata: named fields, private fields, non-exhaustive
 struct agent_access_provider::MultipartUploadSpec: named fields, non-exhaustive
 struct agent_access_provider::MutationReceipt: named fields, private fields
@@ -4046,6 +4117,7 @@ struct agent_access_provider::OAuthCallbackIssuer: named fields, non-exhaustive
 struct agent_access_provider::OAuthClient: named fields, non-exhaustive
 struct agent_access_provider::OAuthDialectRegistration: named fields, private fields, non-exhaustive
 struct agent_access_provider::OAuthHttp: named fields, private fields
+struct agent_access_provider::OAuthLoginBinding: named fields
 struct agent_access_provider::OAuthPermissionProfile: named fields
 struct agent_access_provider::OAuthRegistrationConfig: named fields
 struct agent_access_provider::OAuthResponse: named fields, private fields
@@ -4139,6 +4211,7 @@ trait agent_access_provider::OAuthDialect::identity: required fn
 trait agent_access_provider::OAuthDialect::prepare_authorization: provided fn
 trait agent_access_provider::OAuthDialect::refresh: required fn
 trait agent_access_provider::OAuthDialect::refresh_replay: required fn
+trait agent_access_provider::OAuthDialect::supports_login_binding: provided fn
 trait agent_access_provider::OAuthDialect::supports_server_default_scopes: provided fn
 trait agent_access_provider::OAuthDialect::upstream_allowlist: required fn
 trait agent_access_provider::OAuthDialect::validate_registration: required fn

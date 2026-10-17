@@ -7,7 +7,8 @@ Shared provider concepts and runtime discovery guidance are in
 [providers.md](providers.md); CLI-wide behavior is in [cli.md](cli.md).
 
 Service name `gitlab`. Scope type `repository`. Every action advertises
-credential modes `[service, per_user]` and uses `bearer_token` credentials.
+credential modes `[service, per_user]`. It presents `bearer_token` credentials
+or, in `per_user` mode, a person's [GitLab OAuth connection](#oauth-connections).
 
 This provider is for GitLab REST API access. It does not implement native Git
 fetch/push, clone, checkout, or merge-request checkout flows; those remain the
@@ -55,9 +56,12 @@ connection = "gitlab"
 
 A [GitLab Git gateway](git-http-gateway.md#credentials-limits-and-audit) can
 consume the same connection, so each principal stores one GitLab token for both.
-Have the principal store their token, or provision a service account's, and
-grant `credential_mode = "per_user"`. Upstream project membership and token scopes must
-support the chosen actions. Configure `git_repository` resources and action grants
+People can instead connect their GitLab account through
+[OAuth](#oauth-connections).
+
+Have the principal store their token, connect their account, or provision a
+service account's token, and grant `credential_mode = "per_user"`. Upstream
+project membership and token or OAuth scopes must support the chosen actions. Configure `git_repository` resources and action grants
 through the selected policy authority. Validate and reload the Broker, verify a
 small `project.view` or `issue.search`, and inspect audit before write tests.
 
@@ -70,6 +74,64 @@ alone does not grant invocation access. Deliberately configured classless
 management uses explicit scoped credential rights; see the
 [administrator guide](administrator-guide.md) for that distinct setup and the
 complete user handoff. OAuth connections use grant-based personal setup instead.
+
+### OAuth connections
+
+People can connect their GitLab account through OAuth instead of storing a
+token: configure a `gitlab` OAuth registration for the instance, as described
+in [GitLab OAuth](oauth.md#gitlab), and reference it from the connection:
+
+```toml
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token" # optional: service-account tokens
+oauth = { registration = "gitlab", profile = "default" }
+```
+
+People then always use their OAuth connection and never store a token through
+it. Service accounts keep administrator-provisioned tokens when the connection
+also sets `token_profile`; without it, only people have a GitLab credential.
+The registration's `target` must be this provider's instance, `api_base_url`
+without `/api/v4`, or `config validate` rejects the connection.
+
+- **Scopes.** The connection acts as the person's GitLab account, within the
+  scopes the profile requests and GitLab grants; Broker grants still decide
+  which actions and repositories agents reach. Request `api` when you grant
+  any write, or `read_api` for read-only REST, and add a repository scope when
+  a Git gateway shares the connection ([GitLab scopes](oauth.md#gitlab-scopes)).
+  GitLab refuses an action outside the granted scopes or the account's project
+  role with 403. That is reported as `upstream_forbidden`, or for a project
+  lookup as the concealed `scope_unresolved`, and never renews the access.
+- **One lease per invocation.** The project lookup before policy, the lookups
+  at execution and the execution itself use one lease on the person's
+  connection.
+- **Fresh access for every request.** Immediately before each GitLab request,
+  including each lookup, page and read-back, the Broker confirms the
+  connection is still current and presents its current access for this
+  instance, with audience `gitlab`. Access another request renewed meanwhile is
+  picked up; access for another instance is refused before anything is sent.
+  Page tokens bind the connection, not its access, so they survive a refresh.
+- **401 recovery.** GitLab invalidates both earlier tokens on every refresh,
+  so a request in flight while another refreshes is answered 401. GitLab
+  applied nothing it answered with 401: the Broker marks that access rejected,
+  renews it once per invocation, whether the 401 answered a lookup or the
+  execution, and repeats the request, including a write or an upload. Another
+  401 in the same invocation fails as `credential_invalid`; if it persists,
+  reconnect GitLab in the portal. Connection failures, such as a connection
+  that needs reconnecting after a lost refresh response, consent in progress,
+  or refresh busy or throttled, are reported as described in
+  [refresh, durability and recovery](oauth.md#refresh-durability-and-recovery),
+  with their retry metadata, including at a review submission's GitLab version
+  check. Such a failure before a write applied nothing. One that stops the
+  read-back of a write GitLab applied reports the write as
+  `mutation_verification_failed` with `mutationStatus = "applied_unverified"`,
+  `retrySafe = false` and its safe locators instead; see
+  [unsent and unanswered writes](#unsent-and-unanswered-writes).
+- **Token-only actions.** Project and service-account token issuance and
+  rotation need a personal access token, so they are unavailable through an
+  OAuth connection; see [bot accounts and issued tokens](#bot-accounts-and-issued-tokens).
+- **Verification.** Credential verification reads `/user` with stored tokens.
+  An OAuth connection identifies its GitLab account when the person connects.
 
 Provisioning and webhook destinations have additional opt-in controls described
 below and in [bot provisioning](gitlab-bot-provisioning.md). REST grants do not
@@ -574,7 +636,7 @@ mode, credential binding, effective page size, validated filters and sort
 order, and GitLab provider endpoint fingerprint. The credential binding is the
 credential method and, for a stored or service token, its type; the token
 value is not bound, so replacing a stored token keeps the continuation. For
-delegated (OAuth) access, which GitLab does not yet accept, it is the OAuth
+delegated (OAuth) access, it is the OAuth
 connection and its generation and the instance the access is for, never the
 current access token: a routine refresh keeps the continuation, while
 disconnecting and reconnecting or connecting another GitLab account
@@ -1296,11 +1358,13 @@ may have done:
 - when GitLab definitively rejected the request, with a redirect, a 4xx status
   such as 401, 403, 404, 409 or 422 (provisioning reports 400 and 422 as
   `input_invalid`), or throttling (`upstream_rate_limited`), the action keeps
-  its ordinary error without a receipt.
+  its ordinary error without a receipt. So does a failure of the person's
+  OAuth connection that stops the request, which applies nothing.
 
 A readback after the mutation that was never sent, timed out, failed, was
-throttled, answered 5xx or returned an unusable response also returns the
-`applied_unverified` contract.
+throttled, answered 5xx, returned an unusable response, or that the person's
+OAuth connection could not authorize (refresh throttled, busy or uncertain, or
+a reconnect required) also returns the `applied_unverified` contract.
 
 Other writes (issue, note, merge-request and merge, general discussion,
 discussion-note edit/delete, resolve/reopen, branch, file, commit, pipeline and

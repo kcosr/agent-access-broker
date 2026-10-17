@@ -398,6 +398,11 @@ All notable changes to this project are documented in this file.
   prefix `aab_confluence_draft_v4_`. Tokens and draft handles issued before
   the upgrade are rejected: repeat the search or listing without the token,
   and create or stage the draft again.
+- The SDK's intentionally exhaustive `OAuthRegistrationConfig` gains the
+  optional `login_binding: Option<OAuthLoginBinding>` field. Code that builds
+  it with a struct literal adds `login_binding: None`; deserialized
+  registrations without the key are unchanged, as are their fingerprints and
+  stored connections.
 
 ### Added
 
@@ -759,9 +764,79 @@ All notable changes to this project are documented in this file.
   conformance backend's `item.upload` uses it. GitLab's
   `project.access_token.create`/`rotate` and
   `service_account.token.create`/`rotate` are token-only.
+- The production `gitlab` OAuth dialect (`adapter = "gitlab"`,
+  `agent_access_gitlab::GITLAB_OAUTH_DIALECT`, selected by the Broker binary)
+  connects a person's account on one GitLab instance through an instance-wide
+  confidential GitLab application. Registrations use `client_secret_post`, form
+  encoding, `rotation = "rotate_both"` and exactly one permission profile whose
+  `audience` is `gitlab` and whose `target` is the normalized instance base of
+  `base_url`; the sample and docs default to the `api` and `write_repository`
+  scopes. The connected account is `/api/v4/user`'s numeric `id` and
+  `username`. Granted scopes come from the token response, or, when a code
+  exchange omits them, from `/oauth/token/info` (whose failure fails the
+  connection and stores nothing); a refresh that omits them keeps the
+  originally granted scopes. Refresh material is consuming. Only consumers on
+  the registration's instance, such as GitLab REST and a Git gateway there,
+  pass offline validation. See [GitLab OAuth](docs/oauth.md#gitlab).
+- GitLab REST accepts delegated access: a `gitlab` credential connection may set
+  `oauth`, and people's GitLab REST lookups and actions then use their GitLab
+  OAuth connection, with one lease per invocation. Immediately before each
+  GitLab request the provider pins the access to its instance (`api_base_url`
+  without `/api/v4`) and the `gitlab` audience. A 401 marks the presented
+  access rejected and renews it once per invocation, whether it answered a
+  lookup or the execution, and repeats that request, including a write or an
+  upload; a further 401 fails as `credential_invalid`. A connection failure
+  that stops a read-back after GitLab applied a write reports the write as
+  `mutation_verification_failed` with an `applied_unverified` receipt,
+  `retrySafe: false` and its safe locators. Static tokens are
+  presented as before. Token-only project and service-account token actions
+  stay unavailable through OAuth. See
+  [GitLab REST OAuth connections](docs/providers-gitlab-rest.md#oauth-connections).
+- The development `oauth_stub` service declares its `base_url` as its upstream
+  authority.
+- Optional OAuth login binding, off unless a registration sets
+  `login_binding = { provider = "microsoft", upstream_identity_provider,
+  upstream_tenant_id }`: the Broker installs an upstream account only when it
+  reports a linked identity at that upstream identity provider whose external
+  ID is the Entra object ID of the owner's Broker Microsoft sign-in, whatever
+  sign-in the browser session used. The owner's sign-in must be in
+  `upstream_tenant_id`, the operator's statement of the tenant the upstream's
+  provider uses, which must be `browser_auth.oidc.microsoft.tenant_id`.
+  Consent start and installation check it, installation again inside its
+  transaction. Without a linked sign-in the connections listing reports
+  `connectUnavailableReason: "login_binding_required"`, which the portal
+  explains, and consent fails with `oauth_login_binding_required`; an account
+  linked elsewhere fails with `oauth_login_binding_mismatch` and stores
+  nothing. Only the `gitlab` dialect supports it, reading `/api/v4/user`'s
+  `identities` (GitLab's Entra provider must use `uid_field = "oid"`);
+  validation rejects it on other dialects. Adding, changing or removing it
+  makes the registration's owners reconnect. The SDK adds
+  `OAuthLoginBinding`, `OAuthLoginProvider`, `LinkedIdentity`,
+  `ConnectedIdentity::linked_identities` with `with_linked_identities`, and the
+  default `OAuthDialect::supports_login_binding`. See
+  [GitLab login binding](docs/oauth.md#gitlab-login-binding).
+- Git gateways present OAuth connections. A gateway whose `credential_modes`
+  include `per_user` accepts delegated credentials, so its credential
+  connection may set `oauth`; for GitLab, people connect once for GitLab REST
+  and Git. Each Git HTTP request acquires the caller's lease after policy and
+  revalidates it immediately before sending, pinned to the gateway's own
+  `upstream_base_url` instance, and presents the access token through
+  `upstream_token_auth` (GitLab: `{ scheme = "basic", username = "oauth2" }`).
+  Ref discovery recovers once from an upstream 401; `git-upload-pack` and
+  `git-receive-pack` POSTs mark the presented access rejected and fail without
+  replay. Upstream rejection and a connection needing reconnect (never
+  connected, `invalid_grant`, or a refresh with an unknown outcome) answer HTTP
+  403 `credential_invalid` with a plain-text message naming the portal
+  reconnect, never 401, so Git neither prompts nor has its credential helper
+  erase the Broker token. Gateway audit records of a personal connection add
+  `providerAudit.gateway.credentialMethod` (`oauth` or `token`). See
+  [Git gateway OAuth connections](docs/git-http-gateway.md#oauth-connections).
 
 ### Changed
 
+- Git gateway error responses are labeled `Content-Type: text/plain;
+  charset=utf-8`, so Git shows their one-line reason as `remote:` output when
+  ref discovery fails. Their status, reason code header and body are unchanged.
 - Existing Confluence `all` resources used by grants, groups, and token
   restrictions now cover personal spaces visible to the selected upstream
   credential; those keys were previously rejected. Review this coverage before

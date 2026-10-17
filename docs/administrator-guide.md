@@ -105,7 +105,8 @@ settings as described in [Jira setup](providers-jira.md) and
 
 Services that reach the same upstream account can share one connection, as Jira
 and Confluence do above. GitLab REST and a GitLab Git gateway can both name a
-`gitlab` connection, so each principal stores one GitLab token for both; see the
+`gitlab` connection, so each principal stores one GitLab token, or connects one
+GitLab account through [OAuth](oauth.md#gitlab), for both; see the
 [Git gateway](git-http-gateway.md#credentials-limits-and-audit). Grants stay
 per service, so a principal with only GitLab REST grants still cannot fetch
 through the gateway, and one with only Jira grants cannot read Confluence. A
@@ -122,9 +123,11 @@ never falls back from one method to the other:
 | Service account | Uses the token you provision, if the connection sets `token_profile` | Uses the token you provision |
 | `system` principal | Stores its own token, if the connection sets `token_profile` | Stores its own token |
 
-OAuth is available for services that accept delegated credentials: Gmail and
-imported MCP OAuth services. An import with a personal binding publishes its
-own connection under its service ID. See
+OAuth is available for services that accept delegated credentials: Gmail,
+GitLab REST and GitLab Git gateways, which share one GitLab OAuth connection
+per instance ([GitLab setup](oauth.md#gitlab)), and imported MCP OAuth
+services. An import with a personal binding publishes its own connection under
+its service ID. See
 [credential connections](configuration.md#credential-connections) for every
 rule.
 
@@ -219,13 +222,15 @@ version checks and caller setup.
 
 ## Enable personal OAuth connections
 
-For Gmail and imported MCP OAuth, enable the human owner's self-service setting,
-configure a credential connection whose `oauth` names the registration and
-permission profile (imports publish theirs), and assign a matching active action
-grant with `credentialMode = "per_user"` on a service that uses the connection
-to the user or one of their current groups. The same setup applies to an administrator connecting a
-personal account. A signed-in browser session is required; a setup bearer alone
-cannot perform consent. Use the registration's row in **My access > Credentials**.
+For Gmail, GitLab (GitLab REST and GitLab Git gateways on one connection; see
+[GitLab setup](oauth.md#gitlab)) and imported MCP OAuth, enable the human
+owner's self-service setting, configure a credential connection whose `oauth`
+names the registration and permission profile (imports publish theirs), and
+assign a matching active action grant with `credentialMode = "per_user"` on a
+service that uses the connection to the user or one of their current groups.
+The same setup applies to an administrator connecting a personal account. A
+signed-in browser session is required; a setup bearer alone cannot perform
+consent. Use the registration's row in **My access > Credentials**.
 
 Setup does not require a resource or execution context to be usable now, and the
 matching grant need not win invocation precedence. A user can prepare an account

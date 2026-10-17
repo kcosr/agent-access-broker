@@ -2,10 +2,11 @@
 
 The Broker can hold a user's delegated upstream OAuth connection and obtain a
 short-lived access token when an authorized action needs it. [Gmail](providers-gmail.md)
-provides a production Google dialect and typed mailbox actions. The development-only
-`stub` dialect and `oauth_stub` records provider use the separate
-`oauth-provider-stub` repository. Microsoft Graph,
-Atlassian and GitLab delegated adapters are not enabled.
+provides a production Google dialect and typed mailbox actions, and the
+production [GitLab dialect](#gitlab) connects one GitLab instance's accounts.
+The development-only `stub` dialect and `oauth_stub` records provider use the
+separate `oauth-provider-stub` repository. Microsoft Graph and Atlassian
+delegated adapters are not enabled.
 
 This is separate from `[browser_auth.oidc.microsoft]`, which signs a person into
 the Broker. A Broker browser session identifies the connection owner; connecting
@@ -18,11 +19,12 @@ access tokens, refresh tokens, client secrets or authorization codes.
 | Adapter | Purpose | Setup |
 | --- | --- | --- |
 | `google` | Production Gmail account connection | [Gmail operator setup](providers-gmail.md#setup) |
+| `gitlab` | Production GitLab account connection for GitLab REST and Git | [GitLab](#gitlab) |
 | `mcp_oauth` | Personal OAuth for reviewed imported MCP services | [Imported MCP OAuth](imported-oauth.md) |
 | `stub` | Development records provider and lifecycle fault tests; forbidden in production | [Test-provider configuration](#development-test-provider-configuration) |
 
-The linked production adapters do not enable Microsoft Graph, Atlassian, or
-GitLab delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
+The linked production adapters do not enable Microsoft Graph or Atlassian
+delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
 Microsoft OIDC remains a separate browser-login feature.
 
 ## Credential connections and shared registrations
@@ -87,8 +89,8 @@ for request, token-response and permission-boundary semantics.
 4. The Broker checks issuer, state and browser ownership, exchanges the code
    using the configured client authentication plus PKCE. The dialect determines
    identity and target evidence: the test provider uses `/me` and `/targets`,
-   Google identifies the connected account, and imported MCP OAuth may provide
-   no upstream account identity. The Broker rechecks the active session,
+   Google and GitLab identify the connected account, and imported MCP OAuth may
+   provide no upstream account identity. The Broker rechecks the active session,
    self-service setting, current grant/group authority and exact service binding
    before exchange and again before committing the connection.
 5. Encrypted connection state contains any refresh family, available subject
@@ -149,6 +151,232 @@ pending consent unchanged. It does **not** claim to revoke provider-side consent
 that separately at the provider if desired. Disabling/removing a Broker principal
 also removes its OAuth state. Existing provider requests already dispatched
 cannot be recalled.
+
+## GitLab
+
+The `gitlab` dialect connects a person's account on one GitLab instance. GitLab
+REST and a GitLab [Git gateway](git-http-gateway.md) on that instance consume
+one credential connection, so a person connects once for both, and each
+service's own grants still decide what it may do. GitLab REST's use of the
+connection, including its lookups and 401 recovery, is described under
+[GitLab REST OAuth connections](providers-gitlab-rest.md#oauth-connections).
+
+### GitLab administrator setup
+
+1. In the GitLab Admin area, open **Applications** and add an instance-wide
+   application. Keep it **confidential**.
+2. Set its redirect URI to the Broker's exact callback for the registration,
+   `<browser_auth.public_origin>/v1/oauth/callback/<registration>`, such as
+   `https://broker.example.com/v1/oauth/callback/gitlab`.
+3. Select the [scopes](#gitlab-scopes) the Broker profile requests.
+4. Optionally mark the application **trusted**, so people are not shown
+   GitLab's consent screen. Only the Admin area can set this; the Applications
+   API has no such setting. When GitLab's `disable_admin_oauth_scopes` setting
+   is on, GitLab administrators can authorize only trusted applications with API
+   or repository scopes.
+5. Hand the application ID and secret to the Broker administrator, who stores
+   the secret in a file or environment variable the Broker reads.
+
+When people sign in to GitLab through an external identity provider, such as
+Microsoft Entra ID, setting GitLab's `auto_sign_in_with_provider` to it lets a
+trusted application connect without a click for anyone with a session. The
+provider can still prompt, for example for multi-factor authentication. Keep a
+GitLab administrator who can sign in without it; `?auto_sign_in=false` on the
+sign-in page bypasses it. When the Broker also signs people in through Entra,
+[login binding](#gitlab-login-binding) can require each connected GitLab
+account to be the person's own.
+
+### GitLab registration
+
+```toml
+[oauth.registrations.gitlab]
+adapter = "gitlab"
+base_url = "https://gitlab.example.com"
+redirect_uri = "https://broker.example.com/v1/oauth/callback/gitlab"
+client_id = "YOUR_GITLAB_APPLICATION_ID"
+client_secret_ref = "file:/etc/agent-access-broker/secrets/gitlab-oauth-client-secret"
+client_auth = "client_secret_post"
+rotation = "rotate_both"
+
+[oauth.registrations.gitlab.permission_profiles.default]
+scopes = ["api", "write_repository"]
+audience = "gitlab"
+target = "https://gitlab.example.com"
+
+[credentials.connections.gitlab]
+display_name = "GitLab"
+token_profile = "gitlab-access-token"
+oauth = { registration = "gitlab", profile = "default" }
+
+[credentials.per_user.gitlab]
+type = "connection"
+connection = "gitlab"
+
+[credentials.per_user.gitlab_git]
+type = "connection"
+connection = "gitlab"
+```
+
+`config validate`, startup and reload check, without contacting GitLab:
+
+- `base_url` is the instance base, including any relative URL root such as
+  `https://example.com/gitlab`, without credentials, query or fragment. Every
+  endpoint is below it.
+- `client_auth = "client_secret_post"`, the default form encoding, no
+  `adapter_settings`, and `rotation = "rotate_both"`, because every GitLab
+  refresh replaces both the access and the refresh token.
+- The registration has exactly one permission profile. It requests explicit
+  `scopes`, its `audience` is `gitlab`, and its `target` is the normalized
+  instance base: `base_url` with a lowercase scheme and host, no default port
+  and no trailing slash.
+- Every service using the connection acts on that instance: GitLab REST whose
+  `api_base_url` is the target followed by `/api/v4`, and Git gateways whose
+  `upstream_base_url` is the target. Any other consumer fails with
+  `credentials.connections.<id>.oauth: <service> does not act on the upstream
+  registration <registration> grants access to: it acts on <origin>, not the
+  GitLab instance <target>`.
+
+People always use their OAuth connection and never store a GitLab token
+through it. With `token_profile` set, service accounts keep tokens an
+administrator provisions, because GitLab service accounts authenticate only
+with personal access tokens, and `system` principals store their own. Without
+`token_profile`, only people have a GitLab credential.
+
+### GitLab scopes
+
+Scopes are deployment configuration: the GitLab application allows them and
+the profile requests them. GitLab documents Git over HTTP for OAuth tokens only
+under its repository scopes, so request one explicitly:
+
+| Use | Scopes |
+| --- | --- |
+| REST reads and writes, Git fetch and push (default) | `api`, `write_repository` |
+| Read-only REST and Git fetch | `read_api`, `read_repository` |
+| REST reads, Git fetch and push | `read_api`, `write_repository` |
+
+The Broker identifies the connected account at `/api/v4/user`, which `api`,
+`read_api` or `read_user` allows; without one of them, connecting fails with a
+permission error. Changing the profile's scopes changes the registration, so
+every person reconnects.
+
+### GitLab protocol
+
+- The authorization page is `<base_url>/oauth/authorize`, requested with the
+  profile's scopes, the flow's state and a PKCE S256 challenge. Code exchange
+  and refresh are form-encoded POSTs to `<base_url>/oauth/token` carrying the
+  client ID and secret; refresh also sends the registration's redirect URI.
+- Each token response sets its access token's lifetime. Without `expires_in`,
+  GitLab's default of 7200 seconds applies. GitLab 19.1 and later let
+  administrators shorten it to as little as 300 seconds.
+- The connected account's numeric `id` is its stable subject, and its
+  `username` the name the portal shows. Reconnecting rejects a different
+  account unless the person chooses to replace it.
+- Granted scopes come from the token response's `scope`. When the code
+  exchange omits it, the Broker reads `<base_url>/oauth/token/info` with the
+  new access token; if that fails, connecting fails and nothing is stored. When
+  a refresh omits it, the connection keeps the scopes originally granted, and
+  the Broker sends nothing else between the refresh and storing its result.
+  Requested scopes are never taken as granted.
+- The connection's one target is the instance, with audience `gitlab` and the
+  granted scopes. Leases carry that target and audience.
+- Refresh material is consuming. GitLab invalidates both earlier tokens on
+  every refresh, with no grace period, so an access token in use when another
+  request refreshes stops working. A refresh whose outcome is unknown, such as a
+  lost response, a 5xx answer or an unrecognized rejection, leaves the
+  connection needing reconnect, for GitLab REST and Git together.
+  `invalid_grant` also requires reconnect, and HTTP 429 holds refresh until its
+  `Retry-After` wait.
+
+GitLab refresh tokens do not expire. Disconnecting removes the Broker's copy
+but does not revoke the grant in GitLab: the person revokes the application
+under their GitLab **Applications** settings, or a GitLab administrator revokes
+the application's tokens.
+
+### GitLab Git through the gateway
+
+A GitLab [Git gateway](git-http-gateway.md#oauth-connections) on the
+connection presents each person's OAuth access to GitLab's Git HTTP endpoint,
+which accepts tokens only as HTTP Basic. Set the gateway's
+`upstream_token_auth = { scheme = "basic", username = "oauth2" }`; `oauth2` is
+GitLab's convention for access tokens. The gateway's `upstream_base_url`
+names the profile's `target` instance, and the profile requests a repository
+scope (see [GitLab scopes](#gitlab-scopes)).
+
+Each Git HTTP request holds its own lease. Ref discovery recovers once from a
+401; pack POSTs are never replayed. When GitLab rejects the access, or the
+connection needs reconnecting, the gateway answers HTTP 403 with a plain-text
+message naming the portal reconnect, never 401, so Git neither prompts nor has
+its credential helper erase the Broker token. Service accounts present their
+stored token as Basic `oauth2:<token>` through the same setting.
+
+### GitLab login binding
+
+Where people sign in to both the Broker and GitLab through Microsoft Entra ID,
+a registration can require each connected GitLab account to belong to the
+person connecting it: GitLab must report the account linked to the same Entra
+user as the person's Broker account. Binding is off unless the registration
+sets `login_binding`:
+
+```toml
+[oauth.registrations.gitlab.login_binding]
+provider = "microsoft"
+upstream_identity_provider = "azure_activedirectory_v2"
+upstream_tenant_id = "00000000-0000-0000-0000-000000000000"
+```
+
+- `provider = "microsoft"` makes the Broker's
+  [Microsoft sign-in](operator-guide.md#microsoft-entra-oidc-setup-and-operation)
+  authoritative, so `browser_auth.oidc.microsoft.enabled` is required.
+- `upstream_identity_provider` is GitLab's OmniAuth name for its Entra
+  sign-in, as GitLab reports it in a user's `identities`, such as
+  `azure_activedirectory_v2`, or the `name` of an `openid_connect` provider.
+- `upstream_tenant_id` states that this GitLab provider signs people in
+  through that Entra tenant. GitLab does not report the tenant, so the Broker
+  relies on this statement, and it must be
+  `browser_auth.oidc.microsoft.tenant_id`.
+
+Before enabling it, check that:
+
+- GitLab's Entra provider records each person's Entra object ID: set its
+  `uid_field` to `oid`. GitLab's examples differ: some use
+  `preferred_username`, and without `uid_field` GitLab records `sub`, which is
+  not the object ID, so no account would connect. Never use
+  `preferred_username`, which can be changed or reassigned; the Broker
+  compares only object IDs.
+- GitLab includes `identities` in `/api/v4/user` for the profile's scopes.
+  GitLab documents the field but not which scopes expose it; request
+  `/api/v4/user` with a token holding the same scopes and confirm it lists the
+  Entra identity. Without it, no account connects.
+- Each person's Broker account has a Microsoft sign-in: Microsoft
+  just-in-time accounts have one, and an administrator can
+  [link an existing account](administrator-guide.md#microsoft-onboarding).
+
+With the binding set:
+
+- A person without an active Microsoft sign-in in that tenant cannot connect.
+  Their row in `GET /v1/oauth/connections` has `canConnect: false` and
+  `connectUnavailableReason: "login_binding_required"`, which the portal
+  explains, and starting consent fails with HTTP 400 and
+  `error.message: "oauth_login_binding_required"`.
+- After the code exchange, the Broker reads `/api/v4/user` and requires an
+  `identities` entry whose `provider` is `upstream_identity_provider` and whose
+  `extern_uid` is the person's Entra object ID, compared without regard to
+  case. Otherwise the callback fails with HTTP 400 and
+  `error.message: "oauth_login_binding_mismatch"`, and nothing is stored.
+- The Broker checks the person's current Microsoft sign-in again inside the
+  transaction that installs the connection, so a link removed or changed
+  during consent prevents the installation.
+- The Broker account's Microsoft sign-in counts whatever sign-in method the
+  browser session used, including a local password.
+- Errors, logs and audit carry only these codes, never object IDs.
+
+The check runs whenever a connection is installed: on connect, reconnect and
+account replacement. Later changes to either link do not affect an existing
+connection until it is reconnected; disconnect it to end access sooner. Adding,
+changing or removing `login_binding` changes the registration, so every person
+reconnects; a registration without it keeps its connections. Only the `gitlab`
+dialect reports linked identities, and validation rejects `login_binding` on
+any other registration.
 
 ## Development test-provider configuration
 
@@ -282,8 +510,10 @@ connected mailbox. The test records provider does not define mail actions; see
 Each row includes `canConnect`, `canDisconnect` and the required nullable
 `connectUnavailableReason`. The reason is `null` when setup is available,
 `no_personal_access` when the owner lacks a matching `per_user` grant on every
-consumer, or `service_unavailable` when an imported consumer cannot currently
-accept setup. A retained connection can therefore offer Disconnect while
+consumer, `service_unavailable` when an imported consumer cannot currently
+accept setup, or `login_binding_required` when the registration's
+[login binding](#gitlab-login-binding) needs a Broker sign-in the owner has not
+linked. A retained connection can therefore offer Disconnect while
 Connect/Reconnect is unavailable. These flags describe personal management, not
 invocation access.
 
@@ -348,7 +578,12 @@ Broker setup authorization denial returns HTTP 403 with
 `error.message: "oauth_setup_denied"`. An upstream permission or scope rejection
 instead returns HTTP 400 with `reasonCode: "credential_invalid"` and
 `error.message: "oauth_permission_denied"`;
-it does not imply a Broker grant denial.
+it does not imply a Broker grant denial. A registration's
+[login binding](#gitlab-login-binding) refuses consent with HTTP 400,
+`reasonCode: "credential_invalid"` and `error.message:
+"oauth_login_binding_required"` when the owner has no linked sign-in, and
+installation with `error.message: "oauth_login_binding_mismatch"` when the
+upstream account is not linked to it.
 The portal is mounted at `/ui`; the current Broker configuration validator
 rejects any other `portal.mount_path`; callback destinations stay within that portal.
 The three JSON management routes advertise `browser_management` access in the
@@ -473,8 +708,9 @@ is lost, malformed, or ambiguous, the family becomes uncertain. The Broker does 
 refresh token or continue handing out prior access leases. The owner reconnects.
 A persisted unfinished attempt after process loss is likewise treated
 conservatively. An upstream 401 on a read permits at most one version-aware
-refresh/retry. Gmail also permits this one recovery after a mutation's explicit
-401 authentication rejection; no timeout, transport or server-error replay occurs.
+refresh/retry. Gmail and GitLab REST also permit this one recovery after a
+mutation's explicit 401 authentication rejection; no timeout, transport or
+server-error replay occurs.
 Leases stay pinned to their original connection/generation across both revalidation
 and unauthorized recovery.
 
@@ -502,7 +738,7 @@ version. The Broker supports **one connection and refresh family
 per owner/registration**. Separate independent grant families under one
 registration, adding permission profiles without reconnecting existing grants,
 interactive target selection, delegated OIDC ID-token/claims validation, client assertions,
-provider revocation orchestration and Microsoft/Jira/GitLab delegated adapters are
+provider revocation orchestration and Microsoft/Jira/Confluence delegated adapters are
 not supported. Changing the stub base URL does not provide a production adapter.
 
 The stub's identity endpoint and fault controls are test protocols, not a

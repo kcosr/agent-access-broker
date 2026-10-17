@@ -7011,14 +7011,17 @@ impl StubGitlabBackend {
     fn record_credential(
         &self,
         operation: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) {
         self.credential_observations
             .lock()
             .unwrap()
             .push(CredentialObservation {
                 operation: operation.to_string(),
-                credential: credential.clone(),
+                credential: credential
+                    .static_credential()
+                    .expect("the GitLab smoke presents static tokens")
+                    .clone(),
             });
     }
 }
@@ -7029,7 +7032,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         mut upload: agent_access_provider::BrokerBodyPart,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProjectUpload>, GitlabBackendError> {
         self.record_credential("upload_project", credential);
         if let Some(path) = upload.temp_file_path() {
@@ -7057,7 +7060,7 @@ impl GitlabBackend for StubGitlabBackend {
 
     async fn current_user(
         &self,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabUser>, GitlabBackendError> {
         self.record_credential("current_user", credential);
         Ok(GitlabBackendResponse {
@@ -7074,7 +7077,7 @@ impl GitlabBackend for StubGitlabBackend {
     async fn project(
         &self,
         project: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProject>, GitlabBackendError> {
         self.record_credential("project", credential);
         let project = self
@@ -7093,7 +7096,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookListRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhook>>, GitlabBackendError> {
         let items = self
             .webhooks
@@ -7117,7 +7120,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         webhook_id: u64,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         let value = self
             .webhooks
@@ -7137,7 +7140,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookWriteRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         *self.last_webhook_write.lock().unwrap() = Some(request.clone());
         let mut next_id = self.next_webhook_id.lock().unwrap();
@@ -7157,7 +7160,7 @@ impl GitlabBackend for StubGitlabBackend {
         _project_id: u64,
         webhook_id: u64,
         request: GitlabWebhookWriteRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhook>, GitlabBackendError> {
         *self.last_webhook_write.lock().unwrap() = Some(request.clone());
         let mut hooks = self.webhooks.lock().unwrap();
@@ -7176,7 +7179,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         webhook_id: u64,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.webhooks.lock().unwrap().remove(&webhook_id);
         Ok(GitlabBackendResponse {
@@ -7191,7 +7194,7 @@ impl GitlabBackend for StubGitlabBackend {
         _project_id: u64,
         _webhook_id: u64,
         _trigger: &str,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         Ok(GitlabBackendResponse {
             value: GitlabWebhookDeliveryAttempt {
@@ -7209,7 +7212,7 @@ impl GitlabBackend for StubGitlabBackend {
         _request: GitlabWebhookEventListRequest,
         _redacted_header_names: &BTreeSet<String>,
         _field_byte_cap: u64,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabWebhookDeliveryEvent>>, GitlabBackendError>
     {
         Ok(GitlabBackendResponse {
@@ -7239,7 +7242,7 @@ impl GitlabBackend for StubGitlabBackend {
         _project_id: u64,
         _webhook_id: u64,
         _webhook_event_id: u64,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabWebhookDeliveryAttempt>, GitlabBackendError> {
         Ok(GitlabBackendResponse {
             value: GitlabWebhookDeliveryAttempt {
@@ -7255,7 +7258,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookCustomHeaderRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         *self.last_webhook_header.lock().unwrap() = Some(request.clone());
         if let Some(hook) = self.webhooks.lock().unwrap().get_mut(&request.webhook_id) {
@@ -7277,7 +7280,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         _project_id: u64,
         request: GitlabWebhookCustomHeaderRequest,
-        _credential: &agent_access_provider::ExecutionCredential,
+        _credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         *self.last_webhook_header.lock().unwrap() = Some(request.clone());
         if let Some(hook) = self.webhooks.lock().unwrap().get_mut(&request.webhook_id)
@@ -7296,7 +7299,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         self.record_credential("issue", credential);
         if project_id != 42 || iid != 7 {
@@ -7328,7 +7331,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueSearchRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabIssue>>, GitlabBackendError> {
         self.record_credential("issues", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7365,7 +7368,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         self.record_credential("create_issue", credential);
         *self.last_issue_create.lock().unwrap() = Some(ObservedIssueCreate {
@@ -7383,7 +7386,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabIssue>, GitlabBackendError> {
         self.record_credential("update_issue", credential);
         *self.last_issue_update.lock().unwrap() = Some(ObservedIssueUpdate {
@@ -7401,7 +7404,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError> {
         self.record_credential("issue_notes", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7431,7 +7434,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabIssueNoteCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_issue_note", credential);
         *self.last_issue_note_add.lock().unwrap() = Some(ObservedIssueNoteAdd {
@@ -7449,7 +7452,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("issue_note", credential);
         if project_id != 42 || request.iid != 7 || request.note_id != 701 {
@@ -7466,7 +7469,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("update_issue_note", credential);
         *self.last_issue_note_update.lock().unwrap() = Some(ObservedIssueNoteUpdate {
@@ -7484,7 +7487,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_issue_note", credential);
         *self.last_issue_note_delete.lock().unwrap() = Some(ObservedIssueNoteDelete {
@@ -7502,7 +7505,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("merge_request", credential);
         if project_id != 42 || iid != 5 {
@@ -7516,7 +7519,8 @@ impl GitlabBackend for StubGitlabBackend {
             } else {
                 *self.fork_execution_source_project_id.lock().unwrap()
             }
-        } else if *credential == bearer_credential("gitlab-lookup-token") {
+        } else if credential.static_credential() == Some(&bearer_credential("gitlab-lookup-token"))
+        {
             *self.fork_lookup_source_project_id.lock().unwrap()
         } else {
             *self.fork_execution_source_project_id.lock().unwrap()
@@ -7581,7 +7585,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestSearchRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabMergeRequest>>, GitlabBackendError> {
         self.record_credential("merge_requests", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7643,7 +7647,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("create_merge_request", credential);
         *self.last_merge_request_create.lock().unwrap() = Some(ObservedMergeRequestCreate {
@@ -7661,7 +7665,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("update_merge_request", credential);
         *self.last_merge_request_update.lock().unwrap() = Some(ObservedMergeRequestUpdate {
@@ -7679,7 +7683,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabNote>>, GitlabBackendError> {
         self.record_credential("merge_request_notes", credential);
         let next_page = (request.page == 1).then_some(2);
@@ -7705,7 +7709,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_note", credential);
         *self.last_merge_request_note_add.lock().unwrap() = Some(ObservedMergeRequestNoteAdd {
@@ -7723,7 +7727,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("merge_request_note", credential);
         if project_id != 42 || request.iid != 5 || request.note_id != 501 {
@@ -7744,7 +7748,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("update_merge_request_note", credential);
         *self.last_merge_request_note_update.lock().unwrap() =
@@ -7763,7 +7767,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteDeleteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_merge_request_note", credential);
         *self.last_merge_request_note_delete.lock().unwrap() =
@@ -7782,7 +7786,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiscussion>>, GitlabBackendError> {
         self.record_credential("merge_request_discussions_page", credential);
         *self.last_merge_request_discussion_list.lock().unwrap() =
@@ -7832,7 +7836,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPositionedDiscussionCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("create_merge_request_inline_discussion", credential);
         *self.last_inline_discussion_add.lock().unwrap() = Some(ObservedInlineDiscussionAdd {
@@ -7857,7 +7861,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionReplyRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_discussion_note", credential);
         if *self.fail_discussion_reply_write.lock().unwrap() {
@@ -7881,7 +7885,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDraftNote>>, GitlabBackendError> {
         self.record_credential("merge_request_draft_notes", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7901,7 +7905,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         self.record_credential("merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7926,7 +7930,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7951,7 +7955,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDraftNote>, GitlabBackendError> {
         self.record_credential("update_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -7989,7 +7993,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8012,7 +8016,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftNoteObjectRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("publish_merge_request_draft_note", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8075,7 +8079,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDraftBulkPublishRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("bulk_publish_merge_request_draft_notes", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8105,7 +8109,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabReviewSummaryNoteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("create_merge_request_review_summary", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8126,7 +8130,7 @@ impl GitlabBackend for StubGitlabBackend {
 
     async fn gitlab_version(
         &self,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabServerVersion>, GitlabBackendError> {
         self.record_credential("gitlab_version", credential);
         if *self.fail_gitlab_version.lock().unwrap() {
@@ -8147,7 +8151,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         self.record_credential("merge_request_approval_summary", credential);
         if project_id != 42 || iid != 5 {
@@ -8194,7 +8198,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         iid: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalState>, GitlabBackendError> {
         self.record_credential("merge_request_approval_state", credential);
         if project_id != 42 || iid != 5 {
@@ -8214,7 +8218,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabApprovalRuleListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabApprovalRule>>, GitlabBackendError> {
         self.record_credential("merge_request_approval_rules", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8235,7 +8239,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         iid: u64,
         rule_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalRule>, GitlabBackendError> {
         self.record_credential("merge_request_approval_rule", credential);
         if project_id != 42 || iid != 5 || rule_id != 71 {
@@ -8252,7 +8256,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabApprovalMutationRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabApprovalSummary>, GitlabBackendError> {
         self.record_credential("set_merge_request_approval", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8292,7 +8296,7 @@ impl GitlabBackend for StubGitlabBackend {
     async fn apply_suggestions(
         &self,
         request: GitlabSuggestionApplyRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<agent_access_gitlab::GitlabSuggestion>>, GitlabBackendError>
     {
         self.record_credential("apply_suggestions", credential);
@@ -8318,7 +8322,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabReviewer>>, GitlabBackendError> {
         self.record_credential("merge_request_reviewers", credential);
         *self.last_merge_request_reviewer_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8350,7 +8354,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabCommit>>, GitlabBackendError> {
         self.record_credential("merge_request_commits", credential);
         *self.last_merge_request_commit_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8371,7 +8375,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabPipeline>>, GitlabBackendError> {
         self.record_credential("merge_request_pipelines", credential);
         *self.last_merge_request_pipeline_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8392,7 +8396,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffFile>>, GitlabBackendError> {
         self.record_credential("merge_request_diffs", credential);
         *self.last_merge_request_diff_list.lock().unwrap() = Some(ObservedMergeRequestList {
@@ -8417,7 +8421,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         iid: u64,
         _byte_cap: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.record_credential("merge_request_raw_diffs", credential);
         if project_id != 42 || iid != 5 {
@@ -8451,7 +8455,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPage<GitlabDiffVersionSummary>>, GitlabBackendError>
     {
         self.record_credential("merge_request_diff_versions", credential);
@@ -8480,7 +8484,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestObjectRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiffVersion>, GitlabBackendError> {
         self.record_credential("merge_request_diff_version", credential);
         if project_id != 42 || request.iid != 5 || request.object_id != 77 {
@@ -8502,7 +8506,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabNoteCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("create_merge_request_discussion", credential);
         *self.last_merge_request_discussion_add.lock().unwrap() =
@@ -8522,7 +8526,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         iid: u64,
         discussion_id: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("merge_request_discussion", credential);
         if let Some(value) = self
@@ -8582,7 +8586,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteUpdateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabNote>, GitlabBackendError> {
         self.record_credential("update_merge_request_discussion_note", credential);
         *self
@@ -8603,7 +8607,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionNoteDeleteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<()>, GitlabBackendError> {
         self.record_credential("delete_merge_request_discussion_note", credential);
         *self
@@ -8624,7 +8628,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabDiscussionStateChangeRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabDiscussion>, GitlabBackendError> {
         self.record_credential("set_merge_request_discussion_resolved", credential);
         *self
@@ -8654,7 +8658,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabMergeRequestMergeRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabMergeRequest>, GitlabBackendError> {
         self.record_credential("merge_merge_request", credential);
         if project_id != 42 || request.iid != 5 {
@@ -8686,7 +8690,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabBranchListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabBranch>>, GitlabBackendError> {
         self.record_credential("branches", credential);
         *self.last_branch_list.lock().unwrap() = Some(ObservedBranchList {
@@ -8711,7 +8715,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         branch: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError> {
         self.record_credential("branch", credential);
         let branch = self
@@ -8733,7 +8737,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabBranchCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabBranch>, GitlabBackendError> {
         self.record_credential("create_branch", credential);
         if project_id != 42 {
@@ -8756,7 +8760,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabProtectedBranchListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabProtectedBranch>>, GitlabBackendError> {
         self.record_credential("protected_branches", credential);
         if project_id != 42 {
@@ -8792,7 +8796,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         name: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabProtectedBranch>, GitlabBackendError> {
         self.record_credential("protected_branch", credential);
         let branch = self
@@ -8814,7 +8818,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFile>, GitlabBackendError> {
         self.record_credential("file", credential);
         if project_id != 42 {
@@ -8839,7 +8843,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         request: GitlabFileRequest,
         _byte_cap: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.record_credential("raw_file", credential);
         if project_id != 42 || request.path != "README.md" || request.ref_name != TEST_SHA {
@@ -8860,7 +8864,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         self.record_credential("create_file", credential);
         if project_id != 42 {
@@ -8885,7 +8889,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileWriteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         self.record_credential("update_file", credential);
         if project_id != 42 {
@@ -8914,7 +8918,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabFileDeleteRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFileMutation>, GitlabBackendError> {
         self.record_credential("delete_file", credential);
         if project_id != 42 {
@@ -8939,7 +8943,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabCommitListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabCommit>>, GitlabBackendError> {
         self.record_credential("commits", credential);
         *self.last_commit_list.lock().unwrap() = Some(ObservedCommitList {
@@ -8957,7 +8961,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         sha: &str,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError> {
         self.record_credential("commit", credential);
         if project_id != 42 || !matches!(sha, TEST_SHA | "01234567") {
@@ -8974,7 +8978,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabCommitCreateRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabCommit>, GitlabBackendError> {
         self.record_credential("create_commit", credential);
         if project_id != 42 {
@@ -8995,7 +8999,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPipelineListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabPipeline>>, GitlabBackendError> {
         self.record_credential("pipelines", credential);
         *self.last_pipeline_list.lock().unwrap() = Some(ObservedPipelineList {
@@ -9016,7 +9020,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("pipeline", credential);
         if project_id != 42 {
@@ -9040,7 +9044,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabPipelineRunRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("run_pipeline", credential);
         if project_id != 42 {
@@ -9058,7 +9062,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("retry_pipeline", credential);
         if project_id != 42 || pipeline_id != 321 {
@@ -9075,7 +9079,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         pipeline_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabPipeline>, GitlabBackendError> {
         self.record_credential("cancel_pipeline", credential);
         if project_id != 42 || pipeline_id != 321 {
@@ -9092,7 +9096,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         request: GitlabJobListRequest,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<Vec<GitlabJob>>, GitlabBackendError> {
         self.record_credential("jobs", credential);
         *self.last_job_list.lock().unwrap() = Some(ObservedJobList {
@@ -9113,7 +9117,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("job", credential);
         if project_id != 42 {
@@ -9139,7 +9143,7 @@ impl GitlabBackend for StubGitlabBackend {
         project_id: u64,
         job_id: u64,
         _byte_cap: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
         self.record_credential("job_trace", credential);
         if project_id != 42 || job_id != 9001 {
@@ -9163,7 +9167,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("retry_job", credential);
         if project_id != 42 || job_id != 9001 {
@@ -9180,7 +9184,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("cancel_job", credential);
         if project_id != 42 || job_id != 9001 {
@@ -9197,7 +9201,7 @@ impl GitlabBackend for StubGitlabBackend {
         &self,
         project_id: u64,
         job_id: u64,
-        credential: &agent_access_provider::ExecutionCredential,
+        credential: &agent_access_gitlab::GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabJob>, GitlabBackendError> {
         self.record_credential("play_job", credential);
         if project_id != 42 || job_id != 9002 {

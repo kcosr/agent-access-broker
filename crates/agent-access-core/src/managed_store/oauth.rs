@@ -276,6 +276,23 @@ pub(crate) fn check_admission(
         OAuthError::SetupDenied
     })
 }
+/// The external subject of the owner's active login method at the external
+/// sign-in `provider`, such as `microsoft`, when they have linked one.
+pub(crate) fn linked_login_subject(
+    conn: &Connection,
+    owner: &str,
+    provider: &str,
+) -> Result<Option<String>, OAuthError> {
+    conn.query_row(
+        "SELECT external_subject FROM principal_login_methods
+         WHERE principal_id = ?1 AND method = 'oidc' AND external_provider = ?2
+           AND status = 'active'",
+        params![owner, provider],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|_| OAuthError::Storage)
+}
 fn active(conn: &Connection, owner: &str) -> Result<(), OAuthError> {
     let p = principal_by_id(conn, owner).map_err(|_| OAuthError::Principal)?;
     if p.status != "active" || p.kind != "user" {
@@ -304,6 +321,14 @@ impl ManagedStore {
         write(&tx, ring, owner, registration, &next)?;
         tx.commit().map_err(|_| OAuthError::Storage)?;
         Ok(result)
+    }
+    pub(crate) fn oauth_linked_login_subject(
+        &self,
+        owner: &str,
+        provider: &str,
+    ) -> Result<Option<String>, OAuthError> {
+        let conn = self.connection.lock().map_err(|_| OAuthError::Storage)?;
+        linked_login_subject(&conn, owner, provider)
     }
     pub(crate) fn oauth_read(
         &self,

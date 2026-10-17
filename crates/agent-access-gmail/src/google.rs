@@ -279,6 +279,7 @@ mod tests {
 
     fn config() -> OAuthRegistrationConfig {
         OAuthRegistrationConfig {
+            login_binding: None,
             adapter: OAuthAdapter::new("google"),
             base_url: ISSUER.into(),
             redirect_uri: "http://127.0.0.1:8787/v1/oauth/callback/google".into(),

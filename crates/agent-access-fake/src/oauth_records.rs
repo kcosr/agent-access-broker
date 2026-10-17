@@ -6,8 +6,8 @@ use agent_access_provider::{
     ClientProfile, CredentialDescriptor, DelegatedAccess, EgressDeclaration, EgressProxyConfig,
     Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits,
     ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamCall,
-    UpstreamClient, UpstreamClientSpec, ValidationContext, complete_upstream_trace,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamAuthority,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, ValidationContext, complete_upstream_trace,
     is_literal_loopback, parse_backend_config, read_bounded_body, take_upstream_trace,
 };
 use async_trait::async_trait;
@@ -92,8 +92,17 @@ impl BackendConfig for OAuthStubProviderConfig {
         }
     }
 
+    /// The records service acts on the test server at `base_url`.
     fn descriptor(&self) -> ServiceDescriptor {
-        oauth_stub_descriptor()
+        let descriptor = oauth_stub_descriptor();
+        match self
+            .base()
+            .ok()
+            .and_then(|base| UpstreamAuthority::from_base_url(base.as_str()).ok())
+        {
+            Some(authority) => descriptor.with_upstream_authority(authority),
+            None => descriptor,
+        }
     }
 
     fn egress_proxies(&self) -> Vec<(String, &EgressProxyConfig)> {
@@ -468,6 +477,16 @@ mod tests {
                 .map(|action| action.action.as_str())
                 .collect::<Vec<_>>(),
             ["record.list", "record.view", "account.view"]
+        );
+        assert_eq!(
+            descriptor.upstream_authority,
+            Some(UpstreamAuthority::from_base_url("http://127.0.0.1:8099").unwrap())
+        );
+        assert!(
+            config("http://localhost:8099")
+                .descriptor()
+                .upstream_authority
+                .is_none()
         );
     }
 }

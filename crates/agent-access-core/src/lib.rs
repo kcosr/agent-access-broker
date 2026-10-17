@@ -1626,6 +1626,13 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
                 "oauth.registrations.{name} is not a valid {adapter} registration: {reason}"
             ));
         }
+        oauth::validate_login_binding(
+            name,
+            registration,
+            dialect.dialect(),
+            &config.browser_auth.oidc.microsoft,
+            &mut errors,
+        );
         if dialect.is_development_only() && !development_fixtures_enabled {
             errors.push(format!(
                 "oauth.registrations.{name} uses the development-only {adapter} dialect, which requires non-production deployment.enable_fake_service"

@@ -335,6 +335,40 @@ read_only = true
 # type = "connection"
 # connection = "gitlab"
 
+# GitLab OAuth: people connect their GitLab account once for GitLab REST and
+# the Git gateway, while service accounts keep administrator-provisioned
+# tokens. Add oauth = { registration = "gitlab", profile = "default" } to
+# [credentials.connections.gitlab] above. A GitLab administrator creates an
+# instance-wide confidential application (Admin area > Applications) with the
+# redirect URI and scopes below, and may mark it trusted to skip consent.
+# Requires managed identity/store/encryption, browser auth and management; the
+# redirect URI is the exact browser_auth.public_origin callback. The target is
+# the normalized instance base. See docs/oauth.md#gitlab. The Git gateway
+# presents a person's OAuth access through its upstream_token_auth, as Basic
+# oauth2:<access token>; see docs/git-http-gateway.md#oauth-connections.
+# [oauth.registrations.gitlab]
+# adapter = "gitlab"
+# base_url = "https://gitlab.example.com"
+# redirect_uri = "https://broker.example.com/v1/oauth/callback/gitlab"
+# client_id = "YOUR_GITLAB_APPLICATION_ID"
+# client_secret_ref = "env:GITLAB_OAUTH_CLIENT_SECRET"
+# client_auth = "client_secret_post"
+# rotation = "rotate_both"
+#
+# [oauth.registrations.gitlab.permission_profiles.default]
+# scopes = ["api", "write_repository"] # read-only: ["read_api", "read_repository"]
+# audience = "gitlab"
+# target = "https://gitlab.example.com"
+#
+# Optional, off when omitted: install only GitLab accounts that GitLab reports
+# linked, through its Entra sign-in (uid_field = "oid"), to the owner's Broker
+# Microsoft sign-in. Requires [browser_auth.oidc.microsoft] in the same tenant.
+# See docs/oauth.md#gitlab-login-binding.
+# [oauth.registrations.gitlab.login_binding]
+# provider = "microsoft"
+# upstream_identity_provider = "azure_activedirectory_v2"
+# upstream_tenant_id = "00000000-0000-0000-0000-000000000000"
+
 [policy]
 authority = "toml"
 default_decision = "deny"
