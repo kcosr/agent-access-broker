@@ -8,8 +8,9 @@ import { portalDist } from "./support/binaries";
 
 // Deterministic browser contract for the one Credentials list: one row per
 // credential connection naming the entitled services it serves, one row per
-// OAuth registration, and retained stored rows deleted by ID. The real-store
-// flows live in portal.spec.ts and my-access-metadata.spec.ts.
+// OAuth registration (read-only for an administered principal), and retained
+// stored rows deleted by ID. The real-store flows live in portal.spec.ts and
+// my-access-metadata.spec.ts.
 let server: Server;
 let baseUrl: string;
 const envelope = (result: unknown) => ({ ok: true, result });
@@ -64,18 +65,21 @@ test.afterAll(async () => {
 });
 
 /**
- * A user with self-service, or an administrator managing the service account
- * `bot`; records every broker write as `METHOD path` with its body.
+ * A user with self-service, or an administrator or auditor managing the
+ * service account `bot` or the user `morgan`; records every broker read path
+ * and every write as `METHOD path` with its body.
  */
-async function fixture(page: Page, role: "user" | "admin" = "user", start = "/ui/credentials") {
+async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", start = "/ui/credentials") {
   const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
   const writes: Array<{ request: string; body: unknown }> = [];
+  const reads: string[] = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (request.method() !== "GET") writes.push({ request: `${request.method()} ${pathname}`, body: request.postDataJSON() });
+    else reads.push(pathname);
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = session;
     else if (pathname === "/v1/resource-types") result = { resourceTypes: RESOURCE_TYPES };
@@ -91,10 +95,12 @@ async function fixture(page: Page, role: "user" | "admin" = "user", start = "/ui
     else if (pathname === "/v1/admin/principals/bot") result = bot;
     else if (pathname === "/v1/admin/principals/bot/credentials") result = botCredentials;
     else if (pathname === "/v1/admin/principals/bot/credentials/connections/jira") result = botToken;
+    else if (pathname === "/v1/admin/principals/morgan") result = morgan;
+    else if (pathname === "/v1/admin/principals/morgan/credentials") result = morganCredentials;
     await route.fulfill({ json: envelope(result) });
   });
   await page.goto(`${baseUrl}${start}`);
-  return { writes, errors };
+  return { writes, reads, errors };
 }
 
 // A service account that lost every grant on the jira connection still owns its active token.
@@ -102,6 +108,21 @@ const bot = { principalId: "bot", kind: "service_account", role: "user", selfSer
 const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
 const botCredentials = {
   connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, profile: "atlassian-api-token", credentialKind: "basic_api_token", registration: null, credential: botToken }],
+  retained: []
+};
+
+// A user whose connections use OAuth: GitLab's last ended connection lost a
+// renewal's outcome; Morgan lost every grant on GitLab Ops, whose revocation
+// failed, so it stays listed for the provider-side cleanup.
+const morgan = { ...bot, principalId: "morgan", kind: "user", selfServiceEnabled: true, displayName: "Morgan" };
+const oauthRow = (connection: string, displayName: string, registration: string, consumers: (typeof rest)[], otherConsumers: number, remoteRevocation: string) =>
+  ({ connection, displayName, method: "oauth", consumers, otherConsumers, profile: null, credentialKind: null, registration, remoteRevocation, credential: null });
+const morganCredentials = {
+  connections: [
+    oauthRow("gitlab", "GitLab", "gitlab", [rest, git], 0, "unconfirmed"),
+    oauthRow("gmail", "Gmail", "google", [mail], 0, "not_requested"),
+    oauthRow("gitlab_ops", "GitLab Ops", "gitlab-ops", [], 1, "failed")
+  ],
   retained: []
 };
 
@@ -191,3 +212,43 @@ test("an administrator sees a principal's active token after it lost every grant
   await expect.poll(() => writes.map((write) => write.request)).toContain("DELETE /v1/admin/principals/bot/credentials/connections/jira");
   expect(errors).toEqual([]);
 });
+
+for (const role of ["admin", "auditor"] as const) {
+  test(`an ${role} sees a user's OAuth connections and their remote revocation read-only`, async ({ page }, testInfo) => {
+    const { writes, reads, errors } = await fixture(page, role, "/ui/admin/principals/morgan/credentials");
+    await expect(page.getByText("OAuth connections are read-only here: only the user can connect, reconnect or disconnect them, from their own Credentials page.")).toBeVisible();
+    const gitlab = row(page, "GitLab");
+    await expect(gitlab).toContainText("Managed by user");
+    await expect(gitlab).toContainText("GitLab REST and GitLab Git");
+    await expect(gitlab).toContainText("OAuth · gitlab");
+    await expect(gitlab).toContainText("Revocation unconfirmed");
+    // The state concerns the connection the broker ended; the user, or a provider administrator, revokes.
+    await expect(gitlab).toContainText("outcome was lost for an ended connection");
+    await expect(gitlab).toContainText("The user must revoke the broker application's access at the provider");
+    await expect(gitlab).toContainText("Preferences › Applications › Authorized applications");
+    await expect(row(page, "Gmail")).not.toContainText("Revocation");
+    const cleanup = row(page, "GitLab Ops");
+    await expect(cleanup).toContainText("No current grants");
+    await expect(cleanup).toContainText("Revocation failed");
+    await expect(list(page).getByRole("button", { name: /^(Connect account|Reconnect|Disconnect|Return to authorization tab|Delete)$/ })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`credentials-administered-oauth-${role}.png`), fullPage: true });
+
+    await page.getByRole("group", { name: "Credential status" }).getByRole("button", { name: /^Needs attention/ }).click();
+    await expect(list(page).getByRole("row").filter({ has: page.getByRole("link") })).toHaveCount(2);
+    await expect(row(page, "Gmail")).toHaveCount(0);
+
+    await gitlab.getByRole("link", { name: "GitLab", exact: true }).click();
+    await expect(page).toHaveURL(/\/ui\/admin\/principals\/morgan\/credentials\?.*credential=oauth%3Agitlab/);
+    const drawer = page.getByRole("complementary", { name: "GitLab credential", exact: true });
+    await expect(drawer).toContainText("OAuth registration gitlab");
+    await expect(drawer).toContainText("Revocation unconfirmed. A token renewal's outcome was lost for an ended connection");
+    await expect(drawer).toContainText("Only the user can connect, reconnect or disconnect this account, from their own Credentials page.");
+    await expect(drawer.getByText("GitLab Git", { exact: false })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: /^(Connect account|Reconnect|Disconnect|Return to authorization tab|Delete|Verify)$/ })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`credentials-administered-oauth-${role}-drawer.png`), fullPage: true });
+    // The administered view reads only the principal's list, never the viewer's own OAuth connections.
+    expect(reads).not.toContain("/v1/oauth/connections");
+    expect(writes).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}

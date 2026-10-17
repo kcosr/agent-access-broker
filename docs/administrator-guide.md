@@ -315,7 +315,10 @@ An administrator acting through **Admin > Principals > Credentials** or
 target's stored tokens. An administrator can store a token only for a
 connection that selects a token for that principal: service accounts' and
 `system` principals' tokens, and people's for connections without OAuth. That
-does not grant the target personal rights or complete the user's OAuth consent. An `admin` bearer cannot call
+does not grant the target personal rights or complete the user's OAuth consent. The
+tab lists a person's OAuth connections read-only, one row per registration with
+its remote revocation, for administrators and auditors alike; only the person
+connects, reconnects or disconnects them. An `admin` bearer cannot call
 personal routes. Imported OAuth administrator discovery has a separate authority
 path described in [imported OAuth](imported-oauth.md).
 
@@ -463,11 +466,12 @@ For a departing user or suspected compromise:
    tokens. Pause is temporary and preserves the disclosed token secret.
    Disabling also ends the principal's OAuth connections and, for GitLab,
    revokes their tokens in GitLab automatically.
-   `agent-access admin credentials list <principal>` reports each OAuth
-   connection's `remoteRevocation`, and keeps listing a connection whose
-   revocation is `pending`, `failed` or `unconfirmed` after its grants are
-   removed: `failed` or `unconfirmed` needs the application's access revoked
-   for that person in GitLab (see
+   The principal's **Credentials** tab and
+   `agent-access admin credentials list <principal>` report each OAuth
+   connection's remote revocation (`remoteRevocation`), and keep listing a
+   connection whose revocation is `pending`, `failed` or `unconfirmed` after its
+   grants are removed: `failed` or `unconfirmed` needs the application's access
+   revoked for that person in GitLab (see
    [remote revocation](oauth.md#remote-revocation)).
 2. Remove directory/JIT eligibility when it could admit the identity again.
 3. Revoke upstream credentials at the upstream service when they may be exposed;

@@ -923,6 +923,15 @@ All notable changes to this project are documented in this file.
   action. The SDK adds the default `OAuthDialect::supports_revocation` and
   `OAuthDialect::revoke`, with `TokenRevocation`, `OAuthTokenType` and
   `RevocationOutcome`.
+- The portal's principal **Credentials** tab lists a person's OAuth
+  connections read-only, for administrators and auditors alike: one row per
+  registration from `GET /v1/admin/principals/{principal}/credentials`, marked
+  **Managed by user**, with the services using it, the registration and the
+  remote revocation of the connections the Broker ended, also as a cleanup-only
+  row after the person lost every grant. **Needs attention** counts failed and
+  unconfirmed revocations. The tab shows no connection status or connected
+  account, which that response does not carry, and offers no Connect,
+  Reconnect or Disconnect: only the person acts on their OAuth account.
 - Managed-store migration `028_oauth_revocations` adds the `oauth_revocations`
   table of pending remote revocations, one per ended family, naming a refresh
   attempt whose late successor it still captures, and changes no existing row. Its
