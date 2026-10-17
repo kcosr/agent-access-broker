@@ -2241,7 +2241,9 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await expect(page.getByText("Every broker audit record.", { exact: true })).toBeVisible();
     await expect(page.getByTestId("audit-range")).toContainText("from");
     await expect(rows.filter({ hasText: "issue.view on jira" }).first()).toBeVisible();
-    expect((await comboboxOptions(page, "Service"))[0]).toMatch(/^broker(?:\s|$)/);
+    await page.getByRole("combobox", { name: "Service", exact: true }).click();
+    await expect(page.getByRole("listbox", { name: "Service", exact: true }).getByRole("option").first()).toHaveAccessibleName(/^broker(?:\s|$)/);
+    await page.keyboard.press("Escape");
     await chooseFacet(page, "Service", /^broker(?:\s|$)/);
     await expect(page).toHaveURL(/service=broker/);
     await expect(rows.filter({ hasText: "auth.local.login on broker" }).first()).toBeVisible();
@@ -2352,10 +2354,12 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await expect(adminNav.getByRole("link")).toHaveText(["Policies", "Audit"]);
     await adminNav.getByRole("link", { name: "Audit", exact: true }).click();
     await expect(page.getByText("Audit records for the services you manage: jira.", { exact: true })).toBeVisible();
-    const services = await comboboxOptions(page, "Service");
-    expect(services).toHaveLength(2);
-    expect(services[0]).toMatch(/^broker(?:\s|$)/);
-    expect(services[1]).toMatch(/^jira/);
+    await page.getByRole("combobox", { name: "Service", exact: true }).click();
+    const services = page.getByRole("listbox", { name: "Service", exact: true }).getByRole("option");
+    await expect(services).toHaveCount(2);
+    await expect(services.first()).toHaveAccessibleName(/^broker(?:\s|$)/);
+    await expect(services.nth(1)).toHaveAccessibleName(/^jira/);
+    await page.keyboard.press("Escape");
     await expect(rows.filter({ hasText: "issue.view on jira" }).first()).toBeVisible();
     await expect(rows.filter({ hasText: "auth.local.login" })).toHaveCount(0);
     await chooseFacet(page, "Service", /^broker(?:\s|$)/);

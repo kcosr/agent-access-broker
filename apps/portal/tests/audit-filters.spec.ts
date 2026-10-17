@@ -179,7 +179,7 @@ for (const tier of ["admin", "manager", "self"] as const) {
     const service = page.getByRole("combobox", { name: "Service", exact: true });
     await service.click();
     const list = page.getByRole("listbox", { name: "Service", exact: true });
-    expect((await list.getByRole("option").allTextContents())[0]).toMatch(/^broker(?:\s|$)/);
+    await expect(list.getByRole("option").first()).toHaveAccessibleName(/^broker(?:\s|$)/);
     await expectAligned(service, list);
     const request = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/audit/events") && new URL(request.url()).searchParams.get("service") === "broker");
     await service.press("Enter");
