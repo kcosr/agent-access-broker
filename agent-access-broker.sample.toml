@@ -799,7 +799,7 @@ allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 # These caps apply in addition to independently granted repository-scoped actions.
 [providers.gitlab.provisioning]
 enabled = false
-max_access_level = 30
+max_role = "developer"
 max_token_lifetime_days = 30
 allowed_token_scopes = ["api", "read_api", "read_repository"]
 

@@ -728,7 +728,10 @@ tokens. The latter use the protected SDK sidecar and global secret output policy
 reference mode must never fall back to plaintext. Only issuance/rotation responses contain `result.issuedToken`; keep
 metadata reads/audit secret-free and maintain sensitive output markers across
 catalog, OpenAPI, and send schema. Project service-account ownership must be
-proved before membership changes or token management.
+proved before membership changes or token management. Role selection uses exact
+built-in `role` names and the named `max_role` cap; only the upstream wire and
+result metadata use numeric access levels. Keep role enum filtering and direct
+provider validation aligned, and preserve numeric metadata reads above the cap.
 
 ## Trusted managed human identity
 

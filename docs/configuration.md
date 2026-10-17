@@ -2188,8 +2188,10 @@ For the full client flag/env/config precedence and exit codes, see
 ## GitLab bot provisioning limits
 
 `[providers.gitlab.provisioning]` accepts `enabled` (default false),
-`max_access_level` (default 30), `max_token_lifetime_days` (default 30, range
+`max_role` (default `"developer"`), `max_token_lifetime_days` (default 30, range
 1–365), and `allowed_token_scopes` (default api/read_api/read_repository).
+The role cap accepts `guest`, `planner`, `reporter`, `security_manager`,
+`developer`, or `maintainer`, in GitLab numeric base access-level order.
 These operator-owned caps apply alongside repository grants and upstream
 permissions. See [GitLab bot provisioning](gitlab-bot-provisioning.md) for allowed
 values, exact actions, and the issued-credential boundary.

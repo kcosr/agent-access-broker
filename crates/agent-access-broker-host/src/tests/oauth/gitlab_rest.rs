@@ -581,7 +581,7 @@ async fn token_only_gitlab_actions_are_refused_for_an_oauth_connection() {
                 "project": "sip/service",
                 "name": "ci",
                 "scopes": ["read_api"],
-                "accessLevel": 30,
+                "role": "developer",
                 "expiresAt": "2026-11-01"
             }),
         )
