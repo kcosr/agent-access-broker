@@ -407,7 +407,10 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
 - `jira_smoke.rs` includes project issue-type discovery through typed CLI,
   invoke, send, and direct HTTP, catalog/OpenAPI/send/MCP projections, explicit
   pagination, project denial before backend dispatch, and passing a discovered
-  issue-type ID into issue creation.
+  issue-type ID into issue creation. It also covers renamed project keys:
+  previous-key issue keys and browser URLs resolve to the current issue when
+  the current project is granted, and deny without content on every issue
+  path when only the previous key is.
 - `confluence_smoke.rs`
 - `gitlab_smoke.rs`
 - `cloudbees_smoke.rs`

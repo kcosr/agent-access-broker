@@ -57,7 +57,7 @@ pub(crate) fn jql_documentation() -> Value {
             "orderBy": {"fields": JqlSortField::ALL.iter().map(|field| field.canonical()).collect::<Vec<_>>(), "aliases": JqlSortField::alias_documentation(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_JIRA_ORDER_TERMS},
             "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, text negation, custom fields, and nested functions are unsupported.",
             "values": "Text operands must be quoted. Bare identifiers use ASCII letters, digits, underscore, hyphen, or dot; quote other values. Single or double quotes delimit ASCII strings, with only the matching quote and backslash escapable; non-ASCII and control characters are rejected. Dates accept YYYY-MM-DD or quoted YYYY/MM/DD, optionally with HH:mm in a quoted string; relative dates use a sign, positive integer, and m/h/d/w, e.g. -7d. Function offsets must be unquoted. Project and issue keys must be canonical uppercase keys; project keys may contain underscores, e.g. OPS_TOOLS and OPS_TOOLS-12345.",
-            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the effective boundary.",
+            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
             "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, supply explicit projects or a filter such as updated >= -7d: Jira enhanced search requires a bounded query, and exclusions alone are not treated as a sufficient bound.",
             "limits": {"rawQueryBytes": MAX_JIRA_RAW_QUERY_BYTES, "tokens": MAX_JIRA_QUERY_TOKENS, "depth": MAX_JIRA_QUERY_DEPTH, "inListValues": MAX_JIRA_IN_LIST_VALUES, "stringLiteralBytes": MAX_JIRA_STRING_LITERAL_BYTES, "textQueryBytes": MAX_JIRA_TEXT_QUERY_BYTES},
             "errors": "Invalid syntax, unsupported grammar, and query caps return input_invalid. Parser diagnostics report token positions and supported choices without echoing query literals. Scope authorization and returned-issue containment errors remain distinct."
@@ -148,7 +148,6 @@ pub(crate) struct BuiltJiraSearchQuery {
     pub(crate) jql: String,
     pub(crate) kind: &'static str,
     pub(crate) injected_scope_predicate: &'static str,
-    pub(crate) response_scope: EffectiveSearchScope,
     /// The caller's query re-emitted canonically, before scope composition.
     /// Continuations bind it; diagnostics carry only its hash.
     pub(crate) canonical_caller_jql: String,
@@ -169,9 +168,13 @@ pub(crate) fn search_authorization(
     })
 }
 
-pub(crate) fn effective_search_scope(
+/// The authorized project boundary: the finite projects or the all-except
+/// exclusions the host admitted, with token restrictions already applied.
+/// Returned issues are checked against it, never against the caller's own
+/// project names: Jira resolves a previous project key in `projects` or JQL to
+/// the renamed project, whose issues carry its current key.
+pub(crate) fn authorized_search_scope(
     authorization: &SearchAuthorization,
-    requested: &BTreeSet<String>,
 ) -> Result<EffectiveSearchScope, ProviderError> {
     if authorization.scope_type != "project" {
         return Err(ProviderError::error(
@@ -188,32 +191,34 @@ pub(crate) fn effective_search_scope(
                     "Jira search policy scope is empty",
                 ));
             }
-            if requested.is_empty() {
-                return Ok(EffectiveSearchScope::Finite(allowed));
-            }
-            if !requested.is_subset(&allowed) {
-                return Err(ProviderError::deny(
-                    ReasonCode::ServiceActionDenied,
-                    "requested Jira projects are not authorized",
-                ));
-            }
-            Ok(EffectiveSearchScope::Finite(requested.clone()))
+            Ok(EffectiveSearchScope::Finite(allowed))
         }
-        SearchAuthorizationScope::AllExcept { excluded_values } => {
-            let excluded = excluded_values.iter().cloned().collect::<BTreeSet<_>>();
-            if !requested.is_disjoint(&excluded) {
-                return Err(ProviderError::deny(
-                    ReasonCode::ServiceActionDenied,
-                    "requested Jira projects are not authorized",
-                ));
-            }
-            if requested.is_empty() {
-                Ok(EffectiveSearchScope::AllExcept(excluded))
-            } else {
-                Ok(EffectiveSearchScope::Finite(requested.clone()))
-            }
-        }
+        SearchAuthorizationScope::AllExcept { excluded_values } => Ok(
+            EffectiveSearchScope::AllExcept(excluded_values.iter().cloned().collect()),
+        ),
     }
+}
+
+/// The scope the upstream query is composed with: the authorized boundary,
+/// narrowed to explicit `projects`, which must each be authorized.
+pub(crate) fn effective_search_scope(
+    authorization: &SearchAuthorization,
+    requested: &BTreeSet<String>,
+) -> Result<EffectiveSearchScope, ProviderError> {
+    let authorized = authorized_search_scope(authorization)?;
+    if requested.is_empty() {
+        return Ok(authorized);
+    }
+    if !requested
+        .iter()
+        .all(|project| authorized.authorizes_value(project))
+    {
+        return Err(ProviderError::deny(
+            ReasonCode::ServiceActionDenied,
+            "requested Jira projects are not authorized",
+        ));
+    }
+    Ok(EffectiveSearchScope::Finite(requested.clone()))
 }
 
 pub(crate) fn build_jira_search_query(
@@ -270,20 +275,10 @@ pub(crate) fn build_jira_search_query(
     let query_shape = ast.query_shape();
     let text_operand_hashes = ast.text_operand_hashes();
     let sort_fields = ast.sort_fields();
-    let response_scope = match effective_scope {
-        EffectiveSearchScope::Finite(projects) => EffectiveSearchScope::Finite(projects.clone()),
-        EffectiveSearchScope::AllExcept(excluded) => ast
-            .project_scope()
-            .map(|values| {
-                EffectiveSearchScope::Finite(values.difference(excluded).cloned().collect())
-            })
-            .unwrap_or_else(|| EffectiveSearchScope::AllExcept(excluded.clone())),
-    };
     Ok(BuiltJiraSearchQuery {
         jql,
         kind,
         injected_scope_predicate,
-        response_scope,
         canonical_caller_jql_hash: sha256_hex(caller_jql.as_bytes()),
         canonical_caller_jql: caller_jql,
         query_shape,
@@ -486,10 +481,6 @@ impl JqlQueryAst {
         projects
     }
 
-    pub(crate) fn project_scope(&self) -> Option<BTreeSet<String>> {
-        self.filter.as_ref().and_then(JqlExpr::project_scope)
-    }
-
     pub(crate) fn query_shape(&self) -> Value {
         json!({
             "filter": self.filter.as_ref().map(JqlExpr::shape),
@@ -557,33 +548,6 @@ impl JqlExpr {
                 for child in children {
                     child.collect_projects(projects);
                 }
-            }
-        }
-    }
-
-    pub(crate) fn project_scope(&self) -> Option<BTreeSet<String>> {
-        match self {
-            Self::Clause(clause) => clause.project_scope(),
-            Self::And(children) => {
-                let mut bounded: Option<BTreeSet<String>> = None;
-                for child in children {
-                    let Some(child_scope) = child.project_scope() else {
-                        continue;
-                    };
-                    bounded = Some(match bounded {
-                        Some(current) => current.intersection(&child_scope).cloned().collect(),
-                        None => child_scope,
-                    });
-                }
-                bounded
-            }
-            Self::Or(children) => {
-                let mut bounded = BTreeSet::new();
-                for child in children {
-                    let child_scope = child.project_scope()?;
-                    bounded.extend(child_scope);
-                }
-                Some(bounded)
             }
         }
     }
@@ -678,22 +642,6 @@ impl JqlClause {
                 );
             }
             _ => {}
-        }
-    }
-
-    pub(crate) fn project_scope(&self) -> Option<BTreeSet<String>> {
-        match (&self.field, &self.operator, &self.operand) {
-            (JqlField::Project, JqlOperator::Eq, JqlOperand::Single(value)) => value
-                .identifier()
-                .map(|project| BTreeSet::from([project.to_string()])),
-            (JqlField::Project, JqlOperator::In, JqlOperand::List(values)) => Some(
-                values
-                    .iter()
-                    .filter_map(JqlValue::identifier)
-                    .map(str::to_string)
-                    .collect(),
-            ),
-            _ => None,
         }
     }
 
@@ -978,6 +926,7 @@ impl JqlValue {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn identifier(&self) -> Option<&str> {
         match self {
             Self::Identifier(value) => Some(value),

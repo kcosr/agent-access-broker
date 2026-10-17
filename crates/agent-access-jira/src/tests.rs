@@ -17,6 +17,12 @@ mod issue_type_tests;
 #[path = "underscore_key_tests.rs"]
 mod underscore_key_tests;
 
+#[path = "renamed_project_key_tests.rs"]
+mod renamed_project_key_tests;
+
+#[path = "moved_issue_tests.rs"]
+mod moved_issue_tests;
+
 #[path = "search_continuation_tests.rs"]
 mod search_continuation_tests;
 
@@ -39,14 +45,12 @@ fn parses_jira_issue_url_for_configured_tenant_only() {
     let locator =
         issue_locator_from_url("https://example.atlassian.net/browse/PROJ-123", &config).unwrap();
     assert_eq!(locator.issue_key, "PROJ-123");
-    assert_eq!(locator.candidate_project, "PROJ");
     let modern = issue_locator_from_url(
         "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/PROJ-123",
         &config,
     )
     .unwrap();
     assert_eq!(modern.issue_key, "PROJ-123");
-    assert_eq!(modern.candidate_project, "PROJ");
     assert_eq!(
         issue_locator_from_url("https://other.atlassian.net/browse/PROJ-123", &config)
             .unwrap_err()
@@ -56,7 +60,8 @@ fn parses_jira_issue_url_for_configured_tenant_only() {
     for raw in [
         "https://user@example.atlassian.net/browse/PROJ-123",
         "https://example.atlassian.net:443/browse/PROJ-123",
-        "https://example.atlassian.net/jira/software/c/projects/OTHER/issues/PROJ-123",
+        "https://example.atlassian.net/jira/software/c/projects/proj/issues/PROJ-123",
+        "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/proj-123",
         "https://example.atlassian.net/rest/api/3/issue/662790",
         "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/PROJ-123?selectedIssue=PROJ-123",
     ] {
@@ -1238,7 +1243,18 @@ async fn issue_create_fails_closed_when_created_key_leaves_requested_project() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    // A valid key in another project is Jira resolving a previous project key:
+    // the issue exists outside the authorized project, not a protocol failure.
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert_eq!(
+        error.message,
+        "Jira created the issue outside the authorized project"
+    );
+    let receipt = error.result.as_deref().unwrap();
+    assert_eq!(receipt["mutationStatus"], "applied_unverified");
+    assert_eq!(receipt["retrySafe"], false);
+    assert_eq!(receipt["verificationStage"], "mutation_response");
+    assert_eq!(receipt["safeLocators"], json!({"project": "PROJ"}));
     let audit = error.audit.unwrap();
     assert_eq!(audit["failurePhase"], "create_response_validation");
     assert_eq!(audit["issueId"], "10002");
@@ -1791,23 +1807,6 @@ async fn issue_child_create_capability_and_scope_resolution_use_lookup_metadata(
         "string"
     );
 
-    let local_scopes = provider
-        .local_scopes(
-            "issue.child.create",
-            &json!({
-                "project": "ENG",
-                "issueTypeId": "10001",
-                "summary": "Child issue",
-                "parentIssue": "OLD-100"
-            }),
-        )
-        .unwrap();
-    assert_eq!(
-        local_scopes["project"],
-        vec!["ENG".to_string(), "OLD".to_string()]
-    );
-    assert!(!local_scopes.contains_key("issue"));
-
     let scopes = provider
         .lookup_scopes(
             "issue.child.create",
@@ -2169,7 +2168,11 @@ async fn issue_child_create_created_project_mismatch_emits_side_effect_audit() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert_eq!(
+        error.result.as_deref().unwrap()["mutationStatus"],
+        "applied_unverified"
+    );
     assert_eq!(error.upstream_status, Some(201));
     assert_eq!(
         error.object_ids,
@@ -4016,14 +4019,7 @@ fn scope_only_jql_uses_authorized_projects_without_an_empty_filter() {
         assert_eq!(query.jql, expected);
         assert!(query.query_shape["filter"].is_null());
         assert!(query.text_operand_hashes.is_empty());
-        assert_eq!(query.response_scope, scope);
         assert_eq!(query.injected_scope_predicate, "project_in");
-        assert!(
-            parse_jql_query(input, CredentialMode::Service)
-                .unwrap()
-                .project_scope()
-                .is_none()
-        );
     }
     // Empty nested expressions and partial clauses are still invalid.
     for invalid in [
@@ -4074,9 +4070,12 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
             )
             .unwrap();
             assert!(query.jql.starts_with("project IN (PROJ)"));
+            assert_eq!(narrowed, EffectiveSearchScope::Finite(set(["PROJ"])));
+            // Returned issues are checked against the authorized boundary, not
+            // the explicit selection.
             assert_eq!(
-                query.response_scope,
-                EffectiveSearchScope::Finite(set(["PROJ"]))
+                authorized_search_scope(&authorization).unwrap(),
+                EffectiveSearchScope::AllExcept(excluded.clone())
             );
         }
         if !excluded.is_empty() {
@@ -4319,10 +4318,6 @@ fn search_intersects_raw_jql_with_effective_scope() {
     .unwrap();
     assert_eq!(wildcard.jql, "status = Done ORDER BY updated DESC");
     assert_eq!(wildcard.injected_scope_predicate, "none");
-    assert_eq!(
-        wildcard.response_scope,
-        EffectiveSearchScope::AllExcept(BTreeSet::new())
-    );
 
     let wildcard_project_narrowed = build_jira_search_query(
         &JiraSearchQueryInput::Jql {
@@ -4337,10 +4332,7 @@ fn search_intersects_raw_jql_with_effective_scope() {
         wildcard_project_narrowed.jql,
         "status = Done AND project = PROJ"
     );
-    assert_eq!(
-        wildcard_project_narrowed.response_scope,
-        EffectiveSearchScope::Finite(set(["PROJ"]))
-    );
+    assert_eq!(wildcard_project_narrowed.injected_scope_predicate, "none");
 
     let wildcard_unbounded_or = build_jira_search_query(
         &JiraSearchQueryInput::Jql {
@@ -4351,14 +4343,11 @@ fn search_intersects_raw_jql_with_effective_scope() {
         CredentialMode::Service,
     )
     .unwrap();
-    assert_eq!(
-        wildcard_unbounded_or.response_scope,
-        EffectiveSearchScope::AllExcept(BTreeSet::new())
-    );
+    assert_eq!(wildcard_unbounded_or.jql, "project = PROJ OR status = Done");
 }
 
 #[test]
-fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
+fn all_except_jql_preserves_caller_grouping_and_exclusions() {
     let boundary = EffectiveSearchScope::AllExcept(set(["PRIVATE", "IN"]));
     let query = build_jira_search_query(
         &JiraSearchQueryInput::Jql {
@@ -4374,10 +4363,10 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
         "(project = PRIVATE OR status = Done) AND project NOT IN (\"IN\", PRIVATE) ORDER BY updated DESC"
     );
     assert_eq!(query.injected_scope_predicate, "project_not_in");
-    assert!(!query.response_scope.authorizes_value("PRIVATE"));
-    assert!(query.response_scope.authorizes_value("NEW"));
+    assert!(!boundary.authorizes_value("PRIVATE"));
+    assert!(boundary.authorizes_value("NEW"));
     assert_eq!(
-        query.response_scope.audit_value("project")["excludedValues"],
+        boundary.audit_value("project")["excludedValues"],
         json!(["IN", "PRIVATE"])
     );
 
@@ -4391,8 +4380,8 @@ fn all_except_jql_preserves_caller_grouping_and_response_exclusions() {
     )
     .unwrap();
     assert_eq!(
-        narrowed.response_scope,
-        EffectiveSearchScope::Finite(set(["PROJ"]))
+        narrowed.jql,
+        "(project IN (PRIVATE, PROJ)) AND project NOT IN (\"IN\", PRIVATE)"
     );
     let authorization = SearchAuthorization::new(
         "project".to_string(),
@@ -9100,13 +9089,15 @@ fn normalized_jira_content_contract_is_canonical_and_bounded() {
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
 }
 
-#[test]
-fn create_scope_resolution_reads_only_scope_fields() {
-    let provider = JiraProvider::with_backend(
-        jira_config(),
-        ProviderLimits::default(),
-        Arc::new(StubJiraBackend::default()),
-    );
+#[tokio::test]
+async fn create_scope_resolution_reads_only_scope_fields() {
+    let mut backend = StubJiraBackend::default();
+    let mut parent = visible_issue();
+    parent.key = "OPS-1".to_string();
+    parent.project = "OPS".to_string();
+    backend.issues.insert("OPS-1".to_string(), parent);
+    let provider =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let oversized_markdown = "> ".repeat(512);
     let create = provider
         .local_scopes(
@@ -9123,7 +9114,7 @@ fn create_scope_resolution_reads_only_scope_fields() {
     assert_eq!(create["project"], vec!["PROJ"]);
 
     let child = provider
-        .local_scopes(
+        .lookup_scopes(
             "issue.child.create",
             &json!({
                 "project": "PROJ",
@@ -9131,7 +9122,9 @@ fn create_scope_resolution_reads_only_scope_fields() {
                 "contentFormat": "markdown",
                 "content": "> ".repeat(512),
             }),
+            Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
+        .await
         .unwrap();
     assert_eq!(child["project"], vec!["OPS", "PROJ"]);
     assert!(!child.contains_key("issue"));

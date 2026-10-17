@@ -855,6 +855,9 @@ fn jira_action(action: &str, description: &str, input_schema: Value) -> ActionDe
 }
 
 impl JiraProvider {
+    /// Scopes of the actions that name their project directly. Actions that
+    /// name an issue are lookup-backed (`lookup_scopes`): an issue key's prefix
+    /// may be a previous project key, so only Jira's metadata names its project.
     fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
             "issue_type.list" => {
@@ -869,44 +872,6 @@ impl JiraProvider {
                 let mut scopes = ResourceScopes::new();
                 scopes.insert("project".to_string(), vec![inputs.project]);
                 Ok(scopes)
-            }
-            "issue.view"
-            | "issue.update"
-            | "issue.child.create"
-            | "issue.parent.set"
-            | "issue.dependency.add"
-            | "comment.list"
-            | "comment.view"
-            | "comment.add"
-            | "comment.reply"
-            | "comment.update"
-            | "comment.delete"
-            | "comment.property.list"
-            | "comment.property.get"
-            | "comment.property.set"
-            | "comment.property.delete"
-            | "attachment.add"
-            | "attachment.download"
-            | "attachment.list"
-            | "verify" => {
-                if action == "issue.dependency.add" {
-                    let inputs = parse_issue_dependency_add_inputs(inputs, &self.config)?;
-                    Ok(merged_issue_locator_scopes([
-                        &inputs.blocking,
-                        &inputs.blocked,
-                    ]))
-                } else if action == "issue.parent.set" {
-                    let inputs = parse_issue_parent_set_inputs(inputs, &self.config)?;
-                    Ok(merged_issue_locator_scopes([&inputs.issue, &inputs.parent]))
-                } else if action == "issue.child.create" {
-                    let inputs = parse_issue_child_create_scope_inputs(inputs, &self.config)?;
-                    Ok(child_create_locator_scopes(&inputs.project, &inputs.parent))
-                } else {
-                    let locator = issue_locator_from_inputs(inputs, &self.config)?;
-                    let mut scopes = ResourceScopes::new();
-                    scopes.insert("project".to_string(), vec![locator.candidate_project]);
-                    Ok(scopes)
-                }
             }
             "search" => {
                 let inputs = parse_search_inputs(inputs)?;
@@ -1023,20 +988,13 @@ impl Provider for JiraProvider {
                 "Jira action does not accept multipart body parts",
             ));
         }
-        let credential = &self.lookup_credential(request)?;
+        // Scope resolution has just confirmed the issue; invocation confirms
+        // it again immediately before the first upload.
         let inputs = parse_attachment_add_inputs(request.inputs())?;
         validate_attachment_metadata_inputs(&inputs.attachments, &self.config.attachments)?;
-        let body_part_specs = attachment_body_part_specs(&inputs.attachments);
-        let response = self
-            .confirm_issue_project(&inputs.issue, credential)
-            .await?;
         Ok(BodyAdmission::new(
-            body_part_specs,
-            StateDisposition::Replace(ProviderState::new(JiraIssuePreflight {
-                metadata: response.value,
-                upstream_status: response.status,
-                upstream_duration_ms: response.duration_ms,
-            })),
+            attachment_body_part_specs(&inputs.attachments),
+            StateDisposition::Keep,
         ))
     }
 
@@ -1171,18 +1129,9 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let locator = issue_locator_from_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
-            .backend
-            .issue_metadata(&locator.issue_key, lookup_credential)
-            .await
-            .map_err(jira_backend_error)?;
+            .confirm_authorized_issue(&locator, lookup_credential, request.resource_scopes()?)
+            .await?;
         let metadata = metadata_response.value;
-        if !is_issue_key(&metadata.key) || issue_key_project(&metadata.key) != metadata.project {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira issue response did not include a valid current key and project",
-            ));
-        }
-        ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
         let response = self
             .backend
             .issue(&metadata.key, credential)
@@ -1304,7 +1253,7 @@ impl JiraProvider {
         let created = create_response.value;
         let mut upstream_duration_ms = create_response.duration_ms;
         let upstream_status = create_response.status;
-        if !is_issue_key(&created.key) || issue_key_project(&created.key) != inputs.project {
+        if let Some(error) = created_issue_scope_error(&created.key, &inputs.project) {
             let mut audit = issue_create_failure_audit(
                 &request,
                 &audit_context,
@@ -1313,14 +1262,11 @@ impl JiraProvider {
                 &self.backend.egress_proxy_audit(credential),
             );
             merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira issue create response did not match the authorized project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_create_object_ids(Some(&created)))
-            .with_mutation_receipt(write.receipt()));
+            return Err(error
+                .with_audit(audit)
+                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                .with_object_ids(issue_create_object_ids(Some(&created)))
+                .with_mutation_receipt(write.receipt()));
         }
 
         after_accepted_write(
@@ -1542,7 +1488,7 @@ impl JiraProvider {
         let created = create_response.value;
         upstream_duration_ms += create_response.duration_ms;
         let upstream_status = create_response.status;
-        if !is_issue_key(&created.key) || issue_key_project(&created.key) != inputs.project {
+        if let Some(error) = created_issue_scope_error(&created.key, &inputs.project) {
             let mut audit = issue_child_create_failure_audit(
                 &request,
                 &audit_context,
@@ -1551,14 +1497,11 @@ impl JiraProvider {
                 &self.backend.egress_proxy_audit(credential),
             );
             merge_attribution_audit(&mut audit, attribution);
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira child issue create response did not match the authorized project",
-            )
-            .with_audit(audit)
-            .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
-            .with_object_ids(issue_child_create_object_ids(Some(&created), &parent))
-            .with_mutation_receipt(write.receipt()));
+            return Err(error
+                .with_audit(audit)
+                .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
+                .with_object_ids(issue_child_create_object_ids(Some(&created), &parent))
+                .with_mutation_receipt(write.receipt()));
         }
 
         after_accepted_write(
@@ -1816,10 +1759,13 @@ impl JiraProvider {
         let summary_changed = inputs.summary.is_some();
         let description_changed = inputs.description.is_some();
         let metadata_response = self
-            .confirm_issue_locator(&inputs.locator, lookup_credential)
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let metadata = metadata_response.value;
-        ensure_authorized_issue_metadata(&metadata, request.resource_scopes()?)?;
         let write = JiraWrite::new(issue_create_object_ids_partial(
             Some(&metadata.id),
             Some(&metadata.key),
@@ -2194,6 +2140,7 @@ impl JiraProvider {
         let inputs = parse_search_inputs(request.inputs())?;
         let requested = requested_projects(&inputs)?;
         let authorization = search_authorization(&request)?;
+        let authorized_scope = authorized_search_scope(&authorization)?;
         let effective_scope = effective_search_scope(&authorization, &requested)?;
         let query = build_jira_search_query(
             &inputs.query,
@@ -2201,7 +2148,6 @@ impl JiraProvider {
             &self.config.search,
             request.credential_mode(),
         )?;
-        let response_scope = query.response_scope.clone();
         let max_results = capped_max_results(inputs.max_results, &self.config.search)?;
         let pages = SearchPageRequest {
             request: &request,
@@ -2221,7 +2167,7 @@ impl JiraProvider {
             .search(
                 JiraSearchRequest {
                     jql: query.jql.clone(),
-                    projects: response_scope.values_for_backend(),
+                    projects: effective_scope.values_for_backend(),
                     max_results,
                     next_page_token: upstream_page_token,
                 },
@@ -2238,7 +2184,7 @@ impl JiraProvider {
         }
         for (issue_index, issue) in response.value.issues.iter().enumerate() {
             if let Some((diagnostic_code, validation)) =
-                search_diagnostics::rejected_issue(issue, &response_scope, issue_index)
+                search_diagnostics::rejected_issue(issue, &authorized_scope, issue_index)
             {
                 return Err(ProviderError::deny(
                     ReasonCode::ScopeUnresolved,
@@ -2249,7 +2195,7 @@ impl JiraProvider {
                 .with_audit(json!({
                     "provider": "jira",
                     "operation": "search",
-                    "effectiveSearchScope": response_scope.audit_value("project"),
+                    "effectiveSearchScope": effective_scope.audit_value("project"),
                     "injectedScopePredicate": query.injected_scope_predicate,
                     "canonicalCallerJqlHash": query.canonical_caller_jql_hash,
                     "queryType": query.kind,
@@ -2286,7 +2232,7 @@ impl JiraProvider {
                 "provider": "jira",
                 "operation": "search",
                 "requestedProjects": requested,
-                "effectiveSearchScope": response_scope.audit_value("project"),
+                "effectiveSearchScope": effective_scope.audit_value("project"),
                 "queryType": query.kind,
                 "queryAstVersion": JIRA_QUERY_AST_VERSION,
                 "canonicalCallerJqlHash": query.canonical_caller_jql_hash,
@@ -2319,7 +2265,11 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
-            .confirm_issue_locator(&inputs.locator, lookup_credential)
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let metadata = metadata_response.value;
         let list_response = self
@@ -2390,7 +2340,11 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
-            .confirm_issue_locator(&inputs.locator, lookup_credential)
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let metadata = metadata_response.value;
         let response = self
@@ -2443,7 +2397,11 @@ impl JiraProvider {
             attribution_audit_applied(attribution.as_ref()),
         )?;
         let metadata_response = self
-            .confirm_issue_locator(&inputs.locator, lookup_credential)
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let metadata = metadata_response.value;
         let visibility_restricted = inputs.visibility.is_some();
@@ -2521,6 +2479,7 @@ impl JiraProvider {
                 &inputs.parent_comment_id,
                 lookup_credential,
                 credential,
+                request.resource_scopes()?,
             )
             .await?;
         upstream_duration_ms += parent_response.duration_ms;
@@ -2620,7 +2579,11 @@ impl JiraProvider {
             attribution_audit_applied(attribution.as_ref()),
         )?;
         let metadata_response = self
-            .confirm_issue_locator(&inputs.locator, lookup_credential)
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let metadata = metadata_response.value;
         let mut upstream_duration_ms = metadata_response.duration_ms;
@@ -2699,7 +2662,11 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
-            .confirm_issue_locator(&inputs.locator, lookup_credential)
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let metadata = metadata_response.value;
         let write = JiraWrite::new(
@@ -2755,6 +2722,7 @@ impl JiraProvider {
                 &inputs.comment_id,
                 lookup_credential,
                 credential,
+                request.resource_scopes()?,
             )
             .await?;
         let response = self
@@ -2817,6 +2785,7 @@ impl JiraProvider {
                 &inputs.comment_id,
                 lookup_credential,
                 credential,
+                request.resource_scopes()?,
             )
             .await?;
         let response = self
@@ -2876,6 +2845,7 @@ impl JiraProvider {
                 &inputs.comment_id,
                 lookup_credential,
                 credential,
+                request.resource_scopes()?,
             )
             .await?;
         let write = JiraWrite::new(
@@ -2940,6 +2910,7 @@ impl JiraProvider {
                 &inputs.comment_id,
                 lookup_credential,
                 credential,
+                request.resource_scopes()?,
             )
             .await?;
         let write = JiraWrite::new(
@@ -2991,18 +2962,13 @@ impl JiraProvider {
         let credential = &self.execution_credential(request.admitted())?;
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_add_inputs(request.inputs())?;
-        let metadata_response =
-            match ProviderState::optional::<JiraIssuePreflight>(request.state())? {
-                Some(preflight) => JiraBackendResponse {
-                    value: preflight.metadata.clone(),
-                    status: preflight.upstream_status,
-                    duration_ms: preflight.upstream_duration_ms,
-                },
-                None => {
-                    self.confirm_issue_project(&inputs.issue, lookup_credential)
-                        .await?
-                }
-            };
+        let metadata_response = self
+            .confirm_authorized_issue_key(
+                &inputs.issue,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
+            .await?;
         let metadata = metadata_response.value;
         let uploads = prepare_attachment_uploads(
             &inputs.attachments,
@@ -3179,7 +3145,11 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_download_inputs(request.inputs())?;
         let metadata = self
-            .confirm_issue_project(&inputs.issue, lookup_credential)
+            .confirm_authorized_issue_key(
+                &inputs.issue,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?
             .value;
         let attachment = self
@@ -3263,17 +3233,13 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_attachment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
-            .backend
-            .issue_metadata(&inputs.locator.issue_key, lookup_credential)
-            .await
-            .map_err(jira_backend_error)?;
+            .confirm_authorized_issue(
+                &inputs.locator,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
+            .await?;
         let metadata = metadata_response.value;
-        if !is_issue_key(&metadata.key) || issue_key_project(&metadata.key) != metadata.project {
-            return Err(ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Jira issue response did not include a valid current key and project",
-            ));
-        }
         let list_response = self
             .backend
             .issue_attachment_list(&metadata.key, credential)
@@ -3343,7 +3309,11 @@ impl JiraProvider {
         let lookup_credential = &self.lookup_credential(request.admitted())?;
         let inputs = parse_verify_inputs(request.inputs())?;
         let metadata_response = self
-            .confirm_issue_project(&inputs.issue, lookup_credential)
+            .confirm_authorized_issue_key(
+                &inputs.issue,
+                lookup_credential,
+                request.resource_scopes()?,
+            )
             .await?;
         let mut upstream_duration_ms = metadata_response.duration_ms;
         let mut upstream_status = Some(metadata_response.status);
@@ -3434,13 +3404,31 @@ impl JiraProvider {
             })))
     }
 
-    async fn confirm_issue_project(
+    /// Confirms the issue at invocation and requires its current project to
+    /// be within the admitted scopes, before any execution read or write: the
+    /// issue may have moved, or its project key changed, since scope
+    /// resolution. A project that left the scopes denies with the same
+    /// concealed `scope_unresolved` as every other confirmation.
+    async fn confirm_authorized_issue(
+        &self,
+        locator: &IssueLocator,
+        credential: &AtlassianCredential,
+        resource_scopes: &ResourceScopes,
+    ) -> Result<JiraBackendResponse<JiraIssueMetadata>, ProviderError> {
+        let response = self.confirm_issue_locator(locator, credential).await?;
+        ensure_authorized_issue_metadata(&response.value, resource_scopes)?;
+        Ok(response)
+    }
+
+    async fn confirm_authorized_issue_key(
         &self,
         issue_key: &str,
         credential: &AtlassianCredential,
+        resource_scopes: &ResourceScopes,
     ) -> Result<JiraBackendResponse<JiraIssueMetadata>, ProviderError> {
         let locator = issue_locator_from_key(issue_key)?;
-        self.confirm_issue_locator(&locator, credential).await
+        self.confirm_authorized_issue(&locator, credential, resource_scopes)
+            .await
     }
 
     async fn confirm_issue_locator(
@@ -3516,9 +3504,10 @@ impl JiraProvider {
         comment_id: &str,
         lookup_credential: &AtlassianCredential,
         credential: &AtlassianCredential,
+        resource_scopes: &ResourceScopes,
     ) -> Result<(JiraIssueMetadata, JiraBackendResponse<JiraComment>, u64), ProviderError> {
         let metadata_response = self
-            .confirm_issue_locator(locator, lookup_credential)
+            .confirm_authorized_issue(locator, lookup_credential, resource_scopes)
             .await?;
         let metadata_duration_ms = metadata_response.duration_ms;
         let metadata = metadata_response.value;
@@ -3602,10 +3591,12 @@ impl JiraProvider {
     }
 }
 
+/// An issue named by the caller. Only the key identifies it: Jira resolves a
+/// key from a previous project key or a moved issue to the current issue, so
+/// the key prefix never names the project that authorizes the issue.
 #[derive(Debug, Clone)]
 struct IssueLocator {
     issue_key: String,
-    candidate_project: String,
 }
 
 fn issue_locator_from_inputs(
@@ -3686,14 +3677,6 @@ fn issue_scopes_from_metadata(
     )]))
 }
 
-fn merged_issue_locator_scopes<const N: usize>(locators: [&IssueLocator; N]) -> ResourceScopes {
-    let mut projects = BTreeSet::new();
-    for locator in locators {
-        projects.insert(locator.candidate_project.clone());
-    }
-    ResourceScopes::from([("project".to_string(), projects.into_iter().collect())])
-}
-
 fn merged_issue_metadata_scopes<const N: usize>(
     metadata: [&JiraIssueMetadata; N],
 ) -> ResourceScopes {
@@ -3701,13 +3684,6 @@ fn merged_issue_metadata_scopes<const N: usize>(
     for issue in metadata {
         projects.insert(issue.project.clone());
     }
-    ResourceScopes::from([("project".to_string(), projects.into_iter().collect())])
-}
-
-fn child_create_locator_scopes(project: &str, parent: &IssueLocator) -> ResourceScopes {
-    let mut projects = BTreeSet::new();
-    projects.insert(project.to_string());
-    projects.insert(parent.candidate_project.clone());
     ResourceScopes::from([("project".to_string(), projects.into_iter().collect())])
 }
 
@@ -3727,7 +3703,6 @@ fn issue_locator_from_key(issue_key: &str) -> Result<IssueLocator, ProviderError
     }
     Ok(IssueLocator {
         issue_key: issue_key.to_string(),
-        candidate_project: issue_key_project(issue_key),
     })
 }
 
@@ -3785,17 +3760,17 @@ fn issue_locator_from_modern_jira_url_path(
         {
             continue;
         }
-        let project = segments[index + 1];
-        let issue_key = segments[index + 3];
-        return Some(issue_locator_from_key(issue_key).and_then(|locator| {
-            if locator.candidate_project != project {
-                return Err(ProviderError::deny(
-                    ReasonCode::LocatorInvalid,
-                    "Jira issue URL project does not match issue key",
-                ));
-            }
-            Ok(locator)
-        }));
+        // The project segment is navigation context. After a project key change
+        // or an issue move, Jira still routes links that pair a previous project
+        // key with the current issue key, or the reverse, so it is not compared
+        // with the key prefix.
+        if !is_project_key(segments[index + 1]) {
+            return Some(Err(ProviderError::deny(
+                ReasonCode::LocatorInvalid,
+                "Jira issue URL project key is invalid",
+            )));
+        }
+        return Some(issue_locator_from_key(segments[index + 3]));
     }
     None
 }
@@ -4666,6 +4641,25 @@ fn validate_issue_summary(action: &str, summary: &str) -> Result<(), ProviderErr
         ));
     }
     Ok(())
+}
+
+/// Checks a create response's key against the authorized project. A valid key
+/// in another project is a scope outcome, not a protocol failure: when Jira
+/// resolves a previous project key, it creates the issue under the renamed
+/// project's current key, which the authorized project does not cover.
+fn created_issue_scope_error(created_key: &str, project: &str) -> Option<ProviderError> {
+    if !is_issue_key(created_key) {
+        return Some(ProviderError::error(
+            ReasonCode::UpstreamProtocolFailed,
+            "Jira issue create response did not include a valid issue key",
+        ));
+    }
+    (issue_key_project(created_key) != project).then(|| {
+        ProviderError::deny(
+            ReasonCode::ScopeUnresolved,
+            "Jira created the issue outside the authorized project",
+        )
+    })
 }
 
 fn ensure_authorized_issue_metadata(
