@@ -11,7 +11,8 @@ All notable changes to this project are documented in this file.
   `role` names and `--role`. Provisioning configuration replaces
   `max_access_level` with `max_role` (default `"developer"`). Numeric role
   inputs and old spellings are rejected; numeric `accessLevel` result metadata
-  is unchanged. Discovery advertises only roles permitted by the configured cap.
+  is unchanged. Discovery advertises only roles permitted by the configured cap;
+  action details distinguish role inputs, existing-role checks and numeric metadata.
 
 - Connection credential PUTs, including literal tokens, return `409 version_conflict` before writing when a runtime publication overtakes admission; retry the PUT using current configuration.
 

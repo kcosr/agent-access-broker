@@ -7191,7 +7191,22 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 schema,
             )
         };
-        descriptor.documentation(json!({"roleSelection": provisioning::ROLE_DOCUMENTATION}))
+        match *action {
+            "project.access_token.create" | "service_account.member.set" => descriptor
+                .documentation(json!({"roleSelection": provisioning::ROLE_DOCUMENTATION})),
+            "project.access_token.rotate" => descriptor.documentation(json!({
+                "existingRole": "Rotation preserves the token's existing role and checks its numeric accessLevel against operator max_role; it does not accept a role input."
+            })),
+            "service_account.token.create" | "service_account.token.rotate" => descriptor
+                .documentation(json!({
+                    "existingMembership": "Issuance checks the service account's existing project membership against operator max_role; it does not assign a role. Result accessLevel, when present, remains GitLab's numeric base access level."
+                })),
+            "project.member.view" | "project.access_token.list" | "project.access_token.view"
+            | "service_account.token.list" => descriptor.documentation(json!({
+                "accessLevel": provisioning::ACCESS_LEVEL_DOCUMENTATION
+            })),
+            _ => descriptor,
+        }
     }));
     let descriptor = ServiceDescriptor::new("gitlab", "GitLab")
         .with_resource_scopes(BTreeMap::from([(

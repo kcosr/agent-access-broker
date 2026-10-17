@@ -99,7 +99,9 @@ impl<'de> Deserialize<'de> for GitlabProjectRole {
     }
 }
 
-pub(crate) const ROLE_DOCUMENTATION: &str = "Role inputs use exact built-in names: guest (10), planner (15), reporter (20), security_manager (25), developer (30), and maintainer (40). The role enum contains only choices allowed by operator max_role. Custom-role names and IDs are unsupported. Result accessLevel remains GitLab's numeric base access level, including Owner (50) or other upstream values on metadata reads; it is not a complete effective-permissions inventory. Token rotation preserves the existing role and checks it against the current cap. Service-account token issuance checks the account's existing project membership.";
+pub(crate) const ROLE_DOCUMENTATION: &str = "Role inputs use exact built-in names: guest (10), planner (15), reporter (20), security_manager (25), developer (30), and maintainer (40). The role enum contains only choices allowed by operator max_role. Custom-role names and IDs are unsupported. Result accessLevel remains GitLab's numeric base access level, not a complete effective-permissions inventory.";
+
+pub(crate) const ACCESS_LEVEL_DOCUMENTATION: &str = "Result accessLevel reports GitLab's numeric base access level, including Owner (50) or other upstream values above the provisioning cap. It is not a role input or a complete effective-permissions inventory.";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]

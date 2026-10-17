@@ -1912,6 +1912,44 @@ fn gitlab_webhook_actions_do_not_advertise_content_attribution() {
 }
 
 #[test]
+fn gitlab_descriptor_provisioning_role_documentation_matches_inputs() {
+    let descriptor = gitlab_descriptor(&config());
+    let role_actions =
+        BTreeSet::from(["project.access_token.create", "service_account.member.set"]);
+    for action in &descriptor.actions {
+        let accepts_role = action.input_schema["properties"].get("role").is_some();
+        assert_eq!(accepts_role, role_actions.contains(action.action.as_str()));
+        assert_eq!(
+            action
+                .documentation
+                .as_ref()
+                .and_then(|docs| docs.get("roleSelection"))
+                .is_some(),
+            accepts_role,
+            "{} must describe role inputs only when it accepts them",
+            action.action
+        );
+    }
+    for action in [
+        "project.member.view",
+        "project.access_token.list",
+        "project.access_token.view",
+        "service_account.token.list",
+    ] {
+        assert_eq!(
+            descriptor
+                .action(action)
+                .unwrap()
+                .documentation
+                .as_ref()
+                .unwrap()["accessLevel"],
+            provisioning::ACCESS_LEVEL_DOCUMENTATION,
+            "{action}"
+        );
+    }
+}
+
+#[test]
 fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
     let descriptor = gitlab_descriptor(&config());
     assert_eq!(descriptor.validate(), Ok(()));
