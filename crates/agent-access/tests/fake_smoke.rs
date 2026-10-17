@@ -3860,7 +3860,12 @@ async fn cli_invokes_fake_provider_against_stubbed_broker() {
     let actions_json: serde_json::Value = serde_json::from_slice(&actions.stdout).unwrap();
     assert_eq!(
         actions_json,
-        serde_json::json!({"service":"fake","actions":["echo"]})
+        serde_json::json!({
+            "service":"fake",
+            "actions":["echo"],
+            "matchKind":"unfiltered",
+            "policyGeneration":1
+        })
     );
 
     let action_description = Command::new(env!("CARGO_BIN_EXE_agent-access"))
