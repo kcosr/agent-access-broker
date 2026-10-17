@@ -239,18 +239,21 @@ metadata; it does not replace health or readiness checks.
   capabilities and projects a sorted compact object:
 
 ```json
-{"services":[{"service":"jira","displayName":"Jira","surface":"invoke","actions":["issue.view","search"],"availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."}}]}
+{"services":[{"service":"jira","displayName":"Jira","surface":"invoke","actions":["issue.view","search"],"availability":{"state":"available","requirements":[],"message":"Required capabilities are locally available; upstream access has not been verified."}}]}
 ```
 
 Surfaces use the broker's canonical `invoke` or `gateway` spelling. Action names replace counts. `--verbose` returns an unwrapped array of
 complete service objects, including action schemas. `services describe SERVICE`
 returns one complete service object. An empty compact list is `{"services":[]}`.
-`availability` reports local credential readiness. Missing or unusable credentials
-hide actions, schemas, resources and coverage; an authorized service remains with
-empty actions and safe setup requirements. Partial services retain only usable
-access. Unknown readiness also hides affected capabilities. Resolve the reported
-user/administrator requirement and refresh discovery. No upstream check or OAuth
-refresh occurs while listing. See [availability](http-api.md#credential-availability).
+`availability` reports local credential and Broker runtime readiness. Missing
+prerequisites hide actions, schemas, resources and coverage; an authorized service
+remains with empty actions and safe setup requirements. Partial services retain
+only usable access. Unknown readiness also hides affected capabilities. Requirements carry
+`kind: "credential"` with `credentialMode`, or `kind: "local_runtime"` without
+that field. Each gives a `reason` and a `resolution`: `user`, `administrator`, or
+`caller`. Caller resolution requires supported invocation authentication.
+Resolve the requirement and refresh discovery. No upstream check or OAuth refresh
+occurs while listing. See [availability](http-api.md#credential-availability).
 
 ### `resources`
 
@@ -289,9 +292,10 @@ returns sorted canonical action-name strings (`--resource-type` is needed with
 {"service":"jira","resource":"ENG","actions":["issue.view","search"],"matchKind":"single_resource","policyGeneration":42}
 ```
 
-Without `--resource`, the result omits `resource` and lists service-wide visible
-actions. With it, the broker checks single-target policy using a Jira project
-key, Confluence space key, or canonical repository path. A registered entry is
+Without a resource or target filter, the result omits `resource` and lists
+service-wide visible actions. With `--resource`, the broker checks single-target
+policy using a Jira project key, Confluence space key, or canonical repository
+path. A registered entry is
 not required: broad grants can cover a known locator. A well-formed locator
 with no policy access returns `"actions":[]`. This does not prove upstream
 existence or authorization of a multi-target request. Local credentials are
@@ -311,8 +315,9 @@ current `policyGeneration`. Only `single_resource` includes `resource`; targets
 are not echoed. An empty action list does not identify which target failed.
 This is current policy compatibility, not a reservation or an object-existence
 check. Targets cannot be combined with `--resource` or `--resource-type`.
-Duplicate JSON keys, unknown scopes, empty lists, invalid target identifiers,
-more than eight scopes, and more than 64 distinct values per scope are rejected.
+Duplicate JSON keys, duplicate values within a scope, unknown scopes, empty lists,
+invalid target identifiers, more than eight scopes, and more than 64 values per
+scope are rejected.
 
 `--verbose` returns an unwrapped array of raw action definitions selected by the
 same filters. It fetches selected names first, then service details, and only

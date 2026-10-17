@@ -3816,7 +3816,7 @@ async fn cli_invokes_fake_provider_against_stubbed_broker() {
             "service": "fake",
             "displayName": "Fake Provider",
             "surface": "invoke",
-            "availability": {"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},
+            "availability": {"state":"available","requirements":[],"message":"Required capabilities are locally available; upstream access has not been verified."},
             "actions": ["echo"]
         }]})
     );
