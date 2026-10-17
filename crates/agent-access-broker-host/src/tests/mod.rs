@@ -15051,24 +15051,21 @@ impl TestJiraParentInvokeProvider {
                 "Jira route test action is not supported",
             ));
         }
-        let parent = inputs
+        inputs
             .get("parentIssue")
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 ProviderError::deny(ReasonCode::InputInvalid, "parentIssue is required")
             })?;
-        let issues = if action == "issue.parent.set" {
-            let issue = inputs.get("issue").and_then(Value::as_str).ok_or_else(|| {
+        if action == "issue.parent.set" {
+            inputs.get("issue").and_then(Value::as_str).ok_or_else(|| {
                 ProviderError::deny(ReasonCode::InputInvalid, "issue is required")
             })?;
-            vec![issue.to_string(), parent.to_string()]
-        } else {
-            vec![parent.to_string()]
-        };
-        Ok(ResourceScopes::from([
-            ("project".to_string(), vec!["PROJ".to_string()]),
-            ("issue".to_string(), issues),
-        ]))
+        }
+        Ok(ResourceScopes::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
     }
 }
 
@@ -15094,14 +15091,11 @@ impl Provider for TestJiraParentInvokeProvider {
             Some(&basic_credential("service@example.com", "service-token"))
         );
         assert_eq!(
-            request.resource_scopes().unwrap()["project"],
-            vec!["PROJ".to_string()]
+            request.resource_scopes().unwrap(),
+            &ResourceScopes::from([("project".to_string(), vec!["PROJ".to_string()])])
         );
+        assert_eq!(request.inputs()["parentIssue"], "PROJ-100");
         if request.action() == "issue.child.create" {
-            assert_eq!(
-                request.resource_scopes().unwrap()["issue"],
-                vec!["PROJ-100".to_string()]
-            );
             return Ok(ProviderResult::new(json!({
                 "operation": "issue.child.create",
                 "issue": {
@@ -15135,10 +15129,7 @@ impl Provider for TestJiraParentInvokeProvider {
                 "parentIssueKey": "PROJ-100",
             })));
         }
-        assert_eq!(
-            request.resource_scopes().unwrap()["issue"],
-            vec!["PROJ-2".to_string(), "PROJ-100".to_string()]
-        );
+        assert_eq!(request.inputs()["issue"], "PROJ-2");
         Ok(ProviderResult::new(json!({
             "operation": "issue.parent.set",
             "issue": {
