@@ -72,6 +72,7 @@ pub(crate) mod conformance_import;
 mod credential_connections;
 mod discovery;
 mod domain_reasons;
+mod gitlab_moved_projects;
 mod gitlab_uploads;
 mod gitlab_webhooks;
 mod gmail;

@@ -51,7 +51,10 @@ references) first.
 An exact selector has the shape `{"kind":"exact","value":"engineering/payments"}`.
 Repository names are canonical paths shared across integrations: at least two
 segments, not all digits, used identically by GitLab REST authorization and Git
-HTTP gateway classification. Jira project
+HTTP gateway classification. An entry names a path, not a project: when a
+GitLab project is renamed, moved or transferred, update its entries to the new
+path, as described for [GitLab REST](providers-gitlab-rest.md#moved-or-renamed-projects)
+and the [Git gateway](git-http-gateway.md#moved-or-renamed-repositories). Jira project
 and Confluence space selectors use their canonical keys. A Confluence personal
 space is an ordinary exact selection, such as
 `{"kind":"exact","value":"~alice"}`; keep the actual upstream key, including its

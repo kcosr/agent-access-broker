@@ -696,7 +696,8 @@ existence, ownership of a particular object, or an authorization outcome.
 - **GitLab REST** (`gitlab`) — repository-scoped project, issue, merge-request,
   review discussion, current/historical diff, branch, protected branch, file,
   REST commit, CI pipeline, and CI job actions.
-  The scope type is `repository`, expressed as a GitLab project path. Merge
+  The scope type is `repository`, expressed as the project's current GitLab
+  path, which lookup resolves from an old path of a moved project too. Merge
   requires a caller-supplied current merge-request head SHA and delegates final
   branch protection, approval, and CI decisions to GitLab. Direct branch, file,
   and commit writes and CI execution actions reject default and protected

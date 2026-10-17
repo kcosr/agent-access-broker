@@ -184,6 +184,21 @@ subgroups, and all selectors match every repository. A selector for
 `engineering/platform-tools/api`. Group exclusions and token references use the
 shared policy rules described in [resources.md](resources.md).
 
+### Moved or renamed repositories
+
+The gateway authorizes the repository path the Git client requests; it does
+not look up the upstream project. GitLab serves a renamed, moved or
+transferred project's repository at its old path, for fetch and push, until
+another project, group or user takes that path, and only prints a message
+asking to update the remote. A request for an old path is therefore
+authorized as that old path: a resource entry or selector covering the old
+path reaches the moved repository, while one covering only the new path
+refuses the old remote. After a move, point remotes at the current path,
+update or remove exact entries for the vacated path, and exclude it from
+namespace and `all` selections that must no longer reach the moved
+repository. GitLab REST instead
+[authorizes the current path](providers-gitlab-rest.md#moved-or-renamed-projects).
+
 ## Push validation
 
 For receive-pack POSTs, the broker parses the command prefix before resolving or
