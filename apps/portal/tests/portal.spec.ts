@@ -2241,8 +2241,8 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await expect(page.getByText("Every broker audit record.", { exact: true })).toBeVisible();
     await expect(page.getByTestId("audit-range")).toContainText("from");
     await expect(rows.filter({ hasText: "issue.view on jira" }).first()).toBeVisible();
-    expect((await comboboxOptions(page, "Service"))[0]).toMatch(/^broker/);
-    await chooseFacet(page, "Service", /^broker/);
+    expect((await comboboxOptions(page, "Service"))[0]).toMatch(/^broker(?:\s|$)/);
+    await chooseFacet(page, "Service", /^broker(?:\s|$)/);
     await expect(page).toHaveURL(/service=broker/);
     await expect(rows.filter({ hasText: "auth.local.login on broker" }).first()).toBeVisible();
     await expect(rows.filter({ hasNotText: / on broker$/ })).toHaveCount(0);
@@ -2354,11 +2354,11 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await expect(page.getByText("Audit records for the services you manage: jira.", { exact: true })).toBeVisible();
     const services = await comboboxOptions(page, "Service");
     expect(services).toHaveLength(2);
-    expect(services[0]).toMatch(/^broker/);
+    expect(services[0]).toMatch(/^broker(?:\s|$)/);
     expect(services[1]).toMatch(/^jira/);
     await expect(rows.filter({ hasText: "issue.view on jira" }).first()).toBeVisible();
     await expect(rows.filter({ hasText: "auth.local.login" })).toHaveCount(0);
-    await chooseFacet(page, "Service", /^broker/);
+    await chooseFacet(page, "Service", /^broker(?:\s|$)/);
     await expect(page).toHaveURL(/service=broker/);
     await expect(rows.filter({ hasText: "admin.policy.grants.create on broker" }).first()).toBeVisible();
     await expect(rows.filter({ hasNotText: / on broker$/ })).toHaveCount(0);
@@ -2392,7 +2392,7 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await expect(page.getByRole("combobox", { name: "Principal", exact: true })).toHaveCount(0);
     const invocation = tableRow(page.getByRole("main"), "issue.view on jira").first();
     await expect(await columnCell(invocation, "Token")).toHaveText(tokenName);
-    await chooseFacet(page, "Service", /^broker/);
+    await chooseFacet(page, "Service", /^broker(?:\s|$)/);
     await expect(page).toHaveURL(/service=broker/);
     await expect(rows.filter({ hasText: "auth.local.login on broker" }).first()).toBeVisible();
     await expect(rows.filter({ hasNotText: / on broker$/ })).toHaveCount(0);
