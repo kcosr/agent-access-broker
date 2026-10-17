@@ -253,6 +253,15 @@ impl BrokerRuntime {
         action: &str,
         inputs: &Value,
     ) -> SecretInputProvenance {
+        if let Some(super::registration::RuntimeServiceRegistration::BrokerManagement(
+            registration,
+        )) = self.service_registration(service)
+        {
+            return registration
+                .input_plan(action)
+                .map(|plan| SecretInputProvenance::capture(plan.pointers(), inputs))
+                .unwrap_or_default();
+        }
         self.action_descriptor(service, action)
             .map(|action| {
                 SecretInputProvenance::capture(
@@ -877,7 +886,6 @@ fn input_pointer(pointer: &str) -> &str {
 fn result_pointer(pointer: &str) -> &str {
     pointer.strip_prefix("/result").unwrap_or("")
 }
-#[cfg(test)]
 fn is_reference_value(value: &Value) -> bool {
     parse_reference(value).is_ok()
 }
