@@ -357,6 +357,16 @@ fn settled_conflict(value: &Value) {
     assert_eq!(value["result"]["retrySafe"], false, "{value}");
 }
 
+fn assert_view_matches_write(viewed: &Value, written: &Value) {
+    let mut metadata = allowed(written).clone();
+    assert_eq!(metadata["executionState"], "completed");
+    assert_eq!(metadata["retrySafe"], false);
+    let metadata = metadata.as_object_mut().unwrap();
+    metadata.remove("executionState");
+    metadata.remove("retrySafe");
+    assert_eq!(allowed(viewed).as_object().unwrap(), metadata);
+}
+
 fn tool_names(listing: &Value) -> BTreeMap<String, String> {
     listing["result"]["tools"]
         .as_array()
@@ -613,7 +623,7 @@ async fn builtin_management_uses_real_http_cli_and_mcp_without_plaintext_or_admi
                 json!({"principalId":worker}),
             )
             .await;
-        assert_eq!(allowed(&viewed), principal);
+        assert_view_matches_write(&viewed, &created);
         assert_eq!(fixture.actions(targets).await["actions"], before["actions"]);
 
         let group = mcp
@@ -699,7 +709,7 @@ async fn builtin_management_uses_real_http_cli_and_mcp_without_plaintext_or_admi
                 json!({"principalId":worker,"connectionId":"gitlab"}),
             )
             .await;
-        assert_eq!(allowed(&credential), allowed(&installed));
+        assert_view_matches_write(&credential, &installed);
         for field in ["token", "secret", "secretRef", "username"] {
             assert!(allowed(&credential).get(field).is_none());
         }
