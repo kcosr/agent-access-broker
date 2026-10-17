@@ -55,7 +55,8 @@ impl DelegatedAccess {
     /// The token presented in `placement`, after the placement's checks of
     /// the token. Delegated access is a token, so
     /// [`CredentialPlacement::basic`] fails with
-    /// [`CredentialPlacementError::KindMismatch`].
+    /// [`CredentialPlacementError::KindMismatch`]; only the host's
+    /// [`crate::host::token_as_basic`] presents it as HTTP Basic.
     pub fn authorization_as(
         &self,
         placement: &CredentialPlacement,
@@ -374,6 +375,16 @@ mod tests {
                 .authorization_as(&CredentialPlacement::basic())
                 .unwrap_err(),
             CredentialPlacementError::KindMismatch
+        );
+        // Only the host's token-as-Basic placement presents delegated access
+        // as HTTP Basic, under the username it configures.
+        assert_eq!(
+            header(
+                access
+                    .authorization_as(&crate::host::token_as_basic("oauth2"))
+                    .unwrap()
+            ),
+            "Basic b2F1dGgyOmRlbGVnYXRlZC1zZWNyZXQ="
         );
         let rendered = format!("{access:?} {:?}", access.authorization());
         assert!(!rendered.contains("delegated-secret"), "{rendered}");

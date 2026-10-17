@@ -62,8 +62,8 @@ use crate::{
     NormalizedPolicyGrantValidationIssue, PolicyGrantConfig, PolicyReadScope,
     PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog, ResourceDefinition,
     ResourceGroupDefinition, ResourceSelection, ResponseEnvelope, api_service_spec,
-    credential_mode_available, is_safe_identifier, is_safe_principal,
-    normalized_policy_grant_validation_issues, validate_broker_config,
+    credential_mode_available, gateway_upstream_authorization, is_safe_identifier,
+    is_safe_principal, normalized_policy_grant_validation_issues, validate_broker_config,
 };
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
 use agent_access_provider::host::{ContractViolation, HookContext, with_provider_context};
@@ -4445,7 +4445,10 @@ impl BrokerRuntime {
                     correlation.broker_request_id.clone(),
                 );
         }
-        builder = apply_gateway_execution_credential(builder, credential)?;
+        builder = agent_access_provider::host::authorize_host_request(
+            builder,
+            &gateway_upstream_authorization(&gateway.upstream_token_auth, credential)?,
+        );
         let started = Instant::now();
         let verification_timeout = Duration::from_millis(
             gateway
@@ -6697,24 +6700,6 @@ fn normalize_git_verification_repository(
         ));
     }
     Ok(repository)
-}
-
-fn apply_gateway_execution_credential(
-    builder: reqwest::RequestBuilder,
-    credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.kind() {
-        StaticCredentialKind::BearerToken | StaticCredentialKind::BasicApiToken => {
-            Ok(agent_access_provider::host::authorize_host_request(
-                builder,
-                &credential.authorization(),
-            ))
-        }
-        _ => Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "the Git gateway does not support this credential kind",
-        )),
-    }
 }
 
 fn git_verify_reqwest_error_to_provider_error(

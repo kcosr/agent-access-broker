@@ -10,13 +10,14 @@ use agent_access_core::{
     AttributionConfig, AuditConfig, AuditDurability, BrokerConfig, BrokerTokenTtlOption,
     BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig, CredentialConfig,
     CredentialEncryptionConfig, CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig,
-    ExecutionContextConfig, GatewayConfig, GatewayGitConfig, IdentityConfig, IdentityGroupConfig,
-    IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
-    InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
-    ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
-    OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig, PolicyGrantConfig, PortalConfig,
-    PrincipalInvocationLimitConfig, ProvidersConfig, ResourceDefinition, ResourceGroupDefinition,
-    ResourceSelection, StaticPrincipalConfig, TrustedCallerConfig, TrustedCallerContextMode,
+    ExecutionContextConfig, GatewayConfig, GatewayGitConfig, GatewayUpstreamTokenAuth,
+    IdentityConfig, IdentityGroupConfig, IdentitySourceConfig, ImportsConfig, InitialAdminConfig,
+    InvocationLimitConfig, InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig,
+    ManagedStoreConfig, ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig,
+    OAuthConfig, OidcConfig, OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig,
+    PolicyGrantConfig, PortalConfig, PrincipalInvocationLimitConfig, ProvidersConfig,
+    ResourceDefinition, ResourceGroupDefinition, ResourceSelection, StaticPrincipalConfig,
+    TrustedCallerConfig, TrustedCallerContextMode,
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
@@ -765,6 +766,7 @@ fn gateway_value(gateway: &GatewayConfig) -> Value {
         auth_modes,
         basic_broker_token_username,
         credential_modes,
+        upstream_token_auth,
         redirect_policy,
         request_body_max_bytes,
         response_body_max_bytes,
@@ -789,6 +791,16 @@ fn gateway_value(gateway: &GatewayConfig) -> Value {
             basic_broker_token_username.as_str(),
         )
         .put("credential_modes", strings(credential_modes))
+        .put(
+            "upstream_token_auth",
+            match upstream_token_auth {
+                GatewayUpstreamTokenAuth::Bearer {} => Fields::default().put("scheme", "bearer"),
+                GatewayUpstreamTokenAuth::Basic { username } => Fields::default()
+                    .put("scheme", "basic")
+                    .put("username", username.as_str()),
+            }
+            .value(),
+        )
         .put("redirect_policy", redirect_policy.as_str())
         .opt_int("request_body_max_bytes", *request_body_max_bytes)
         .opt_int("response_body_max_bytes", *response_body_max_bytes)

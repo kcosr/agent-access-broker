@@ -155,8 +155,9 @@ Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
 `helper`); declare one when adding a crate. The boundary check rejects an
 undeclared role and dependency edges that cross the roles, such as any
 production path from core or the host to a backend or import adapter, and any
-use of the host-only `host::authorize_host_request` in native, adapter,
-reference or helper sources. See `docs/testing.md` for the rules.
+use of the host-only items (the SDK's `host::authorize_host_request` and
+`host::token_as_basic`, and core's `gateway_upstream_authorization`) in native,
+adapter, reference or helper sources. See `docs/testing.md` for the rules.
 
 `api/` holds the checked-in supported public API inventory: the SDK and host
 with and without `test-support`, the assembly library, the reviewed selection
@@ -247,9 +248,10 @@ binary and needs `python3`, whose absence fails it.
   hand an `UpstreamAuthorization` to the send method (`UpstreamCall`,
   `RedirectRules`), and the client adds the sensitive header to the request it
   builds. Only the host's raw-client paths (Git gateway, Git verification) use
-  the host-only `host::authorize_host_request`; the boundary check rejects it
-  in native, adapter, reference and helper crates. Credential equality exists
-  only with `test-support`, in constant time. `lib.rs`
+  the host-only `host::authorize_host_request` and the host-only
+  `host::token_as_basic` placement, which presents a token as HTTP Basic; the
+  boundary check rejects both in native, adapter, reference and helper crates.
+  Credential equality exists only with `test-support`, in constant time. `lib.rs`
   lists every supported export explicitly, one path per item; never add a
   wildcard re-export. Presentation items are reachable only through
   `presentation`. The supported `host` module holds the host cooperation ports:
@@ -265,7 +267,10 @@ binary and needs `python3`, whose absence fails it.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
-  upstream client factories); contains no backend. Its internal `imports`
+  upstream client factories) and the Git gateway's upstream credential
+  presentation (`gateway_token_auth.rs`: `upstream_token_auth` and the
+  host-only `gateway_upstream_authorization` that forwarding and Git
+  verification share); contains no backend. Its internal `imports`
   module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import

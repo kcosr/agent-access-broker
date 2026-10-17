@@ -221,6 +221,7 @@ pub fn agent_access_provider::host::scope_request(agent_access_provider::host::S
 pub fn agent_access_provider::host::service_signing_key(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>, &str) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
 pub fn agent_access_provider::host::spooled_body_file(std::path::PathBuf, u64, alloc::string::String) -> agent_access_provider::BrokerBodyPartFile
 pub fn agent_access_provider::host::spooled_body_part(alloc::string::String, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, std::path::PathBuf, u64, alloc::string::String) -> agent_access_provider::BrokerBodyPart
+pub fn agent_access_provider::host::token_as_basic(impl core::convert::Into<alloc::string::String>) -> agent_access_provider::CredentialPlacement
 pub async fn agent_access_provider::host::with_correlation_context<F>(agent_access_provider::CorrelationContext, F) -> <F as core::future::future::Future>::Output where F: core::future::future::Future
 pub async fn agent_access_provider::host::with_hook_context<F: core::future::future::Future>(agent_access_provider::host::HookContext, F) -> <F as core::future::future::Future>::Output
 pub async fn agent_access_provider::host::with_provider_context<F>(agent_access_provider::CorrelationContext, alloc::string::String, alloc::string::String, F) -> <F as core::future::future::Future>::Output where F: core::future::future::Future

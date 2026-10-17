@@ -15,8 +15,8 @@ use agent_access_core::{
     PreparedGatewayOperation, REASON_CODE_HEADER, new_broker_request_id,
 };
 use agent_access_provider::{
-    BROKER_REQUEST_ID_HEADER, ExecutionCredential, ProviderError, REQUEST_ID_HEADER, ReasonCode,
-    ReasonCodeId, ResourceScopes, StaticCredentialKind, url_allowed_by_patterns,
+    BROKER_REQUEST_ID_HEADER, ProviderError, REQUEST_ID_HEADER, ReasonCode, ReasonCodeId,
+    ResourceScopes, url_allowed_by_patterns,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
@@ -1006,8 +1006,13 @@ async fn forward_prepared_git_http(
                 prepared.correlation.broker_request_id.clone(),
             );
     }
-    builder = match apply_gateway_credential(builder, &prepared.credential) {
-        Ok(builder) => builder,
+    builder = match agent_access_core::gateway_upstream_authorization(
+        &gateway.upstream_token_auth,
+        &prepared.credential,
+    ) {
+        Ok(authorization) => {
+            agent_access_provider::host::authorize_host_request(builder, &authorization)
+        }
         Err(error) => {
             let response = runtime
                 .fail_prepared_gateway_operation(prepared, error)
@@ -2120,24 +2125,6 @@ fn apply_single_request_header(
         )
     })?;
     Ok(builder.header(name, value))
-}
-
-fn apply_gateway_credential(
-    builder: reqwest::RequestBuilder,
-    credential: &ExecutionCredential,
-) -> Result<reqwest::RequestBuilder, ProviderError> {
-    match credential.kind() {
-        StaticCredentialKind::BearerToken | StaticCredentialKind::BasicApiToken => {
-            Ok(agent_access_provider::host::authorize_host_request(
-                builder,
-                &credential.authorization(),
-            ))
-        }
-        _ => Err(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "the Git gateway does not support this credential kind",
-        )),
-    }
 }
 
 pub(crate) fn gateway_response_body_stream(
@@ -3303,45 +3290,66 @@ mod tests {
         );
         headers.insert(CONTENT_ENCODING, HeaderValue::from_static("GZIP"));
 
-        let builder = client
-            .post("https://gitlab.example.com/sip/service.git/git-upload-pack")
-            .body(Vec::new());
-        let builder = apply_git_request_headers(
-            builder,
-            &headers,
-            &Method::POST,
-            Some(GitContentEncoding::Gzip),
-        )
-        .unwrap();
-        let request = apply_gateway_credential(
-            builder,
-            &agent_access_provider::test_support::bearer_credential("upstream-token"),
-        )
-        .unwrap()
-        .build()
-        .unwrap();
+        // The default Bearer presentation and the configured Basic one both
+        // replace the caller's Basic broker token with the upstream token.
+        for (token_auth, expected) in [
+            (
+                agent_access_core::GatewayUpstreamTokenAuth::default(),
+                "Bearer upstream-token",
+            ),
+            (
+                agent_access_core::GatewayUpstreamTokenAuth::Basic {
+                    username: "oauth2".to_string(),
+                },
+                "Basic b2F1dGgyOnVwc3RyZWFtLXRva2Vu",
+            ),
+        ] {
+            let builder = client
+                .post("https://gitlab.example.com/sip/service.git/git-upload-pack")
+                .body(Vec::new());
+            let builder = apply_git_request_headers(
+                builder,
+                &headers,
+                &Method::POST,
+                Some(GitContentEncoding::Gzip),
+            )
+            .unwrap();
+            let request = agent_access_provider::host::authorize_host_request(
+                builder,
+                &agent_access_core::gateway_upstream_authorization(
+                    &token_auth,
+                    &agent_access_provider::test_support::bearer_credential("upstream-token"),
+                )
+                .unwrap(),
+            )
+            .build()
+            .unwrap();
 
-        assert_eq!(
-            request.headers()[reqwest::header::AUTHORIZATION],
-            "Bearer upstream-token"
-        );
-        assert_eq!(request.headers()[reqwest::header::ACCEPT], "*/*");
-        assert_eq!(request.headers()[reqwest::header::USER_AGENT], "git/2.51");
-        assert_eq!(request.headers()["Git-Protocol"], "version=2");
-        assert_eq!(
-            request.headers()[reqwest::header::CONTENT_TYPE],
-            "application/x-git-upload-pack-request"
-        );
-        assert_eq!(request.headers()[reqwest::header::CONTENT_ENCODING], "gzip");
-        assert!(!request.headers().contains_key(reqwest::header::COOKIE));
-        assert!(!request.headers().contains_key(reqwest::header::HOST));
-        assert!(!request.headers().contains_key(REQUEST_ID_HEADER));
-        assert!(!request.headers().contains_key(BROKER_REQUEST_ID_HEADER));
-        assert!(
-            !request
+            let authorization = request
                 .headers()
-                .contains_key(agent_access_core::EXECUTION_CONTEXT_HEADER)
-        );
+                .get_all(reqwest::header::AUTHORIZATION)
+                .iter()
+                .collect::<Vec<_>>();
+            assert_eq!(authorization, [expected]);
+            assert!(authorization[0].is_sensitive());
+            assert_eq!(request.headers()[reqwest::header::ACCEPT], "*/*");
+            assert_eq!(request.headers()[reqwest::header::USER_AGENT], "git/2.51");
+            assert_eq!(request.headers()["Git-Protocol"], "version=2");
+            assert_eq!(
+                request.headers()[reqwest::header::CONTENT_TYPE],
+                "application/x-git-upload-pack-request"
+            );
+            assert_eq!(request.headers()[reqwest::header::CONTENT_ENCODING], "gzip");
+            assert!(!request.headers().contains_key(reqwest::header::COOKIE));
+            assert!(!request.headers().contains_key(reqwest::header::HOST));
+            assert!(!request.headers().contains_key(REQUEST_ID_HEADER));
+            assert!(!request.headers().contains_key(BROKER_REQUEST_ID_HEADER));
+            assert!(
+                !request
+                    .headers()
+                    .contains_key(agent_access_core::EXECUTION_CONTEXT_HEADER)
+            );
+        }
     }
 
     #[test]
@@ -5728,6 +5736,270 @@ mod tests {
         packet
     }
 
+    /// Forwards one upload-pack discovery for `gateway-user` through
+    /// `runtime`, with `token_auth` on the gateway, to a loopback upstream and
+    /// returns the one `authorization` header line the upstream received.
+    async fn forwarded_upstream_authorization(
+        runtime: &BrokerRuntime,
+        token_auth: agent_access_core::GatewayUpstreamTokenAuth,
+        request_id: &str,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_headers(&mut stream).await;
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-git-upload-pack-advertisement\r\nContent-Length: 4\r\nConnection: close\r\n\r\n0000",
+                )
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let identity = runtime.identity_from_principal_groups(
+            "gateway-user".to_string(),
+            Some("gateway-user".to_string()),
+            vec!["gateway-users".to_string()],
+            None,
+            None,
+        );
+        let mut gateway = runtime.config().gateways["gitlab_git"].clone();
+        gateway.upstream_base_url = format!("http://{upstream_addr}");
+        gateway.allowed_upstream_hosts = vec![format!("http://{upstream_addr}/**")];
+        gateway.upstream_token_auth = token_auth;
+        let prepared = runtime
+            .prepare_gateway_operation(
+                test_governed_operation(OperationContext {
+                    agent_request_id: request_id.to_string(),
+                    broker_request_id: format!("broker-{request_id}"),
+                    identity,
+                    service: "gitlab_git".to_string(),
+                    action: "repo.fetch".to_string(),
+                    source: agent_access_core::SourceContext::unknown(),
+                }),
+                ResourceScopes::from([("repository".to_string(), vec!["sip/service".to_string()])]),
+            )
+            .await
+            .unwrap();
+
+        let response = forward_prepared_git_http(
+            runtime.clone(),
+            gateway,
+            GatewayForwardRequest {
+                git_request_kind: GitRequestKind::UploadPackDiscovery,
+                headers: HeaderMap::new(),
+                body: Body::empty(),
+                content_encoding: None,
+                receive_pack: None,
+            },
+            prepared,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"0000");
+        let request = upstream.await.unwrap();
+        let authorization = request
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+            .collect::<Vec<_>>();
+        assert_eq!(authorization.len(), 1, "{request}");
+        authorization[0].to_string()
+    }
+
+    fn basic_token_auth(username: &str) -> agent_access_core::GatewayUpstreamTokenAuth {
+        agent_access_core::GatewayUpstreamTokenAuth::Basic {
+            username: username.to_string(),
+        }
+    }
+
+    /// A static `bearer_token` service credential is a Bearer token by
+    /// default and the password of HTTP Basic under the configured username.
+    #[tokio::test]
+    async fn gateway_presents_a_static_bearer_service_credential_as_configured() {
+        let temp = test_temp_dir();
+        let token_path = temp.join("gateway-presentation-service-token");
+        let identity_token_path = temp.join("gateway-presentation-identity-token");
+        let audit_path = temp.join("gateway-presentation-service.audit.jsonl");
+        std::fs::write(&token_path, "upstream-token").unwrap();
+        std::fs::write(&identity_token_path, "identity-token").unwrap();
+        let runtime = BrokerRuntime::new(test_forwarding_config(
+            &token_path,
+            &identity_token_path,
+            &audit_path,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            forwarded_upstream_authorization(
+                &runtime,
+                agent_access_core::GatewayUpstreamTokenAuth::default(),
+                "gateway-presentation-service-bearer",
+            )
+            .await,
+            "authorization: Bearer upstream-token"
+        );
+        assert_eq!(
+            forwarded_upstream_authorization(
+                &runtime,
+                basic_token_auth("oauth2"),
+                "gateway-presentation-service-basic",
+            )
+            .await,
+            "authorization: Basic b2F1dGgyOnVwc3RyZWFtLXRva2Vu"
+        );
+        drain_gateway_test_audit(&runtime).await;
+    }
+
+    /// A `basic_api_token` service credential presents its own stored
+    /// username whatever `upstream_token_auth` selects for tokens.
+    #[tokio::test]
+    async fn gateway_basic_service_credential_keeps_its_own_username() {
+        let temp = test_temp_dir();
+        let username_path = temp.join("gateway-presentation-basic-username");
+        let token_path = temp.join("gateway-presentation-basic-token");
+        let identity_token_path = temp.join("gateway-presentation-basic-identity-token");
+        let audit_path = temp.join("gateway-presentation-basic.audit.jsonl");
+        std::fs::write(&username_path, "deploy-user").unwrap();
+        std::fs::write(&token_path, "deploy-token").unwrap();
+        std::fs::write(&identity_token_path, "identity-token").unwrap();
+        let mut config = test_forwarding_config(&token_path, &identity_token_path, &audit_path);
+        let credential = config.credentials.service.get_mut("gitlab_git").unwrap();
+        credential.kind = "basic_api_token".to_string();
+        credential.username_ref = Some(format!("file:{}", username_path.display()));
+        let runtime = BrokerRuntime::new(config).unwrap();
+
+        for (token_auth, request_id) in [
+            (
+                agent_access_core::GatewayUpstreamTokenAuth::default(),
+                "gateway-presentation-basic-default",
+            ),
+            (
+                basic_token_auth("oauth2"),
+                "gateway-presentation-basic-configured",
+            ),
+        ] {
+            assert_eq!(
+                forwarded_upstream_authorization(&runtime, token_auth, request_id).await,
+                "authorization: Basic ZGVwbG95LXVzZXI6ZGVwbG95LXRva2Vu"
+            );
+        }
+        drain_gateway_test_audit(&runtime).await;
+    }
+
+    /// A per-user managed `git-bearer-token` credential is presented under the
+    /// configured Basic username, like a static one.
+    #[tokio::test]
+    async fn gateway_presents_a_per_user_managed_bearer_credential_as_configured() {
+        let temp = test_temp_dir();
+        let token_path = temp.join("gateway-presentation-unused-service-token");
+        let identity_token_path = temp.join("gateway-presentation-managed-identity-token");
+        let key_path = temp.join("gateway-presentation-managed-key");
+        let store_path = temp.join("gateway-presentation-managed.sqlite");
+        let audit_path = temp.join("gateway-presentation-managed.audit.jsonl");
+        std::fs::write(&token_path, "service-token").unwrap();
+        std::fs::write(&identity_token_path, "identity-token").unwrap();
+        std::fs::write(&key_path, URL_SAFE_NO_PAD.encode([41_u8; 32])).unwrap();
+        let mut config = test_forwarding_config(&token_path, &identity_token_path, &audit_path);
+        let store_config = agent_access_core::ManagedStoreConfig {
+            kind: "sqlite".to_string(),
+            path: store_path.display().to_string(),
+            require_registered_principal_for_invocation: false,
+            auto_migrate: true,
+        };
+        config.managed_store = Some(store_config.clone());
+        config.credential_encryption = Some(agent_access_core::CredentialEncryptionConfig {
+            active_key: "fixture".into(),
+            keys: vec![agent_access_core::CredentialEncryptionKeyConfig {
+                id: "fixture".into(),
+                provider: "file".into(),
+                env: None,
+                path: Some(key_path.display().to_string()),
+            }],
+        });
+        config.credentials.service.clear();
+        config.credentials.per_user.insert(
+            "gitlab_git".to_string(),
+            CredentialConfig {
+                kind: "managed_store".to_string(),
+                username_ref: None,
+                token_ref: None,
+                provider: None,
+                path: None,
+                read_only: None,
+                credential_name: Some("default".to_string()),
+                profile: Some("git-bearer-token".to_string()),
+            },
+        );
+        config
+            .gateways
+            .get_mut("gitlab_git")
+            .unwrap()
+            .credential_modes = vec!["per_user".to_string()];
+        config.policy.grants[0].credential_mode = "per_user".to_string();
+        let store = agent_access_core::ManagedStore::open(
+            &store_config,
+            agent_access_core::ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        store
+            .create_principal(agent_access_core::PrincipalWriteRequest {
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "gateway-user".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            })
+            .unwrap();
+        drop(store);
+        let runtime = BrokerRuntime::new(config).unwrap();
+        runtime
+            .managed_store()
+            .unwrap()
+            .upsert_user_credential(
+                runtime.credential_key_ring().unwrap(),
+                agent_access_core::CredentialWriteRequest {
+                    owner_principal_id: "gateway-user".to_string(),
+                    service: "gitlab_git".to_string(),
+                    name: "default".to_string(),
+                    profile: "git-bearer-token".to_string(),
+                    credential_kind: "bearer_token".to_string(),
+                    secret: json!({"token": "personal-token"}),
+                    metadata: json!({}),
+                    actor: "test".to_string(),
+                },
+                agent_access_core::CredentialManagementPurpose::Administrative,
+            )
+            .unwrap();
+
+        assert_eq!(
+            forwarded_upstream_authorization(
+                &runtime,
+                agent_access_core::GatewayUpstreamTokenAuth::default(),
+                "gateway-presentation-managed-bearer",
+            )
+            .await,
+            "authorization: Bearer personal-token"
+        );
+        assert_eq!(
+            forwarded_upstream_authorization(
+                &runtime,
+                basic_token_auth("oauth2"),
+                "gateway-presentation-managed-basic",
+            )
+            .await,
+            "authorization: Basic b2F1dGgyOnBlcnNvbmFsLXRva2Vu"
+        );
+        drain_gateway_test_audit(&runtime).await;
+    }
+
     async fn read_http_request_headers(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
         let mut request = Vec::new();
         let mut buffer = [0_u8; 1024];
@@ -5769,6 +6041,7 @@ mod tests {
             auth_modes: vec!["basic_broker_token".to_string()],
             basic_broker_token_username: "agent-access".to_string(),
             credential_modes: vec!["service".to_string()],
+            upstream_token_auth: Default::default(),
             redirect_policy: "none".to_string(),
             request_body_max_bytes: Some(1024),
             response_body_max_bytes: Some(1024),
