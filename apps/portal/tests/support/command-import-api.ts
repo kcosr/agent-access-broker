@@ -49,7 +49,7 @@ export const ADMIN_SESSION = {
 
 /** The record result the Broker returns for a mutation of the import. */
 function recordResult(data: ImportPreviewResult) {
-  const { scopedMcpWarnings: _warnings, preview: _preview, resourceTypeChanges: _changes, affectedGrants: _affected, affectedGrantsByAction: _byAction, ...record } = data;
+  const { secretInputCandidates: _candidates, scopedMcpWarnings: _warnings, preview: _preview, resourceTypeChanges: _changes, affectedGrants: _affected, affectedGrantsByAction: _byAction, ...record } = data;
   return record;
 }
 

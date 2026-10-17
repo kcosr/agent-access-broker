@@ -13,7 +13,7 @@ import { inlineFrame } from "../src/features/catalog/catalog-ui";
 
 function fixture(): ImportPreviewResult {
   const definition: ImportActionDefinition = { action: "read", source: { operationId: "read" }, description: "Read an item", inputSchema: { type: "object" }, annotations: { openapi: { method: "get", path: "/items/{id}", security: { scheme: "apiKey", kind: "raw_header", header: "X-Api-Key" } } }, readOnly: false };
-  return { operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], catalogRevision: 1, importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {}, service: { definition: { service: "inventory", displayName: "Inventory", adapterKind: "openapi_http", endpoint: "https://api.example.test/v1", connectionSettings: { definitionUrl: "https://docs.example.test/openapi.json", definitionAuthKind: "none" }, executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], discovery: { kind: "anonymous" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" }, preview: { service: "inventory", serviceVersion: 1, catalogRevision: 1, configRevision: "config", credentialVersions: {}, manifestHash: "manifest", manifest: { protocolVersion: "3.1.0", metadata: { securitySchemes: [{ name: "apiKey", kind: "raw_header", header: "X-Api-Key" }, { name: "bearer", kind: "bearer" }, { name: "oauth", kind: "oauth" }, { name: "broken", kind: "raw_header" }] }, tools: [{ definition, unsupportedReason: null, readOnlyHint: null }] }, createdAt: "", expiresAt: "", createdBy: "admin" } };
+  return { operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, secretInputCandidates: [], scopedMcpWarnings: [], catalogRevision: 1, importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {}, service: { definition: { service: "inventory", displayName: "Inventory", adapterKind: "openapi_http", endpoint: "https://api.example.test/v1", connectionSettings: { definitionUrl: "https://docs.example.test/openapi.json", definitionAuthKind: "none" }, executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], discovery: { kind: "anonymous" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" }, preview: { service: "inventory", serviceVersion: 1, catalogRevision: 1, configRevision: "config", credentialVersions: {}, manifestHash: "manifest", manifest: { protocolVersion: "3.1.0", metadata: { securitySchemes: [{ name: "apiKey", kind: "raw_header", header: "X-Api-Key" }, { name: "bearer", kind: "bearer" }, { name: "oauth", kind: "oauth" }, { name: "broken", kind: "raw_header" }] }, tools: [{ definition, unsupportedReason: null, readOnlyHint: null }] }, createdAt: "", expiresAt: "", createdBy: "admin" } };
 }
 function renderEditor(data?: ImportPreviewResult, availableKinds = ["openapi_http"]) {
   return renderToStaticMarkup(createElement(ImportEditor, { principal: "admin", data, availableKinds, authentication: [], onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
@@ -61,7 +61,7 @@ describe("OpenAPI import configuration", () => {
     const draft = renderEditor(data);
     expect(draft).not.toContain("The definition settings and token delivery are fixed");
     expect(draft.match(/<input[^>]*value="https:\/\/docs.example.test\/openapi.json"[^>]*>/)?.[0]).not.toContain('disabled=""');
-    data.service.actions.push({ definition: data.preview!.manifest.tools[0].definition, status: "retired", version: 1, definitionHash: "hash" });
+    data.service.actions.push({ definition: data.preview!.manifest.tools[0].definition, status: "retired", version: 1, secretInputs: [], definitionHash: "hash" });
     const accepted = renderEditor(data);
     expect(accepted).toContain("The definition settings and token delivery are fixed");
     expect(accepted.match(/<input[^>]*value="https:\/\/docs.example.test\/openapi.json"[^>]*>/)?.[0]).toContain('disabled=""');
@@ -69,7 +69,7 @@ describe("OpenAPI import configuration", () => {
   });
   test("route or security changes require review under the existing operation identity", () => {
     const data = fixture();
-    data.service.actions.push({ definition: structuredClone(data.preview!.manifest.tools[0].definition), status: "enabled", version: 1, definitionHash: "hash" });
+    data.service.actions.push({ definition: structuredClone(data.preview!.manifest.tools[0].definition), status: "enabled", version: 1, secretInputs: [], definitionHash: "hash" });
     data.service.actions[0].definition.readOnly = true;
     expect(importReviewRows(data)[0]).toMatchObject({ change: "Unchanged", selected: true, readOnly: true });
     (data.preview!.manifest.tools[0].definition.annotations as { openapi: { path: string } }).openapi.path = "/v2/items/{id}";
@@ -100,7 +100,7 @@ describe("OpenAPI import configuration", () => {
     const data = fixture();
     data.service.definition.connectionSettings.securityScheme = "apiKey";
     data.service.definition.executionBindings[0].delivery = { kind: "raw_header", name: "X-Original-Key" };
-    data.service.actions.push({ definition: data.preview!.manifest.tools[0].definition, status: "quarantined", version: 1, definitionHash: "hash" });
+    data.service.actions.push({ definition: data.preview!.manifest.tools[0].definition, status: "quarantined", version: 1, secretInputs: [], definitionHash: "hash" });
     const html = renderEditor(data);
     expect(html).toContain("Token delivery: X-Original-Key.");
     expect(html).toContain("The discovered scheme now uses different token delivery");

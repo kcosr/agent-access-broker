@@ -1096,7 +1096,7 @@ fn accept_all(admin: &Path, files: &Path, discovered: &Value) -> Value {
         .map(|tool| {
             let action = tool["definition"]["action"].as_str().unwrap();
             json!({"source": tool["definition"]["source"], "action": action,
-                "readOnly": !matches!(action, "issue.create" | "issue.close")})
+                "readOnly": !matches!(action, "issue.create" | "issue.close"), "secretInputs":[]})
         })
         .collect::<Vec<_>>();
     run(

@@ -2,7 +2,8 @@
 //! Existing providers, identity, audit and OAuth state are shared across import edits.
 use super::*;
 use crate::imports::{
-    ImportEndpointForm, ImportedAdapterContext, ImportedCredentialKind, ImportedProvider,
+    ImportEndpointForm, ImportedAdapterContext, ImportedCredentialKind, ImportedDispatchGuard,
+    ImportedProvider,
 };
 use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, ImportedServiceStatus};
 #[cfg(test)]
@@ -18,14 +19,23 @@ mod retained_grants;
 pub struct PreparedImportedProviders {
     base_catalog: Arc<ImportedCatalog>,
     providers: BTreeMap<String, ImportedProvider>,
+    dispatch: BTreeMap<String, ImportedDispatchGuard>,
     service: String,
     definition: ImportedServiceDefinition,
     status: ImportedServiceStatus,
-    enabled_actions: Vec<ImportedActionDefinition>,
+    enabled_actions: Vec<(
+        ImportedActionDefinition,
+        Vec<agent_access_provider::SecretInputDescriptor>,
+    )>,
     /// The accepted metadata the provider was built with; the committed
     /// record must carry the same.
     accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     transport: PreparedTransport,
+}
+
+struct ValidatedImportedProviders {
+    providers: BTreeMap<String, ImportedProvider>,
+    dispatch: BTreeMap<String, ImportedDispatchGuard>,
 }
 
 enum PreparedTransport {
@@ -60,7 +70,7 @@ impl PreparedImportedProviders {
         self,
         runtime: &BrokerRuntime,
         catalog: &ImportedCatalog,
-    ) -> Result<BTreeMap<String, ImportedProvider>, ManagedStoreError> {
+    ) -> Result<ValidatedImportedProviders, ManagedStoreError> {
         if !Arc::ptr_eq(&self.base_catalog, &runtime.imported_catalog) {
             return Err(preparation_mismatch());
         }
@@ -69,7 +79,7 @@ impl PreparedImportedProviders {
             .ok_or_else(preparation_mismatch)?;
         if record.definition != self.definition
             || record.status != self.status
-            || enabled_definitions(record) != self.enabled_actions
+            || enabled_contracts(record) != self.enabled_actions
             || record.accepted_metadata != self.accepted_metadata
         {
             return Err(preparation_mismatch());
@@ -115,18 +125,26 @@ impl PreparedImportedProviders {
                 _ => return Err(preparation_mismatch()),
             }
         }
-        Ok(self.providers)
+        Ok(ValidatedImportedProviders {
+            providers: self.providers,
+            dispatch: self.dispatch,
+        })
     }
 }
 
-fn enabled_definitions(record: &ImportedServiceRecord) -> Vec<ImportedActionDefinition> {
+fn enabled_contracts(
+    record: &ImportedServiceRecord,
+) -> Vec<(
+    ImportedActionDefinition,
+    Vec<agent_access_provider::SecretInputDescriptor>,
+)> {
     let mut actions = record
         .actions
         .iter()
         .filter(|action| action.status == ImportedActionStatus::Enabled)
-        .map(|action| action.definition.clone())
+        .map(|action| (action.definition.clone(), action.secret_inputs.clone()))
         .collect::<Vec<_>>();
-    actions.sort_by(|left, right| left.action.cmp(&right.action));
+    actions.sort_by(|left, right| left.0.action.cmp(&right.0.action));
     actions
 }
 /// Core's adapter inputs for `record`: its accepted metadata and, for a
@@ -142,6 +160,7 @@ pub(super) fn adapter_context<'a>(
         .and_then(|endpoint| endpoint.command_name().map(str::to_owned))
         .and_then(|name| config.command_imports.get(&name));
     ImportedAdapterContext::new(record.accepted_metadata.as_ref(), command)
+        .with_receivers(&record.actions)
 }
 
 /// Whether an adapter built the provider shape its endpoint form requires:
@@ -238,6 +257,17 @@ pub(super) fn descriptor(
                 definition.input_schema.clone(),
             )
             .credential_modes(shape.credential_modes);
+            for input in &action_record.secret_inputs {
+                action = action.secret_input(input.clone());
+            }
+            if !action_record.secret_inputs.is_empty() {
+                action.description.push(' ');
+                action
+                    .description
+                    .push_str(crate::imports::RECEIVER_OUTPUT_NOTICE);
+                action.documentation =
+                    Some(json!({"secretReceiver": crate::imports::RECEIVER_OUTPUT_NOTICE}));
+            }
             if let Some(scope) = shape.scope {
                 action = action.scopes([scope.name.clone()]);
                 if scope.search_contained {
@@ -637,7 +667,7 @@ impl BrokerRuntime {
         };
         self.import_dispatch
             .get(service)
-            .is_some_and(|current| current.load(Ordering::Acquire))
+            .is_some_and(ImportedDispatchGuard::active)
             && record.status == ImportedServiceStatus::Enabled
             && destination_allowed(&self.config, &record.definition)
             && self.providers.contains_key(service)
@@ -656,58 +686,9 @@ impl BrokerRuntime {
         Arc::ptr_eq(&self.imported_catalog, &replacement.imported_catalog)
     }
 
-    /// Reuse per-service fences across unrelated edits and configuration reloads.
-    pub(super) fn initialize_import_dispatch(&mut self, previous: Option<&Self>) {
-        self.import_dispatch = Arc::new(
-            self.imported_catalog
-                .services
-                .iter()
-                .map(|record| {
-                    let name = &record.definition.service;
-                    let prior = previous
-                        .filter(|old| {
-                            old.imported_catalog.service(name) == Some(record)
-                                && ProviderLimits::from(&old.config.limits)
-                                    == ProviderLimits::from(&self.config.limits)
-                                && old.config.network.outbound_tls.trust
-                                    == self.config.network.outbound_tls.trust
-                                && old.config.network.outbound_tls.ca_certificate
-                                    == self.config.network.outbound_tls.ca_certificate
-                                && match (
-                                    &old.config.network.egress_proxy,
-                                    &self.config.network.egress_proxy,
-                                ) {
-                                    (None, None) => true,
-                                    (Some(old), Some(new)) => {
-                                        old.url == new.url
-                                            && old.username_ref == new.username_ref
-                                            && old.password_ref == new.password_ref
-                                    }
-                                    _ => false,
-                                }
-                                && destination_allowed(&old.config, &record.definition)
-                                    == destination_allowed(&self.config, &record.definition)
-                                && adapter_context(&old.config, record).command
-                                    == adapter_context(&self.config, record).command
-                                && old.providers.contains_key(name)
-                                    == self.providers.contains_key(name)
-                        })
-                        .and_then(|old| old.import_dispatch.get(name))
-                        .filter(|flag| flag.load(Ordering::Acquire));
-                    (
-                        name.clone(),
-                        prior
-                            .cloned()
-                            .unwrap_or_else(|| Arc::new(AtomicBool::new(true))),
-                    )
-                })
-                .collect(),
-        );
-    }
-
     pub fn retire_import_dispatch(&self) {
         for flag in self.import_dispatch.values() {
-            flag.store(false, Ordering::Release);
+            flag.retire();
         }
     }
 
@@ -716,9 +697,9 @@ impl BrokerRuntime {
             if replacement
                 .import_dispatch
                 .get(service)
-                .is_none_or(|new| !Arc::ptr_eq(old, new))
+                .is_none_or(|new| !old.same(new))
             {
-                old.store(false, Ordering::Release);
+                old.retire();
             }
         }
     }
@@ -733,7 +714,10 @@ impl BrokerRuntime {
     ) -> Result<Self, ManagedStoreError> {
         self.validate_import_mcp_names(&catalog)?;
         let changed_service = prepared.service.clone();
-        let imported_providers = prepared.validate(self, &catalog)?;
+        let ValidatedImportedProviders {
+            providers: imported_providers,
+            dispatch,
+        } = prepared.validate(self, &catalog)?;
         // The registry publishes with the catalog that declares its types.
         let resource_types = Arc::new(self.imported_resource_types(&catalog)?);
         let mut next = self.clone();
@@ -839,7 +823,7 @@ impl BrokerRuntime {
         next.providers = Arc::new(providers);
         next.command_providers = Arc::new(command_providers);
         next.imported_catalog = Arc::new(catalog);
-        next.initialize_import_dispatch(Some(self));
+        next.import_dispatch = Arc::new(dispatch);
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
         next.policy_snapshot = Arc::new(ArcSwap::from(self.policy_snapshot()));
         next.check_import_catalog_budgets()?;
@@ -958,6 +942,54 @@ impl BrokerRuntime {
     }
 }
 
+/// Reuse live fences only when the complete contract and host transport stay equal.
+pub(super) fn prepare_dispatch(
+    config: &BrokerConfig,
+    catalog: &ImportedCatalog,
+    previous: Option<&BrokerRuntime>,
+) -> BTreeMap<String, ImportedDispatchGuard> {
+    catalog
+        .services
+        .iter()
+        .map(|record| {
+            let name = &record.definition.service;
+            let prior = previous
+                .filter(|old| {
+                    old.imported_catalog.service(name) == Some(record)
+                        && old.providers.contains_key(name)
+                        && ProviderLimits::from(&old.config.limits)
+                            == ProviderLimits::from(&config.limits)
+                        && old.config.network.outbound_tls.trust
+                            == config.network.outbound_tls.trust
+                        && old.config.network.outbound_tls.ca_certificate
+                            == config.network.outbound_tls.ca_certificate
+                        && match (
+                            &old.config.network.egress_proxy,
+                            &config.network.egress_proxy,
+                        ) {
+                            (None, None) => true,
+                            (Some(old), Some(new)) => {
+                                old.url == new.url
+                                    && old.username_ref == new.username_ref
+                                    && old.password_ref == new.password_ref
+                            }
+                            _ => false,
+                        }
+                        && destination_allowed(&old.config, &record.definition)
+                            == destination_allowed(config, &record.definition)
+                        && adapter_context(&old.config, record).command
+                            == adapter_context(config, record).command
+                })
+                .and_then(|old| old.import_dispatch.get(name))
+                .filter(|guard| guard.active());
+            (
+                name.clone(),
+                prior.cloned().unwrap_or_else(ImportedDispatchGuard::new),
+            )
+        })
+        .collect()
+}
+
 /// Build a host-controlled adapter without contacting upstream. Call outside a
 /// managed transaction; token material resolution must not reenter its DB lock.
 pub(super) fn build_providers(
@@ -967,6 +999,7 @@ pub(super) fn build_providers(
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
+    dispatch: &BTreeMap<String, ImportedDispatchGuard>,
 ) -> Result<BTreeMap<String, ImportedProvider>, RuntimeError> {
     // Each generation reports approved commands it cannot use yet.
     for warning in crate::command_import_warnings(config) {
@@ -1041,7 +1074,14 @@ pub(super) fn build_providers(
             None,
         );
         if actions.iter().any(|action| {
-            adapter.validate_action(action).is_err() || adapter.scoped_mcp_name(action).is_err()
+            adapter.validate_action(action).is_err()
+                || adapter.scoped_mcp_name(action).is_err()
+                || adapter
+                    .validate_secret_inputs(
+                        action,
+                        adapter_context(config, record).secret_inputs(&action.action),
+                    )
+                    .is_err()
         }) {
             continue;
         }
@@ -1049,7 +1089,7 @@ pub(super) fn build_providers(
             definition,
             &actions,
             transport,
-            &adapter_context(config, record),
+            &adapter_context(config, record).with_dispatch_guard(&dispatch[&definition.service]),
             &host,
         ) && provider_matches_endpoint(definition, &provider)
         {
@@ -1189,13 +1229,16 @@ impl BrokerRuntime {
                 PreparedTransport::ReplacementPending(Sha256::digest(token.as_bytes()).into())
             }
         };
+        let mut dispatch = (*self.import_dispatch).clone();
+        dispatch.insert(definition.service.clone(), ImportedDispatchGuard::new());
         let mut prepared = PreparedImportedProviders {
             base_catalog: self.imported_catalog.clone(),
             providers,
+            dispatch,
             service: definition.service.clone(),
             definition: definition.clone(),
             status: record.status,
-            enabled_actions: enabled_definitions(record),
+            enabled_actions: enabled_contracts(record),
             accepted_metadata: record.accepted_metadata.clone(),
             transport: transport_provenance,
         };
@@ -1259,6 +1302,12 @@ impl BrokerRuntime {
             adapter
                 .scoped_mcp_name(action)
                 .map_err(ManagedStoreError::InputInvalid)?;
+            adapter
+                .validate_secret_inputs(
+                    action,
+                    adapter_context(&self.config, record).secret_inputs(&action.action),
+                )
+                .map_err(ManagedStoreError::InputInvalid)?;
         }
         let clients = self.network.client_factory(ClientCaller::ImportAdapter {
             kind: adapter.kind(),
@@ -1274,7 +1323,8 @@ impl BrokerRuntime {
                 definition,
                 &actions,
                 transport,
-                &adapter_context(&self.config, record),
+                &adapter_context(&self.config, record)
+                    .with_dispatch_guard(&prepared.dispatch[&definition.service]),
                 &host,
             )
             .ok()

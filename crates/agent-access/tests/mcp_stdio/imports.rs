@@ -443,11 +443,11 @@ async fn exercise_import(openapi: bool) {
     );
     let (version, revision) = versions(&discovered);
     let mut selections = vec![
-        json!({"source":if openapi {json!({"operationId":"Read.Item-V1"})} else {json!({"toolName":RAW_MCP_READ})},"action":"item.read","readOnly":true}),
-        json!({"source":if openapi {json!({"operationId":"update_item"})} else {json!({"toolName":"update_item"})},"action":"item.update","readOnly":false}),
+        json!({"source":if openapi {json!({"operationId":"Read.Item-V1"})} else {json!({"toolName":RAW_MCP_READ})},"action":"item.read","readOnly":true,"secretInputs":[]}),
+        json!({"source":if openapi {json!({"operationId":"update_item"})} else {json!({"toolName":"update_item"})},"action":"item.update","readOnly":false,"secretInputs":[]}),
     ];
     if openapi {
-        selections.push(json!({"source":{"method":"GET","path":"/unnamed"},"action":"item.unnamed","readOnly":true}));
+        selections.push(json!({"source":{"method":"GET","path":"/unnamed"},"action":"item.unnamed","readOnly":true,"secretInputs":[]}));
     }
     let request = write_request(
         directory.path(),

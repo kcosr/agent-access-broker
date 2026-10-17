@@ -214,7 +214,7 @@ pub(super) async fn discover_and_accept(
             .iter()
             .filter(|tool| tool["unsupportedReason"].is_null())
             .map(|tool| json!({"source": tool["definition"]["source"],
-                "action": tool["definition"]["action"], "readOnly": true}))
+                "action": tool["definition"]["action"], "readOnly": true,"secretInputs":[]}))
             .collect::<Vec<_>>()
     );
     let (status, accepted) = request(
@@ -688,7 +688,7 @@ async fn refresh_keeps_grants_and_reacceptance_requires_confirming_them() {
     let mut accept = versions(refreshed);
     accept["manifestHash"] = refreshed["preview"]["manifestHash"].clone();
     accept["selections"] = json!([{"source": tool["definition"]["source"],
-        "action": "time.now", "readOnly": true}]);
+        "action": "time.now", "readOnly": true,"secretInputs":[]}]);
     let (status, unconfirmed) = request(
         &app,
         &token,
@@ -1333,7 +1333,7 @@ async fn acceptance_refuses_changes_that_would_invalidate_retained_grants() {
         let mut accept = versions(discovered);
         accept["manifestHash"] = discovered["preview"]["manifestHash"].clone();
         accept["selections"] = json!([{"source": tool["definition"]["source"],
-            "action": "issue.stats", "readOnly": true}]);
+            "action": "issue.stats", "readOnly": true,"secretInputs":[]}]);
         accept["confirmAffectedGrants"] = json!(true);
         let (status, refused) = request(
             &app,

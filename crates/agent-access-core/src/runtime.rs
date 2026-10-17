@@ -1728,7 +1728,7 @@ pub struct BrokerRuntime {
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
     imported_catalog: Arc<crate::ImportedCatalog>,
     effective_credentials: Arc<crate::CredentialsConfig>,
-    import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
+    import_dispatch: Arc<BTreeMap<String, crate::imports::ImportedDispatchGuard>>,
     /// Command-import budgets and live process supervisors, carried from
     /// each generation to the next, as import dispatch fences are.
     command_registry: crate::imports::CommandRegistry,
@@ -2279,6 +2279,7 @@ impl BrokerRuntime {
                 .check_active_credential_keys(ring)
                 .map_err(runtime_managed_store_error)?;
         }
+        let mut import_dispatch = imports::prepare_dispatch(&config, &imported_catalog, previous);
         let imported_providers = imports::build_providers(
             &config,
             &imported_catalog,
@@ -2286,7 +2287,15 @@ impl BrokerRuntime {
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
             &network,
+            &import_dispatch,
         )?;
+        // A failed rebuild must retire the previous available provider even when
+        // the stored contract itself did not change.
+        for (service, guard) in &mut import_dispatch {
+            if !imported_providers.contains_key(service) {
+                *guard = crate::imports::ImportedDispatchGuard::new();
+            }
+        }
         let mut command_providers = BTreeMap::new();
         for (service, provider) in imported_providers {
             if let Some(command) = provider.command() {
@@ -2354,7 +2363,7 @@ impl BrokerRuntime {
             command_providers: Arc::new(command_providers),
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
-            import_dispatch: Arc::new(BTreeMap::new()),
+            import_dispatch: Arc::new(import_dispatch),
             command_registry: previous
                 .map(|previous| previous.command_registry.clone())
                 .unwrap_or_default(),
@@ -2378,7 +2387,6 @@ impl BrokerRuntime {
             config_generation: None,
             provider_fixtures,
         };
-        runtime.initialize_import_dispatch(previous);
         runtime.initialize_scoped_mcp_readiness(None);
         runtime
             .check_import_catalog_budgets()

@@ -253,6 +253,7 @@ fn project_resources(config: &mut BrokerConfig) {
 
 fn action(name: &str, command: Value) -> ImportedActionRecord {
     ImportedActionRecord {
+        secret_inputs: Vec::new(),
         definition: ImportedActionDefinition {
             action: name.into(),
             source: json!({"name": name}),

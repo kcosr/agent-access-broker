@@ -364,7 +364,7 @@ test("Auditor can inspect a stored import preview while discovery and acceptance
     status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin", updatedBy: "admin"
   };
   const data = {
-    service: imported, operatorAllowed: false, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {},
+    service: imported, operatorAllowed: false, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, secretInputCandidates: [], scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {},
     preview: { service: "metrics", serviceVersion: 1, catalogRevision: 1, configRevision: "fixture", credentialVersions: {}, manifestHash: "fixture-preview", manifest: { protocolVersion: "fixture", metadata: {}, tools: [{ definition, unsupportedReason: null, readOnlyHint: true }] }, createdAt: "2026-09-29T00:00:00Z", expiresAt: "2026-09-30T00:00:00Z", createdBy: "admin" }
   };
   await page.route("**/v1/admin/imports", (route) => route.fulfill({ json: envelope({ catalogRevision: 1, operatorEnabled: false, availableKinds: [], importAuthentication: [], services: [imported] }) }));

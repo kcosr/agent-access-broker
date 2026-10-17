@@ -352,6 +352,11 @@ property path. Its ancestors must be unambiguous `type: "object"` schemas with
 explicit `properties`; paths through arrays, references, schema composition,
 conditionals or pattern properties are unsupported. Leaf string constraints
 such as `enum`, `const`, `pattern`, `minLength` and `maxLength` remain in force.
+`ActionDescriptor::validate_secret_contract()` checks declared secret fields
+against the same fixed schema profile as `reference_input_schema()` without
+allocating the reference-admission projection. Import review uses this check to
+enumerate eligible receiver fields while preserving the upstream source schema.
+
 `ActionDescriptor::reference_input_schema()` projects each declared field as
 the original literal schema or a strict object containing `secretRef` and an
 optional `expiresAt`. Unknown reference-object properties are rejected. The

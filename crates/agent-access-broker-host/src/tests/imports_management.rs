@@ -66,7 +66,7 @@ async fn detail(app: &Router, token: &str, service: &str) -> Value {
 }
 fn selection(preview: &Value, read_only: bool) -> Value {
     let definition = &preview["preview"]["manifest"]["tools"][0]["definition"];
-    json!({"source":definition["source"],"action":definition["action"],"readOnly":read_only})
+    json!({"source":definition["source"],"action":definition["action"],"readOnly":read_only,"secretInputs":[]})
 }
 async fn accept_preview(
     app: &Router,
@@ -244,6 +244,7 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
         .actions
         .iter()
         .map(|a| ImportedActionWrite {
+            secret_inputs: Vec::new(),
             definition: a.definition.clone(),
             status: a.status,
         })

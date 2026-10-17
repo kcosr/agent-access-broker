@@ -1,3 +1,4 @@
+import { RECEIVER_NOTICE } from "../../lib/imports";
 import { AdminIconButton, AdminButton } from "../../components/admin-access";
 // A service page's Actions tab: every action from the policy catalog; for an
 // imported service, every accepted action record with its status, OpenAPI
@@ -540,6 +541,7 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
           ]}
         />
       </DrawerSection>
+      {open.record?.secretInputs.length ? <DrawerSection title="Secret receiver fields"><p className="pt-prose wb-mono">{open.record.secretInputs.map(({ pointer }) => pointer).join(", ")}</p><Banner tone="warning" slim>{RECEIVER_NOTICE}</Banner></DrawerSection> : null}
       {open.description.trim() ? (
         <DrawerSection title="Description">
           <LongText text={open.description} subject={open.action} />
@@ -585,10 +587,11 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
       {inputSchema || open.record ? (
         <DrawerSection title="Schemas">
           {inputSchema ? (
-            <Disclosure summary="Input schema">
+            <Disclosure summary={open.record ? "Source input schema" : "Input schema"}>
               <pre className="wb-code pt-catalog-code">{JSON.stringify(inputSchema, null, 2)}</pre>
             </Disclosure>
           ) : null}
+          {open.record?.secretInputs.length && open.catalog?.inputSchema ? <Disclosure summary="Broker input schema"><pre className="wb-code pt-catalog-code">{JSON.stringify(open.catalog.inputSchema, null, 2)}</pre></Disclosure> : null}
           {open.record ? (
             <Disclosure summary="Source and annotations">
               <pre className="wb-code pt-catalog-code">

@@ -134,8 +134,8 @@ test("discovery previews the manifest, editable type IDs and who checks each act
       expectedCatalogRevision: 4,
       manifestHash: "manifest-1.4.0",
       selections: [
-        { source: { name: "issue.view" }, action: "issue.view", readOnly: true },
-        { source: { name: "issue.search" }, action: "issue.search", readOnly: false }
+        { source: { name: "issue.view" }, action: "issue.view", readOnly: true, secretInputs: [] },
+        { source: { name: "issue.search" }, action: "issue.search", readOnly: false, secretInputs: [] }
       ],
       confirmAffectedGrants: false,
       resourceTypeIds: { project: "tickets_project" }
