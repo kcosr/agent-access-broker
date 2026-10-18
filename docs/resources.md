@@ -370,6 +370,23 @@ exhaustive coverage. It retains separate clauses when one grant must cover the
 whole request. Each clause's coverage must contain every target; several clauses
 cannot be combined to authorize different parts of one operation.
 
+Each effective-access clause has a `scopes` object keyed by required scope name.
+Each scope contains `resourceType`, `included`, and `excluded`. Scopes within one
+clause are a conjunction; different clauses are alternatives. An unscoped action
+uses `{"scopes":{},"excludedRequests":[]}`. Clauses always include
+`excludedRequests`, whose entries contain complete `scopes` maps: a request is
+excluded only when all of its targets fit every scope of one such boundary.
+Entry-level resource types and flat resource clauses are not part of this API.
+
+The portal displays each complete alternative and its whole-request exclusions.
+A mixed-type selection in one grant permits all combinations within that grant;
+use separate grants when only specific pairings are intended. Token resource
+selections narrow each type independently and cannot create correlated pairings.
+Complete action filtering through `targets` checks the whole tuple against the
+same evaluator. Resource listing remains one type at a time: a returned row has
+some complete compatible boundary, but it is not necessarily compatible with
+every row from another type's list.
+
 Credential precedence can also impose whole-request conditions. A higher-ranked
 grant covering only repository A must not suppress a lower-ranked grant covering
 both A and B when an operation touches both repositories: the higher grant does

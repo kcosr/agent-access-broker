@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Core-owned delegated Broker administration: complete-tuple service-account,
+  group and grant operations, reference-only absent-slot credential installation,
+  and bounded child invocation tokens with atomic encrypted output capture.
+- Principal creation, group-member changes, administrator/self-service token
+  issuance, grant-subject changes, grant PATCH, and administrator/personal
+  credential installation recheck original authority in their transaction and
+  retain completion ownership through disconnect and shutdown.
+
 ### Breaking Changes
 
 - GitLab project access-token creation and service-account membership replace
@@ -13,6 +23,17 @@ All notable changes to this project are documented in this file.
   inputs and old spellings are rejected; numeric `accessLevel` result metadata
   is unchanged. Discovery advertises only roles permitted by the configured cap;
   action details distinguish role inputs, existing-role checks and numeric metadata.
+- Availability prerequisites now use a tagged `kind` contract. Local-runtime
+  prerequisites omit `credentialMode` and can require caller authentication.
+- Reserve `broker_management` and `access_management` for the core-owned local
+  administration service. Its four Broker resource types accept exact selectors.
+- Provider actions declare plural `resource_scopes` through `.scopes(...)`.
+  Capability and runtime metadata use `requiredScopes`; discovery and previews
+  use complete `targets` maps. Every required resource dimension must be covered
+  by one grant and by the token's resource restrictions. Singular scope fields
+  and the old one-target query shape are removed.
+- The host's test-support `ManagedStoreError` adds `ManagementDenied` and
+  `CommitUnknown`; exhaustive downstream matches must handle both.
 
 - Connection credential PUTs, including literal tokens, return `409 version_conflict` before writing when a runtime publication overtakes admission; retry the PUT using current configuration.
 
@@ -1218,6 +1239,19 @@ All notable changes to this project are documented in this file.
   neutral tone unless something needs fixing.
 
 ### Fixed
+
+- Delegated credential installation retains safe secret-reference provenance in
+  completion audit. All credential-install paths reject references produced by
+  Broker administration, preventing invocation tokens from becoming upstream
+  connection credentials while preserving approved receiver use.
+- Grant PATCH rechecks current authentication and policy-write authority inside
+  its transaction, including when replacing grant subjects.
+- Grant-subject edits preserve the active policy snapshot when the edited grant
+  is disabled or the final subject is removed with `disable_grant`. Disabled
+  grants cannot become effective or displace unrelated active grants.
+- Delegated writes that fail before starting a transaction report
+  `not_dispatched`; shared management adapters return storage unavailability for
+  a poisoned connection lock.
 
 - GitLab REST resolves the old path or web URL of a renamed, moved or
   transferred project to the project's current identity. GitLab 16.7 and later

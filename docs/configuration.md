@@ -2499,3 +2499,19 @@ succeeds. Storage, encryption, expiry and output-contract failures remain captur
 failures.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Local Broker administration
+
+`broker_management` is always registered by core and requires no provider table,
+endpoint or dummy credential. Native provider kind/service naming rules do not
+apply to this built-in: its internal kind is `access_management`. The names
+`broker`, `broker_management`, and `access_management` are reserved against
+external services, imports, gateways and credential connections.
+
+Managed identity and managed policy are required for its actions. Administrators
+author grants through managed policy; TOML grants for this service are rejected.
+Missing local prerequisites affect action availability rather than preventing
+unrelated services from starting. `token.create` requires reference output mode,
+token hashing, encrypted managed storage and a finite option in
+`broker_tokens.admin_agent_invoke_ttl_options`. Its input schema advertises only
+finite configured choices. See [delegated administration](broker-management.md).

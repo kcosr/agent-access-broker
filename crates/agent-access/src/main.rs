@@ -833,6 +833,12 @@ enum ActionsCommand {
             help = "Resource type of --resource; required when the service authorizes several resource types"
         )]
         resource_type: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = ["resource", "resource_type"],
+            help = "Complete target map as JSON, keyed by required scope name; checks current policy compatibility"
+        )]
+        targets_json: Option<String>,
         #[command(flatten)]
         projection: DiscoveryListArgs,
     },
@@ -4931,6 +4937,7 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
                 service,
                 resource,
                 resource_type,
+                targets_json,
                 projection,
             } => {
                 run_actions_list(
@@ -4938,6 +4945,7 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
                     service,
                     resource.as_deref(),
                     resource_type.as_deref(),
+                    targets_json.as_deref(),
                     projection,
                 )
                 .await
@@ -9832,6 +9840,7 @@ async fn run_actions_list(
     service: &str,
     resource: Option<&str>,
     resource_type: Option<&str>,
+    targets_json: Option<&str>,
     projection: &DiscoveryListArgs,
 ) -> Result<()> {
     render_discovery(
@@ -9841,6 +9850,7 @@ async fn run_actions_list(
             service,
             resource,
             resource_type,
+            targets_json,
             projection.prefix.as_deref(),
             projection.verbose,
         )
@@ -17884,7 +17894,7 @@ mod tests {
                     "action": "repo.fetch",
                     "readOnly": true,
                     "description": "Fetch repository",
-                    "requiredScopeTypes": ["repository"],
+                    "requiredScopes": {"repository":{"resourceType":"git_repository"}},
                     "credentialModes": ["service"],
                     "inputSchema": {"type": "object"},
                     "futureField": {"preserved": true}
@@ -17901,7 +17911,7 @@ mod tests {
                         "action": "project.view",
                         "readOnly": true,
                         "description": "View project",
-                        "requiredScopeTypes": ["repository"],
+                        "requiredScopes": {"repository":{"resourceType":"git_repository"}},
                         "credentialModes": ["per_user", "service"],
                         "inputSchema": {"type": "object"}
                     },
@@ -17909,7 +17919,7 @@ mod tests {
                         "action": "merge_request.draft_note.publish",
                         "readOnly": false,
                         "description": "Publish draft note",
-                        "requiredScopeTypes": ["repository"],
+                        "requiredScopes": {"repository":{"resourceType":"git_repository"}},
                         "credentialModes": ["service", "per_user"],
                         "upstreamResourceOwnership": "acting_user",
                         "inputSchema": {"type": "object", "required": ["project"]}
@@ -17918,7 +17928,7 @@ mod tests {
                         "action": "merge_request.approve",
                         "readOnly": false,
                         "description": "Approve merge request",
-                        "requiredScopeTypes": ["repository"],
+                        "requiredScopes": {"repository":{"resourceType":"git_repository"}},
                         "credentialModes": ["service"],
                         "inputSchema": {"type": "object"}
                     }
@@ -18627,7 +18637,7 @@ mod tests {
             read_only: true,
             action: "issue.view".to_string(),
             description: "test action".to_string(),
-            required_scope_types: Vec::new(),
+            required_scopes: BTreeMap::new(),
             credential_modes: Vec::new(),
             upstream_resource_ownership: None,
             lookup_required: false,
@@ -18637,6 +18647,7 @@ mod tests {
             secret_outputs: Vec::new(),
             secret_input_pointers: Vec::new(),
             secret_output_mode: None,
+            result_schema: None,
             io: ActionIo::Json,
             response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
@@ -22388,7 +22399,12 @@ upload_spool_dir = "upload-spool"
                     read_only: true,
                     action: "call".to_string(),
                     description: "Call".to_string(),
-                    required_scope_types: vec!["endpoint".to_string()],
+                    required_scopes: BTreeMap::from([(
+                        "endpoint".to_string(),
+                        agent_access_provider::RequiredResourceScope::new(
+                            agent_access_provider::ResourceType::new("endpoint").unwrap(),
+                        ),
+                    )]),
                     credential_modes: vec!["service".to_string()],
                     upstream_resource_ownership: None,
                     lookup_required: false,
@@ -22398,6 +22414,7 @@ upload_spool_dir = "upload-spool"
                     secret_outputs: Vec::new(),
                     secret_input_pointers: Vec::new(),
                     secret_output_mode: None,
+                    result_schema: None,
                     io: ActionIo::Json,
                     response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
                     exit_policy: ExitPolicy::InvokeDecision,

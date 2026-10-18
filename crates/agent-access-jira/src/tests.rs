@@ -1112,7 +1112,7 @@ fn issue_create_capability_is_project_scoped_without_lookup() {
         .into_iter()
         .find(|action| action.action == "issue.create")
         .unwrap();
-    assert_eq!(action.required_scope_types(), vec!["project".to_string()]);
+    assert_eq!(action.resource_scopes, vec!["project".to_string()]);
     assert_eq!(action.lookup, LookupRequirement::None);
     assert_eq!(
         action.input_schema["required"],
@@ -1798,10 +1798,7 @@ async fn issue_child_create_capability_and_scope_resolution_use_lookup_metadata(
         .find(|action| action.action == "issue.child.create")
         .unwrap();
     assert_eq!(capability.lookup, LookupRequirement::ScopeResolution);
-    assert_eq!(
-        capability.required_scope_types(),
-        vec!["project".to_string()]
-    );
+    assert_eq!(capability.resource_scopes, vec!["project".to_string()]);
     assert_eq!(
         capability.input_schema["properties"]["parentIssue"]["type"],
         "string"
@@ -2558,7 +2555,7 @@ async fn issue_update_capability_and_scope_resolution_use_lookup_metadata() {
         .into_iter()
         .find(|action| action.action == "issue.update")
         .unwrap();
-    assert_eq!(capability.required_scope_types(), vec!["project"]);
+    assert_eq!(capability.resource_scopes, vec!["project"]);
     assert!(capability.lookup.credential_required());
 
     let scopes = provider
@@ -2594,7 +2591,7 @@ async fn issue_dependency_add_capability_and_scope_resolution_use_lookup_metadat
         .into_iter()
         .find(|action| action.action == "issue.dependency.add")
         .unwrap();
-    assert_eq!(capability.required_scope_types(), vec!["project"]);
+    assert_eq!(capability.resource_scopes, vec!["project"]);
     assert!(capability.lookup.credential_required());
     assert_eq!(
         capability.input_schema["properties"]["blockingIssue"]["type"],
@@ -3025,7 +3022,7 @@ async fn issue_parent_set_capability_and_scope_resolution_use_lookup_metadata() 
         .into_iter()
         .find(|action| action.action == "issue.parent.set")
         .unwrap();
-    assert_eq!(capability.required_scope_types(), vec!["project"]);
+    assert_eq!(capability.resource_scopes, vec!["project"]);
     assert!(capability.lookup.credential_required());
     assert_eq!(
         capability.input_schema["properties"]["parentIssue"]["type"],
@@ -9300,7 +9297,10 @@ fn jira_descriptor_declares_lookup_and_io_per_action() {
     let search = action("search");
     assert_eq!(search.lookup, LookupRequirement::None);
     assert!(search.native_search.is_some());
-    assert_eq!(search.resource_scope.as_deref(), Some("project"));
+    assert_eq!(
+        search.resource_scopes.first().map(String::as_str),
+        Some("project")
+    );
     assert_eq!(search.io, crate::ActionIo::Json);
 
     let create = action("issue.create");

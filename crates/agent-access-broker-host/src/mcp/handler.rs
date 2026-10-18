@@ -295,10 +295,15 @@ impl Handler {
                 let discovery = runtime
                     .service_discovery(&request.identity, &request.context, service)
                     .ok_or("Service is not visible or does not exist")?;
+                let targets = args
+                    .get("targets")
+                    .map(|value| agent_access_core::parse_action_targets_json(&value.to_string()))
+                    .transpose()?;
                 serde_json::to_value(discovery.actions(
                     args.get("resource").and_then(Value::as_str),
                     mcp_resource_type(&args)?.as_ref(),
                     prefix,
+                    targets.as_ref(),
                 )?)
                 .map_err(|_| "Cannot encode action discovery")
             }

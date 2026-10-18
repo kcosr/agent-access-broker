@@ -173,7 +173,7 @@ fn parse_inputs(
 pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor> {
     let common = |action: &str, description: &str, schema: Value, documentation: Value| {
         ActionDescriptor::new(action, description, schema)
-            .scope("repository")
+            .scopes(["repository"])
             .credential_modes(["service", "per_user"])
             .native_search(NativeSearchEnforcement::ResultFiltered)
             .read_only()

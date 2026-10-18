@@ -69,6 +69,13 @@ the caller's grants to filter by.
 Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
 connections.
 
+The core-owned [Broker administration service](docs/broker-management.md) supports
+explicitly delegated service-account creation, membership and grant assignments,
+reference-only GitLab credential installation, and bounded child invocation-token
+issuance. Each operation authorizes its complete target tuple. Broker-issued token
+references can be passed to approved receivers, but cannot be installed as
+upstream connection credentials.
+
 Native integrations are ordinary Rust crates built on the provider SDK. A team
 can write providers in its own repository and build its own Broker distribution
 that links them alongside upstream modules; see the

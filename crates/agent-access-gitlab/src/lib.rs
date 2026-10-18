@@ -7289,7 +7289,7 @@ fn gitlab_read_action(action: &str, description: &str, input_schema: Value) -> A
 
 fn gitlab_action(action: &str, description: &str, input_schema: Value) -> ActionDescriptor {
     ActionDescriptor::new(action, description, input_schema)
-        .scope("repository")
+        .scopes(["repository"])
         .credential_modes(["service", "per_user"])
         .lookup(LookupRequirement::ScopeResolution)
 }

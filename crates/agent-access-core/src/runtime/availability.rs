@@ -11,20 +11,105 @@ pub enum AvailabilityState {
     Unknown,
 }
 
+/// A prerequisite is either upstream credential setup or a local Broker
+/// capability. Local requirements never invent an upstream credential mode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CredentialRequirement {
-    pub reason: String,
-    pub credential_mode: String,
-    /// `user` for personal setup, `administrator` for broker configuration.
-    pub resolution: String,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AvailabilityRequirement {
+    Credential {
+        reason: String,
+        #[serde(rename = "credentialMode")]
+        credential_mode: String,
+        resolution: AvailabilityResolution,
+    },
+    LocalRuntime {
+        reason: LocalAvailabilityReason,
+        resolution: AvailabilityResolution,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AvailabilityResolution {
+    User,
+    Administrator,
+    /// Use a supported invocation credential; no upstream setup link applies.
+    Caller,
+}
+
+impl AvailabilityResolution {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Administrator => "administrator",
+            Self::Caller => "caller",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalAvailabilityReason {
+    ManagedIdentityRequired,
+    ManagedPolicyRequired,
+    CredentialEncryptionUnavailable,
+    ReferenceIdentityUnsupported,
+    TokenHashingUnavailable,
+    FiniteTokenTtlRequired,
+    ReferenceOutputRequired,
+}
+
+impl LocalAvailabilityReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ManagedIdentityRequired => "managed_identity_required",
+            Self::ManagedPolicyRequired => "managed_policy_required",
+            Self::CredentialEncryptionUnavailable => "credential_encryption_unavailable",
+            Self::ReferenceIdentityUnsupported => "reference_identity_unsupported",
+            Self::TokenHashingUnavailable => "token_hashing_unavailable",
+            Self::FiniteTokenTtlRequired => "finite_token_ttl_required",
+            Self::ReferenceOutputRequired => "reference_output_required",
+        }
+    }
+}
+
+impl AvailabilityRequirement {
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Credential { reason, .. } => reason,
+            Self::LocalRuntime { reason, .. } => reason.as_str(),
+        }
+    }
+    pub fn resolution(&self) -> &str {
+        match self {
+            Self::Credential { resolution, .. } | Self::LocalRuntime { resolution, .. } => {
+                resolution.as_str()
+            }
+        }
+    }
+    pub fn credential_mode(&self) -> Option<&str> {
+        match self {
+            Self::Credential {
+                credential_mode, ..
+            } => Some(credential_mode),
+            Self::LocalRuntime { .. } => None,
+        }
+    }
+    fn local(reason: LocalAvailabilityReason) -> Self {
+        let resolution = if reason == LocalAvailabilityReason::ReferenceIdentityUnsupported {
+            AvailabilityResolution::Caller
+        } else {
+            AvailabilityResolution::Administrator
+        };
+        Self::LocalRuntime { reason, resolution }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceAvailability {
     pub state: AvailabilityState,
-    pub requirements: Vec<CredentialRequirement>,
+    pub requirements: Vec<AvailabilityRequirement>,
     pub message: String,
 }
 
@@ -128,6 +213,24 @@ impl UnavailableCredential {
 }
 
 impl BrokerRuntime {
+    /// Prerequisites for an administrator inspecting a local action contract.
+    /// This is metadata only: it neither evaluates grants nor reads targets or
+    /// credentials, and it cannot authorize an invocation.
+    pub fn local_action_requirements(
+        &self,
+        identity: &IdentityContext,
+        service: &str,
+        action: &str,
+    ) -> Option<Vec<AvailabilityRequirement>> {
+        let RuntimeServiceRegistration::BrokerManagement(registration) =
+            self.service_registration(service)?
+        else {
+            return None;
+        };
+        registration.descriptor().action(action)?;
+        Some(self.broker_management_requirements(identity, action))
+    }
+
     pub(super) fn available_service_descriptors(
         &self,
         identity: &IdentityContext,
@@ -166,13 +269,24 @@ impl BrokerRuntime {
         let mut unknown = false;
         let actions = std::mem::take(&mut descriptor.actions);
         for action in actions {
+            if let Some(local) =
+                self.local_action_requirements(identity, &descriptor.service, &action.action)
+                && !local.is_empty()
+            {
+                for requirement in local {
+                    if !requirements.contains(&requirement) {
+                        requirements.push(requirement);
+                    }
+                }
+                continue;
+            }
             if !action.secret_outputs.is_empty()
                 && self.config.secret_outputs.mode == crate::SecretOutputMode::Reference
                 && !self.can_hold_secret_references(identity)
             {
                 continue;
             }
-            let scoped = action.resource_scope.is_some();
+            let scoped = !action.resource_scopes.is_empty();
             let unscoped_modes = if scoped {
                 Vec::new()
             } else {
@@ -238,15 +352,14 @@ impl BrokerRuntime {
                     if let Err(error) = result {
                         usable = false;
                         unknown |= error.unknown;
-                        let requirement = CredentialRequirement {
+                        let requirement = AvailabilityRequirement::Credential {
                             reason: error.reason.clone(),
                             credential_mode: needed_mode.into(),
                             resolution: if needed_mode == "per_user" && !error.administrator {
-                                "user"
+                                AvailabilityResolution::User
                             } else {
-                                "administrator"
-                            }
-                            .into(),
+                                AvailabilityResolution::Administrator
+                            },
                         };
                         if !requirements.contains(&requirement) {
                             requirements.push(requirement);
@@ -270,7 +383,7 @@ impl BrokerRuntime {
             descriptor
                 .actions
                 .iter()
-                .any(|action| action.resource_scope.as_ref() == Some(name))
+                .any(|action| action.resource_scopes.contains(name))
         });
         if descriptor.actions.is_empty() {
             descriptor.credentials.verification_inputs.clear();
@@ -285,10 +398,10 @@ impl BrokerRuntime {
             AvailabilityState::Unavailable
         };
         let message = match state {
-                    AvailabilityState::Available => "Required credentials are locally available; upstream access has not been verified.",
-                    AvailabilityState::Partial => "Some capabilities are hidden because required credentials are unavailable. Resolve the requirements, then refresh discovery.",
-                    AvailabilityState::Unavailable => "Capabilities are hidden because required credentials are unavailable. Resolve the requirements, then refresh discovery.",
-                    AvailabilityState::Unknown => "Credential availability could not be checked. Capabilities are hidden; retry discovery after the problem is resolved.",
+                    AvailabilityState::Available => "Required capabilities are locally available; upstream access has not been verified.",
+                    AvailabilityState::Partial => "Some capabilities are hidden because required capabilities are unavailable. Resolve the requirements, then refresh discovery.",
+                    AvailabilityState::Unavailable => "Capabilities are hidden because required capabilities are unavailable. Resolve the requirements, then refresh discovery.",
+                    AvailabilityState::Unknown => "Capability availability could not be checked. Capabilities are hidden; retry discovery after the problem is resolved.",
                 }.into();
         AvailableService {
             descriptor,
@@ -299,6 +412,51 @@ impl BrokerRuntime {
             },
             clauses,
         }
+    }
+
+    /// Inspect only loaded runtime capability and the caller's authentication
+    /// category. No secret inventory, reference lookup or upstream I/O occurs.
+    pub(super) fn broker_management_requirements(
+        &self,
+        identity: &IdentityContext,
+        action: &str,
+    ) -> Vec<AvailabilityRequirement> {
+        use LocalAvailabilityReason::*;
+        let mut reasons = Vec::new();
+        if self.config.identity.authority != "managed" {
+            reasons.push(ManagedIdentityRequired);
+        }
+        if self.config.policy.authority != "managed" {
+            reasons.push(ManagedPolicyRequired);
+        }
+        if matches!(action, "credential.install" | "token.create") {
+            if self.managed_store.is_none() || self.credential_key_ring.is_none() {
+                reasons.push(CredentialEncryptionUnavailable);
+            }
+            if !self.can_hold_secret_references(identity) {
+                reasons.push(ReferenceIdentityUnsupported);
+            }
+        }
+        if action == "token.create" {
+            if self.broker_token_hasher.is_none() {
+                reasons.push(TokenHashingUnavailable);
+            }
+            if self.config.broker_tokens.as_ref().is_none_or(|tokens| {
+                !tokens
+                    .admin_agent_invoke_ttl_options
+                    .iter()
+                    .any(|option| option.ttl_seconds().is_some_and(|ttl| ttl > 0))
+            }) {
+                reasons.push(FiniteTokenTtlRequired);
+            }
+            if self.config.secret_outputs.mode != crate::SecretOutputMode::Reference {
+                reasons.push(ReferenceOutputRequired);
+            }
+        }
+        reasons
+            .into_iter()
+            .map(AvailabilityRequirement::local)
+            .collect()
     }
 
     /// Whether the caller's execution credential for `mode` is locally
@@ -430,5 +588,105 @@ impl BrokerRuntime {
                     .map_err(UnavailableCredential::from_provider)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn local_prerequisites_gate_only_the_actions_that_need_them() {
+        let mut config = super::super::tests::base_fake_config();
+        config.secret_outputs.mode = crate::SecretOutputMode::Raw;
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let identity = IdentityContext::anonymous();
+        let reasons = |action: &str| {
+            runtime
+                .broker_management_requirements(&identity, action)
+                .iter()
+                .map(|item| item.reason().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let ordinary = vec!["managed_identity_required", "managed_policy_required"];
+        assert_eq!(reasons("principal.create"), ordinary);
+        assert_eq!(reasons("credential.view"), ordinary);
+        assert_eq!(reasons("token.view"), ordinary);
+        assert_eq!(
+            reasons("credential.install"),
+            [
+                "managed_identity_required",
+                "managed_policy_required",
+                "credential_encryption_unavailable",
+                "reference_identity_unsupported",
+            ]
+        );
+        assert_eq!(
+            reasons("token.create"),
+            [
+                "managed_identity_required",
+                "managed_policy_required",
+                "credential_encryption_unavailable",
+                "reference_identity_unsupported",
+                "token_hashing_unavailable",
+                "finite_token_ttl_required",
+                "reference_output_required",
+            ]
+        );
+        assert!(
+            runtime
+                .local_action_requirements(&identity, "fake", "echo")
+                .is_none()
+        );
+        assert!(runtime.scoped_mcp_diagnostics("fake").ready);
+    }
+
+    #[test]
+    fn requirements_are_tagged_and_local_entries_have_no_credential_mode() {
+        let personal = AvailabilityRequirement::Credential {
+            reason: "credential_not_provisioned".into(),
+            credential_mode: "per_user".into(),
+            resolution: AvailabilityResolution::User,
+        };
+        assert_eq!(
+            serde_json::to_value(&personal).unwrap(),
+            json!({
+                "kind":"credential", "reason":"credential_not_provisioned",
+                "credentialMode":"per_user", "resolution":"user"
+            })
+        );
+        for reason in [
+            LocalAvailabilityReason::ManagedIdentityRequired,
+            LocalAvailabilityReason::ManagedPolicyRequired,
+            LocalAvailabilityReason::CredentialEncryptionUnavailable,
+            LocalAvailabilityReason::ReferenceIdentityUnsupported,
+            LocalAvailabilityReason::TokenHashingUnavailable,
+            LocalAvailabilityReason::FiniteTokenTtlRequired,
+            LocalAvailabilityReason::ReferenceOutputRequired,
+        ] {
+            let requirement = AvailabilityRequirement::local(reason);
+            let value = serde_json::to_value(&requirement).unwrap();
+            assert_eq!(value["kind"], "local_runtime");
+            assert_eq!(value["reason"], reason.as_str());
+            assert!(value.get("credentialMode").is_none());
+            assert_eq!(
+                value["resolution"],
+                if reason == LocalAvailabilityReason::ReferenceIdentityUnsupported {
+                    "caller"
+                } else {
+                    "administrator"
+                }
+            );
+            assert_eq!(
+                serde_json::from_value::<AvailabilityRequirement>(value).unwrap(),
+                requirement
+            );
+        }
+        assert!(serde_json::from_value::<AvailabilityRequirement>(json!({
+            "reason":"credential_not_provisioned", "credentialMode":"per_user", "resolution":"user"
+        })).is_err());
+        assert!(serde_json::from_value::<AvailabilityRequirement>(json!({
+            "kind":"local_runtime", "reason":"managed_policy_required", "resolution":"administrator", "credentialMode":"service"
+        })).is_err());
     }
 }

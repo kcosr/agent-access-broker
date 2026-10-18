@@ -46,9 +46,51 @@ pub struct ResourceList {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActionList {
     pub service: String,
+    pub match_kind: ActionMatchKind,
+    pub policy_generation: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionMatchKind {
+    Unfiltered,
+    SingleResource,
+    CompleteTargets,
+}
+
+/// Decode complete action targets without losing duplicate JSON keys.
+pub fn parse_action_targets_json(value: &str) -> Result<ResourceScopes, &'static str> {
+    let value = crate::mcp::parse_json_unique_keys(value.as_bytes())
+        .map_err(|_| "targets must be a JSON object with unique scope names")?;
+    let targets: ResourceScopes = serde_json::from_value(value)
+        .map_err(|_| "targets must map scope names to string arrays")?;
+    validate_action_targets_structure(&targets)?;
+    Ok(targets)
+}
+
+fn validate_action_targets_structure(targets: &ResourceScopes) -> Result<(), &'static str> {
+    if !(1..=8).contains(&targets.len()) {
+        return Err("targets must contain between 1 and 8 scopes");
+    }
+    for (name, values) in targets {
+        if name.is_empty() {
+            return Err("target scope names must be nonempty");
+        }
+        if !(1..=64).contains(&values.len()) {
+            return Err("each target scope must contain between 1 and 64 values");
+        }
+        let mut seen = BTreeSet::new();
+        if values
+            .iter()
+            .any(|value| value.is_empty() || !seen.insert(value))
+        {
+            return Err("target values must be nonempty and unique within each scope");
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -130,10 +172,11 @@ impl ServiceDiscovery<'_> {
             .transpose()
     }
 
-    fn action_resource_type(&self, action: &str) -> Option<&ResourceType> {
+    fn action_scope_for_type(&self, action: &str, kind: &ResourceType) -> Option<&str> {
         self.capabilities
-            .action_resource_scope(action)
-            .map(|(_, binding)| &binding.resource_type)
+            .action_resource_scopes(action)?
+            .into_iter()
+            .find_map(|(name, scope)| (scope.resource_type == *kind).then_some(name))
     }
 
     fn clauses(&self, action: &str) -> Vec<EffectiveAccessClause> {
@@ -145,20 +188,38 @@ impl ServiceDiscovery<'_> {
         resource: Option<&str>,
         resource_type: Option<&ResourceType>,
         prefix: Option<&str>,
+        targets: Option<&ResourceScopes>,
     ) -> Result<ActionList, &'static str> {
         nonempty(prefix, "prefix must be nonempty")?;
         nonempty(resource, "resource must be nonempty")?;
+        if targets.is_some() && (resource.is_some() || resource_type.is_some()) {
+            return Err("targets cannot be combined with resource or resourceType");
+        }
         if resource.is_none() && resource_type.is_some() {
             return Err("resourceType requires resource");
         }
-        if self.capabilities.actions.is_empty() {
-            return Ok(ActionList {
-                service: self.capabilities.service.clone(),
-                resource: resource.map(str::to_owned),
-                actions: Vec::new(),
-            });
+        if let Some(targets) = targets {
+            validate_action_targets_structure(targets)?;
+            for (name, values) in targets {
+                let binding = self
+                    .capabilities
+                    .resource_scopes
+                    .get(name)
+                    .ok_or("target scope is not used by this service")?;
+                let kind = self
+                    .runtime
+                    .resource_types
+                    .get(&binding.resource_type)
+                    .ok_or("resource type is not registered")?;
+                if values.iter().any(|value| !kind.is_canonical_target(value)) {
+                    return Err("target must be a canonical locator for its scope");
+                }
+            }
         }
         let kind = match resource {
+            // An unavailable service remains a visible shell without scope metadata.
+            // Resource filtering on that shell returns the same empty action set.
+            Some(_) if self.capabilities.actions.is_empty() => None,
             Some(resource) => {
                 let kind = self
                     .resource_type(resource_type)?
@@ -176,13 +237,28 @@ impl ServiceDiscovery<'_> {
             .iter()
             .filter(|action| prefix.is_none_or(|prefix| action.action.starts_with(prefix)))
             .filter(|action| {
+                targets.is_none_or(|targets| {
+                    action.resource_scopes.len() == targets.len()
+                        && action
+                            .resource_scopes
+                            .iter()
+                            .all(|name| targets.contains_key(name))
+                        && self
+                            .clauses(&action.action)
+                            .iter()
+                            .any(|clause| clause.matches_request(targets))
+                })
+            })
+            .filter(|action| {
                 resource.is_none_or(|resource| {
                     kind.is_some_and(|kind| {
-                        self.action_resource_type(&action.action) == Some(kind.id())
-                    }) && self
-                        .clauses(&action.action)
-                        .iter()
-                        .any(|clause| clause.matches_request(&[resource]))
+                        self.action_scope_for_type(&action.action, kind.id())
+                            .is_some_and(|name| {
+                                self.clauses(&action.action)
+                                    .iter()
+                                    .any(|clause| clause.matches_partial_target(name, resource))
+                            })
+                    })
                 })
             })
             .map(|action| action.action.clone())
@@ -190,6 +266,14 @@ impl ServiceDiscovery<'_> {
         actions.sort();
         Ok(ActionList {
             service: self.capabilities.service.clone(),
+            match_kind: if targets.is_some() {
+                ActionMatchKind::CompleteTargets
+            } else if resource.is_some() {
+                ActionMatchKind::SingleResource
+            } else {
+                ActionMatchKind::Unfiltered
+            },
+            policy_generation: self.snapshot.generation(),
             resource: resource.map(str::to_owned),
             actions,
         })
@@ -208,7 +292,10 @@ impl ServiceDiscovery<'_> {
             .capabilities
             .actions
             .iter()
-            .filter(|action| self.action_resource_type(&action.action) == kind.as_ref())
+            .filter(|action| {
+                kind.as_ref()
+                    .is_some_and(|kind| self.action_scope_for_type(&action.action, kind).is_some())
+            })
             .map(|action| self.clauses(&action.action))
             .collect::<Vec<_>>();
         let clauses = action_clauses.concat();
@@ -234,9 +321,12 @@ impl ServiceDiscovery<'_> {
                     .prefix
                     .as_deref()
                     .is_some_and(|prefix| !value.starts_with(prefix))
-                    || !clauses
-                        .iter()
-                        .any(|clause| clause.matches_request(&[value.as_str()]))
+                    || !clauses.iter().any(|clause| {
+                        clause.scopes.iter().any(|(name, scope)| {
+                            Some(&scope.resource_type) == kind.as_ref()
+                                && clause.matches_partial_target(name, value)
+                        })
+                    })
                 {
                     return None;
                 }
@@ -347,8 +437,15 @@ impl ServiceDiscovery<'_> {
             .iter()
             .flatten()
             .flat_map(|clause| {
-                let reach = clause.single_target_reach();
-                clause
+                let Some((name, scope)) = clause
+                    .scopes
+                    .iter()
+                    .find(|(_, scope)| &scope.resource_type == kind.id())
+                else {
+                    return Vec::new();
+                };
+                let reach = clause.single_target_reach(name);
+                scope
                     .included
                     .iter()
                     .flat_map(|selector| match selector {
@@ -378,7 +475,13 @@ impl ServiceDiscovery<'_> {
             .map(|clauses| {
                 let reach = clauses
                     .iter()
-                    .flat_map(EffectiveAccessClause::single_target_reach)
+                    .flat_map(|clause| {
+                        clause
+                            .scopes
+                            .iter()
+                            .filter(|(_, scope)| &scope.resource_type == kind.id())
+                            .flat_map(|(name, _)| clause.single_target_reach(name))
+                    })
                     .collect::<Vec<_>>();
                 (clauses, reach)
             })
@@ -409,7 +512,13 @@ impl ServiceDiscovery<'_> {
                 restricted: actions.iter().any(|(clauses, reach)| {
                     clauses
                         .iter()
-                        .flat_map(|clause| &clause.included)
+                        .flat_map(|clause| {
+                            clause
+                                .scopes
+                                .values()
+                                .filter(|scope| &scope.resource_type == kind.id())
+                                .flat_map(|scope| &scope.included)
+                        })
                         .any(|selector| selector.contains(entry))
                         && !boundaries_cover(reach, entry)
                 }),
@@ -501,8 +610,17 @@ mod tests {
             );
             descriptor.actions.push(
                 ActionDescriptor::new("note", "Note on a space", json!({"type": "object"}))
-                    .scope("space")
+                    .scopes(["space"])
                     .credential_modes(["service"]),
+            );
+            descriptor.actions.push(
+                ActionDescriptor::new(
+                    "pair",
+                    "Pair a project and a space",
+                    json!({"type":"object"}),
+                )
+                .scopes(["project", "space"])
+                .credential_modes(["service"]),
             );
             descriptor
         }
@@ -525,6 +643,372 @@ mod tests {
         ) -> Result<ProviderResult, ProviderError> {
             agent_access_fake::FakeProvider.invoke(request).await
         }
+    }
+
+    fn plural_runtime(selections: &[(&[&str], i32)]) -> BrokerRuntime {
+        let mut config = config();
+        let runtime =
+            BrokerRuntime::with_providers(config.clone(), vec![Arc::new(TwoTypeProvider)]).unwrap();
+        let template = config.policy.grants[0].clone();
+        config.policy.grants = selections
+            .iter()
+            .map(|(ids, priority)| {
+                let mut grant = template.clone();
+                grant.actions = vec!["pair".into()];
+                grant.resources = ResourceSelection {
+                    resource_ids: ids.iter().map(|id| (*id).into()).collect(),
+                    resource_group_ids: vec![],
+                };
+                grant.priority = Some(*priority);
+                grant
+            })
+            .collect();
+        runtime
+            .policy_snapshot
+            .store(Arc::new(PolicySnapshot::from_config(&config, 23)));
+        runtime
+    }
+
+    fn pair(project: &str, space: &str) -> ResourceScopes {
+        ResourceScopes::from([
+            ("project".into(), vec![project.into()]),
+            ("space".into(), vec![space.into()]),
+        ])
+    }
+
+    #[test]
+    fn complete_targets_preserve_grant_pairings_and_one_grant_cross_products() {
+        let runtime = plural_runtime(&[
+            (&["fake-project-TEST", "space-ENG"], 0),
+            (&["fake-project-OPS", "space-OPS"], 0),
+        ]);
+        let identity = IdentityContext::anonymous();
+        let context = context();
+        let view = runtime
+            .service_discovery(&identity, &context, "fake")
+            .unwrap();
+        let snapshot = runtime.policy_snapshot();
+        for (project, space, permitted) in [
+            ("TEST", "ENG", true),
+            ("OPS", "OPS", true),
+            ("TEST", "OPS", false),
+            ("OPS", "ENG", false),
+        ] {
+            let targets = pair(project, space);
+            let result = view.actions(None, None, None, Some(&targets)).unwrap();
+            assert_eq!(result.actions == ["pair"], permitted, "{project}/{space}");
+            assert_eq!(result.match_kind, ActionMatchKind::CompleteTargets);
+            assert_eq!(result.policy_generation, 23);
+            assert!(result.resource.is_none());
+            assert_eq!(
+                runtime
+                    .select_policy(&snapshot, &identity, &context, "fake", "pair", &targets)
+                    .is_ok(),
+                permitted
+            );
+        }
+        let project = agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone();
+        assert_eq!(
+            view.actions(Some("TEST"), Some(&project), None, None)
+                .unwrap()
+                .actions,
+            ["pair"]
+        );
+        assert_eq!(
+            view.actions(None, None, None, None).unwrap().match_kind,
+            ActionMatchKind::Unfiltered
+        );
+        assert_eq!(
+            view.resources(&ResourceListQuery {
+                resource_type: Some(project),
+                ..Default::default()
+            })
+            .unwrap()
+            .resources
+            .iter()
+            .map(|entry| entry.value.as_str())
+            .collect::<Vec<_>>(),
+            ["OPS", "TEST"]
+        );
+        let clauses = view.clauses("pair");
+        assert_eq!(clauses.len(), 2);
+        let wire = serde_json::to_value(&clauses).unwrap();
+        assert!(wire[0].get("included").is_none());
+        assert_eq!(wire[0]["excludedRequests"], json!([]));
+        assert_eq!(
+            wire[0]["scopes"]["space"]["resourceType"],
+            "confluence_space"
+        );
+
+        let combined = plural_runtime(&[(
+            &[
+                "fake-project-TEST",
+                "fake-project-OPS",
+                "space-ENG",
+                "space-OPS",
+            ],
+            0,
+        )]);
+        let view = combined
+            .service_discovery(&identity, &context, "fake")
+            .unwrap();
+        for targets in [
+            pair("TEST", "OPS"),
+            pair("OPS", "ENG"),
+            ResourceScopes::from([
+                ("project".into(), vec!["TEST".into(), "OPS".into()]),
+                ("space".into(), vec!["ENG".into(), "OPS".into()]),
+            ]),
+        ] {
+            assert_eq!(
+                view.actions(None, None, None, Some(&targets))
+                    .unwrap()
+                    .actions,
+                ["pair"]
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_unknown_and_noncanonical_scopes_fail_before_precedence() {
+        let runtime = plural_runtime(&[
+            (&["fake-project-TEST", "space-ENG"], 0),
+            (&["fake-project-TEST"], 100),
+            (&["space-OPS"], 100),
+            (&["fake-project-OPS", "space-OPS", "unknown-resource"], 200),
+        ]);
+        let identity = IdentityContext::anonymous();
+        let context = context();
+        let snapshot = runtime.policy_snapshot();
+        let candidates =
+            runtime.policy_candidates_for_action(&snapshot, &identity, &context, "fake", "pair");
+        assert_eq!(
+            candidates.len(),
+            1,
+            "partial high grants and any unknown reference must fail closed"
+        );
+        let authorized = pair("TEST", "ENG");
+        assert!(
+            runtime
+                .select_policy(&snapshot, &identity, &context, "fake", "pair", &authorized)
+                .is_ok()
+        );
+        for invalid in [
+            ResourceScopes::new(),
+            ResourceScopes::from([("project".into(), vec!["TEST".into()])]),
+            ResourceScopes::from([
+                ("project".into(), vec!["TEST".into()]),
+                ("space".into(), vec![]),
+            ]),
+            pair("TEST", "../ENG"),
+            pair("OPS", "OPS"),
+            {
+                let mut extra = authorized.clone();
+                extra.insert("metadata".into(), vec!["ENG".into()]);
+                extra
+            },
+        ] {
+            assert!(
+                runtime
+                    .select_policy(&snapshot, &identity, &context, "fake", "pair", &invalid)
+                    .is_err(),
+                "{invalid:?}"
+            );
+        }
+        let view = runtime
+            .service_discovery(&identity, &context, "fake")
+            .unwrap();
+        assert!(
+            view.actions(None, None, None, Some(&pair("TEST", "../ENG")))
+                .is_err()
+        );
+        assert!(
+            view.actions(Some("TEST"), None, None, Some(&authorized))
+                .is_err()
+        );
+        assert!(
+            view.actions(
+                None,
+                None,
+                None,
+                Some(&ResourceScopes::from([(
+                    "project".into(),
+                    vec!["TEST".into()]
+                )]))
+            )
+            .unwrap()
+            .actions
+            .is_empty()
+        );
+        assert!(
+            view.actions(
+                Some("OPS"),
+                Some(agent_access_confluence::CONFLUENCE_SPACE_RESOURCE.id()),
+                None,
+                None
+            )
+            .unwrap()
+            .actions
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn token_restrictions_must_cover_each_dimension_and_cannot_uncross_grants() {
+        let runtime = plural_runtime(&[
+            (&["fake-project-TEST", "space-ENG"], 0),
+            (&["fake-project-OPS", "space-OPS"], 0),
+        ]);
+        let identity = IdentityContext::anonymous();
+        let context = context();
+        let snapshot = runtime.policy_snapshot();
+        let caveats = |ids: &[&str]| AgentInvokeTokenCaveats {
+            allowed_services: Some(vec!["fake".into()]),
+            allowed_execution_contexts: Some(vec![context.clone()]),
+            service_restrictions: Some(BTreeMap::from([(
+                "fake".into(),
+                crate::AgentTokenServiceRestriction {
+                    actions: vec!["pair".into()],
+                    resources: Some(ResourceSelection {
+                        resource_ids: ids.iter().map(|id| (*id).into()).collect(),
+                        resource_group_ids: vec![],
+                    }),
+                },
+            )])),
+        };
+        let token_identity = |caveats: &AgentInvokeTokenCaveats| {
+            let mut identity = token(ResourceSelection::default());
+            identity.source.as_mut().unwrap().token_scopes = Some(caveats.to_scopes_value());
+            identity
+        };
+        for ids in [
+            &[][..],
+            &["fake-project-TEST"][..],
+            &["space-ENG"][..],
+            &["fake-project-TEST", "space-ENG", "unknown-resource"][..],
+        ] {
+            assert!(
+                runtime
+                    .effective_resource_clauses(
+                        &snapshot,
+                        &identity,
+                        &context,
+                        "fake",
+                        "pair",
+                        Some(&caveats(ids))
+                    )
+                    .is_empty()
+            );
+            assert!(
+                runtime
+                    .enforce_agent_invoke_token_resource_caveats(
+                        &token_identity(&caveats(ids)),
+                        "fake",
+                        "pair",
+                        &pair("TEST", "ENG")
+                    )
+                    .is_err()
+            );
+        }
+        let bounded = caveats(&[
+            "fake-project-TEST",
+            "fake-project-OPS",
+            "space-ENG",
+            "space-OPS",
+        ]);
+        for targets in [pair("TEST", "ENG"), pair("TEST", "OPS")] {
+            assert!(
+                runtime
+                    .enforce_agent_invoke_token_resource_caveats(
+                        &token_identity(&bounded),
+                        "fake",
+                        "pair",
+                        &targets
+                    )
+                    .is_ok(),
+                "a flat token selection covers each dimension independently"
+            );
+        }
+        let clauses = runtime.effective_resource_clauses(
+            &snapshot,
+            &identity,
+            &context,
+            "fake",
+            "pair",
+            Some(&bounded),
+        );
+        assert!(
+            clauses
+                .iter()
+                .any(|clause| clause.matches_request(&pair("TEST", "ENG")))
+        );
+        assert!(
+            !clauses
+                .iter()
+                .any(|clause| clause.matches_request(&pair("TEST", "OPS")))
+        );
+        let preview = runtime
+            .preview_agent_token_access(&identity, &bounded)
+            .unwrap();
+        let entry = preview
+            .access
+            .iter()
+            .find(|entry| entry.action == "pair")
+            .unwrap();
+        assert!(
+            serde_json::to_value(entry)
+                .unwrap()
+                .get("resourceType")
+                .is_none()
+        );
+        assert_eq!(entry.clauses.len(), 2);
+        let unrestricted = AgentInvokeTokenCaveats {
+            allowed_services: None,
+            allowed_execution_contexts: None,
+            service_restrictions: None,
+        };
+        assert_eq!(
+            runtime
+                .effective_resource_clauses(
+                    &snapshot,
+                    &identity,
+                    &context,
+                    "fake",
+                    "pair",
+                    Some(&unrestricted)
+                )
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn targets_parser_rejects_ambiguous_and_unbounded_shapes() {
+        for text in [
+            "{}",
+            "null",
+            "[]",
+            r#"{"project":[]}"#,
+            r#"{"project":["TEST","TEST"]}"#,
+            r#"{"project":[""]}"#,
+            r#"{"project":["TEST"],"project":["OPS"]}"#,
+            r#"{"project":["TEST"],"pro\u006aect":["OPS"]}"#,
+        ] {
+            assert!(parse_action_targets_json(text).is_err(), "{text}");
+        }
+        let too_many = BTreeMap::from([(
+            "project",
+            (0..65).map(|i| format!("P{i}")).collect::<Vec<_>>(),
+        )]);
+        assert!(parse_action_targets_json(&serde_json::to_string(&too_many).unwrap()).is_err());
+        let many_scopes = (0..9)
+            .map(|i| (format!("scope{i}"), vec!["TEST"]))
+            .collect::<BTreeMap<_, _>>();
+        assert!(parse_action_targets_json(&serde_json::to_string(&many_scopes).unwrap()).is_err());
+        assert_eq!(
+            parse_action_targets_json(r#"{"project":["TEST"],"space":["ENG"]}"#).unwrap(),
+            pair("TEST", "ENG")
+        );
     }
 
     #[test]
@@ -558,12 +1042,12 @@ mod tests {
             "resourceType is required for a service with several resource types"
         );
         assert_eq!(
-            view.actions(Some("ENG"), None, None).unwrap_err(),
+            view.actions(Some("ENG"), None, None, None).unwrap_err(),
             "resourceType is required for a service with several resource types"
         );
         // An unqualified action list still covers every type.
         assert_eq!(
-            view.actions(None, None, None).unwrap().actions,
+            view.actions(None, None, None, None).unwrap().actions,
             ["echo", "note"]
         );
 
@@ -598,13 +1082,13 @@ mod tests {
         // The same value names different resources per type; each type only
         // reports the actions bound to it.
         assert_eq!(
-            view.actions(Some("ENG"), Some(&space), None)
+            view.actions(Some("ENG"), Some(&space), None, None)
                 .unwrap()
                 .actions,
             ["note"]
         );
         assert_eq!(
-            view.actions(Some("ENG"), Some(&fake_project), None)
+            view.actions(Some("ENG"), Some(&fake_project), None, None)
                 .unwrap()
                 .actions,
             ["echo"]
@@ -664,18 +1148,23 @@ mod tests {
         assert!(resources.next_cursor.is_none());
         for resource in ["UNREGISTERED", "OPS", "ENG"] {
             assert_eq!(
-                view.actions(Some(resource), None, None).unwrap().actions,
+                view.actions(Some(resource), None, None, None)
+                    .unwrap()
+                    .actions,
                 ["echo"]
             );
         }
-        assert!(view.actions(Some("fake-project-TEST"), None, None).is_err());
         assert!(
-            view.actions(Some("TEST"), None, Some("z"))
+            view.actions(Some("fake-project-TEST"), None, None, None)
+                .is_err()
+        );
+        assert!(
+            view.actions(Some("TEST"), None, Some("z"), None)
                 .unwrap()
                 .actions
                 .is_empty()
         );
-        assert!(view.actions(None, None, Some("")).is_err());
+        assert!(view.actions(None, None, Some(""), None).is_err());
     }
 
     #[test]
@@ -717,7 +1206,7 @@ mod tests {
             .unwrap();
         for resource in ["TEST", "OPS", "ENG"] {
             assert!(
-                view.actions(Some(resource), None, None)
+                view.actions(Some(resource), None, None, None)
                     .unwrap()
                     .actions
                     .is_empty()
@@ -734,7 +1223,9 @@ mod tests {
             .service_discovery(&identity, &context, "fake")
             .unwrap();
         assert_eq!(
-            view.actions(Some("TEST"), None, None).unwrap().actions,
+            view.actions(Some("TEST"), None, None, None)
+                .unwrap()
+                .actions,
             ["echo"]
         );
         let identity = token(selection);
@@ -742,7 +1233,7 @@ mod tests {
             .service_discovery(&identity, &context, "fake")
             .unwrap();
         assert!(
-            view.actions(Some("TEST"), None, None)
+            view.actions(Some("TEST"), None, None, None)
                 .unwrap()
                 .actions
                 .is_empty()
@@ -923,7 +1414,7 @@ mod tests {
                 2,
             )));
         assert_eq!(
-            view.actions(Some("UNREGISTERED"), None, None)
+            view.actions(Some("UNREGISTERED"), None, None, None)
                 .unwrap()
                 .actions,
             ["echo"]
@@ -932,7 +1423,7 @@ mod tests {
             runtime
                 .service_discovery(&identity, &context, "fake")
                 .unwrap()
-                .actions(Some("UNREGISTERED"), None, None)
+                .actions(Some("UNREGISTERED"), None, None, None)
                 .unwrap()
                 .actions
                 .is_empty()
@@ -958,8 +1449,11 @@ mod tests {
             ),
         );
         assert!(view.resources(&ResourceListQuery::default()).is_err());
-        assert!(view.actions(Some("TEST"), None, None).is_err());
-        assert_eq!(view.actions(None, None, None).unwrap().actions, ["echo"]);
+        assert!(view.actions(Some("TEST"), None, None, None).is_err());
+        assert_eq!(
+            view.actions(None, None, None, None).unwrap().actions,
+            ["echo"]
+        );
         view.capabilities.resource_scopes.clear();
         assert!(
             view.resources(&ResourceListQuery::default())
@@ -967,7 +1461,7 @@ mod tests {
                 .resources
                 .is_empty()
         );
-        assert!(view.actions(Some("TEST"), None, None).is_err());
+        assert!(view.actions(Some("TEST"), None, None, None).is_err());
     }
 
     #[test]
@@ -1009,13 +1503,15 @@ mod tests {
             .service_discovery(&identity, &context, "fake")
             .unwrap();
         assert!(
-            view.actions(Some("TEST"), None, None)
+            view.actions(Some("TEST"), None, None, None)
                 .unwrap()
                 .actions
                 .is_empty()
         );
         assert_eq!(
-            view.actions(Some("OTHER"), None, None).unwrap().actions,
+            view.actions(Some("OTHER"), None, None, None)
+                .unwrap()
+                .actions,
             ["echo"]
         );
         assert!(
@@ -1030,7 +1526,10 @@ mod tests {
         assert!(
             view.clauses("echo")
                 .iter()
-                .any(|clause| clause.matches_request(&["TEST", "OTHER"]))
+                .any(|clause| clause.matches_request(&ResourceScopes::from([(
+                    "project".into(),
+                    vec!["TEST".into(), "OTHER".into()]
+                )])))
         );
     }
 }

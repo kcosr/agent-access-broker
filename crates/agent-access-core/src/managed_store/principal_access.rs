@@ -64,7 +64,9 @@ macro_rules! scope_methods {
             pub fn authorizes_service(&self, service: &str) -> bool {
                 match self {
                     Self::Global => true,
-                    Self::Services { services } => services.contains(service),
+                    Self::Services { services } => {
+                        service != "broker_management" && services.contains(service)
+                    }
                 }
             }
             pub fn is_empty(&self) -> bool {
@@ -193,6 +195,14 @@ pub(super) fn management_authority_conn(
     } else {
         Vec::new()
     };
+    if authorities
+        .iter()
+        .any(|authority| authority.service == "broker_management")
+    {
+        return Err(input_invalid(
+            "Broker management policy requires full administrator authority",
+        ));
+    }
     let services = authorities
         .iter()
         .map(|authority| authority.service.clone())
@@ -216,6 +226,13 @@ pub(super) fn management_authority_conn(
 }
 
 impl ManagedStore {
+    /// Reject retained assignments even when their account or role is inactive.
+    /// Enabling such an account must never make Broker administration delegable
+    /// through ordinary service-policy management.
+    pub fn validate_broker_management_assignments(&self) -> Result<(), ManagedStoreError> {
+        check_broker_management_assignments(&self.connection.lock().unwrap())
+    }
+
     pub fn management_authority(
         &self,
         principal_id: &str,
@@ -311,6 +328,11 @@ impl ManagedStore {
         request: ServicePolicyManagementAssignmentPutRequest,
     ) -> Result<ServicePolicyManagementAssignmentRecord, ManagedStoreError> {
         validate_policy_grant_service_field(&request.service)?;
+        if request.service == "broker_management" {
+            return Err(input_invalid(
+                "Broker management policy requires full administrator authority",
+            ));
+        }
         validate_principal_id(&request.principal_id)?;
         validate_actor(&request.created_by)?;
         let mut conn = self.connection.lock().unwrap();
@@ -355,6 +377,24 @@ impl ManagedStore {
         }
         service_policy_management_assignments(&self.connection.lock().unwrap(), service)
     }
+}
+
+pub(super) fn check_broker_management_assignments(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    let retained: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM service_policy_management_assignments WHERE service='broker_management')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_unavailable)?;
+    if retained {
+        return Err(input_invalid(
+            "remove retained Broker management service-policy assignments before startup",
+        ));
+    }
+    Ok(())
 }
 fn service_policy_management_assignments(
     conn: &Connection,

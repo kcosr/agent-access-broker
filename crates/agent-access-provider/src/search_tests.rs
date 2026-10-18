@@ -597,7 +597,7 @@ fn native_search_modes_require_scopes_and_forbid_private_attribute_binding() {
                     vec!["exact".into(), "namespace".into(), "all".into()],
                 ),
             )]))
-            .with_actions(vec![action.scope("repository")]);
+            .with_actions(vec![action.scopes(["repository"])]);
         assert!(service.validate().is_ok());
         let mut invalid = service.clone();
         invalid.actions[0].requires_resource_attributes = true;

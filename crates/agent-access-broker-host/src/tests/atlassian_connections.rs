@@ -31,7 +31,7 @@ impl RecordingProduct {
                 "Read in Atlassian connection tests",
                 json!({"type": "object"}),
             )
-            .scope(scope)
+            .scopes([scope])
             .credential_modes(["per_user"])
             .read_only(),
         ]);

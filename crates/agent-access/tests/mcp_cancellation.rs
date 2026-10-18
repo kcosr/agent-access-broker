@@ -121,7 +121,7 @@ async fn broker_fixture() -> MockServer {
             "services":[{
                 "service":"fake", "displayName":"Cancellation fixture", "surface":"invoke", "scopedMcpReady":true,
                 "scopeTypes":[], "actions":[{
-                    "action":"echo", "scopedMcpName":"echo", "readOnly":true, "description":"Echo an input", "requiredScopeTypes":[],
+                    "action":"echo", "scopedMcpName":"echo", "readOnly":true, "description":"Echo an input", "requiredScopes":{},
                     "credentialModes":[], "inputSchema":{"type":"object"},
                     "io":{"type":"json"}, "responseKind":"response_envelope",
                     "exitPolicy":"invoke_decision"

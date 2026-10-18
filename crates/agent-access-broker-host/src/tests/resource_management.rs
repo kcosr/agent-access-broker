@@ -464,6 +464,10 @@ async fn runtime_catalog_and_resource_types_route_publish_registered_types() {
         // Registration order; clients treat the first type as the default.
         [
             "git_repository",
+            "broker_principal",
+            "broker_group",
+            "broker_grant",
+            "broker_connection",
             "jira_project",
             "confluence_space",
             "cloudbees_ci_job",

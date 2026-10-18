@@ -44,11 +44,13 @@ fn discovery_rechecks_shared_files_and_keeps_only_a_service_shell_when_missing()
     let service = summary(&runtime);
     assert_eq!(service.availability.state, AvailabilityState::Unavailable);
     assert_eq!(
-        service.availability.requirements[0].credential_mode,
+        service.availability.requirements[0]
+            .credential_mode()
+            .unwrap(),
         "service"
     );
     assert_eq!(
-        service.availability.requirements[0].resolution,
+        service.availability.requirements[0].resolution(),
         "administrator"
     );
     assert!(service.actions.is_empty());
@@ -60,7 +62,7 @@ fn discovery_rechecks_shared_files_and_keeps_only_a_service_shell_when_missing()
         .unwrap();
     assert!(
         discovery
-            .actions(Some("ENG"), None, None)
+            .actions(Some("ENG"), None, None, None)
             .unwrap()
             .actions
             .is_empty()
@@ -95,20 +97,20 @@ fn discovery_retains_usable_resource_regions_without_falling_back_from_personal_
     let runtime = BrokerRuntime::new(config).unwrap();
     let service = summary(&runtime);
     assert_eq!(service.availability.state, AvailabilityState::Partial);
-    assert_eq!(service.availability.requirements[0].resolution, "user");
+    assert_eq!(service.availability.requirements[0].resolution(), "user");
     let identity = agent_one_identity();
     let context = default_execution_context();
     let view = runtime
         .service_discovery(&identity, &context, "jira")
         .unwrap();
     assert!(
-        view.actions(Some("ENG"), None, None)
+        view.actions(Some("ENG"), None, None, None)
             .unwrap()
             .actions
             .is_empty()
     );
     assert_eq!(
-        view.actions(Some("OPS"), None, None).unwrap().actions,
+        view.actions(Some("OPS"), None, None, None).unwrap().actions,
         ["issue.view"]
     );
     assert_eq!(
@@ -139,7 +141,7 @@ fn discovery_retains_usable_resource_regions_without_falling_back_from_personal_
         runtime
             .service_discovery(&identity, &context, "jira")
             .unwrap()
-            .actions(Some("ENG"), None, None)
+            .actions(Some("ENG"), None, None, None)
             .unwrap()
             .actions,
         ["issue.view"]
@@ -166,7 +168,9 @@ fn discovery_includes_pre_scope_lookup_dependency_for_personal_regions() {
     assert!(service.actions.is_empty());
     assert_eq!(service.availability.requirements.len(), 1);
     assert_eq!(
-        service.availability.requirements[0].credential_mode,
+        service.availability.requirements[0]
+            .credential_mode()
+            .unwrap(),
         "lookup"
     );
 }

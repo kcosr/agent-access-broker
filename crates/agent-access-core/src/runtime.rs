@@ -1,3 +1,5 @@
+pub(crate) mod management_authority;
+pub use management_authority::{ManagementAuthority, ManagementOperation};
 mod trusted_callers;
 pub use trusted_callers::{
     AdmittedIdentity, CALLER_AUTHORIZATION_HEADER, CallerSecurityBinding, IngressAdmission,
@@ -8,6 +10,7 @@ mod action_eligibility;
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
+pub(crate) mod broker_management;
 #[cfg(test)]
 mod client_category_tests;
 mod command_authority;
@@ -47,9 +50,12 @@ mod secret_references;
 pub(crate) use audit_sqlite::override_query_limits as override_audit_query_limits;
 pub use audit_sqlite::{AuditVerifyCheck, AuditVerifyReport, verify_sqlite_audit_database};
 pub use availability::{
-    AvailabilityState, CredentialRequirement, DiscoveredService, ServiceAvailability,
+    AvailabilityRequirement, AvailabilityResolution, AvailabilityState, DiscoveredService,
+    LocalAvailabilityReason, ServiceAvailability,
 };
 pub use owned::InvocationControl;
+mod registration;
+use registration::{BrokerManagementRegistration, RuntimeServiceRegistration};
 mod resource_access;
 mod resource_management;
 mod resource_types;
@@ -88,15 +94,16 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use chrono::Utc;
 pub use discovery::{
-    ActionList, DiscoveredResource, ResourceCoverage, ResourceList, ResourceListQuery,
-    ServiceDiscovery,
+    ActionList, ActionMatchKind, DiscoveredResource, ResourceCoverage, ResourceList,
+    ResourceListQuery, ServiceDiscovery, parse_action_targets_json,
 };
 use futures_util::Stream;
 pub use gateway_access::{GatewayUpstreamPresentation, GatewayUpstreamRejection};
 use http::HeaderMap;
 use lookup_access::{PreScopeLookup, PreScopeLookupPlan};
 pub use resource_access::{
-    EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, ResourceGroupOption,
+    EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, EffectiveAccessScope,
+    EffectiveRequestBoundary, ResourceGroupOption,
 };
 pub(crate) use resource_types::EffectiveResourceTypes;
 use serde::{Deserialize, Serialize};
@@ -329,9 +336,7 @@ pub struct AgentTokenActionOption {
     /// Explicitly reviewed read operation (`ActionCapabilities::read_only`);
     /// false for actions the backend or import review has not classified.
     pub read_only: bool,
-    pub required_scope_types: Vec<String>,
-    /// None for an explicit action grant with no resource selector.
-    pub resource_type: Option<ResourceType>,
+    pub required_scopes: BTreeMap<String, agent_access_provider::RequiredResourceScope>,
     pub execution_contexts: Vec<ExecutionContext>,
     pub effective_access_by_execution_context:
         BTreeMap<ExecutionContext, Vec<EffectiveAccessClause>>,
@@ -1668,6 +1673,7 @@ enum PolicyGrantRef {
 pub struct BrokerRuntime {
     config: Arc<BrokerConfig>,
     providers: Arc<BTreeMap<String, Arc<dyn Provider>>>,
+    broker_management: BrokerManagementRegistration,
     /// The command hooks of available command imports, keyed by service.
     /// Each is the same object as the service's entry in `providers`.
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
@@ -1782,20 +1788,36 @@ impl ProviderFixtureSlot {
 /// that resolved and admitted it, so provider state never reaches another
 /// generation's provider.
 pub struct PreparedInvocation {
-    resource_binding: Option<crate::ResourceAttributeBinding>,
-    provider: Arc<dyn Provider>,
-    /// The domain reasons the provider's backend registered, pinned with
-    /// the provider for the operation's later hooks.
+    dispatch: PreparedDispatch,
     domain_reasons: &'static [&'static ProviderReasonDefinition],
-    request: AdmittedRequest,
-    /// Body parts supplied with the invoke request itself; multipart bodies
-    /// are consumed separately after admission.
     body_parts: Vec<BrokerBodyPart>,
-    state: Option<ProviderState>,
     response_options: agent_access_provider::presentation::ResponseOptions,
     secret_outputs: secret_references::PreparedSecretOutputs,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
+}
+
+enum PreparedDispatch {
+    External {
+        resource_binding: Option<crate::ResourceAttributeBinding>,
+        provider: Arc<dyn Provider>,
+        request: Box<AdmittedRequest>,
+        state: Option<ProviderState>,
+    },
+    Local {
+        host: Arc<dyn crate::LocalOperationHost>,
+        command: Box<crate::AdmittedManagementCommand>,
+    },
+}
+
+enum InvocationOutcome {
+    Provider(Result<ProviderResult, ProviderError>),
+    Local(crate::LocalOperationOutcome),
+}
+impl From<Result<ProviderResult, ProviderError>> for InvocationOutcome {
+    fn from(outcome: Result<ProviderResult, ProviderError>) -> Self {
+        Self::Provider(outcome)
+    }
 }
 
 pub struct PreparedGatewayOperation {
@@ -1825,6 +1847,21 @@ struct PlannedGatewayOperation {
 }
 
 impl PreparedInvocation {
+    fn is_local(&self) -> bool {
+        matches!(self.dispatch, PreparedDispatch::Local { .. })
+    }
+    fn is_local_write(&self) -> bool {
+        matches!(&self.dispatch, PreparedDispatch::Local { command, .. } if command.is_write())
+    }
+
+    #[cfg(test)]
+    fn external_request(&self) -> &AdmittedRequest {
+        match &self.dispatch {
+            PreparedDispatch::External { request, .. } => request,
+            PreparedDispatch::Local { .. } => panic!("expected external invocation"),
+        }
+    }
+
     pub fn body_part_specs(&self) -> &[BrokerBodyPartSpec] {
         &self.body_part_specs
     }
@@ -2078,6 +2115,11 @@ impl BrokerRuntime {
             register_service_provider(&mut provider_map, &config, provider)?;
         }
         let managed_store = load_managed_store(&config, previous.is_some())?;
+        if let Some(store) = &managed_store {
+            store
+                .validate_broker_management_assignments()
+                .map_err(runtime_managed_store_error)?;
+        }
         let credential_key_ring = config
             .credential_encryption
             .as_ref()
@@ -2167,6 +2209,7 @@ impl BrokerRuntime {
                 previous.map(|previous| &*previous.resource_types),
             )
             .map_err(|message| RuntimeError::ManagedStore { message })?;
+        let broker_management = BrokerManagementRegistration::new(&config)?;
         let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         for record in &imported_catalog.services {
             let name = &record.definition.service;
@@ -2258,6 +2301,7 @@ impl BrokerRuntime {
                     .map(|(service, provider)| (service, provider.provider))
                     .collect(),
             ),
+            broker_management,
             command_providers: Arc::new(command_providers),
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
@@ -3197,11 +3241,7 @@ impl BrokerRuntime {
         )
         .iter()
         .filter_map(|service| {
-            let mut spec = api_service_spec(
-                &service.descriptor,
-                self.scoped_mcp_ready(&service.descriptor.service),
-                self.config.secret_outputs.mode,
-            )?;
+            let mut spec = self.project_service_spec(&service.descriptor)?;
             spec.availability = Some(service.availability.clone());
             Some(spec)
         })
@@ -3217,13 +3257,7 @@ impl BrokerRuntime {
                     self.imported_action_available(&descriptor.service, &action.action)
                 });
                 (!descriptor.actions.is_empty())
-                    .then(|| {
-                        api_service_spec(
-                            &descriptor,
-                            self.scoped_mcp_ready(&descriptor.service),
-                            self.config.secret_outputs.mode,
-                        )
-                    })
+                    .then(|| self.project_service_spec(&descriptor))
                     .flatten()
             })
             .collect()
@@ -3333,7 +3367,10 @@ impl BrokerRuntime {
         action: &str,
         caveats: Option<&AgentInvokeTokenCaveats>,
     ) -> bool {
-        if self.action_resource_scope(service, action).is_none() {
+        if self
+            .action_resource_scopes(service, action)
+            .is_some_and(|scopes| scopes.is_empty())
+        {
             // Resource restrictions cannot authorize a scope-free action.
             // Use the same explicit grant/credential-mode selection as invocation.
             return caveats.is_none_or(|c| {
@@ -3464,9 +3501,7 @@ impl BrokerRuntime {
         service: &ServiceDescriptor,
         action: &ActionDescriptor,
     ) -> Option<AgentTokenActionOption> {
-        let resource_type = service
-            .action_resource_scope(&action.action)
-            .map(|(_, binding)| binding.resource_type.clone());
+        let required_scopes = action.required_scopes(&service.resource_scopes);
         let mut effective_access_by_execution_context = BTreeMap::new();
         for execution_context in configured_contexts {
             let authored = policy_snapshot.grants.iter().any(|grant| {
@@ -3476,7 +3511,7 @@ impl BrokerRuntime {
                     && grant.execution_contexts.contains(execution_context)
             });
             if authored
-                && (resource_type.is_some()
+                && (!required_scopes.is_empty()
                     || self.scope_free_action_admitted(
                         policy_snapshot,
                         identity,
@@ -3504,8 +3539,7 @@ impl BrokerRuntime {
             action: action.action.clone(),
             description: action.description.clone(),
             read_only: action.read_only,
-            required_scope_types: action.required_scope_types(),
-            resource_type,
+            required_scopes,
             execution_contexts,
             effective_access_by_execution_context,
         })
@@ -3916,7 +3950,7 @@ impl BrokerRuntime {
             }
         };
         if let Some(missing_scope) = action_capabilities
-            .required_scope_types()
+            .resource_scopes
             .iter()
             .find(|scope| {
                 resource_scopes
@@ -4572,7 +4606,7 @@ impl BrokerRuntime {
             &context.operation.service,
             &context.operation.action,
         );
-        let preparation = self.prepare_invoke(context.clone(), request, None);
+        let preparation = self.prepare_invoke(context.clone(), request, None, None);
         let result = if let Some(deadline) = deadline {
             match tokio::time::timeout_at(deadline, preparation).await {
                 Ok(result) => result,
@@ -4609,6 +4643,7 @@ impl BrokerRuntime {
         context: GovernedOperationContext,
         mut request: InvokeRequest,
         identity_proof: Option<&crate::AttestedIdentityProof>,
+        local_host: Option<Arc<dyn crate::LocalOperationHost>>,
     ) -> Result<PreparedInvocation, Box<owned::PreparationFailure>> {
         let GovernedOperationContext {
             operation:
@@ -4629,7 +4664,7 @@ impl BrokerRuntime {
         let policy_snapshot = self.policy_snapshot();
         let policy_generation = policy_snapshot.generation();
         let domain_reasons = self.service_domain_reasons(&service);
-        let Some(provider) = self.providers.get(&service).cloned() else {
+        let Some(registration) = self.service_registration(&service) else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
                     search_authorization: None,
@@ -4758,7 +4793,34 @@ impl BrokerRuntime {
                     response_options,
                 )?;
             }
-            secret_references::validate_reference_inputs(&action_descriptor, &request.inputs)
+            match &registration {
+                RuntimeServiceRegistration::External(_) => {
+                    secret_references::validate_reference_inputs(
+                        &action_descriptor,
+                        &request.inputs,
+                    )
+                }
+                RuntimeServiceRegistration::BrokerManagement(local) => {
+                    if local_host.is_none()
+                        || !self
+                            .broker_management_requirements(&identity, &action)
+                            .is_empty()
+                    {
+                        return Err(broker_management::unavailable());
+                    }
+                    if !request.body_parts.is_empty() {
+                        return Err(ProviderError::deny(
+                            ReasonCode::InputInvalid,
+                            "local actions do not accept body parts",
+                        ));
+                    }
+                    local.validate_inputs(&action, &request.inputs)?;
+                    let plan = local
+                        .input_plan(&action)
+                        .ok_or_else(broker_management::unavailable)?;
+                    secret_references::validate_reference_plan(plan, &request.inputs)
+                }
+            }
         })();
         if let Err(error) = request_contract {
             return Err(Box::new(owned::PreparationFailure::new(
@@ -4842,7 +4904,12 @@ impl BrokerRuntime {
                         token: token_caveats.as_ref(),
                         inputs: &request.inputs,
                         correlation: &correlation,
-                        provider: &provider,
+                        provider: match &registration {
+                            RuntimeServiceRegistration::External(provider) => provider,
+                            RuntimeServiceRegistration::BrokerManagement(_) => {
+                                unreachable!("core actions cannot declare command enforcement")
+                            }
+                        },
                         domain_reasons,
                     })
                     .await;
@@ -4962,62 +5029,76 @@ impl BrokerRuntime {
             } else {
                 let scope_identity =
                     InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
-                let scope_resolution = match with_provider_context(
-                    correlation.clone(),
-                    service.clone(),
-                    action.clone(),
-                    run_provider_hook(
-                        agent_access_provider::host::hook_context(
-                            &service,
-                            &action,
-                            HookPhase::ScopeResolution,
-                            domain_reasons,
+                let scope_resolution =
+                    match with_provider_context(
+                        correlation.clone(),
+                        service.clone(),
+                        action.clone(),
+                        run_provider_hook(
+                            agent_access_provider::host::hook_context(
+                                &service,
+                                &action,
+                                HookPhase::ScopeResolution,
+                                domain_reasons,
+                            ),
+                            async {
+                                match &registration {
+                                    RuntimeServiceRegistration::External(provider) => provider
+                                        .resolve_scopes(agent_access_provider::host::scope_request(
+                                            agent_access_provider::host::ScopeRequestParts {
+                                                service: &service,
+                                                action: &action,
+                                                inputs: &request.inputs,
+                                                execution_context: execution_context.as_str(),
+                                                identity: &scope_identity,
+                                                correlation: &correlation,
+                                                lookup_access: pre_scope_lookup.access(),
+                                            },
+                                        ))
+                                        .await,
+                                    RuntimeServiceRegistration::BrokerManagement(_) => {
+                                        broker_management::descriptor::resolve_scopes(
+                                            &action,
+                                            &request.inputs,
+                                        )
+                                        .map(ScopeResolution::resources)
+                                    }
+                                }
+                            },
                         ),
-                        provider.resolve_scopes(agent_access_provider::host::scope_request(
-                            agent_access_provider::host::ScopeRequestParts {
-                                service: &service,
-                                action: &action,
-                                inputs: &request.inputs,
-                                execution_context: execution_context.as_str(),
-                                identity: &scope_identity,
-                                correlation: &correlation,
-                                lookup_access: pre_scope_lookup.access(),
-                            },
-                        )),
-                    ),
-                )
-                .await
-                {
-                    Ok(scopes) => scopes,
-                    Err(error) => {
-                        return Err(Box::new(owned::PreparationFailure::new(
-                            FinalizeContext {
-                                search_authorization: None,
-                                command: None,
-                                agent_request_id,
-                                broker_request_id,
-                                policy_generation,
-                                identity,
-                                service,
-                                action,
-                                upstream_resource_ownership: None,
-                                resource_scopes: ResourceScopes::new(),
-                                credential_mode: None,
-                                matched_grant: None,
-                                source,
-                                execution_context: Some(execution_context.clone()),
-                                redact_error_resource_scopes: lookup_scopes_before_policy,
-                                personal_lookup_connection: personal_lookup_connection.clone(),
-                                started,
-                            },
-                            Err(if lookup_scopes_before_policy {
-                                public_lookup_scope_error(error)
-                            } else {
-                                error
-                            }),
-                        )));
-                    }
-                };
+                    )
+                    .await
+                    {
+                        Ok(scopes) => scopes,
+                        Err(error) => {
+                            return Err(Box::new(owned::PreparationFailure::new(
+                                FinalizeContext {
+                                    search_authorization: None,
+                                    command: None,
+                                    agent_request_id,
+                                    broker_request_id,
+                                    policy_generation,
+                                    identity,
+                                    service,
+                                    action,
+                                    upstream_resource_ownership: None,
+                                    resource_scopes: ResourceScopes::new(),
+                                    credential_mode: None,
+                                    matched_grant: None,
+                                    source,
+                                    execution_context: Some(execution_context.clone()),
+                                    redact_error_resource_scopes: lookup_scopes_before_policy,
+                                    personal_lookup_connection: personal_lookup_connection.clone(),
+                                    started,
+                                },
+                                Err(if lookup_scopes_before_policy {
+                                    public_lookup_scope_error(error)
+                                } else {
+                                    error
+                                }),
+                            )));
+                        }
+                    };
                 let (scopes, provider_state) = scope_resolution.into_parts();
 
                 if let Err(error) = self.enforce_agent_invoke_token_resource_caveats_with(
@@ -5224,7 +5305,7 @@ impl BrokerRuntime {
         };
 
         let resource_binding = if action_descriptor.requires_resource_attributes {
-            action_descriptor.resource_scope.as_ref().and_then(|scope| {
+            action_descriptor.resource_scopes.first().and_then(|scope| {
                 let resource_type = service_descriptor
                     .as_ref()?
                     .resource_scopes
@@ -5284,30 +5365,60 @@ impl BrokerRuntime {
                 )));
             }
         };
-        let admitted = agent_access_provider::host::admitted_request(
-            agent_access_provider::host::AdmittedRequestParts {
-                service: service.clone(),
-                action: action.clone(),
-                execution_context: execution_context.as_str().to_owned(),
-                identity: InvocationIdentity::new(
-                    identity.principal.clone(),
-                    identity.authenticated,
-                ),
-                correlation: correlation.clone(),
-                credential_mode,
-                authority,
-                inputs: request.inputs,
-                execution: credentials,
-                lookup_access,
-            },
-        );
+        let dispatch = match registration {
+            RuntimeServiceRegistration::External(provider) => {
+                let admitted = agent_access_provider::host::admitted_request(
+                    agent_access_provider::host::AdmittedRequestParts {
+                        service: service.clone(),
+                        action: action.clone(),
+                        execution_context: execution_context.as_str().to_owned(),
+                        identity: InvocationIdentity::new(
+                            identity.principal.clone(),
+                            identity.authenticated,
+                        ),
+                        correlation: correlation.clone(),
+                        credential_mode,
+                        authority,
+                        inputs: request.inputs,
+                        execution: credentials,
+                        lookup_access,
+                    },
+                );
+                PreparedDispatch::External {
+                    resource_binding,
+                    provider,
+                    request: Box::new(admitted),
+                    state: provider_state,
+                }
+            }
+            RuntimeServiceRegistration::BrokerManagement(_) => {
+                let command = match self.admit_management_command(
+                    &finalize_context,
+                    &request.inputs,
+                    identity_proof,
+                    &secret_outputs,
+                ) {
+                    Ok(command) => command,
+                    Err(error) => {
+                        return Err(Box::new(owned::PreparationFailure::new(
+                            finalize_context,
+                            Err(error),
+                        )));
+                    }
+                };
+                // Only the sealed command retains a reference. The generic
+                // provider request never receives local sink inputs.
+                secret_references::zeroize_json(&mut request.inputs);
+                PreparedDispatch::Local {
+                    host: local_host.expect("local host checked before admission"),
+                    command: Box::new(command),
+                }
+            }
+        };
         Ok(PreparedInvocation {
-            resource_binding,
-            provider,
+            dispatch,
             domain_reasons,
-            request: admitted,
             body_parts: request.body_parts,
-            state: provider_state,
             response_options,
             body_part_specs: Vec::new(),
             finalize_context,
@@ -5319,7 +5430,25 @@ impl BrokerRuntime {
         &self,
         mut prepared: PreparedInvocation,
     ) -> Result<PreparedInvocation, Box<BrokerResponse<Value>>> {
-        let context = prepared.request.context().clone();
+        let PreparedDispatch::External {
+            provider,
+            request,
+            state,
+            ..
+        } = &mut prepared.dispatch
+        else {
+            return Err(Box::new(
+                self.finalize(
+                    prepared.finalize_context,
+                    Err(ProviderError::deny(
+                        ReasonCode::InputInvalid,
+                        "local actions do not accept body parts",
+                    )),
+                )
+                .await,
+            ));
+        };
+        let context = request.context().clone();
         let result = with_provider_context(
             context.correlation().clone(),
             context.service().to_owned(),
@@ -5331,16 +5460,14 @@ impl BrokerRuntime {
                     HookPhase::BodyAdmission,
                     prepared.domain_reasons,
                 ),
-                prepared
-                    .provider
-                    .authorize_body_parts(&prepared.request, prepared.state.as_ref()),
+                provider.authorize_body_parts(request, state.as_ref()),
             ),
         )
         .await;
         match result {
             Ok(admission) => {
                 let (body_part_specs, disposition) = admission.into_parts();
-                prepared.state = disposition.apply(prepared.state.take());
+                *state = disposition.apply(state.take());
                 prepared.body_part_specs = body_part_specs;
                 Ok(prepared)
             }
@@ -5375,7 +5502,9 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         let secret_outputs = prepared.secret_outputs.clone();
         let response_options = prepared.response_options;
-        let (context, result) = if let Some(deadline) = secret_outputs.operation_deadline() {
+        let (context, result) = if prepared.is_local_write() {
+            self.execute_prepared_invoke(prepared, body_parts).await
+        } else if let Some(deadline) = secret_outputs.operation_deadline() {
             use futures_util::FutureExt;
             let context = prepared.finalize_context.clone();
             let finalization =
@@ -5396,7 +5525,7 @@ impl BrokerRuntime {
                     completed.unwrap_or_else(|| (context, Err(owned::interrupted_error(
                         (ReasonCode::OperationTimeout, "operation deadline exceeded"),
                         secret_outputs.dispatched(),
-                    ))))
+                    )).into()))
                 }
                 result = &mut execution => result,
             }
@@ -5417,19 +5546,28 @@ impl BrokerRuntime {
         &self,
         prepared: PreparedInvocation,
         body_parts: Vec<BrokerBodyPart>,
-    ) -> (FinalizeContext, Result<ProviderResult, ProviderError>) {
+    ) -> (FinalizeContext, InvocationOutcome) {
         let PreparedInvocation {
-            resource_binding,
-            provider,
+            dispatch,
             domain_reasons,
-            request,
             body_parts: _,
-            state,
             response_options: _,
             secret_outputs,
             body_part_specs: _,
             finalize_context,
         } = prepared;
+        let (resource_binding, provider, request, state) = match dispatch {
+            PreparedDispatch::External {
+                resource_binding,
+                provider,
+                request,
+                state,
+            } => (resource_binding, provider, *request, state),
+            PreparedDispatch::Local { host, command } => {
+                let outcome = host.execute(*command).await;
+                return (finalize_context, InvocationOutcome::Local(outcome));
+            }
+        };
         let correlation = request.correlation().clone();
         let service = request.service().to_owned();
         let action = request.action().to_owned();
@@ -5548,7 +5686,7 @@ impl BrokerRuntime {
                 error
             }
         });
-        (finalize_context, result)
+        (finalize_context, InvocationOutcome::Provider(result))
     }
 
     /// Capture is deliberately outside the cancellable upstream wait. Once an
@@ -5559,9 +5697,25 @@ impl BrokerRuntime {
         secret_outputs: &secret_references::PreparedSecretOutputs,
         response_options: agent_access_provider::presentation::ResponseOptions,
         require_stream: bool,
-        result: Result<ProviderResult, ProviderError>,
+        result: InvocationOutcome,
     ) -> Result<ProviderResult, ProviderError> {
-        let result = self.complete_secret_outputs(secret_outputs, result);
+        let result = match result {
+            InvocationOutcome::Provider(result) => {
+                self.complete_secret_outputs(secret_outputs, result)
+            }
+            InvocationOutcome::Local(outcome) => self
+                .complete_local_outcome(context, secret_outputs, outcome)
+                .and_then(|result| {
+                    self.broker_management
+                        .validate_result(&context.action, result)
+                })
+                .map_err(|mut error| {
+                    if let Some(evidence) = error.result.as_deref_mut() {
+                        secret_outputs.add_receipt(evidence);
+                    }
+                    error
+                }),
+        };
         let result = result.and_then(|result| {
             if !require_stream
                 || result
@@ -5603,11 +5757,17 @@ impl BrokerRuntime {
         &self,
         service: &str,
     ) -> &'static [&'static ProviderReasonDefinition] {
-        self.config
-            .providers
-            .registry()
-            .get(service)
-            .map_or(&[], BackendRegistration::domain_reasons)
+        match self.service_registration(service) {
+            Some(RuntimeServiceRegistration::BrokerManagement(_)) => {
+                broker_management::DOMAIN_REASONS
+            }
+            _ => self
+                .config
+                .providers
+                .registry()
+                .get(service)
+                .map_or(&[], BackendRegistration::domain_reasons),
+        }
     }
 
     fn presentation_body_limit(&self, service: &str) -> u64 {
@@ -5692,7 +5852,7 @@ impl BrokerRuntime {
                     )
                 )
             })
-            .and_then(|descriptor| descriptor.resource_scope.clone())
+            .and_then(|descriptor| descriptor.resource_scopes.first().cloned())
             .ok_or_else(|| {
                 ProviderError::deny(
                     ReasonCode::ServiceActionDenied,
@@ -5739,7 +5899,9 @@ impl BrokerRuntime {
         let scope = top_band
             .iter()
             .fold(SearchAuthorizationScope::empty(), |scope, candidate| {
-                scope.union(&search_scope_from_boundary(&candidate.boundary))
+                scope.union(&search_scope_from_boundary(
+                    &candidate.scopes[&scope_type].boundary,
+                ))
             });
         if scope.is_empty() {
             return Err(ProviderError::deny(
@@ -5761,21 +5923,34 @@ impl BrokerRuntime {
         })
     }
 
-    /// The resource scope an action is authorized against, with its type.
-    /// Descriptor scopes are checked against the resource type registry when
-    /// the generation is built. Should a scope's type ever be missing, the
-    /// scope still binds a type that matches nothing, so the action stays
-    /// scoped and denies instead of becoming unscoped.
+    /// Every required scope remains typed even if a registry entry is unavailable.
+    fn action_resource_scopes(
+        &self,
+        service: &str,
+        action: &str,
+    ) -> Option<Vec<ActionResourceScope>> {
+        Some(
+            self.services
+                .get(service)?
+                .action_resource_scopes(action)?
+                .into_iter()
+                .map(|(scope, binding)| ActionResourceScope {
+                    scope: scope.to_string(),
+                    resource_type: self
+                        .resource_types
+                        .get(&binding.resource_type)
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(UNRESOLVED_RESOURCE_TYPE.clone())),
+                })
+                .collect(),
+        )
+    }
+
+    /// Single-scope features (search, lookup and command imports) use only a
+    /// descriptor that binds exactly one scope.
     fn action_resource_scope(&self, service: &str, action: &str) -> Option<ActionResourceScope> {
-        let (scope, binding) = self.services.get(service)?.action_resource_scope(action)?;
-        Some(ActionResourceScope {
-            scope: scope.to_string(),
-            resource_type: self
-                .resource_types
-                .get(&binding.resource_type)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(UNRESOLVED_RESOURCE_TYPE.clone())),
-        })
+        let scopes = self.action_resource_scopes(service, action)?;
+        (scopes.len() == 1).then(|| scopes.into_iter().next().unwrap())
     }
 
     fn action_resource_type(&self, service: &str, action: &str) -> Option<ResourceType> {
@@ -5794,7 +5969,9 @@ impl BrokerRuntime {
         if !self.imported_action_available(service, action) {
             return Vec::new();
         }
-        let resource_scope = self.action_resource_scope(service, action);
+        let Some(resource_scopes) = self.action_resource_scopes(service, action) else {
+            return Vec::new();
+        };
         policy_snapshot
             .grants
             .iter()
@@ -5803,21 +5980,28 @@ impl BrokerRuntime {
                 if grant.service != service
                     || !grant.actions.iter().any(|item| item == action)
                     || !grant.execution_contexts.contains(execution_context)
-                    || (resource_scope.is_none() && !grant.resources.is_empty())
+                    || (resource_scopes.is_empty() && !grant.resources.is_empty())
                 {
                     return None;
                 }
-                let boundary = resource_scope.as_ref().map_or_else(
-                    ResourceBoundary::default,
-                    |resource_scope| {
-                        policy_snapshot.resources.resolve(
+                let scopes = resource_scopes
+                    .iter()
+                    .map(|scope| {
+                        let boundary = policy_snapshot.resources.resolve(
                             &grant.resources,
-                            resource_scope.resource_type.id(),
+                            scope.resource_type.id(),
                             execution_context.as_str(),
+                        );
+                        (
+                            scope.scope.clone(),
+                            PolicyCandidateScope {
+                                resource_type: scope.resource_type.clone(),
+                                boundary,
+                            },
                         )
-                    },
-                );
-                if resource_scope.is_some() && boundary.is_empty() {
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                if scopes.values().any(|scope| scope.boundary.is_empty()) {
                     return None;
                 }
                 Some(PolicyCandidate {
@@ -5832,8 +6016,7 @@ impl BrokerRuntime {
                     grant_id: grant.managed_id().map(ToString::to_string),
                     grant_version: grant.managed_version(),
                     resources: grant.resources.clone(),
-                    resource_scope: resource_scope.clone(),
-                    boundary,
+                    scopes,
                     execution_contexts: grant.execution_contexts.clone(),
                 })
             })
@@ -6101,23 +6284,27 @@ impl BrokerRuntime {
         caveats: &AgentInvokeTokenCaveats,
         service: &str,
         action: &str,
-    ) -> Option<ResourceBoundary> {
+    ) -> Option<BTreeMap<String, ResourceBoundary>> {
         let selection = caveats
             .service_restrictions
             .as_ref()?
             .get(service)?
             .resources
             .as_ref()?;
-        Some(self.action_resource_type(service, action).map_or_else(
-            ResourceBoundary::default,
-            |resource_type| {
-                policy_snapshot.resources.resolve(
-                    selection,
-                    &resource_type,
-                    execution_context.as_str(),
-                )
-            },
-        ))
+        Some(
+            self.action_resource_scopes(service, action)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|scope| {
+                    let boundary = policy_snapshot.resources.resolve(
+                        selection,
+                        scope.resource_type.id(),
+                        execution_context.as_str(),
+                    );
+                    (scope.scope, boundary)
+                })
+                .collect(),
+        )
     }
 
     fn enforce_agent_invoke_token_resource_caveats_with(
@@ -6141,42 +6328,47 @@ impl BrokerRuntime {
         ) else {
             return Ok(());
         };
-        let ActionResourceScope {
-            scope,
-            resource_type,
-        } = self.action_resource_scope(service, action).ok_or_else(|| {
-            token_caveat_denial(
-                parsed.source,
-                service,
-                action,
-                "token resource restriction cannot apply to this action",
-            )
-        })?;
-        let values = resource_scopes
-            .get(&scope)
-            .filter(|values| !values.is_empty())
-            .ok_or_else(|| {
-                ProviderError::deny(
-                    ReasonCode::ScopeUnresolved,
-                    "token-restricted resource scope could not be resolved",
-                )
-            })?;
-        if values
-            .iter()
-            .any(|value| !resource_type.is_canonical_target(value))
-        {
-            return Err(ProviderError::deny(
-                ReasonCode::ScopeUnresolved,
-                "resolved resource scope is not canonical",
-            ));
-        }
-        if !values.iter().all(|value| boundary.matches(value)) {
+        let required = self
+            .action_resource_scopes(service, action)
+            .unwrap_or_default();
+        if required.is_empty() || required.len() != resource_scopes.len() {
             return Err(token_caveat_denial(
                 parsed.source,
                 service,
                 action,
-                "broker token is not allowed to invoke the resolved resource",
+                "token resource restriction cannot apply to this action or scope shape",
             ));
+        }
+        for required in required {
+            let values = resource_scopes
+                .get(&required.scope)
+                .filter(|values| !values.is_empty())
+                .ok_or_else(|| {
+                    ProviderError::deny(
+                        ReasonCode::ScopeUnresolved,
+                        "token-restricted resource scope could not be resolved",
+                    )
+                })?;
+            if values
+                .iter()
+                .any(|value| !required.resource_type.is_canonical_target(value))
+            {
+                return Err(ProviderError::deny(
+                    ReasonCode::ScopeUnresolved,
+                    "resolved resource scope is not canonical",
+                ));
+            }
+            if !boundary
+                .get(&required.scope)
+                .is_some_and(|boundary| values.iter().all(|value| boundary.matches(value)))
+            {
+                return Err(token_caveat_denial(
+                    parsed.source,
+                    service,
+                    action,
+                    "broker token is not allowed to invoke the resolved resource",
+                ));
+            }
         }
         Ok(())
     }
@@ -6222,6 +6414,10 @@ impl BrokerRuntime {
         ) else {
             return Ok(());
         };
+        let boundary = boundary
+            .get(&search_authorization.scope_type)
+            .cloned()
+            .unwrap_or_default();
         let narrowed = search_authorization
             .scope
             .intersection(&search_scope_from_boundary(&boundary));
@@ -6862,7 +7058,11 @@ fn register_service_provider(
     provider: ServiceProvider,
 ) -> Result<(), RuntimeError> {
     let service = provider.descriptor.service.clone();
-    let duplicate = if provider_map.contains_key(&service) {
+    let duplicate = if crate::backends::is_reserved_service_name(&service) {
+        Some(format!(
+            "service {service} is reserved for a core-owned registration"
+        ))
+    } else if provider_map.contains_key(&service) {
         Some(format!(
             "service {service} is registered by more than one provider"
         ))
@@ -6897,8 +7097,8 @@ pub(crate) fn imported_service_collision(
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
     name: &str,
 ) -> Option<String> {
-    if name == "broker" {
-        return Some("the reserved broker control-plane namespace".into());
+    if crate::backends::is_reserved_service_name(name) {
+        return Some("a reserved Broker control-plane namespace".into());
     }
     if config.providers.registry().get(name).is_some() {
         return Some(format!("the selected native provider kind {name}"));
@@ -6938,6 +7138,14 @@ fn build_service_descriptors(
         }
         services.insert(service.clone(), Arc::new(provider.descriptor.clone()));
     }
+    let local = broker_management::descriptor::descriptor(config);
+    if let Err(descriptor_errors) = local.validate() {
+        errors.extend(descriptor_errors);
+    }
+    if let Err(descriptor_errors) = local.validate_builtin_mcp_names() {
+        errors.extend(descriptor_errors);
+    }
+    services.insert(local.service.clone(), Arc::new(local));
     for (service, gateway) in &config.gateways {
         if let Some(descriptor) = gateway_service_descriptor(service, gateway) {
             services.insert(service.clone(), Arc::new(descriptor));
@@ -6970,7 +7178,7 @@ pub(crate) fn gateway_service_descriptor(
                 "additionalProperties": false
             }),
         )
-        .scope("repository")
+        .scopes(["repository"])
         .credential_modes(gateway.credential_modes.iter().cloned())
     };
     let mut actions = Vec::new();
@@ -7931,7 +8139,12 @@ struct PolicyCandidate {
     grant_version: Option<i64>,
     resources: ResourceSelection,
     execution_contexts: Vec<ExecutionContext>,
-    resource_scope: Option<ActionResourceScope>,
+    scopes: BTreeMap<String, PolicyCandidateScope>,
+}
+
+#[derive(Debug, Clone)]
+struct PolicyCandidateScope {
+    resource_type: Arc<ResourceTypeDescriptor>,
     boundary: ResourceBoundary,
 }
 
@@ -8019,24 +8232,24 @@ fn admitted_authority(
     if command_enforced {
         return match (
             action.native_search,
-            action.resource_scope.as_deref(),
+            action.resource_scopes.as_slice(),
             search,
         ) {
-            (None, Some(scope), Some(search))
-                if search.scope_type == scope
+            (None, [scope], Some(search))
+                if search.scope_type == scope.as_str()
                     && !search.scope.is_empty()
                     && search.scope.exact_projection().is_ok() =>
             {
                 Ok(InvocationAuthority::Search(search))
             }
-            (None, None, None) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
+            (None, [], None) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
             _ => Err(mismatch()),
         };
     }
     match (
         action.native_search,
         search,
-        action.resource_scope.as_deref(),
+        action.resource_scopes.as_slice(),
     ) {
         (
             Some(
@@ -8044,14 +8257,20 @@ fn admitted_authority(
                 | NativeSearchEnforcement::ResultFiltered,
             ),
             Some(search),
-            Some(scope),
-        ) if search.scope_type == scope && !search.scope.is_empty() => {
+            [scope],
+        ) if search.scope_type == scope.as_str() && !search.scope.is_empty() => {
             Ok(InvocationAuthority::Search(search))
         }
-        (None, None, Some(scope)) if scopes.get(scope).is_some_and(|values| !values.is_empty()) => {
+        (None, None, []) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
+        (None, None, declared)
+            if !declared.is_empty()
+                && scopes.len() == declared.len()
+                && declared
+                    .iter()
+                    .all(|scope| scopes.get(scope).is_some_and(|values| !values.is_empty())) =>
+        {
             Ok(InvocationAuthority::Resources(scopes.clone()))
         }
-        (None, None, None) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
         _ => Err(mismatch()),
     }
 }
@@ -8105,16 +8324,16 @@ fn has_per_user_setup_grant(
 }
 
 fn candidate_authorizes_scopes(candidate: &PolicyCandidate, resolved: &ResourceScopes) -> bool {
-    let Some(resource_scope) = &candidate.resource_scope else {
-        return resolved.is_empty();
-    };
-    resolved.get(&resource_scope.scope).is_some_and(|values| {
-        !values.is_empty()
-            && values.iter().all(|value| {
-                resource_scope.resource_type.is_canonical_target(value)
-                    && candidate.boundary.matches(value)
+    candidate.scopes.len() == resolved.len()
+        && candidate.scopes.iter().all(|(name, scope)| {
+            resolved.get(name).is_some_and(|values| {
+                !values.is_empty()
+                    && values.iter().all(|value| {
+                        scope.resource_type.is_canonical_target(value)
+                            && scope.boundary.matches(value)
+                    })
             })
-    })
+        })
 }
 
 struct ParsedAgentInvokeTokenCaveats<'a> {
@@ -8427,10 +8646,14 @@ fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
         ManagedStoreError::PrincipalAlreadyExists => "managed principal already exists",
         ManagedStoreError::VersionConflict => "managed credential version changed",
         ManagedStoreError::Unavailable(_) => "managed credential store is unavailable",
+        ManagedStoreError::CommitUnknown => {
+            "management transaction commit outcome could not be established"
+        }
         ManagedStoreError::MigrationRequired | ManagedStoreError::SchemaInvalid(_) => {
             "managed store schema is incompatible; a fresh database is required"
         }
         ManagedStoreError::InputInvalid(_) => "managed credential input is invalid",
+        ManagedStoreError::ManagementDenied => "management operation is not authorized",
         ManagedStoreError::ImportChangeBlocked(_) => "imported service change is blocked",
         ManagedStoreError::CredentialInvalid(_) => "managed per_user credential is invalid",
         ManagedStoreError::CredentialEncryptFailed => {

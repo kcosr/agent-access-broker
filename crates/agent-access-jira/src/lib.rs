@@ -850,7 +850,7 @@ fn jira_read_action(action: &str, description: &str, input_schema: Value) -> Act
 
 fn jira_action(action: &str, description: &str, input_schema: Value) -> ActionDescriptor {
     ActionDescriptor::new(action, description, input_schema)
-        .scope("project")
+        .scopes(["project"])
         .credential_modes(["service", "per_user"])
 }
 

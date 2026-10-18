@@ -400,6 +400,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         invocation_limits: Arc::new(crate::ConfiguredInvocationLimits::from_config(&config)),
         config: Arc::new(config),
         providers: Arc::clone(&runtime.providers),
+        broker_management: runtime.broker_management.clone(),
         command_providers: Arc::clone(&runtime.command_providers),
         services: Arc::clone(&runtime.services),
         resource_types: Arc::clone(&runtime.resource_types),
@@ -2243,7 +2244,7 @@ impl agent_access_provider::test_support::DescribedProvider for LookupTraceProvi
                         "additionalProperties": false
                     }),
                 )
-                .scope(self.scope_type.clone())
+                .scopes([self.scope_type.clone()])
                 .credential_modes(["service", "per_user"])
                 .lookup(LookupRequirement::ScopeResolution),
             ])
@@ -2321,7 +2322,7 @@ impl agent_access_provider::test_support::DescribedProvider for SearchPreflightT
                         "additionalProperties": true
                     }),
                 )
-                .scope("project")
+                .scopes(["project"])
                 .credential_modes(["service"])
                 .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained),
             ])
@@ -2433,7 +2434,7 @@ impl agent_access_provider::test_support::DescribedProvider for DependencyPolicy
                                 "additionalProperties": true
                             }),
                         )
-                        .scope("project")
+                        .scopes(["project"])
                         .credential_modes(["service"])
                         .lookup(lookup)
                     })
@@ -3427,8 +3428,16 @@ fn agent_token_options_preserve_configured_context_order_and_union_groups() {
     assert_eq!(action.execution_contexts, options.execution_contexts);
     for execution_context in &options.execution_contexts {
         let clauses = &action.effective_access_by_execution_context[execution_context];
-        assert!(clauses.iter().any(|boundary| boundary.matches("TEST")));
-        assert!(clauses.iter().all(|boundary| !boundary.matches("OTHER")));
+        assert!(
+            clauses
+                .iter()
+                .any(|boundary| boundary.matches_partial_target("project", "TEST"))
+        );
+        assert!(
+            clauses
+                .iter()
+                .all(|boundary| !boundary.matches_partial_target("project", "OTHER"))
+        );
     }
 }
 
@@ -3549,11 +3558,13 @@ fn agent_token_options_exclude_only_same_band_wildcard_credential_overlap() {
     assert!(
         clauses
             .iter()
-            .any(|boundary| boundary.matches("NEWPROJECT")),
+            .any(|boundary| boundary.matches_partial_target("project", "NEWPROJECT")),
         "non-overlapping resources remain usable through per-user all"
     );
     assert!(
-        clauses.iter().all(|boundary| !boundary.matches("ENG")),
+        clauses
+            .iter()
+            .all(|boundary| !boundary.matches_partial_target("project", "ENG")),
         "mixed credential modes in the top band must not appear usable"
     );
 }
@@ -3650,8 +3661,16 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
     for context in ["rank", "priority"] {
         let context = ExecutionContext::new(context).unwrap();
         let clauses = &action.effective_access_by_execution_context[&context];
-        assert!(clauses.iter().any(|boundary| boundary.matches("ENG")));
-        assert!(clauses.iter().all(|boundary| !boundary.matches("OPS")));
+        assert!(
+            clauses
+                .iter()
+                .any(|boundary| boundary.matches_partial_target("project", "ENG"))
+        );
+        assert!(
+            clauses
+                .iter()
+                .all(|boundary| !boundary.matches_partial_target("project", "OPS"))
+        );
         let authorization = runtime
             .plan_search_authorization(&snapshot, &identity, &context, "jira", "search")
             .unwrap();
@@ -3660,11 +3679,16 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
     }
     let missing_scope = ExecutionContext::new("missing-scope").unwrap();
     let clauses = &action.effective_access_by_execution_context[&missing_scope];
-    assert!(clauses.iter().any(|boundary| boundary.matches("OPS")));
     assert!(
         clauses
             .iter()
-            .all(|boundary| !boundary.matches("ENG") && !boundary.matches("NEWPROJECT")),
+            .any(|boundary| boundary.matches_partial_target("project", "OPS"))
+    );
+    assert!(
+        clauses.iter().all(
+            |boundary| !boundary.matches_partial_target("project", "ENG")
+                && !boundary.matches_partial_target("project", "NEWPROJECT")
+        ),
         "an empty high-priority selection contributes no permission and does not suppress a separate matching grant"
     );
     let authorization = runtime
@@ -6262,10 +6286,7 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
                 action: "repo.fetch".to_string(),
                 source: SourceContext::unknown(),
             }),
-            ResourceScopes::from([
-                ("repository".to_string(), vec!["sip/service".to_string()]),
-                ("namespace".to_string(), vec!["sip".to_string()]),
-            ]),
+            ResourceScopes::from([("repository".to_string(), vec!["sip/service".to_string()])]),
         )
         .await
         .unwrap();
@@ -6404,10 +6425,7 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
                 action: "repo.fetch".to_string(),
                 source: SourceContext::unknown(),
             }),
-            ResourceScopes::from([
-                ("repository".to_string(), vec!["sip/service".to_string()]),
-                ("namespace".to_string(), vec!["sip".to_string()]),
-            ]),
+            ResourceScopes::from([("repository".to_string(), vec!["sip/service".to_string()])]),
         )
         .await
         .unwrap();
@@ -7633,7 +7651,7 @@ fn token_repository_selectors_require_every_resolved_repository() {
             )
             .is_err()
     );
-    // Namespace metadata is not another target or authoritative resource identity.
+    // Undeclared scopes cannot be smuggled alongside the authoritative resource identity.
     let metadata = ResourceScopes::from([
         ("repository".into(), vec!["sip/service".into()]),
         ("namespace".into(), vec!["uncovered".into()]),
@@ -7646,7 +7664,7 @@ fn token_repository_selectors_require_every_resolved_repository() {
                 "repo.fetch",
                 &metadata
             )
-            .is_ok()
+            .is_err()
     );
 }
 
@@ -7664,14 +7682,16 @@ fn repository_candidate(included: Vec<ResourceSelector>) -> PolicyCandidate {
         grant_version: None,
         resources: ResourceSelection::default(),
         execution_contexts: vec![default_execution_context()],
-        resource_scope: Some(ActionResourceScope {
-            scope: "repository".to_string(),
-            resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
-        }),
-        boundary: ResourceBoundary {
-            included,
-            excluded: vec![],
-        },
+        scopes: BTreeMap::from([(
+            "repository".into(),
+            PolicyCandidateScope {
+                resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
+                boundary: ResourceBoundary {
+                    included,
+                    excluded: vec![],
+                },
+            },
+        )]),
     }
 }
 
@@ -7879,6 +7899,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         invocation_limits: runtime.invocation_limits.clone(),
         config: Arc::new(invalid_config),
         providers: runtime.providers.clone(),
+        broker_management: runtime.broker_management.clone(),
         command_providers: runtime.command_providers.clone(),
         services: runtime.services.clone(),
         resource_types: runtime.resource_types.clone(),
@@ -8314,7 +8335,7 @@ impl agent_access_provider::test_support::DescribedProvider for CorrelationCaptu
                     "additionalProperties": false
                 }),
             )
-            .scope("project")
+            .scopes(["project"])
             .credential_modes(["service"]),
         ];
         descriptor
@@ -9652,13 +9673,13 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
                 token_preview.access[0]
                     .clauses
                     .iter()
-                    .any(|clause| clause.matches("TEST"))
+                    .any(|clause| clause.matches_partial_target("project", "TEST"))
             );
             assert!(
                 !token_preview.access[0]
                     .clauses
                     .iter()
-                    .any(|clause| clause.matches("OPS"))
+                    .any(|clause| clause.matches_partial_target("project", "OPS"))
             );
         }
     }

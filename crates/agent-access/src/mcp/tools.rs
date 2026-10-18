@@ -660,7 +660,7 @@ mod tests {
 
     fn action() -> ApiActionSpec {
         serde_json::from_value(json!({
-            "action":"issue.view","scopedMcpName":"issue.view","description":"Read an issue","readOnly":true,"requiredScopeTypes":[],"credentialModes":[],
+            "action":"issue.view","scopedMcpName":"issue.view","description":"Read an issue","readOnly":true,"requiredScopes":{},"credentialModes":[],
             "inputSchema":{"type":"object","required":["issue"],"properties":{"issue":{"type":"string"}}},
             "io":{"type":"json"},"responseKind":"response_envelope","exitPolicy":"invoke_decision"
         })).unwrap()

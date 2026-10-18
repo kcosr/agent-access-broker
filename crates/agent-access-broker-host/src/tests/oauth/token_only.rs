@@ -61,25 +61,25 @@ impl DescribedProvider for TokenOnlyRecords {
             .with_actions(vec![
                 // Both resolve their collection with a lookup before policy.
                 action("token.create", &scoped)
-                    .scope("collection")
+                    .scopes(["collection"])
                     .lookup(LookupRequirement::ScopeResolution)
                     .token_only(),
                 action("token.rotate", &scoped)
-                    .scope("collection")
+                    .scopes(["collection"])
                     .lookup(LookupRequirement::ScopeResolution)
                     .token_only(),
                 action("token.view", &scoped)
-                    .scope("collection")
+                    .scopes(["collection"])
                     .token_only(),
                 action("token.search", &unscoped)
-                    .scope("collection")
+                    .scopes(["collection"])
                     .native_search(
                         agent_access_provider::NativeSearchEnforcement::UpstreamConstrained,
                     )
                     .token_only(),
                 action("token.status", &unscoped).token_only(),
                 action("record.view", &scoped)
-                    .scope("collection")
+                    .scopes(["collection"])
                     .read_only(),
                 action("account.view", &unscoped).read_only(),
             ])
@@ -245,7 +245,12 @@ impl OAuthFixture {
         let context = ExecutionContext::new("default").unwrap();
         self.runtime
             .service_discovery(&identity, &context, SERVICE)
-            .map(|discovery| discovery.actions(collection, None, None).unwrap().actions)
+            .map(|discovery| {
+                discovery
+                    .actions(collection, None, None, None)
+                    .unwrap()
+                    .actions
+            })
             .unwrap_or_default()
     }
 

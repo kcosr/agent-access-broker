@@ -209,7 +209,7 @@ export function commandPolicyService(data: ImportPreviewResult): PolicyServiceCa
         action: entry.definition.action,
         readOnly: entry.definition.readOnly,
         description: entry.definition.description,
-        requiredScopeTypes: resources ? ["ticketing_project"] : [],
+        requiredScopes: Object.fromEntries(resources ? [["ticketing_project", { resourceType: "ticketing_project" }]] : []),
         credentialModes: ["service", "per_user"],
         lookupRequired: false,
         inputSchema: entry.definition.inputSchema,

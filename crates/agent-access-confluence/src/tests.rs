@@ -126,7 +126,7 @@ fn descriptor_lookup_requirements_follow_scope_resolution_needs() {
             _ => LookupRequirement::ScopeResolution,
         };
         assert_eq!(action.lookup, expected, "unexpected lookup for {name}");
-        assert_eq!(action.required_scope_types(), ["space"], "{name}");
+        assert_eq!(action.resource_scopes, ["space"], "{name}");
         assert_eq!(action.credential_modes, ["service", "per_user"], "{name}");
     }
 }

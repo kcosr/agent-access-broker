@@ -169,6 +169,13 @@ unregistered value can also be allowed. A service that authorizes several
 resource types needs `--resource-type` (a row's `type`) on both commands. This checks single-target policy, not full-request or
 upstream authorization. Actual execution remains authoritative.
 
+For complete policy compatibility, use `actions list --service SERVICE
+--targets-json '{"group":["review-automation"],"principal":["review-worker"]}'`.
+The map keys come from the action's `requiredScopes`; do not combine it with
+`--resource` or `--resource-type`. Every target must fit one complete grant and
+the token boundary. Results include `matchKind` and `policyGeneration`. This
+does not check object eligibility or reserve authority for a later invocation.
+
 `agent-access broker status` reports the running executable's `assembly` (`name`,
 `version`, `qualification`, `source`), the linked `host` and `sdk` packages, the
 compiled `modules` (each `crate`, `version`, `roles` and `source`), an
@@ -1022,3 +1029,10 @@ connected account. Account linking occurs in the portal with self-service
 enabled, a credential connection with OAuth and a matching active `per_user`
 action grant for the user or their current groups. No separate
 credential rights are required; linking does not expand invocation access.
+
+For delegated service-account provisioning, discover the `broker_management`
+service and use its published action schemas. Edge changes require one grant
+covering every required target. Credential installation accepts a temporary
+reference only; child token creation returns a reference and cannot be replayed
+to recover a lost response. Use independently granted view actions to reconcile.
+See [Broker administration](../../docs/broker-management.md).

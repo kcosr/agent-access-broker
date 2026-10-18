@@ -1208,6 +1208,7 @@ pub agent_access_core::managed_store::ManagedStoreError::BrokerTokenNotFound
 pub agent_access_core::managed_store::ManagedStoreError::BrokerTokenPaused
 pub agent_access_core::managed_store::ManagedStoreError::BrokerTokenRevoked
 pub agent_access_core::managed_store::ManagedStoreError::BrokerTokenStateConflict
+pub agent_access_core::managed_store::ManagedStoreError::CommitUnknown
 pub agent_access_core::managed_store::ManagedStoreError::CredentialDecryptFailed
 pub agent_access_core::managed_store::ManagedStoreError::CredentialEncryptFailed
 pub agent_access_core::managed_store::ManagedStoreError::CredentialExpired
@@ -1228,6 +1229,7 @@ pub agent_access_core::managed_store::ManagedStoreError::LocalLoginLocked
 pub agent_access_core::managed_store::ManagedStoreError::LocalPasswordAlreadyEnabled
 pub agent_access_core::managed_store::ManagedStoreError::LocalPasswordBusy
 pub agent_access_core::managed_store::ManagedStoreError::LocalPasswordNotEnabled
+pub agent_access_core::managed_store::ManagedStoreError::ManagementDenied
 pub agent_access_core::managed_store::ManagedStoreError::MigrationRequired
 pub agent_access_core::managed_store::ManagedStoreError::OidcAdmissionDenied
 pub agent_access_core::managed_store::ManagedStoreError::OidcCallbackStale

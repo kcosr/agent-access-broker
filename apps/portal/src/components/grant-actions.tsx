@@ -2,7 +2,7 @@
 // write-capability badge shown for a selection. A command import's actions
 // also say whether the Broker or the command checks their resources.
 import { useId, useState } from "react";
-import { actionSelectionCounts, grantActionGroups, selectMatchingActions, type ClassifiedAction } from "../lib/grant-actions";
+import { actionSelectionCounts, canGrantAction, grantActionGroups, selectMatchingActions, type ClassifiedAction } from "../lib/grant-actions";
 import { Badge, Button, Checkbox, FilterInput } from "../workbench";
 import { ActionName } from "./action-name";
 
@@ -42,7 +42,7 @@ export function GrantActionSelector({
       <div className="pt-action-columns">
         {groups.map((group) => {
           const matching = group.matching.map((action) => action.action);
-          const selectable = group.matching.filter((action) => action.available !== false).map((action) => action.action);
+          const selectable = group.matching.filter(canGrantAction).map((action) => action.action);
           const category = group.label.toLowerCase();
           return (
             <div className="pt-action-column" role="group" aria-labelledby={`${id}-${category}`} key={group.label}>
@@ -94,7 +94,7 @@ export function GrantActionSelector({
                       </span>
                     }
                     checked={selected.includes(action.action)}
-                    disabled={disabled || (action.available === false && !selected.includes(action.action))}
+                    disabled={disabled || (!canGrantAction(action) && !selected.includes(action.action))}
                     onChange={(event) => onChange(selectMatchingActions(selected, [action.action], event.target.checked))}
                   />
                 ))}

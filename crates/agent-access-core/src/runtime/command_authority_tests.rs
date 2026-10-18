@@ -514,6 +514,7 @@ async fn prepare(
             },
             InvokeRequest::new(inputs),
             None,
+            None,
         )
         .await
         .map_err(|failure| failure.result.unwrap_err())
@@ -565,7 +566,11 @@ fn discovered(
     Some(
         PROBES
             .into_iter()
-            .filter(|probe| clauses.iter().any(|clause| clause.matches(probe)))
+            .filter(|probe| {
+                clauses
+                    .iter()
+                    .any(|clause| clause.matches_partial_target("project", probe))
+            })
             .collect(),
     )
 }
@@ -605,20 +610,26 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         crate::runtime::imports::descriptor(&declaring, &config, &published_types(&declaring));
     descriptor.validate().unwrap();
     let view = descriptor.action("issue.view").unwrap();
-    assert_eq!(view.resource_scope.as_deref(), Some("project"));
+    assert_eq!(
+        view.resource_scopes.first().map(String::as_str),
+        Some("project")
+    );
     assert!(
         view.native_search.is_none(),
         "inputs mean the Broker checks them"
     );
     assert!(!view.requires_resource_attributes);
     let search = descriptor.action("issue.search").unwrap();
-    assert_eq!(search.resource_scope.as_deref(), Some("project"));
+    assert_eq!(
+        search.resource_scopes.first().map(String::as_str),
+        Some("project")
+    );
     assert!(
         search.native_search.is_none(),
         "command enforcement never enables native search"
     );
     let stats = descriptor.action("issue.stats").unwrap();
-    assert!(stats.resource_scope.is_none() && stats.native_search.is_none());
+    assert!(stats.resource_scopes.is_empty() && stats.native_search.is_none());
     assert_eq!(stats.credential_modes, ["service", "per_user"]);
     assert_eq!(
         descriptor
@@ -642,7 +653,8 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     // modes stay valid; it never reaches a resource.
     assert!(corrupt.native_search.is_none());
     assert_eq!(
-        descriptor.resource_scopes[corrupt.resource_scope.as_deref().unwrap()].resource_type,
+        descriptor.resource_scopes[corrupt.resource_scopes.first().map(String::as_str).unwrap()]
+            .resource_type,
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
     let imported = ImportedCatalog {
@@ -680,7 +692,8 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     for action in &unlinked.actions {
         assert!(action.native_search.is_none());
         assert_eq!(
-            unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type,
+            unlinked.resource_scopes[action.resource_scopes.first().map(String::as_str).unwrap()]
+                .resource_type,
             *UNRESOLVED_RESOURCE_TYPE.id()
         );
         assert!(
@@ -813,9 +826,14 @@ async fn command_enforced_calls_pass_the_top_band_with_per_grant_credentials_and
         prepared.finalize_context.resource_scopes,
         BTreeMap::from([("project".to_owned(), vec!["*".to_owned()])])
     );
-    assert!(prepared.request.execution().is_none());
+    assert!(prepared.external_request().execution().is_none());
     assert_eq!(
-        prepared.request.authority().search().unwrap().scope,
+        prepared
+            .external_request()
+            .authority()
+            .search()
+            .unwrap()
+            .scope,
         all_except(&["FIN", "HR", "SEC"]).authority()
     );
     // Audit records grants, modes and boundaries, never attributes.
@@ -1281,12 +1299,18 @@ async fn agent_token_restrictions_intersect_every_passed_grant() {
         .iter()
         .find(|entry| entry.action == "issue.search" && entry.execution_context == context())
         .unwrap();
-    assert!(entry.clauses.iter().any(|clause| clause.matches("ENG")));
+    assert!(
+        entry
+            .clauses
+            .iter()
+            .any(|clause| clause.matches_partial_target("project", "ENG"))
+    );
     assert!(
         !entry
             .clauses
             .iter()
-            .any(|clause| clause.matches("SEC") || clause.matches("OPS"))
+            .any(|clause| clause.matches_partial_target("project", "SEC")
+                || clause.matches_partial_target("project", "OPS"))
     );
 
     let outside = identity(Some(token(&["issue.search"], &["p-sec"])));
@@ -1329,7 +1353,13 @@ async fn untyped_command_actions_pass_action_grants_reaching_any_value() {
     };
     assert!(resource_type.is_none());
     assert!(prepared.finalize_context.resource_scopes.is_empty());
-    assert!(prepared.request.authority().resources().is_none());
+    assert!(
+        prepared
+            .external_request()
+            .authority()
+            .resources()
+            .is_none()
+    );
     assert!(
         serde_json::to_value(prepared.command_authorization().unwrap())
             .unwrap()
@@ -1408,7 +1438,7 @@ async fn broker_enforced_calls_select_one_grant_covering_the_named_resources() {
     assert_eq!(values, &["ENG"]);
     assert_eq!(grant.subject, "group:engineering");
     assert_eq!(
-        prepared.request.authority().resources().unwrap()["project"],
+        prepared.external_request().authority().resources().unwrap()["project"],
         ["ENG"]
     );
     // An uncovered resource is denied before dispatch; a resource two modes

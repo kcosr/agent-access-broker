@@ -1155,13 +1155,13 @@ fn cloudbees_ci_credentials_and_actions_use_job_scope() {
     let service = &configured_service_descriptors(&config)["cloudbees_ci"];
     assert_eq!(service.scope_types(), ["job".to_string()].into());
     for action in &service.actions {
-        assert_eq!(action.required_scope_types(), ["job"]);
+        assert_eq!(action.resource_scopes, ["job"]);
     }
     assert_eq!(
         service
             .action("build.artifact.download")
             .unwrap()
-            .required_scope_types(),
+            .resource_scopes,
         ["job"]
     );
     assert_eq!(
@@ -3898,7 +3898,7 @@ fn git_http_gateway_accepts_typed_repository_resources_and_exposes_capabilities(
     let gitlab = catalog.get("gitlab_git").unwrap();
     assert_eq!(gitlab.scope_types(), ["repository".to_string()].into());
     assert_eq!(
-        gitlab.action("repo.fetch").unwrap().required_scope_types(),
+        gitlab.action("repo.fetch").unwrap().resource_scopes,
         vec!["repository"]
     );
     assert_eq!(
@@ -3946,17 +3946,11 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
             .contains(&"all".to_string())
     );
     assert_eq!(
-        gitlab
-            .action("project.view")
-            .unwrap()
-            .required_scope_types(),
+        gitlab.action("project.view").unwrap().resource_scopes,
         vec!["repository"]
     );
     assert_eq!(
-        gitlab
-            .action("project.upload")
-            .unwrap()
-            .required_scope_types(),
+        gitlab.action("project.upload").unwrap().resource_scopes,
         vec!["repository"]
     );
     assert_eq!(
@@ -6021,6 +6015,10 @@ fn resource_types_follow_backend_registration_order() {
         ids,
         [
             "git_repository",
+            "broker_principal",
+            "broker_group",
+            "broker_grant",
+            "broker_connection",
             "jira_project",
             "confluence_space",
             "cloudbees_ci_job",
@@ -6142,6 +6140,42 @@ fn the_broker_namespace_is_reserved_even_for_an_unconfigured_native_kind() {
     assert_eq!(
         BackendRegistry::new([&FAKE_BACKEND, &BROKER_KIND]).unwrap_err(),
         ["backend kind broker is reserved for the Broker control-plane namespace"]
+    );
+}
+
+#[test]
+fn management_service_and_kind_cannot_be_registered_by_native_backends() {
+    static SERVICE: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "broker_management",
+        parse_backend_config::<FakeProviderConfig>,
+    );
+    static KIND: BackendRegistration = BackendRegistration::new(
+        agent_access_provider::module_metadata!(),
+        "access_management",
+        parse_backend_config::<FakeProviderConfig>,
+    );
+    for registration in [&SERVICE, &KIND] {
+        assert!(
+            BackendRegistry::new([registration])
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("reserved"))
+        );
+    }
+}
+
+#[test]
+fn broker_delegation_cannot_be_authored_in_toml() {
+    let mut config = sample_broker();
+    config.policy.authority = "toml".into();
+    config.policy.grants[0].service = "broker_management".into();
+    assert!(
+        validate_broker_config(&config)
+            .unwrap_err()
+            .errors()
+            .iter()
+            .any(|error| error.contains("requires administrator-authored managed policy"))
     );
 }
 

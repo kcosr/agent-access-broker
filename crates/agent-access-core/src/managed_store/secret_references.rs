@@ -127,6 +127,12 @@ impl SecretOutputReservationBatch {
     pub fn expires_at(&self) -> &str {
         &self.0.expires_at
     }
+    pub(crate) fn mark_completed(&self) {
+        self.0.state.store(2, Ordering::Release);
+    }
+    pub(crate) fn is_completed(&self) -> bool {
+        self.0.state.load(Ordering::Acquire) == 2
+    }
     pub fn mark_dispatched(&self) {
         let _ = self
             .0
@@ -240,7 +246,10 @@ impl ManagedStore {
                 }
             })
             .collect::<Vec<_>>();
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -274,6 +283,48 @@ impl ManagedStore {
         captures: Vec<SecretOutputCapture>,
         safe_metadata: Value,
     ) -> Result<Vec<CapturedSecretReference>, ManagedStoreError> {
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let result = Self::capture_outputs_conn(&tx, ring, batch, captures, safe_metadata)?;
+        tx.commit().map_err(sql_unavailable)?;
+        batch.mark_completed();
+        Ok(result)
+    }
+
+    pub(crate) fn validate_local_reservation_conn(
+        conn: &Connection,
+        ring: &CredentialKeyRing,
+        batch: &SecretOutputReservationBatch,
+        broker_request_id: &str,
+        origin: &SecretReferenceOrigin,
+    ) -> Result<(), ManagedStoreError> {
+        let row = receipt_row(conn, batch.receipt_id())?;
+        if row.receipt.broker_request_id != broker_request_id
+            || row.receipt.service != "broker_management"
+            || row.receipt.action != "token.create"
+            || row.receipt.outcome != "reserved"
+            || timestamp_is_past(Some(&row.receipt.expires_at))
+            || batch.0.slots.len() != 1
+            || batch.0.slots[0].pointer != "/result/issuedToken"
+            || decrypt_origin(ring, &row)? != *origin
+        {
+            return Err(ManagedStoreError::SecretReferenceDenied);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn capture_outputs_conn(
+        conn: &Connection,
+        ring: &CredentialKeyRing,
+        batch: &SecretOutputReservationBatch,
+        captures: Vec<SecretOutputCapture>,
+        safe_metadata: Value,
+    ) -> Result<Vec<CapturedSecretReference>, ManagedStoreError> {
         let mut seen = BTreeSet::new();
         for capture in &captures {
             let slot = batch
@@ -301,11 +352,7 @@ impl ManagedStore {
         } else {
             metadata_json(&safe_metadata).unwrap_or_else(|_| omitted_metadata("completed"))
         };
-        let mut conn = self.connection.lock().unwrap();
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sql_unavailable)?;
-        let receipt = receipt_row(&tx, batch.receipt_id())?;
+        let receipt = receipt_row(conn, batch.receipt_id())?;
         if receipt.receipt.outcome != "reserved" {
             return Err(ManagedStoreError::SecretReferenceStateConflict);
         }
@@ -320,7 +367,7 @@ impl ManagedStore {
                 .iter()
                 .find(|slot| slot.pointer == capture.pointer)
                 .expect("checked reservation");
-            let mut material = material_row(&tx, &slot.reference_hash)?;
+            let mut material = material_row(conn, &slot.reference_hash)?;
             if material.state != "reserved"
                 || material.receipt_id != batch.receipt_id()
                 || material.pointer != slot.pointer
@@ -334,7 +381,7 @@ impl ManagedStore {
                 &material_aad(&receipt, &material)?,
                 capture.value.as_bytes(),
             )?;
-            tx.execute(
+            conn.execute(
                 "UPDATE secret_reference_material SET state='captured',charged_bytes=?2,key_id=?3,nonce=?4,ciphertext=?5 WHERE reference_hash=?1 AND state='reserved'",
                 params![slot.reference_hash,capture.value.len() as i64,encrypted.key_id,encrypted.nonce,encrypted.ciphertext],
             ).map_err(sql_unavailable)?;
@@ -345,10 +392,8 @@ impl ManagedStore {
             });
         }
         // Optional outputs that did not materialize consume no capacity.
-        tx.execute("UPDATE secret_reference_material SET state='released',charged_bytes=0 WHERE receipt_id=?1 AND state='reserved'", [batch.receipt_id()]).map_err(sql_unavailable)?;
-        tx.execute("UPDATE secret_reference_receipts SET outcome='captured',metadata_json=?2 WHERE receipt_id=?1", params![batch.receipt_id(),metadata]).map_err(sql_unavailable)?;
-        tx.commit().map_err(sql_unavailable)?;
-        batch.0.state.store(2, Ordering::Release);
+        conn.execute("UPDATE secret_reference_material SET state='released',charged_bytes=0 WHERE receipt_id=?1 AND state='reserved'", [batch.receipt_id()]).map_err(sql_unavailable)?;
+        conn.execute("UPDATE secret_reference_receipts SET outcome='captured',metadata_json=?2 WHERE receipt_id=?1", params![batch.receipt_id(),metadata]).map_err(sql_unavailable)?;
         Ok(result)
     }
 
@@ -376,7 +421,10 @@ impl ManagedStore {
                 SecretReservationOutcome::Unknown => "unknown",
             })
         });
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -394,7 +442,10 @@ impl ManagedStore {
         reference: &str,
         authorize: impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
     ) -> Result<String, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -411,7 +462,10 @@ impl ManagedStore {
         authorize: impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
     ) -> Result<SecretReferenceReceipt, ManagedStoreError> {
         validate_uuid_id(receipt_id, "receiptId")?;
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn.transaction().map_err(sql_unavailable)?;
         let row = receipt_row(&tx, receipt_id)?;
         let origin = decrypt_origin(ring, &row)?;
@@ -476,7 +530,10 @@ impl ManagedStore {
                 "secret references are accepted only in the token field",
             ));
         }
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -484,12 +541,13 @@ impl ManagedStore {
         authorize_write(&tx)?;
         let mut references = Vec::new();
         if let Some(reference) = reference {
-            let (value, usage) = resolve_conn(&tx, ring, &reference, &authorize_origin)?;
+            let (value, usage) =
+                resolve_credential_reference_conn(&tx, ring, &reference, &authorize_origin)?;
             request.secret["token"] = Value::String(value);
             references.push(usage);
         }
         let credential = upsert_user_credential_conn(&tx, ring, request, purpose)?;
-        tx.commit().map_err(sql_unavailable)?;
+        tx.commit().map_err(|_| ManagedStoreError::CommitUnknown)?;
         Ok(SecretCredentialWriteResult {
             credential,
             references,
@@ -498,7 +556,10 @@ impl ManagedStore {
 
     /// Expiry is enforced on reads even when this maintenance pass has not run.
     pub(crate) fn cleanup_secret_references(&self) -> Result<u64, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -513,7 +574,10 @@ impl ManagedStore {
         &self,
         cold_start: bool,
     ) -> Result<(), ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -700,6 +764,23 @@ fn parse_reference_input(
         .ok_or_else(|| input_invalid("secret reference input is invalid"))?;
     reference_hash(reference)?;
     Ok(reference.into())
+}
+
+/// Broker-issued secrets authenticate to this Broker, never to an upstream
+/// credential connection. The authenticated receipt identifies that producer;
+/// ordinary declared receivers may still resolve its references.
+pub(super) fn resolve_credential_reference_conn(
+    conn: &Connection,
+    ring: &CredentialKeyRing,
+    reference: &str,
+    authorize: &impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
+) -> Result<(String, SecretReferenceUse), ManagedStoreError> {
+    let (mut value, usage) = resolve_conn(conn, ring, reference, authorize)?;
+    if usage.service == crate::runtime::broker_management::SERVICE_ID {
+        value.zeroize();
+        return Err(ManagedStoreError::SecretReferenceDenied);
+    }
+    Ok((value, usage))
 }
 
 fn resolve_conn(
@@ -1849,6 +1930,44 @@ mod tests {
     }
 
     #[test]
+    fn broker_producer_references_cannot_be_installed_as_connection_credentials() {
+        let (_temp, store, ring) = fixture();
+        let mut producer = request("alice");
+        producer.service = crate::runtime::broker_management::SERVICE_ID.into();
+        producer.action = "token.create".into();
+        let batch = store
+            .reserve_secret_outputs(&ring, producer, &limits(), |_, _| Ok(()))
+            .unwrap();
+        // Producer provenance is authoritative even if the captured string does
+        // not look like a Broker token.
+        let reference = capture(&store, &ring, &batch);
+        for purpose in [
+            CredentialManagementPurpose::Administrative,
+            CredentialManagementPurpose::Personal,
+        ] {
+            assert!(matches!(
+                store.upsert_user_credential_with_secret_references(
+                    &ring,
+                    credential(&reference.secret_ref, "alice"),
+                    purpose,
+                    |_| Ok(()),
+                    authorize_alice,
+                ),
+                Err(ManagedStoreError::SecretReferenceDenied)
+            ));
+            assert!(store.list_credentials(Some("alice")).unwrap().is_empty());
+        }
+        // Rejection does not consume the reference or prevent a declared
+        // downstream secret receiver from resolving it under normal authority.
+        assert_eq!(
+            store
+                .resolve_secret_reference(&ring, &reference.secret_ref, authorize_alice)
+                .unwrap(),
+            SECRET
+        );
+    }
+
+    #[test]
     fn failed_credential_material_write_rolls_back_without_consuming_reference() {
         let (_temp, store, ring) = fixture();
         let batch = store
@@ -2100,5 +2219,104 @@ mod tests {
         store
             .reserve_secret_outputs(&ring, request("destination"), &bounded, |_, _| Ok(()))
             .unwrap();
+    }
+    #[test]
+    fn local_token_and_capture_commit_or_rollback_together() {
+        let (_directory, store, ring) = fixture();
+        let hasher = BrokerTokenHasher {
+            key: Arc::new([19; 32]),
+        };
+        let token_id = Uuid::new_v4().to_string();
+        let issue = || BrokerTokenIssueRequest {
+            principal_id: "destination".into(),
+            name: "provisioned".into(),
+            token_class: BrokerTokenClass::AgentInvoke,
+            scopes: json!({"allowedServices":["gitlab"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"gitlab":{"actions":["item.view"]}}}),
+            expires_at: Some(normalized_timestamp(Utc::now() + Duration::hours(1))),
+            created_by: "alice".into(),
+        };
+        let mut request = request("alice");
+        request.service = "broker_management".into();
+        request.action = "token.create".into();
+        let batch = store
+            .reserve_secret_outputs(&ring, request, &limits(), authorize_alice)
+            .unwrap();
+        batch.mark_dispatched();
+        {
+            let mut conn = store.connection.lock().unwrap();
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let (token, _) =
+                ManagedStore::issue_token_conn(&tx, &hasher, issue(), false, None, &token_id)
+                    .unwrap();
+            assert!(
+                ManagedStore::capture_outputs_conn(
+                    &tx,
+                    &ring,
+                    &batch,
+                    vec![SecretOutputCapture {
+                        pointer: "/result/unreserved".into(),
+                        value: token.to_string()
+                    }],
+                    json!({"executionState":"completed"})
+                )
+                .is_err()
+            );
+            // Dropping rolls back the token inserted before capture failed.
+        }
+        assert!(
+            store
+                .list_broker_tokens_for_principal("destination")
+                .unwrap()
+                .is_empty()
+        );
+        let (reference, raw) = {
+            let mut conn = store.connection.lock().unwrap();
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let (token, _) =
+                ManagedStore::issue_token_conn(&tx, &hasher, issue(), false, None, &token_id)
+                    .unwrap();
+            let mut references = ManagedStore::capture_outputs_conn(
+                &tx,
+                &ring,
+                &batch,
+                vec![SecretOutputCapture {
+                    pointer: "/result/issuedToken".into(),
+                    value: token.to_string(),
+                }],
+                json!({"executionState":"completed"}),
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            batch.mark_completed();
+            (references.remove(0), token)
+        };
+        assert_eq!(
+            store
+                .list_broker_tokens_for_principal("destination")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .resolve_secret_reference(&ring, &reference.secret_ref, authorize_alice)
+                .unwrap(),
+            raw.as_str()
+        );
+        assert!(batch.is_completed());
+        store
+            .finish_secret_reservation(&batch, SecretReservationOutcome::Unknown, json!({}))
+            .unwrap();
+        assert_eq!(
+            store
+                .secret_reference_receipt(&ring, batch.receipt_id(), authorize_alice)
+                .unwrap()
+                .outcome,
+            "captured"
+        );
     }
 }

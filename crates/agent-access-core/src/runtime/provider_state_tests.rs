@@ -246,12 +246,48 @@ mod admitted_authority {
 
     #[test]
     fn scoped_actions_receive_their_resources_and_never_empty_authority() {
-        let scoped = action().scope("project");
+        let scoped = action().scopes(["project"]);
         let authority = admitted_authority(&scoped, &scopes(&["ENG"]), None, false).unwrap();
         assert_eq!(authority.resources(), Some(&scopes(&["ENG"])));
         for empty in [ResourceScopes::new(), scopes(&[])] {
             let error = admitted_authority(&scoped, &empty, None, false).unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+        }
+    }
+
+    #[test]
+    fn complete_multi_scope_resources_remain_distinct_from_search_authority() {
+        let scoped = action().scopes(["project", "member"]);
+        let complete = BTreeMap::from([
+            ("project".into(), vec!["ENG".into()]),
+            ("member".into(), vec!["developer".into()]),
+        ]);
+        let authority = admitted_authority(&scoped, &complete, None, false).unwrap();
+        assert_eq!(authority.resources(), Some(&complete));
+
+        let mut empty_member = complete.clone();
+        empty_member.insert("member".into(), Vec::new());
+        let mut extra = complete.clone();
+        extra.insert("other".into(), vec!["unexpected".into()]);
+        let mut wrong_scope = complete.clone();
+        wrong_scope.remove("member");
+        wrong_scope.insert("other".into(), vec!["developer".into()]);
+        for invalid in [scopes(&["ENG"]), empty_member, extra, wrong_scope] {
+            let error = admitted_authority(&scoped, &invalid, None, false).unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+        }
+
+        let search = SearchAuthorization::new(
+            "project",
+            SearchAuthorizationScope::from_exact_values(vec!["ENG".into()]),
+        );
+        assert!(admitted_authority(&scoped, &complete, Some(search.clone()), true).is_err());
+        for mode in [
+            NativeSearchEnforcement::UpstreamConstrained,
+            NativeSearchEnforcement::ResultFiltered,
+        ] {
+            let native = scoped.clone().native_search(mode);
+            assert!(admitted_authority(&native, &complete, Some(search.clone()), false).is_err());
         }
     }
 
@@ -266,7 +302,7 @@ mod admitted_authority {
     #[test]
     fn search_actions_receive_the_complete_boundary() {
         let search = action()
-            .scope("project")
+            .scopes(["project"])
             .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained);
         let boundary = SearchAuthorization::new(
             "project".to_string(),
@@ -280,7 +316,7 @@ mod admitted_authority {
         assert!(admitted_authority(&search, &scopes(&["*"]), None, false).is_err());
         assert!(
             admitted_authority(
-                &action().scope("project"),
+                &action().scopes(["project"]),
                 &scopes(&["ENG"]),
                 Some(boundary),
                 false
@@ -290,7 +326,7 @@ mod admitted_authority {
     }
     #[test]
     fn command_authority_is_separate_from_native_search_and_rejects_namespaces() {
-        let scoped = action().scope("project");
+        let scoped = action().scopes(["project"]);
         assert!(scoped.native_search.is_none());
         let exact = SearchAuthorization::new(
             "project",
@@ -323,7 +359,7 @@ mod admitted_authority {
             NativeSearchEnforcement::UpstreamConstrained,
             NativeSearchEnforcement::ResultFiltered,
         ] {
-            let descriptor = action().scope("project").native_search(mode);
+            let descriptor = action().scopes(["project"]).native_search(mode);
             for authority in [
                 SearchAuthorization::new(
                     "other",

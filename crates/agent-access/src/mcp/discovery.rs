@@ -43,6 +43,7 @@ pub(super) async fn call(
                 text("service").unwrap(),
                 text("resource"),
                 text("resourceType"),
+                arguments.get("targets").map(Value::to_string).as_deref(),
                 text("prefix"),
                 false,
             )

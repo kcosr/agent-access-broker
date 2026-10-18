@@ -103,6 +103,10 @@ The CLI never receives the resolved token. A successful import does not consume
 the reference: an authorized administrator can install the same value into more
 than one destination before expiry. Audit records identify the actor, origin,
 destination, and non-capability receipt, without recording the token or reference.
+References produced by `broker_management` authenticate to the Broker and cannot
+be installed as upstream connection credentials through administrator, personal,
+or delegated credential installation. This check uses the authenticated producer
+receipt; approved ordinary action-input receivers may still resolve them.
 
 `--token-output` on typed GitLab issuance commands requires advertised raw mode.
 In reference mode it refuses before issuing. If a configuration reload changes
@@ -219,3 +223,17 @@ configuration `env:`/`file:` references.
 See [provider SDK](provider-sdk.md) for declaration and sidecar contracts,
 [GitLab provisioning](gitlab-bot-provisioning.md) for upstream behavior, and
 [database operations](database.md) for migration and key handling.
+
+## Delegated local handoffs
+
+[Broker administration](broker-management.md) adds a reference-only
+`credential.install` sink. The caller must own the reference under its exact
+invocation authentication, caller and context. Full principal/connection
+authorization precedes reference lookup. Origin validation and absent-slot
+installation share one transaction; no plaintext reaches an SDK provider.
+
+Its `token.create` action commits the child invocation-token row, encrypted
+reference and capture receipt together. Delivery is always by reference and
+creation is unavailable when global output mode is raw. Existing references can
+still be installed in raw mode. A token's own expiry is independent of reference
+expiry; losing the reference cannot be repaired by reading token metadata.

@@ -139,7 +139,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 schema(json!(["collection"]), json!({"collection": collection()})),
             )
             .read_only()
-            .scope("collection")
+            .scopes(["collection"])
             .credential_modes(["per_user"]),
             ActionDescriptor::new(
                 "record.view",
@@ -153,7 +153,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 ),
             )
             .read_only()
-            .scope("collection")
+            .scopes(["collection"])
             .credential_modes(["per_user"]),
             ActionDescriptor::new(
                 "account.view",

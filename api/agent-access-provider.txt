@@ -1795,7 +1795,7 @@ pub agent_access_provider::ActionCapabilities::documentation: core::option::Opti
 pub agent_access_provider::ActionCapabilities::input_schema: serde_json::value::Value
 pub agent_access_provider::ActionCapabilities::lookup_required: bool
 pub agent_access_provider::ActionCapabilities::read_only: bool
-pub agent_access_provider::ActionCapabilities::required_scope_types: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::ActionCapabilities::required_scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::RequiredResourceScope>
 pub agent_access_provider::ActionCapabilities::upstream_resource_ownership: core::option::Option<agent_access_provider::UpstreamResourceOwnership>
 impl core::clone::Clone for agent_access_provider::ActionCapabilities
 pub fn agent_access_provider::ActionCapabilities::clone(&self) -> agent_access_provider::ActionCapabilities
@@ -1829,7 +1829,7 @@ pub agent_access_provider::ActionDescriptor::presentation: core::option::Option<
 pub agent_access_provider::ActionDescriptor::read_only: bool
 pub agent_access_provider::ActionDescriptor::requires_resource_attributes: bool
 pub agent_access_provider::ActionDescriptor::requires_stable_signing_key: bool
-pub agent_access_provider::ActionDescriptor::resource_scope: core::option::Option<alloc::string::String>
+pub agent_access_provider::ActionDescriptor::resource_scopes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::scoped_mcp_name_source: agent_access_provider::ScopedMcpNameSource
 pub agent_access_provider::ActionDescriptor::secret_inputs: alloc::vec::Vec<agent_access_provider::SecretInputDescriptor>
 pub agent_access_provider::ActionDescriptor::secret_outputs: alloc::vec::Vec<agent_access_provider::SecretOutputDescriptor>
@@ -1838,7 +1838,7 @@ pub agent_access_provider::ActionDescriptor::token_only: bool
 pub agent_access_provider::ActionDescriptor::upstream_resource_ownership: core::option::Option<agent_access_provider::UpstreamResourceOwnership>
 impl agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::attribution(self, agent_access_provider::AttributionCapability) -> Self
-pub fn agent_access_provider::ActionDescriptor::capabilities(&self) -> agent_access_provider::ActionCapabilities
+pub fn agent_access_provider::ActionDescriptor::capabilities(&self, &alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>) -> agent_access_provider::ActionCapabilities
 pub fn agent_access_provider::ActionDescriptor::credential_modes<I, S>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::documentation(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ActionDescriptor::lookup(self, agent_access_provider::LookupRequirement) -> Self
@@ -1850,10 +1850,10 @@ pub fn agent_access_provider::ActionDescriptor::raw_download(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::raw_scoped_mcp_name(&self) -> core::option::Option<&str>
 pub fn agent_access_provider::ActionDescriptor::read_only(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::reference_input_schema(&self) -> core::result::Result<serde_json::value::Value, agent_access_provider::SecretContractError>
-pub fn agent_access_provider::ActionDescriptor::required_scope_types(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn agent_access_provider::ActionDescriptor::required_scopes(&self, &alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>) -> alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::RequiredResourceScope>
 pub fn agent_access_provider::ActionDescriptor::requires_stable_signing_key(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::resource_attributes(self) -> Self
-pub fn agent_access_provider::ActionDescriptor::scope(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::ActionDescriptor::scopes<I, S>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::secret_input(self, agent_access_provider::SecretInputDescriptor) -> Self
 pub fn agent_access_provider::ActionDescriptor::secret_output(self, agent_access_provider::SecretOutputDescriptor) -> Self
 pub fn agent_access_provider::ActionDescriptor::sensitive_output(self, impl core::convert::Into<alloc::string::String>) -> Self
@@ -3377,6 +3377,29 @@ impl<'a> core::marker::Unpin for agent_access_provider::RedirectRules<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::RedirectRules<'a>
 impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RedirectRules<'a>
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::RedirectRules<'a>
+#[non_exhaustive] pub struct agent_access_provider::RequiredResourceScope
+pub agent_access_provider::RequiredResourceScope::resource_type: agent_access_provider::ResourceType
+impl agent_access_provider::RequiredResourceScope
+pub fn agent_access_provider::RequiredResourceScope::new(agent_access_provider::ResourceType) -> Self
+impl core::clone::Clone for agent_access_provider::RequiredResourceScope
+pub fn agent_access_provider::RequiredResourceScope::clone(&self) -> agent_access_provider::RequiredResourceScope
+impl core::cmp::Eq for agent_access_provider::RequiredResourceScope
+impl core::cmp::PartialEq for agent_access_provider::RequiredResourceScope
+pub fn agent_access_provider::RequiredResourceScope::eq(&self, &agent_access_provider::RequiredResourceScope) -> bool
+impl core::fmt::Debug for agent_access_provider::RequiredResourceScope
+pub fn agent_access_provider::RequiredResourceScope::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::RequiredResourceScope
+impl serde_core::ser::Serialize for agent_access_provider::RequiredResourceScope
+pub fn agent_access_provider::RequiredResourceScope::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::RequiredResourceScope
+pub fn agent_access_provider::RequiredResourceScope::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::RequiredResourceScope
+impl core::marker::Send for agent_access_provider::RequiredResourceScope
+impl core::marker::Sync for agent_access_provider::RequiredResourceScope
+impl core::marker::Unpin for agent_access_provider::RequiredResourceScope
+impl core::marker::UnsafeUnpin for agent_access_provider::RequiredResourceScope
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RequiredResourceScope
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RequiredResourceScope
 #[non_exhaustive] pub struct agent_access_provider::ResourceAttributeDescriptor
 impl agent_access_provider::ResourceAttributeDescriptor
 pub fn agent_access_provider::ResourceAttributeDescriptor::declared(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, bool, core::option::Option<agent_access_provider::ResourcePattern>) -> Self
@@ -3531,6 +3554,7 @@ pub fn agent_access_provider::ResourceTypeDescriptor::accepts(&self, &agent_acce
 pub fn agent_access_provider::ResourceTypeDescriptor::action_inputs(&self, &agent_access_provider::ResourceSelector) -> core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
 pub const fn agent_access_provider::ResourceTypeDescriptor::attributes(&self) -> &[agent_access_provider::ResourceAttributeDescriptor]
 pub fn agent_access_provider::ResourceTypeDescriptor::declared(agent_access_provider::ResourceType, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::ResourcePattern, alloc::vec::Vec<agent_access_provider::ResourceAttributeDescriptor>) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::exact_only(self) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::example(&self) -> &str
 pub const fn agent_access_provider::ResourceTypeDescriptor::id(&self) -> &agent_access_provider::ResourceType
 pub fn agent_access_provider::ResourceTypeDescriptor::is_canonical_target(&self, &str) -> bool
@@ -3893,7 +3917,7 @@ pub agent_access_provider::ServiceDescriptor::surface: agent_access_provider::Se
 pub agent_access_provider::ServiceDescriptor::upstream_authority: core::option::Option<agent_access_provider::UpstreamAuthority>
 impl agent_access_provider::ServiceDescriptor
 pub fn agent_access_provider::ServiceDescriptor::action(&self, &str) -> core::option::Option<&agent_access_provider::ActionDescriptor>
-pub fn agent_access_provider::ServiceDescriptor::action_resource_scope(&self, &str) -> core::option::Option<(&str, &agent_access_provider::ResourceScopeCapabilities)>
+pub fn agent_access_provider::ServiceDescriptor::action_resource_scopes(&self, &str) -> core::option::Option<alloc::vec::Vec<(&str, &agent_access_provider::ResourceScopeCapabilities)>>
 pub fn agent_access_provider::ServiceDescriptor::broker_hosts(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ServiceDescriptor::capabilities(&self) -> agent_access_provider::ServiceCapabilities
 pub fn agent_access_provider::ServiceDescriptor::credential_profile_kind(&self, &str) -> core::option::Option<&'static str>
@@ -4474,6 +4498,7 @@ struct agent_access_provider::ProviderState: tuple fields, private fields
 struct agent_access_provider::ProviderStreamError: named fields, non-exhaustive
 struct agent_access_provider::ReasonCodeId: tuple fields, private fields
 struct agent_access_provider::RedirectRules: named fields, private fields, non-exhaustive
+struct agent_access_provider::RequiredResourceScope: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributeDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::ResourceAttributeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributes: tuple fields, private fields

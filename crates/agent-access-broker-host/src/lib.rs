@@ -10,6 +10,7 @@ mod http_server;
 mod identity;
 mod ingress;
 mod lifecycle;
+mod management_operations;
 mod mcp;
 mod oauth_revocations;
 mod observability;

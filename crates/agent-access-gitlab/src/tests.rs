@@ -1791,7 +1791,7 @@ fn gitlab_note_mutation_actions_are_registered_and_project_scoped() {
             "{action} must resolve its repository before policy"
         );
         assert_eq!(
-            spec.resource_scope.as_deref(),
+            spec.resource_scopes.first().map(String::as_str),
             Some("repository"),
             "{action}"
         );
@@ -7011,7 +7011,7 @@ fn gitlab_rest_is_a_project_scoped_invoke_surface_over_the_host_repository_type(
     for action in &descriptor.actions {
         let name = action.action.as_str();
         assert_eq!(
-            action.resource_scope.as_deref(),
+            action.resource_scopes.first().map(String::as_str),
             Some("repository"),
             "{name}"
         );

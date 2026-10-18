@@ -8,8 +8,8 @@
 use crate::attribution::AttributionCapability;
 use crate::presentation::ActionPresentation;
 use crate::{
-    ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamAuthority,
-    UpstreamResourceOwnership,
+    ActionCapabilities, RequiredResourceScope, ResourceScopeCapabilities, ServiceCapabilities,
+    UpstreamAuthority, UpstreamResourceOwnership,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,9 +75,9 @@ pub struct ActionDescriptor {
     /// Explicitly reviewed read operation; defaults to false for new actions.
     pub read_only: bool,
     pub input_schema: Value,
-    /// Scope the action is authorized against; unscoped actions need an
+    /// Scopes the action is authorized against together; unscoped actions need an
     /// explicit grant without a resource selection.
-    pub resource_scope: Option<String>,
+    pub resource_scopes: Vec<String>,
     /// Resolve private attributes for exactly one admitted resource of this backend.
     pub requires_resource_attributes: bool,
     pub credential_modes: Vec<String>,
@@ -263,7 +263,7 @@ impl ActionDescriptor {
             documentation: None,
             read_only: false,
             input_schema,
-            resource_scope: None,
+            resource_scopes: Vec::new(),
             requires_resource_attributes: false,
             credential_modes: Vec::new(),
             token_only: false,
@@ -292,8 +292,13 @@ impl ActionDescriptor {
         self
     }
 
-    pub fn scope(mut self, scope: impl Into<String>) -> Self {
-        self.resource_scope = Some(scope.into());
+    /// Declare every scope that one grant must authorize for this action.
+    pub fn scopes<I, S>(mut self, scopes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.resource_scopes = scopes.into_iter().map(Into::into).collect();
         self
     }
 
@@ -416,18 +421,35 @@ impl ActionDescriptor {
         self
     }
 
-    /// Scope types required by the action, as projected on the wire.
-    pub fn required_scope_types(&self) -> Vec<String> {
-        self.resource_scope.iter().cloned().collect()
+    /// Project required names to their service-declared types. Descriptors must
+    /// pass validation before their capabilities are published.
+    pub fn required_scopes(
+        &self,
+        bindings: &BTreeMap<String, ResourceScopeCapabilities>,
+    ) -> BTreeMap<String, RequiredResourceScope> {
+        self.resource_scopes
+            .iter()
+            .filter_map(|name| {
+                bindings.get(name).map(|binding| {
+                    (
+                        name.clone(),
+                        RequiredResourceScope::new(binding.resource_type.clone()),
+                    )
+                })
+            })
+            .collect()
     }
 
-    pub fn capabilities(&self) -> ActionCapabilities {
+    pub fn capabilities(
+        &self,
+        bindings: &BTreeMap<String, ResourceScopeCapabilities>,
+    ) -> ActionCapabilities {
         ActionCapabilities {
             action: self.action.clone(),
             read_only: self.read_only,
             description: self.description.clone(),
             documentation: self.documentation.clone(),
-            required_scope_types: self.required_scope_types(),
+            required_scopes: self.required_scopes(bindings),
             credential_modes: self.credential_modes.clone(),
             lookup_required: self.lookup.credential_required(),
             upstream_resource_ownership: self.upstream_resource_ownership,
@@ -562,15 +584,21 @@ impl ServiceDescriptor {
         self.resource_scopes.keys().cloned().collect()
     }
 
-    /// The resource scope an action is authorized against and its binding.
-    pub fn action_resource_scope(
+    /// Every required scope and its binding, or `None` for an unknown or
+    /// invalid action. An unscoped action returns an empty list.
+    pub fn action_resource_scopes(
         &self,
         action: &str,
-    ) -> Option<(&str, &ResourceScopeCapabilities)> {
-        let scope = self.action(action)?.resource_scope.as_deref()?;
-        self.resource_scopes
-            .get_key_value(scope)
-            .map(|(scope, binding)| (scope.as_str(), binding))
+    ) -> Option<Vec<(&str, &ResourceScopeCapabilities)>> {
+        self.action(action)?
+            .resource_scopes
+            .iter()
+            .map(|scope| {
+                self.resource_scopes
+                    .get_key_value(scope)
+                    .map(|(scope, binding)| (scope.as_str(), binding))
+            })
+            .collect()
     }
 
     pub fn credential_profile_kind(&self, profile: &str) -> Option<&'static str> {
@@ -621,7 +649,7 @@ impl ServiceDescriptor {
             actions: self
                 .actions
                 .iter()
-                .map(ActionDescriptor::capabilities)
+                .map(|action| action.capabilities(&self.resource_scopes))
                 .collect(),
         }
     }
@@ -657,23 +685,34 @@ impl ServiceDescriptor {
             if !actions.insert(name.as_str()) {
                 errors.push(format!("{service}.{name} is declared more than once"));
             }
-            if let Some(scope) = &action.resource_scope
-                && !self.resource_scopes.contains_key(scope)
-            {
-                errors.push(format!(
-                    "{service}.{name} references undeclared resource scope {scope}"
-                ));
+            let mut scope_names = BTreeSet::new();
+            let mut scope_types = BTreeSet::new();
+            for scope in &action.resource_scopes {
+                if !scope_names.insert(scope) {
+                    errors.push(format!("{service}.{name} repeats resource scope {scope}"));
+                }
+                if let Some(binding) = self.resource_scopes.get(scope) {
+                    if !scope_types.insert(&binding.resource_type) {
+                        errors.push(format!(
+                            "{service}.{name} requires the same resource type in multiple scopes"
+                        ));
+                    }
+                } else {
+                    errors.push(format!(
+                        "{service}.{name} references undeclared resource scope {scope}"
+                    ));
+                }
             }
             if action.requires_resource_attributes
-                && (action.resource_scope.is_none() || action.native_search.is_some())
+                && (action.resource_scopes.len() != 1 || action.native_search.is_some())
             {
                 errors.push(format!(
                     "{service}.{name} private attributes require one exact scoped target"
                 ));
             }
-            if action.native_search.is_some() && action.resource_scope.is_none() {
+            if action.native_search.is_some() && action.resource_scopes.len() != 1 {
                 errors.push(format!(
-                    "{service}.{name} declares native search without a resource scope"
+                    "{service}.{name} native search requires exactly one resource scope"
                 ));
             }
             if action.credential_modes.is_empty() {
@@ -687,10 +726,10 @@ impl ServiceDescriptor {
                 errors.push(format!("{service}.{name} input schema is invalid: {error}"));
             }
             if action.lookup == LookupRequirement::ScopeResolution
-                && action.resource_scope.is_none()
+                && action.resource_scopes.len() != 1
             {
                 errors.push(format!(
-                    "{service}.{name} resolves its resource scope by lookup but declares no resource scope"
+                    "{service}.{name} scope-resolution lookup requires exactly one resource scope"
                 ));
             }
             if action.presentation.is_some() && matches!(action.io, ActionIo::RawDownload { .. }) {
@@ -925,12 +964,81 @@ mod tests {
                 "properties": {"project": {"type": "string"}, "body": {"type": "string"}}
             }),
         )
-        .scope("project")
+        .scopes(["project"])
         .credential_modes(["service"])
     }
 
     fn errors(actions: Vec<ActionDescriptor>) -> Vec<String> {
         service(actions).validate().err().unwrap_or_default()
+    }
+
+    #[test]
+    fn plural_scopes_require_unique_names_and_types_and_preserve_typed_projection() {
+        let mut descriptor = service(vec![action("pair").scopes(["project", "member"])]);
+        descriptor.resource_scopes.insert(
+            "member".into(),
+            ResourceScopeCapabilities::new(
+                ResourceType::new("example_member").unwrap(),
+                vec!["exact".into()],
+            ),
+        );
+        assert!(descriptor.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(descriptor.capabilities()).unwrap()["actions"][0]["requiredScopes"],
+            json!({"project":{"resourceType":"example_project"},"member":{"resourceType":"example_member"}})
+        );
+        descriptor.actions[0].resource_scopes.push("project".into());
+        assert!(
+            descriptor
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("repeats resource scope"))
+        );
+        descriptor.actions[0].resource_scopes.pop();
+        descriptor
+            .resource_scopes
+            .get_mut("member")
+            .unwrap()
+            .resource_type = ResourceType::new("example_project").unwrap();
+        assert!(
+            descriptor
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("same resource type"))
+        );
+        descriptor
+            .resource_scopes
+            .get_mut("member")
+            .unwrap()
+            .resource_type = ResourceType::new("example_member").unwrap();
+        descriptor.actions[0].lookup = LookupRequirement::ScopeResolution;
+        assert!(
+            descriptor
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("exactly one resource scope"))
+        );
+        descriptor.actions[0].lookup = LookupRequirement::None;
+        descriptor.actions[0].native_search = Some(NativeSearchEnforcement::UpstreamConstrained);
+        assert!(
+            descriptor
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("native search requires exactly one resource scope"))
+        );
+        descriptor.actions[0].native_search = None;
+        descriptor.actions[0].requires_resource_attributes = true;
+        assert!(
+            descriptor
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("private attributes"))
+        );
     }
 
     #[test]
@@ -951,8 +1059,10 @@ mod tests {
     #[test]
     fn capability_read_only_requires_explicit_backend_classification() {
         // Names do not classify tools: an unreviewed "read" remains potentially writable.
-        let unreviewed = action("item.read").capabilities();
-        let reviewed = action("item.view").read_only().capabilities();
+        let unreviewed = action("item.read").capabilities(&BTreeMap::new());
+        let reviewed = action("item.view")
+            .read_only()
+            .capabilities(&BTreeMap::new());
         assert!(!unreviewed.read_only);
         assert!(reviewed.read_only);
         assert_eq!(serde_json::to_value(unreviewed).unwrap()["readOnly"], false);
@@ -1021,7 +1131,7 @@ mod tests {
     #[test]
     fn impossible_combinations_are_rejected() {
         let mut unscoped_lookup = action("item.view").lookup(LookupRequirement::ScopeResolution);
-        unscoped_lookup.resource_scope = None;
+        unscoped_lookup.resource_scopes.clear();
         let presented_download = action("item.download").raw_download().presentation(Some(
             crate::presentation::ActionPresentation::new(&[], None),
         ));
@@ -1029,7 +1139,7 @@ mod tests {
         assert_eq!(
             errors(vec![unscoped_lookup, presented_download, malformed_pointer,]),
             [
-                "example.item.view resolves its resource scope by lookup but declares no resource scope",
+                "example.item.view scope-resolution lookup requires exactly one resource scope",
                 "example.item.download streams its result and cannot declare a response presentation",
                 "example.item.token sensitive output /result/~2 is not a JSON pointer",
             ]

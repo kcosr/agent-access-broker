@@ -43,7 +43,7 @@ impl BackendConfig for FixtureConfig {
                     "Exercise namespace search authority",
                     json!({"type": "object", "additionalProperties": false}),
                 )
-                .scope("repository")
+                .scopes(["repository"])
                 .credential_modes(["service", "per_user"])
                 .native_search(NativeSearchEnforcement::ResultFiltered)
                 .read_only(),
@@ -235,6 +235,10 @@ fn effective(
         token,
         |_| true,
     )
+}
+
+fn repository_target(path: &str) -> ResourceScopes {
+    BTreeMap::from([("repository".into(), vec![path.into()])])
 }
 
 fn returned_scope(envelope: &Value) -> SearchAuthorizationScope {
@@ -483,7 +487,7 @@ fn credential_availability_filters_the_selected_band_without_selecting_a_lower_m
     assert!(
         filtered(&PolicySnapshot::from_config(&config, 2))
             .iter()
-            .any(|clause| clause.matches("labs/tool"))
+            .any(|clause| clause.matches_request(&repository_target("labs/tool")))
     );
 }
 
@@ -577,7 +581,7 @@ async fn inactive_exclusions_persist_and_an_independent_exact_grant_restores_one
             assert_eq!(
                 effective(&runtime, None)
                     .iter()
-                    .any(|clause| clause.matches(path)),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed
             );
         }
@@ -611,7 +615,8 @@ async fn inactive_exclusions_persist_and_an_independent_exact_grant_restores_one
         assert!(
             effective(&runtime, Some(&restricted_caveats))
                 .iter()
-                .all(|clause| !clause.matches("engineering/private/tool"))
+                .all(|clause| !clause
+                    .matches_request(&repository_target("engineering/private/tool")))
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -714,12 +719,14 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
             assert_eq!(
                 effective(&runtime, Some(&caveats))
                     .iter()
-                    .any(|clause| clause.matches(path)),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed,
                 "effective: {path}"
             );
             assert_eq!(
-                picker_clauses.iter().any(|clause| clause.matches(path)),
+                picker_clauses
+                    .iter()
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed,
                 "picker: {path}"
             );
@@ -727,7 +734,7 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
                 preview.access[0]
                     .clauses
                     .iter()
-                    .any(|clause| clause.matches(path)),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed,
                 "preview: {path}"
             );

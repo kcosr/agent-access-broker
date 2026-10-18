@@ -239,7 +239,7 @@ pub(super) fn descriptor(
             )
             .credential_modes(shape.credential_modes);
             if let Some(scope) = shape.scope {
-                action = action.scope(scope.name.clone());
+                action = action.scopes([scope.name.clone()]);
                 resource_scopes.insert(scope.name.clone(), authority::scope_binding(&scope));
             }
             action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {

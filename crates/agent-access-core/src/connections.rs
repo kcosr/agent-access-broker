@@ -227,7 +227,7 @@ pub(crate) fn validate_connections(
     let credentials = &config.credentials;
     for (id, connection) in &credentials.connections {
         let label = format!("credentials.connections.{id}");
-        if id == "broker" || !is_service_name(id) {
+        if crate::backends::is_reserved_service_name(id) || !is_service_name(id) {
             errors.push(format!("{label} uses an invalid connection ID"));
         }
         let consumers = credentials.connection_consumers(id).collect::<Vec<_>>();

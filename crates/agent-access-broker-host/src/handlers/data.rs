@@ -510,6 +510,14 @@ async fn service_discovery_response(
             Ok(fields) => fields,
             Err(message) => return invalid(message),
         };
+        let targets = match fields
+            .get("targets")
+            .map(|value| agent_access_core::parse_action_targets_json(value))
+            .transpose()
+        {
+            Ok(targets) => targets,
+            Err(message) => return invalid(message),
+        };
         let resource_type = match fields
             .get("resourceType")
             .map(|value| agent_access_provider::ResourceType::new(value.clone()))
@@ -541,6 +549,7 @@ async fn service_discovery_response(
                     fields.get("resource").map(String::as_str),
                     resource_type.as_ref(),
                     fields.get("prefix").map(String::as_str),
+                    targets.as_ref(),
                 )
                 .map(|result| Json(result).into_response())
         };
@@ -570,7 +579,7 @@ fn discovery_query_fields(
     let allowed: &[&str] = if resources {
         &["resourceType", "prefix", "limit", "cursor"]
     } else {
-        &["resource", "resourceType", "prefix"]
+        &["resource", "resourceType", "prefix", "targets"]
     };
     let mut fields = BTreeMap::new();
     // URL decoding is safe here: both existence and caller visibility are known.

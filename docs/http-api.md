@@ -2208,17 +2208,27 @@ catalogs omit this caller-specific field. For example, an authorized service
 with a missing personal credential returns:
 
 ```json
-{"service":"jira","displayName":"Jira","surface":"invoke","scopeTypes":[],"actions":[],"availability":{"state":"unavailable","requirements":[{"reason":"credential_not_provisioned","credentialMode":"per_user","resolution":"user"}],"message":"Capabilities are hidden because required credentials are unavailable. Resolve the requirements, then refresh discovery."}}
+{"service":"jira","displayName":"Jira","surface":"invoke","scopeTypes":[],"actions":[],"availability":{"state":"unavailable","requirements":[{"kind":"credential","reason":"credential_not_provisioned","credentialMode":"per_user","resolution":"user"}],"message":"Capabilities are hidden because required capabilities are unavailable. Resolve the requirements, then refresh discovery."}}
 ```
 
 States are `available` (local checks pass), `partial` (some authority remains),
-`unavailable` (known missing or unusable material), and `unknown` (the local check
-could not complete). Requirements identify a sanitized reason code, credential
-mode (`per_user`, `service`, or `lookup`), and resolution (`user` or
-`administrator`). Unknown availability hides affected capabilities too. Checks
-include required lookup credentials; they never borrow a lower-ranked grant's
-credential. No check contacts upstream or refreshes OAuth. A refreshable OAuth
-connection can pass locally even if its access token has expired. Local availability
+`unavailable` (known missing or unusable prerequisites), and `unknown` (the local
+check could not complete). Requirements carry a `kind` tag and sanitized `reason`:
+`credential` entries include `credentialMode` (`per_user`, `service`, or `lookup`);
+`local_runtime` entries describe Broker prerequisites and omit `credentialMode`.
+Each has a `resolution`: `user` for personal setup, `administrator` for Broker
+configuration, or `caller` for supported invocation authentication. For example,
+a local requirement can be:
+
+```json
+{"kind":"local_runtime","reason":"reference_identity_unsupported","resolution":"caller"}
+```
+
+See [local management prerequisites](broker-management.md#availability-and-completion)
+for the local reason codes. Unknown availability hides affected capabilities too.
+Credential checks include required lookup credentials; they never borrow a
+lower-ranked grant's credential. No check contacts upstream or refreshes OAuth.
+A refreshable OAuth connection can pass locally even if its access token has expired. Local availability
 does not guarantee upstream acceptance.
 
 A token-only action, whose upstream accepts only a token, is omitted without a
@@ -2252,7 +2262,8 @@ parameters. It returns:
 ```
 
 Rows are registered, enabled, context-eligible exact entries with at least one
-effective single-target policy allowance. Optional display names are configured
+complete compatible policy boundary. A row need not be compatible with every row
+of another resource type. Optional display names are configured
 metadata. Optional `inputs` are the action inputs that address the value, for
 types that define them. Local credential checks filter effective allowances; no
 upstream inventory request occurs. Sort
@@ -2277,11 +2288,13 @@ roots. Continuation pages and empty results omit it. See
 containment, `restricted`, and prefix rules.
 
 `GET /v1/services/{service}/actions` accepts optional `resource`,
-`resourceType`, and `prefix`; `resourceType` requires `resource`.
-It returns sorted action names, with `resource` included only when supplied:
+`resourceType`, `targets`, and `prefix`; `resourceType` requires `resource`.
+It returns sorted action names, `matchKind` (`unfiltered`, `single_resource`, or
+`complete_targets`), and the current `policyGeneration`. Only `single_resource`
+includes `resource`:
 
 ```json
-{"service":"jira","resource":"ENG","actions":["issue.view","search"]}
+{"service":"jira","resource":"ENG","actions":["issue.view","search"],"matchKind":"single_resource","policyGeneration":42}
 ```
 
 Use a canonical Jira project key, Confluence space key, or repository path, not
@@ -2290,6 +2303,17 @@ A known unregistered locator can be covered by broad policy. A valid locator
 with no policy access returns an empty action array. A prefix matches action
 names. Resource-qualified results are single-target checks; actual invocation
 still validates credentials, upstream access, and all request targets together.
+
+For a complete request boundary, pass a query-encoded JSON object in `targets`,
+for example `{"group":["review-automation"],"principal":["review-worker"]}` for
+`broker_management`. Keys must exactly match an action's required scope names,
+and every target must fit one complete grant and the invocation token's boundary.
+The result has `matchKind: "complete_targets"` and does not echo targets. This
+checks current policy compatibility without reserving authority or checking object
+existence. An empty action list does not identify which target failed.
+`targets` cannot be combined with `resource` or `resourceType`. Duplicate JSON keys,
+duplicate values within a scope, unknown scopes, empty lists, invalid target
+identifiers, more than eight scopes, and more than 64 values per scope are rejected.
 
 These routes use existing service visibility, identity/context resolution, and
 admission. Hidden and missing services both return 403 `service_action_denied` before query
@@ -3369,3 +3393,20 @@ name conflicts, not unsupported aggregate operations. See
 Declared secret outputs advertise their delivery mode and field metadata in runtime discovery. Existing connection credential PUT endpoints accept a literal token or `{secretRef, expiresAt?}` in `secret.token`. All connection credential PUTs recheck the admitted runtime snapshot and current actor authority before committing. If a reload or policy publication changed that snapshot, HTTP 409 `version_conflict` means no credential was installed; retry the PUT against the current configuration. A reference must still be valid, and upstream issuance must not be repeated.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Local administration and availability
+
+`/v1/invoke/broker_management/<action>` uses the ordinary invocation envelope and
+complete resource authorization. See [delegated administration](broker-management.md)
+for the action/input/result contracts. The catalog exposes fixed successful
+`resultSchema` contracts, and OpenAPI constrains successful result payloads.
+
+Availability requirements use a canonical `kind` tag. A `credential` entry has
+`reason`, `credentialMode`, and `resolution` (`user`, `administrator`, or `caller`).
+A `local_runtime` entry has only `reason` and `resolution`; it never implies an
+upstream credential setup link. The seven local reasons and their resolution
+owners are listed in the delegated-administration guide.
+
+Local write results distinguish `not_dispatched`, `not_committed` (known rollback),
+`completed` (known commit), and `unknown`, with `retrySafe:false`. A transport or
+audit failure preserves known completion and does not authorize automatic replay.

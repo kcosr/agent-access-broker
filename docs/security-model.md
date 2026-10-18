@@ -1182,3 +1182,29 @@ other ways. Stderr is not logged unless the operator enables
 New provider secrets may be captured in encrypted temporary storage. Ordinary reuse is bound to origin authentication and execution context; a narrow authorized credential-management handoff can install the secret into a named connection.
 See [temporary secret references](secret-references.md) for the supported contract,
 lifetime, permissions, and failure handling.
+
+## Local delegated administration
+
+The core-owned `broker_management` service does not expose a management facade to
+providers. Private, single-use admitted commands bind the original identity,
+authentication, selected complete grant, canonical targets, policy generation and
+runtime snapshot. The final transaction rechecks current authority before target
+eligibility or secret installation. The following management operations also
+seal original authority and recheck it within their write transaction: principal
+creation, group-member add/remove in either route orientation, administrator and
+self-service token issuance, grant-subject add/remove, grant PATCH, and
+administrator and personal credential installation. These operations retain
+completion ownership through policy publication and audit. Other management
+writes retain their admission-time authority checks; a write admitted before an
+authority change may finish. Neither management nor delegated invocation retries
+a denial through the other path.
+
+Membership and grant delegation selects live policy objects, so administrators
+must consider future changes to those objects. All edge operations need one grant
+covering every required resource dimension. Reference installation and token
+issuance retain encrypted ownership/capture boundaries; safe metadata reads never
+recover a one-time secret. Credential installation rejects references whose
+authenticated producer is `broker_management`, preventing Broker invocation
+tokens from being sent as upstream connection credentials. Approved action-input
+receivers may still use those references. See
+[delegated administration](broker-management.md).

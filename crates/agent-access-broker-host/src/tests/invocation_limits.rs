@@ -276,7 +276,10 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
     let alice = runtime.effective_invocation_limits("alice").await.unwrap();
     assert_eq!(
         serde_json::to_value(&alice).unwrap(),
-        json!([{"service":"fake","requests":3,"windowSeconds":60,"overridden":true}])
+        json!([
+            {"service":"broker_management","requests":5,"windowSeconds":60,"overridden":false},
+            {"service":"fake","requests":3,"windowSeconds":60,"overridden":true}
+        ])
     );
     assert_eq!(
         runtime
@@ -446,7 +449,10 @@ async fn managed_store_overrides_take_precedence_and_apply_without_reload() {
         .unwrap();
     assert_eq!(
         serde_json::to_value(runtime.effective_invocation_limits("alice").await.unwrap()).unwrap(),
-        json!([{"service":"fake","requests":4,"windowSeconds":60,"overridden":true}])
+        json!([
+            {"service":"broker_management","requests":3,"windowSeconds":60,"overridden":false},
+            {"service":"fake","requests":4,"windowSeconds":60,"overridden":true}
+        ])
     );
     assert_eq!(invoke("managed-override-0").await.status(), StatusCode::OK);
     assert_eq!(invoke("managed-override-1").await.status(), StatusCode::OK);
