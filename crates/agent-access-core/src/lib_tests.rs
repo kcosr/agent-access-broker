@@ -5306,6 +5306,13 @@ fn provider_read_only_metadata_is_conservative_across_action_families() {
             "gitlab",
             vec![
                 "project.view",
+                "project.search",
+                "search.issues",
+                "search.merge_requests",
+                "search.code",
+                "search.commits",
+                "search.wiki",
+                "search.comments",
                 "issue.search",
                 "merge_request.draft_note.view",
                 "protected_branch.verify",
@@ -5347,12 +5354,38 @@ fn provider_read_only_metadata_is_conservative_across_action_families() {
         }
         for action in &descriptor.actions {
             if matches!(action.io, ActionIo::MultipartUpload { .. })
-                || !action.sensitive_output_pointers.is_empty()
+                || action
+                    .sensitive_output_pointers
+                    .iter()
+                    .any(|pointer| pointer == "/result/issuedToken")
             {
                 assert!(
                     !action.read_only,
                     "upload/secret export {}.{}",
                     service, action.action
+                );
+            }
+        }
+        if service == "gitlab" {
+            for name in [
+                "project.search",
+                "search.issues",
+                "search.merge_requests",
+                "search.code",
+                "search.commits",
+                "search.wiki",
+                "search.comments",
+            ] {
+                let action = descriptor.action(name).unwrap();
+                assert!(
+                    action
+                        .sensitive_output_pointers
+                        .contains(&"/result/items".into())
+                );
+                assert!(
+                    action
+                        .sensitive_output_pointers
+                        .contains(&"/result/nextPageToken".into())
                 );
             }
         }

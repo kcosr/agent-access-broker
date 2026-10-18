@@ -1803,7 +1803,7 @@ async fn invoke_malformed_gitlab_draft_readback(
         egress_proxy: None,
         allowed_upstream_hosts: vec![format!("{}/api/v4/**", server.uri())],
         content: agent_access_gitlab::GitlabContentConfig::default(),
-        search: agent_access_provider::SearchLimitsConfig::default(),
+        search: Default::default(),
         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
     };
     let mut config = base_fake_config();
@@ -2323,7 +2323,7 @@ impl agent_access_provider::test_support::DescribedProvider for SearchPreflightT
                 )
                 .scope("project")
                 .credential_modes(["service"])
-                .search_contained(),
+                .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained),
             ])
     }
 }
@@ -3193,9 +3193,10 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
     }));
     let mut authorization = SearchAuthorizationPlan {
         scope_type: "space".to_string(),
-        scope: SearchAuthorizationScope::Finite {
-            values: vec!["ENG".to_string(), "OPS".to_string()],
-        },
+        scope: SearchAuthorizationScope::from_exact_values(vec![
+            "ENG".to_string(),
+            "OPS".to_string(),
+        ]),
         credential_mode: "service".to_string(),
         matched_grants: Vec::new(),
     };
@@ -3211,9 +3212,7 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
 
     assert_eq!(
         authorization.scope,
-        SearchAuthorizationScope::Finite {
-            values: vec!["ENG".to_string()]
-        }
+        SearchAuthorizationScope::from_exact_values(vec!["ENG".to_string()])
     );
     runtime
         .enforce_agent_invoke_token_resource_caveats(
@@ -3274,8 +3273,7 @@ async fn token_search_boundary_is_narrowed_in_provider_search_authorization() {
     assert_eq!(
         preflights[0]["scope"],
         json!({
-            "type": "finite",
-            "values": ["ENG"]
+            "clauses": [{"included": [{"kind":"exact", "value":"ENG"}], "excluded": []}]
         })
     );
 }
@@ -8105,7 +8103,7 @@ fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
                             "https://gitlab.example.com/api/v4/**".to_string(),
                         ],
                         content: agent_access_gitlab::GitlabContentConfig::default(),
-                        search: agent_access_provider::SearchLimitsConfig::default(),
+                        search: Default::default(),
                         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
                     });
             }
@@ -9532,7 +9530,7 @@ async fn search_audit_preserves_exclusions_when_credential_resolution_fails() {
         .unwrap();
     assert_eq!(
         record["searchAuthorization"]["scope"],
-        json!({"type":"all_except","excludedValues":["ENG"]})
+        json!({"clauses":[{"included":[{"kind":"all"}],"excluded":[{"kind":"exact","value":"ENG"}]}]})
     );
 }
 
@@ -9808,7 +9806,7 @@ fn unrelated_authorization_still_cannot_fall_back_to_forwarded_identity() {
 }
 
 #[test]
-fn search_boundaries_under_all_admit_only_exact_exclusions() {
+fn search_boundaries_preserve_namespace_exclusions() {
     let exact = |value: &str| ResourceSelector::Exact {
         value: value.to_string(),
     };
@@ -9820,22 +9818,18 @@ fn search_boundaries_under_all_admit_only_exact_exclusions() {
     };
     assert_eq!(
         all_except(vec![exact("b"), exact("a"), exact("b")]),
-        SearchAuthorizationScope::AllExcept {
-            excluded_values: vec!["a".to_string(), "b".to_string()],
-        }
+        SearchAuthorizationScope::excluding_exact_values(vec!["a".to_string(), "b".to_string()])
     );
-    // A non-exact exclusion, the closest constructible stand-in for a selector
-    // form this build does not know, never widens to an all-except boundary:
-    // the whole boundary is empty, for grants and token restrictions alike.
-    for unsupported in [
+    let namespace = all_except(vec![
+        exact("a"),
         ResourceSelector::Namespace {
-            value: "team".to_string(),
+            value: "team".into(),
         },
-        ResourceSelector::All,
-    ] {
-        assert_eq!(
-            all_except(vec![exact("a"), unsupported]),
-            SearchAuthorizationScope::Finite { values: Vec::new() }
-        );
-    }
+    ]);
+    assert!(!namespace.matches("team/project"));
+    assert!(namespace.matches("teams/project"));
+    assert!(namespace.matches("team"));
+    assert!(!namespace.matches("a"));
+    assert!(namespace.exact_projection().is_err());
+    assert!(all_except(vec![ResourceSelector::All]).is_empty());
 }

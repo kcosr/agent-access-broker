@@ -7,15 +7,13 @@ const QUERY: &str = "status = Done ORDER BY updated DESC";
 const UPSTREAM: &str = "upstream-page-2";
 
 fn finite(values: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::Finite {
-        values: values.iter().map(ToString::to_string).collect(),
-    }
+    SearchAuthorizationScope::from_exact_values(values.iter().map(ToString::to_string).collect())
 }
 
 fn all_except(values: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::AllExcept {
-        excluded_values: values.iter().map(ToString::to_string).collect(),
-    }
+    SearchAuthorizationScope::excluding_exact_values(
+        values.iter().map(ToString::to_string).collect(),
+    )
 }
 
 /// A per-user `search` under `scope`, with `token` added to `inputs`.

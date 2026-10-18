@@ -492,7 +492,7 @@ impl agent_access_provider::test_support::DescribedProvider
                         "additionalProperties": false
                     }),
                 )
-                .search_contained(),
+                .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained),
                 action(
                     "verify",
                     json!({

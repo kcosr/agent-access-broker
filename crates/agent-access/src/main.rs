@@ -1,5 +1,6 @@
 mod discovery;
 mod gitlab_provisioning;
+mod gitlab_search;
 mod import_commands;
 mod mcp;
 mod output;
@@ -3454,6 +3455,11 @@ enum CloudbeesCiQueueCommand {
 
 #[derive(Debug, Subcommand)]
 enum GitlabCommand {
+    /// Search native GitLab content across authorized repositories or one project.
+    Search {
+        #[command(subcommand)]
+        command: gitlab_search::SearchCommand,
+    },
     ServiceAccount {
         #[command(subcommand)]
         command: gitlab_provisioning::ServiceAccountCommand,
@@ -3506,6 +3512,8 @@ enum GitlabProjectCommand {
         #[command(subcommand)]
         command: gitlab_provisioning::ProjectMemberCommand,
     },
+    /// Discover or browse authorized repositories by name, path, or description.
+    Search(gitlab_search::ProjectSearchArgs),
     AccessToken {
         #[command(subcommand)]
         command: gitlab_provisioning::ProjectTokenCommand,
@@ -3543,6 +3551,7 @@ enum GitlabIssueCommand {
         #[command(flatten)]
         response: EmbeddedAndWholeOutputArgs,
     },
+    /// List and filter issues within one required project.
     Search {
         project: String,
         #[arg(long)]
@@ -3699,6 +3708,7 @@ enum GitlabMergeRequestCommand {
         #[command(flatten)]
         response: EmbeddedAndWholeOutputArgs,
     },
+    /// List and filter merge requests within one required project.
     Search {
         project: String,
         #[arg(long)]
@@ -6893,6 +6903,7 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
 
 async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Result<()> {
     match command {
+        GitlabCommand::Search { command } => gitlab_search::run_content(ctx, command).await,
         GitlabCommand::ServiceAccount { command } => {
             gitlab_provisioning::run_service_account(ctx, command).await
         }
@@ -6900,6 +6911,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
             GitlabProjectCommand::Member { command } => {
                 gitlab_provisioning::run_project_member(ctx, command).await
             }
+            GitlabProjectCommand::Search(args) => gitlab_search::run_project(ctx, args).await,
             GitlabProjectCommand::AccessToken { command } => {
                 gitlab_provisioning::run_project_token(ctx, command).await
             }
@@ -19178,6 +19190,16 @@ upload_spool_dir = "upload-spool"
 
         let whole_result = [
             (&["gitlab", "project", "view"][..], "project.view"),
+            (&["gitlab", "project", "search"][..], "project.search"),
+            (&["gitlab", "search", "issues"][..], "search.issues"),
+            (
+                &["gitlab", "search", "merge-requests"][..],
+                "search.merge_requests",
+            ),
+            (&["gitlab", "search", "code"][..], "search.code"),
+            (&["gitlab", "search", "commits"][..], "search.commits"),
+            (&["gitlab", "search", "wiki"][..], "search.wiki"),
+            (&["gitlab", "search", "comments"][..], "search.comments"),
             (&["gitlab", "issue", "view"][..], "issue.view"),
             (&["gitlab", "issue", "search"][..], "issue.search"),
             (&["gitlab", "issue", "list-comments"][..], "issue.note.list"),

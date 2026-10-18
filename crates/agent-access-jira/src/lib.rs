@@ -462,7 +462,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .search_contained()
+        .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained)
         .documentation(jql_documentation()),
         jira_read_action(
             "comment.list",

@@ -14037,7 +14037,7 @@ async fn gitlab_normalized_write_content_is_absent_from_tracing_and_audit() {
                 max_body_bytes: 128,
                 ..agent_access_gitlab::GitlabContentConfig::default()
             },
-            search: agent_access_provider::SearchLimitsConfig::default(),
+            search: Default::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -14268,7 +14268,7 @@ async fn gitlab_suggestion_apply_direct_http_result_and_audit_are_safe() {
             allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
             webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
             content: agent_access_gitlab::GitlabContentConfig::default(),
-            search: agent_access_provider::SearchLimitsConfig::default(),
+            search: Default::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -14381,7 +14381,7 @@ async fn gitlab_review_failure_contract_broker(audit_path: &Path) -> TestBroker 
             allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
             webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
             content: agent_access_gitlab::GitlabContentConfig::default(),
-            search: agent_access_provider::SearchLimitsConfig::default(),
+            search: Default::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -16847,7 +16847,7 @@ async fn spec_token_fixture_with_restrictions(
                 allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
                 webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
                 content: agent_access_gitlab::GitlabContentConfig::default(),
-                search: agent_access_provider::SearchLimitsConfig::default(),
+                search: Default::default(),
             });
         let actions = agent_access_gitlab::gitlab_descriptor(
             config
@@ -18372,10 +18372,17 @@ fn assert_gitlab_read_response_capability_matrix(
         "merge_request.view",
         "pipeline.list",
         "pipeline.view",
+        "project.search",
         "project.view",
         "protected_branch.list",
         "protected_branch.verify",
         "protected_branch.view",
+        "search.code",
+        "search.comments",
+        "search.commits",
+        "search.issues",
+        "search.merge_requests",
+        "search.wiki",
     ];
 
     let actions = catalog["services"]

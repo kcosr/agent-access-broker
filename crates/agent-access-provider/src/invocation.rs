@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
+use crate::SearchAuthorizationScope;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -174,9 +173,9 @@ impl InvocationIdentity {
     }
 }
 
-/// Search boundary handed to a provider for a search-contained action. The
-/// provider must constrain its upstream query and check every result against
-/// this scope. Its credential mode is the admitted context's; there is no
+/// Search boundary handed to a provider for a search action. The
+/// native provider enforces its declared upstream-constrained or result-filtered
+/// mode, checking every released result against this scope. Its credential mode is the admitted context's; there is no
 /// second copy.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,121 +189,6 @@ impl SearchAuthorization {
         Self {
             scope_type: scope_type.into(),
             scope,
-        }
-    }
-}
-
-/// The values a search boundary admits: a finite set, or every value except
-/// a finite set.
-///
-/// Intentionally exhaustive: a finite set and the complement of one describe
-/// every boundary, and providers must enforce both exactly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum SearchAuthorizationScope {
-    Finite { values: Vec<String> },
-    AllExcept { excluded_values: Vec<String> },
-}
-
-impl SearchAuthorizationScope {
-    pub fn matches(&self, value: &str) -> bool {
-        match self {
-            Self::Finite { values } => values.iter().any(|allowed| allowed == value),
-            Self::AllExcept { excluded_values } => {
-                !excluded_values.iter().any(|excluded| excluded == value)
-            }
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Self::Finite { values } if values.is_empty())
-    }
-
-    pub fn is_universe(&self) -> bool {
-        matches!(self, Self::AllExcept { excluded_values } if excluded_values.is_empty())
-    }
-
-    pub fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::Finite { values: left }, Self::Finite { values: right }) => Self::Finite {
-                values: left
-                    .iter()
-                    .chain(right)
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
-            (
-                Self::AllExcept {
-                    excluded_values: left,
-                },
-                Self::AllExcept {
-                    excluded_values: right,
-                },
-            ) => Self::AllExcept {
-                excluded_values: left
-                    .iter()
-                    .filter(|value| right.contains(value))
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
-            (Self::AllExcept { excluded_values }, Self::Finite { values })
-            | (Self::Finite { values }, Self::AllExcept { excluded_values }) => Self::AllExcept {
-                excluded_values: excluded_values
-                    .iter()
-                    .filter(|value| !values.contains(value))
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
-        }
-    }
-
-    pub fn intersection(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::Finite { values: left }, Self::Finite { values: right }) => Self::Finite {
-                values: left
-                    .iter()
-                    .filter(|value| right.contains(value))
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
-            (
-                Self::AllExcept {
-                    excluded_values: left,
-                },
-                Self::AllExcept {
-                    excluded_values: right,
-                },
-            ) => Self::AllExcept {
-                excluded_values: left
-                    .iter()
-                    .chain(right)
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
-            (Self::AllExcept { excluded_values }, Self::Finite { values })
-            | (Self::Finite { values }, Self::AllExcept { excluded_values }) => Self::Finite {
-                values: values
-                    .iter()
-                    .filter(|value| !excluded_values.contains(value))
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            },
         }
     }
 }

@@ -28,6 +28,18 @@ helpers. It does
 not expose generic `invoke`/`send` tools, broker management operations, or
 gateway execution. Discovery helpers can describe that separate surface.
 
+GitLab `project.search` discovers upstream repositories within repository grants;
+`resources_list` continues to describe Broker registrations. The six native
+`search.*` actions search content across that authority or one explicit project,
+subject to operator-configured engine/scope choices. `issue.search` and
+`merge_request.search` retain their single-project structured-list contract.
+MCP uses the same action schemas and bounded results as CLI/HTTP: preserve search
+settings when passing `nextPageToken` as `pageToken`, continue empty resumable
+pages, and treat `scanStatus=upstream_window` as incomplete coverage. A continuation
+does not guarantee another authorized match. See
+[GitLab search](providers-gitlab-rest.md#repository-discovery-and-content-search)
+and the [MCP search workflow](../skills/agent-access-mcp/SKILL.md#gitlab-repository-discovery-and-content-search).
+
 Teams `notification.send` uses the same destination alias and `simple` or
 `microsoft` content modes on both MCP transports. Local stdio `requestFile`
 contains the complete action input object; HTTP MCP takes inline inputs. The

@@ -413,6 +413,20 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   path when only the previous key is.
 - `confluence_smoke.rs`
 - `gitlab_smoke.rs`
+- `gitlab_search_smoke.rs` drives repository discovery and all six native
+  content-search categories through the real CLI and HTTP MCP, using the
+  production assembly against a synthetic GitLab HTTP server. It covers service
+  tokens, stored personal tokens, and browser-established GitLab OAuth; namespace
+  holes and token restrictions; action independence; confidential empty-page
+  continuations and their carried expiry; current project identity, ownership,
+  unavailable confirmations, engine-header failures, supported comment parents,
+  and project-only wiki projection. Policy narrowing, OAuth refresh/reconnection,
+  and token revocation exercise continuation reauthorization. Public results,
+  rendering and audit are checked for excluded-candidate and credential leakage.
+  Run it directly with
+  `cargo test --locked -p agent-access --test gitlab_search_smoke`.
+  This deterministic fixture does not qualify a deployed GitLab search engine,
+  index completeness, or the documented timing/progress side channels.
 - `cloudbees_smoke.rs`
 - `command_import_smoke.rs` imports the reference command through the real CLI
   and broker; see [command imports](#command-imports).
