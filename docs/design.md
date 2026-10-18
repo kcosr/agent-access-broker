@@ -1,8 +1,9 @@
 # Agent Access Broker — Architecture and runtime contract
 
 For trusted username authentication on HTTP MCP, registered fingerprint identity
-on existing invocation surfaces, explicit managed bindings and shared
-identity-access pause, see [managed identity](managed-identity.md). Named callers
+on existing invocation surfaces, explicit managed bindings, shared
+identity-access pause and per-path Enabled and Read-only controls, see
+[managed identity](managed-identity.md). Named callers
 authenticate attesters; Broker resolves humans and applies current permissions.
 Issued Broker tokens retain their independent authorization boundaries.
 
@@ -596,9 +597,14 @@ Read classification defaults to false and is explicitly opted into by reviewed
 backend descriptors; action names and presentation capabilities do not infer it.
 Runtime, discovery, and management catalogs publish `readOnly`, and OpenAPI/send
 variants publish `x-agent-access-read-only`. This metadata classifies upstream
-reads for grant selection; it does not change authorization or gate local output.
-JSON and multipart-upload action responses support local file/metadata destinations,
-including mutations. Dedicated raw downloads retain their streaming contract.
+reads for grant selection and never gates local output. It grants nothing, but
+it is the ceiling of a
+[read-only identity path](#trusted-human-identity-and-mcp-admission): such a
+path can use only actions classified as reads. A backend that reclassifies a
+native action therefore changes read-only access, and the release notes call out
+every such change. JSON and multipart-upload action responses support local
+file/metadata destinations, including mutations. Dedicated raw downloads retain
+their streaming contract.
 
 The grant picker separates Read-only and Write-capable actions, with independent
 All/None controls for search matches. Grant listings derive a Write-capable
@@ -1046,14 +1052,42 @@ binding. This mode is invocation-only on HTTP MCP; all other routes reject the
 user header. The shared human gate controls both usernames and fingerprints,
 independently of token inventory, issued tokens and browser sign-in.
 
-MCP carries a private identity proof from initial resolution through body intake,
-session ownership and final governed admission. It pins human incarnation/gate
-version, identity kind, binding ID/version or inventory revision, and caller
-security epoch. Final admission atomically checks current managed identity state
-and current caller security before credential or provider work. A changed mapping
-rejects the original request; it never changes its principal. Database and caller
-versions prevent disable/enable, pause/resume and A→B→A changes from restoring old
-session authority. Username proofs do not depend on inventory revisions.
+Each path also has its own settings: a username binding has Enabled and
+Read-only, and the identity token, one record per human, has Enabled and
+Read-only. A disabled binding or token resolves like an unknown name or
+fingerprint. Both identity sources converge on one attested identity with
+synthetic `agent_invoke` caveats for every configured context, and the admitted
+path's read-only setting travels with it as `identitySource.readOnlyAccess`
+(serialized into invocation audit and bound into discovery cursors, but never
+into `token_scopes` or stored token caveats). One agent-invoke ceiling rule
+judges each action for invocation, Git admission, caller discovery and resource
+clauses: execution context, then the read-only class ceiling, then service and
+action caveats. On a read-only path an action must have a runtime catalog
+descriptor this host serves with `read_only = true`; a missing descriptor is a
+write. The rule runs before grant selection and removes no grants, so a
+permitted read selects the same grant as on a full-access path. A refusal is
+`ServiceActionDenied` ("identity access is read-only") with an `identityAccess`
+audit payload, before credential lookup, OAuth leasing, scope resolution or
+dispatch; an unknown action on a read-only path receives the same denial. Git
+push is refused at receive-pack discovery and POST before the body is read,
+keeping the classified repository scope. An attested identity without valid
+synthetic caveats lists nothing and is denied. HTTP MCP resolves hidden tools
+through the caller-filtered registry, so a write call there is an unknown tool,
+and `initialize` and `server/discover` add a read-only sentence to the server
+instructions. A request is judged against the runtime snapshot it was admitted
+with.
+
+MCP carries a private identity proof from initial resolution through body
+intake, session ownership and final governed admission. It pins human
+incarnation/gate version, identity kind, binding ID/version or inventory
+revision, the path's read-only setting, and caller security epoch. Final
+admission atomically checks current managed identity state and current caller
+security before credential or provider work. A changed mapping rejects the
+original request; it never changes its principal. Database and caller versions
+prevent disable/enable, read-only changes, pause/resume and A→B→A changes from
+restoring old session authority. Every Enabled or Read-only change advances the
+binding version or inventory revision, and secret rotation keeps both settings.
+Username proofs do not depend on inventory revisions.
 
 Confirmed stale proofs are removed in background cleanup and before the session
 cap, without cancelling independently admitted work. Unavailable state is not
@@ -1677,8 +1711,9 @@ storage backends hold the same JSON: a SQLite row stores the record exactly as
 the JSONL backend writes the line.
 
 `identitySource` carries name, type, header, scheme, plus `tokenClass` and
-`tokenId`. `token_scopes` is `serde(skip)` and is never serialized into audit;
-raw token values are never logged.
+`tokenId`; attested identities add `readOnlyAccess`. `token_scopes` is
+`serde(skip)` and is never serialized into audit; raw token values are never
+logged.
 
 **Outcome records.** Normal operations write one record per outcome. An allow is
 recorded at status 200; a deny or error is recorded at its reason's HTTP

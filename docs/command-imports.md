@@ -123,7 +123,10 @@ finish.
    action is listed as unsupported with a reason; an invalid manifest fails
    discovery.
 3. Review the action IDs, Broker type IDs and the Read-only / Write-capable
-   classification, accept the selection, then enable the service. Set the
+   classification, accept the selection, then enable the service. Actions stay
+   Write-capable until reviewed as Read-only, and the classification also limits
+   [read-only identity paths](imported-services.md#classification-and-read-only-identity-access).
+   Set the
    service credential, with its username for a `username_token` command, or
    let users add personal credentials on the existing Credentials screens; a
    command without credentials needs neither. The service credential can be

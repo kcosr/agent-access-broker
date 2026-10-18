@@ -14,7 +14,16 @@ credential alone does not replace a Git user's authentication. See
 `X-Agent-Access-User` is rejected on Git; username assertions are HTTP MCP only.
 The shared identity-access gate controls fingerprint Git access. Inventory removal
 disables the fingerprint, while shared pause also blocks the human's username MCP
-bindings. Direct-only caller secrets are invalid in the dedicated carrier here.
+bindings. Disabling the human's identity token denies its fingerprint like an
+unknown one (401 `gateway_auth_invalid`) and keeps the secret.
+A [read-only identity token](managed-identity.md#read-only-paths) can fetch
+(`repo.fetch` is classified as a read) but cannot push: `repo.push` is a write,
+so both the receive-pack discovery GET and the receive-pack POST return 403
+`service_action_denied` with reason `identity access is read-only` before the
+command prefix or pack body is read and before any upstream credential is
+resolved. The denial's audit keeps the classified repository scope. An explicit
+Basic Broker token keeps its own authority. Direct-only caller secrets are
+invalid in the dedicated carrier here.
 
 This document owns `[gateways]` entries with `kind = "git_http"`. Git HTTP
 gateways are host-matched protocol surfaces on the gateway listener and are

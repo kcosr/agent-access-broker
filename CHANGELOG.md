@@ -431,6 +431,13 @@ All notable changes to this project are documented in this file.
   it with a struct literal adds `login_binding: None`; deserialized
   registrations without the key are unchanged, as are their fingerprints and
   stored connections.
+- `agent-access admin principals identity-bindings enable` and `disable` are
+  removed without an alias. Use `identity-bindings update PRINCIPAL BINDING_ID
+  [--enabled BOOL] [--read-only BOOL] --expected-version N`, for example
+  `--enabled false` in place of `disable`. Under `policy.authority = "toml"`,
+  import acceptance now requires `confirmAffectedGrants` when a configured grant
+  references a changed action; it was never required there before, so automation
+  that accepts such changes must confirm them.
 
 ### Added
 
@@ -976,6 +983,50 @@ All notable changes to this project are documented in this file.
   encrypted payloads join key readiness, the used-key inventory and
   `admin credentials rewrap`. Rolling back across it needs a pre-migration
   backup.
+- Trusted-identity access path controls. Each username binding and each human's
+  identity token has its own **Enabled** and **Read-only** setting, beside the
+  unchanged person-level identity-access pause. A disabled identity token is
+  denied like an unknown fingerprint and keeps its secret; reveal, replace,
+  generate and remove keep working, and secret changes keep both settings. A
+  read-only path lists and executes only actions the current runtime catalog
+  classifies as reads, within the person's unchanged grants and precedence:
+  discovery on every surface omits writes, HTTP MCP treats a hidden write tool
+  as unknown, REST writes return 403 `service_action_denied` with reason
+  `identity access is read-only` and an `identityAccess` audit payload before
+  any credential or provider work, and Git fetch works while push is refused at
+  receive-pack discovery and POST. Browser sign-in and issued Broker tokens are
+  unaffected. Changing a setting ends that path's MCP sessions. HTTP MCP
+  `initialize` and `server/discover` instructions on a read-only path end with
+  "This connection is read-only: only actions classified as reads are listed or
+  executable."; `GET /v1/me`, `/v1/capabilities` and the caller catalog identity
+  report `readOnlyAccess`, and invocation audit records
+  `identitySource.readOnlyAccess` for attested identities. Because the ceiling
+  follows current classification, unreviewed imported actions are hidden from
+  read-only paths, and reclassifying an imported action, or a native one in a
+  release, changes what those paths can call. Management adds
+  `PATCH /v1/admin/principals/{principal}/identity-token`
+  (`{enabled?, readOnly?, expectedRevision}`, operation
+  `admin.principals.identity_token.patch`) and
+  `agent-access admin principals identity-token update PRINCIPAL [--enabled BOOL]
+  [--read-only BOOL] --expected-revision N`; binding creation accepts `readOnly`
+  (CLI `create --read-only`), and the binding PATCH takes
+  `{enabled?, readOnly?, expectedVersion}`. Binding metadata gains `readOnly`,
+  and identity-token metadata is `{principalId, configured, enabled, readOnly,
+  revision, updatedAt}` with every field always present. Binding and
+  identity-token audit records carry `{enabled, readOnly, version|revision}`
+  before and after values read in the transaction. Import acceptance returns
+  `classificationChanges` (`{action, from, to}`), also in its
+  `confirmAffectedGrants` refusal, and counts the active policy authority's
+  grants: every non-deleted managed grant, disabled ones included, or every
+  configured grant as `toml:<index>`. The portal's principal page shows an
+  **Access paths** table (identity token first, then bindings) with Enabled and
+  Read-only toggles, read-only for auditors, and the import confirmation lists
+  read/write changes. Managed-store migration
+  `029_identity_access_path_controls` adds the settings with defaults that keep
+  every existing path enabled and not read-only, backfills a not-configured
+  identity-token record for every human without one, and creates it with every
+  new human; rolling back across it needs a pre-migration backup. See
+  [managed identity](docs/managed-identity.md#access-path-controls).
 
 ### Changed
 

@@ -1000,8 +1000,10 @@ query column or full-text field. It names the authenticated trusted caller,
 independently of the principal and `identitySource`, and never contains caller
 credentials or their digests. Header-free direct requests omit it. Username
 `identitySource` uses `trusted_user`, with `namespace` and opaque `bindingId`
-metadata in the JSON record, independently of `callerId`. Failed raw usernames,
-fingerprints, caller secrets and private session proofs are not recorded.
+metadata in the JSON record, independently of `callerId`. Username and
+fingerprint identity sources also carry `readOnlyAccess`, the admitted path's
+read-only setting, in the JSON record only. Failed raw usernames, fingerprints,
+caller secrets and private session proofs are not recorded.
 
 A value longer than 1024 bytes in an indexed text column is stored truncated at
 a UTF-8 boundary; the full value stays in `record_json`. Indexes cover

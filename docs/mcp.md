@@ -251,6 +251,33 @@ the controlled assertion. Broker does not accept username mode on REST, browser,
 management, health or Git routes. See [caller configuration](trusted-callers.md)
 and [administrator bindings](managed-identity.md#username-bindings).
 
+## Read-only identity connections
+
+An administrator can make a username binding or a human's identity token
+[read-only](managed-identity.md#read-only-paths). A connection admitted through a
+read-only path lists and executes only actions the current runtime catalog
+classifies as reads. Its grants still decide which of those reads it has, and a
+permitted read selects the same grant as on a full-access path.
+
+- `initialize`, and `server/discover` within a session, append this sentence to
+  the server instructions, on `/mcp` and `/mcp/{service}`: "This connection is
+  read-only: only actions classified as reads are listed or executable."
+- `tools/list` and the five discovery helpers omit write actions; the helpers
+  remain available. A service with no remaining actions disappears, and its
+  `/mcp/{service}` view returns the ordinary 404 for an unavailable service view.
+- Calling a hidden write tool returns the ordinary `invalid_params` error for an
+  unknown or unavailable tool, without dispatch.
+- Unreviewed imported actions are writes, so they are hidden until an
+  administrator classifies them as reads.
+
+A request is judged against the runtime snapshot it was admitted with: a
+reclassification applies to requests admitted after it is published. Existing
+import fences can still refuse an already resolved call with their changed or
+unavailable denial. Local stdio behind fingerprint-aware ingress sees the same
+filtered catalog through REST, where a write call returns 403
+`service_action_denied` with reason `identity access is read-only`. Read-only
+paths do not restrict local output files.
+
 ## Trusted identity and session lifetime
 
 Repeat the current credential and subject on initialization, initialized
@@ -258,7 +285,8 @@ notifications, discovery, calls, cancellation and DELETE. A session ID never
 replaces authentication. Sessions pin the principal, identity method, context,
 endpoint view, caller security contract and managed identity proof. Username
 proofs include the namespace and binding ID/version; fingerprint proofs include
-the inventory revision. Both include the human's gate incarnation/version.
+the inventory revision. Both include the path's read-only setting and the human's
+gate incarnation/version.
 Different aliases or methods cannot reuse a session even when they resolve to the
 same human. Principal quotas aggregate across them.
 
@@ -270,9 +298,12 @@ currently. A change committed before that final check denies the request; an
 operation admitted before the change may complete under its existing outcome
 contract. Pause responses do not promise cancellation.
 
-Pause/resume, disable/enable, delete/recreate and caller-security changes invalidate
-old attested sessions even if values are later restored. Inventory churn invalidates
-fingerprint sessions but leaves username sessions intact. An unchanged reload
+Pause/resume, disable/enable, read-only changes, delete/recreate and
+caller-security changes invalidate old attested sessions even if values are later
+restored. A binding's Enabled or Read-only change ends only that binding's
+sessions. Inventory churn and identity-token Enabled or Read-only changes
+invalidate fingerprint sessions but leave username sessions intact. An update that
+changes nothing ends no session. An unchanged reload
 preserves sessions; identity-configuration changes can invalidate all MCP sessions,
 including unaffected callers. Reinitialize after an identity transition.
 
@@ -423,7 +454,8 @@ the appropriate schemas on demand. Search and deferred loading are client
 features, not a separate search implementation in this adapter. Clients without
 search can list and call the same tools normally.
 
-Discovery is filtered by identity, token restrictions, grants, and execution
+Discovery is filtered by identity, token restrictions, a
+[read-only identity path](#read-only-identity-connections), grants, and execution
 context. A listed action may be usable only on some resources. The broker
 resolves the actual requested resource and authorizes every invocation. The
 adapter never treats a tool listing as authorization to execute.

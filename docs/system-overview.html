@@ -715,7 +715,7 @@
           <ul class="list">
             <li><b>Action names.</b> Suggested identifiers can be edited before acceptance. Accepted identifiers stay fixed because agent calls and grants reference them. Retiring an action does not transfer its grants to a replacement.</li>
             <li><b>Labels and descriptions.</b> Optional labels default to the MCP tool title or OpenAPI summary/operation ID; administrators can edit or clear them during review. Labels appear only in the management UI. Agents receive the description and input schema. When an OpenAPI description is absent, discovery uses the upstream summary, operation ID, or HTTP method and path. Editing a label does not change that description.</li>
-            <li><b>Effects.</b> New and changed tools start write-capable until reviewed. Upstream read-only hints are suggestions. The flag helps select grant actions; it does not restrict the upstream operation or automatically change existing grants.</li>
+            <li><b>Effects.</b> New and changed tools start write-capable until reviewed. Upstream read-only hints are suggestions. The flag helps select grant actions and limits read-only identity paths to reads; it does not restrict the upstream operation or automatically change existing grants. Reclassifying a granted action requires confirmation.</li>
             <li><b>Manual refresh.</b> New tools remain unselected. A complete refresh quarantines missing, unsupported or behaviorally changed tools. Acceptance of changes affecting existing grants requires confirmation; failed discovery publishes no partial catalog.</li>
           </ul>
         </div>
@@ -877,7 +877,7 @@
       <div class="notes">
         <div class="note"><div class="badge">A</div><div>
           <h4>Identity provisioning</h4>
-          <p>For fingerprint identity, the platform holds a per-user bearer outside the workload and Broker registers it against the human's principal. Administrators can generate, import or remove inventory. HTTP MCP can instead use an explicit namespace/username binding with no inventory. One Identity access pause gates both methods while leaving issued Broker tokens and browser sign-in available.</p>
+          <p>For fingerprint identity, the platform holds a per-user bearer outside the workload and Broker registers it against the human's principal. Administrators can generate, import or remove inventory. HTTP MCP can instead use an explicit namespace/username binding with no inventory. One Identity access pause gates both methods while leaving issued Broker tokens and browser sign-in available. The identity token and each binding can also be disabled or made read-only on their own.</p>
         </div></div>
         <div class="note"><div class="badge">B</div><div>
           <h4>Proxy authentication</h4>
@@ -885,7 +885,7 @@
         </div></div>
         <div class="note"><div class="badge">C</div><div>
           <h4>Managed identity permissions</h4>
-          <p>Managed fingerprints support the existing discovery, invocation, MCP and Git surfaces. Trusted usernames are limited to HTTP MCP. Both apply current human permissions and grant no self-service or administration. MCP pins identity through final admission; identity changes reject old sessions but do not cancel operations already admitted.</p>
+          <p>Managed fingerprints support the existing discovery, invocation, MCP and Git surfaces. Trusted usernames are limited to HTTP MCP. Both apply current human permissions and grant no self-service or administration. A read-only path lists and runs only actions classified as reads, within those permissions, and cannot push with Git. MCP pins identity through final admission; identity changes reject old sessions but do not cancel operations already admitted.</p>
         </div></div>
       </div>
     </div>
@@ -1471,7 +1471,7 @@
     </div>
     <div class="sec-body">
       <dl class="glossary">
-        <dt>Identity attestation</dt><dd>A configured caller supplies an exact bound username on HTTP MCP or a verified registered fingerprint on supported invocation surfaces. Broker authenticates the caller, resolves the human, checks the shared identity-access gate and applies current policy.</dd>
+        <dt>Identity attestation</dt><dd>A configured caller supplies an exact bound username on HTTP MCP or a verified registered fingerprint on supported invocation surfaces. Broker authenticates the caller, resolves the human, checks the shared identity-access gate and the path's own Enabled and Read-only settings, and applies current policy.</dd>
         <dt>Trusted caller</dt><dd>A named infrastructure caller with its own credential, fixed or asserted context permissions, and optional managed-identity forwarding. Its credential does not authenticate the principal or add grants.</dd>
         <dt>Trusted ingress</dt><dd>An optional infrastructure caller implementing Broker's credential and context contract, with identity forwarding only when explicitly permitted. Client-address forwarding is configured separately.</dd>
         <dt>Execution context</dt><dd>An authorization label (<code>internal</code>, <code>external</code>, <code>workstation</code>) asserted by an authenticated trusted caller or fixed by Broker configuration. Header-free direct clients use the configured default.</dd>

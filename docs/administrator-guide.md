@@ -220,14 +220,25 @@ Disabled bindings reserve their names; rename or reassign with delete/create.
 Unavailable namespaces remain visible for review. Auditors can inspect metadata;
 only administrators can mutate it.
 
+The **Access paths** table lists the human's identity token first, then each
+username binding, each with **Enabled** and **Read-only** settings. Disable a
+path to stop it without affecting the others; disabling the identity token keeps
+its secret. Make a path read-only when an agent connection should only read: it
+can then list and call only actions classified as reads, within the person's
+grants, and Git push through the identity token is refused. Browser sign-in and
+issued Broker tokens keep the person's full grants. Imported actions stay writes
+until you review them as reads, so they are hidden from read-only paths until
+then.
+
 **Pause identity access** blocks trusted usernames and fingerprints together while
 leaving browser sign-in and separately issued Broker tokens available. **Identity
 token** inventory is separate: removing or replacing it affects fingerprint access,
-not username bindings or the pause gate. Principal disable blocks all principal
-identity methods. Pause and binding changes take effect at final admission and
-do not cancel already admitted operations. Reinitialize MCP after an identity
-transition. Use [managed identity](managed-identity.md) for exact CLI commands,
-version checks and caller setup.
+not username bindings or the pause gate, and keeps the token's settings. Principal
+disable blocks all principal identity methods. Pause, binding and identity-token
+changes take effect at final admission and do not cancel already admitted
+operations. Changing a path's settings ends its open MCP sessions; reinitialize
+MCP after an identity transition. Use [managed identity](managed-identity.md) for
+exact CLI commands, version checks and caller setup.
 
 ## Enable personal OAuth connections
 
@@ -351,7 +362,9 @@ agent-access admin policy grants create \
 In **Admin > Policies > Create grant**, choose subjects, service/actions,
 execution contexts, resources, and credential mode. The editor shows effective
 access and validation before save. Read-only and Write-capable action columns
-help separate upstream reads from mutations; a mixed grant is Write-capable.
+help separate upstream reads from mutations; a mixed grant is Write-capable. A
+[read-only identity path](managed-identity.md#read-only-paths) can use only the
+Read-only actions of the grants that reach it.
 Saving selects explicit actions, so future provider actions are not added
 implicitly. Start with the smallest useful action set and add writes separately.
 
@@ -455,7 +468,9 @@ future admission.
 Periodically review active administrators, auditors, service managers/assignments,
 service accounts and their owners, credential rights and expiry, enabled grants,
 resource-group membership, trusted username bindings and namespace availability,
-shared identity-access pause state, nonexpiring tokens, unused credentials,
+shared identity-access pause state, each identity path's Enabled and Read-only
+settings, read-only classifications of granted imported actions, nonexpiring
+tokens, unused credentials,
 stored tokens the configuration no longer selects, and principal-specific limits. Review
 retained grants/credentials/assignments before restoring a removed service name:
 its dormant records can become effective again.

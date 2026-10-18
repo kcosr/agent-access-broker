@@ -105,18 +105,27 @@ User role and self-service disabled. Plan the credential mode in
 
 In the human's identity controls, **Identity access** pauses both trusted username
 and fingerprint invocation. It leaves independently issued Broker tokens and
-browser sign-in available. The username bindings list shows the exact namespace,
-name, enabled state and namespace availability. Create a binding only in a
-configured namespace. Disabling keeps the name reserved; delete/create to rename
-or reassign. Version conflicts require refreshing the record before retrying a
-change. Auditors can inspect these values but cannot change them.
+browser sign-in available.
+
+Below it, the **Access paths** table has one row for the built-in identity token,
+always first and never deletable, with its configured state, then one row for each
+username binding with its exact namespace, name and namespace availability. Each
+row has **Enabled** and **Read-only** toggles. A disabled row stops that path
+only; a disabled identity token keeps its secret. A read-only row can list and
+call only actions classified as reads, within the person's grants. A toggle
+change is checked against the row's current version or revision; a conflict
+requires refreshing the record before retrying. Create a binding only in a
+configured namespace, and select **Read-only** in the create form for a
+read-only binding. Disabling keeps the name reserved; delete/create to rename or
+reassign. Auditors see the same table without controls.
 
 **Identity token** retains reveal/copy, set, generate and remove controls. Removing
-inventory disables fingerprint access but leaves username bindings and shared
-pause unchanged. Clients must initialize a fresh MCP session after an identity
-transition. See [managed identity](../managed-identity.md) for lifecycle and CLI
-commands. These controls affect Broker; independently authorized access through
-other services has its own controls.
+inventory disables fingerprint access but leaves username bindings, shared pause
+and the token's Enabled and Read-only settings unchanged. Clients must initialize
+a fresh MCP session after an identity transition, including any toggle change.
+See [managed identity](../managed-identity.md) for lifecycle and CLI commands.
+These controls affect Broker; independently authorized access through other
+services has its own controls.
 
 ## If the result differs
 
@@ -129,6 +138,7 @@ other services has its own controls.
 | Bob does not appear as an available member | He may already be a local member. Inspect the current Members table before adding another principal. |
 | Membership is saved but service access is absent | Review the group's active grants, selected actions, resources, and execution contexts. Then check token restrictions and credential setup. |
 | My access is absent | Check **Self-service enabled** on the human account. It is always disabled for service accounts. |
+| A managed agent connection lacks write actions | Check **Read-only** on the identity token or username binding it uses. A read-only path lists only actions classified as reads; imported actions count as writes until reviewed as reads. |
 
 Continue with [resources and grants](admin-grants.md). Use
 [account and grant maintenance](admin-maintenance.md) for later access reviews,

@@ -283,7 +283,8 @@ Health and discovery:
 | `GET` | `/v1/services/{service}/actions` | Action names, optionally filtered to one concrete resource |
 
 `GET /v1/me` returns the identity summary (`principal`, `groups`,
-`policyGroups` when non-empty, `authenticated`) plus `serviceLimits`: the
+`policyGroups` when non-empty, `authenticated`, and `readOnlyAccess` for an
+attested identity) plus `serviceLimits`: the
 caller's effective [service invocation limit](#rate-limits) for each service
 `GET /v1/services` would list for the same request (identity, agent-token
 caveats, grants, and execution context), ordered by service:
@@ -303,6 +304,14 @@ It does not say whether a value comes from a principal override or a default.
 It is returned for every caller that can use `/v1/me`, including browser
 sessions and anonymous callers, under both identity authorities, and `/v1/me`
 is not counted as an invocation.
+
+`readOnlyAccess` appears only for a [trusted fingerprint identity](managed-identity.md),
+the attested path REST accepts. `true` means the identity token is
+[read-only](managed-identity.md#read-only-paths): discovery lists only actions
+classified as reads, and a write returns 403 `service_action_denied` with reason
+`identity access is read-only`. Issued Broker tokens, browser sessions and other
+identity sources omit it. The identity summaries in `/v1/capabilities` and the
+caller-filtered runtime catalog carry the same field.
 
 `GET /v1/resource-types` requires an authenticated caller (anonymous callers
 receive `identity_required`, as on the spec routes) and a valid
@@ -2999,8 +3008,10 @@ responses.
 The runtime action catalog includes required boolean `readOnly`, explicitly set
 by each backend; OpenAPI operations and generated send-schema variants expose
 `x-agent-access-read-only`. This flag classifies upstream effects, independently
-of response destinations. Local CLI and stdio MCP can save JSON and multipart-upload
-responses, including mutations. The send schema permits `output` and
+of response destinations. It also limits
+[read-only identity paths](managed-identity.md#read-only-paths) to actions with
+`readOnly: true`, without changing grant selection. Local CLI and stdio MCP can
+save JSON and multipart-upload responses, including mutations. The send schema permits `output` and
 `metadataOutput` on these actions and dedicated raw downloads; these fields are
 client instructions, not broker invoke fields.
 
@@ -3116,16 +3127,26 @@ audit. Successful metadata reads are [unaudited reads](#management-audit).
 | GET | `/identity-access` | Current gate |
 | PATCH | `/identity-access` | `{"paused":true,"expectedVersion":3}`; current gate |
 | GET | `/identity-bindings` | `{bindings, configuredNamespaces}` |
-| POST | `/identity-bindings` | `{"namespace":"managed_workspace","username":"alice"}`; created binding at version 1 |
-| PATCH | `/identity-bindings/{bindingId}` | `{"enabled":false,"expectedVersion":1}`; current binding |
+| POST | `/identity-bindings` | `{"namespace":"managed_workspace","username":"alice","readOnly":true}`; created enabled binding at version 1 |
+| PATCH | `/identity-bindings/{bindingId}` | `{"enabled":false,"readOnly":true,"expectedVersion":1}`; current binding |
 | DELETE | `/identity-bindings/{bindingId}?expectedVersion=2` | Version-checked removal |
 
 Gate metadata is `{principalId, incarnation, paused, version, updatedAt, updatedBy}`.
-Binding metadata is `{bindingId, principalId, namespace, username, enabled, version,
-createdAt, createdBy, updatedAt, updatedBy, namespaceAvailable}`. Binding IDs are
-server-assigned and immutable. Namespace and username cannot be edited: delete
-and create to reassign or rename. Disabled bindings reserve the pair. Targets must
-be humans, and nested operations validate principal ownership of the binding.
+Binding metadata is `{bindingId, principalId, namespace, username, enabled, readOnly,
+version, createdAt, createdBy, updatedAt, updatedBy, namespaceAvailable}`. Binding
+IDs are server-assigned and immutable. Namespace and username cannot be edited:
+delete and create to reassign or rename. Disabled bindings reserve the pair.
+Targets must be humans, and nested operations validate principal ownership of the
+binding.
+
+Creation accepts optional `readOnly`, default `false`. The binding PATCH takes
+optional `enabled` and `readOnly` with the required `expectedVersion`; at least one
+setting is required and unknown fields are rejected. A change to either setting
+advances the version once and ends the binding's MCP sessions; a PATCH that
+changes nothing returns the binding unchanged. Success audit targets are
+`{principal, bindingId, namespace, before, after}`, where `before` and `after` are
+`{enabled, readOnly, version}` read inside the transaction (`before` is null on
+creation).
 
 `configuredNamespaces` entries contain `{namespace, credentialTransports}`, with
 transport values `authorization_user` or `caller_authorization`; no caller secrets
@@ -3151,14 +3172,30 @@ Identity inventory uses the same role, CSRF, audit and envelope rules above.
 | --- | --- | --- |
 | GET | (none) | Metadata |
 | PUT | (none) | Import/replace exact `{"token":"…"}` bytes; metadata |
+| PATCH | (none) | `{"enabled":false,"readOnly":true,"expectedRevision":3}`; metadata |
 | DELETE | (none) | Remove value; metadata |
 | POST | `/generate` | Generate UUID v4; metadata |
 | POST | `/reveal` | `{"token":"…"}`; explicit sensitive response |
 
-Metadata is `{principalId, configured, revision, updatedAt}`. `revision` and
-`updatedAt` are null when no inventory row exists. The positive revision advances
-on set, generation and removal; removal retains the row and revision. Inventory
-operations preserve the separate identity-access gate and username bindings.
+Metadata is `{principalId, configured, enabled, readOnly, revision, updatedAt}`.
+Every human has exactly one identity-token record, so every field is always
+present; `configured` is false when no secret is stored. The positive revision
+advances on set, generation, removal and settings changes; removal retains the
+record and its settings.
+
+The PATCH (operation `admin.principals.identity_token.patch`, administrator
+write) takes optional `enabled` and `readOnly` with the required
+`expectedRevision`; at least one setting is required and unknown fields are
+rejected. A stale revision returns 409 `identity_version_conflict`. A change
+advances the revision once and ends fingerprint MCP sessions; a PATCH that
+changes nothing returns the metadata unchanged. Its audit preflight and success
+records use target `{principal, before, after}` with `{enabled, readOnly,
+revision}` read inside the transaction. Set, generation and removal keep both
+settings, and their success records' `after` includes `configured`, `enabled`,
+`readOnly` and `revision`. A disabled token is denied like an unknown fingerprint
+and keeps its secret, so reveal, replace, generate and remove still work.
+Inventory operations preserve the separate identity-access gate and username
+bindings.
 The runtime catalog and send schema mark import `/body/token` as sensitive and
 reveal `/result/token` as sensitive output. See [managed identity](managed-identity.md)
 for trust, provisioning and rotation.

@@ -85,6 +85,9 @@ actions and exposes typed wrappers for supported services.
 - Backend actions default to `read_only = false`; explicitly opt reviewed reads
   in via `ActionDescriptor::read_only()`. Runtime/discovery/management `readOnly`
   classifies upstream effects for grant selection; it does not gate local output.
+  It is also the ceiling of read-only trusted-identity paths, checked against the
+  current catalog on every request, so reclassifying a native action changes what
+  those paths can do: call out every native reclassification in `CHANGELOG.md`.
   JSON and multipart-upload responses support local output, including writes.
   Do not infer read-only status from action names or presentation support, expand
   result limits, or forward local output paths to broker invoke requests. Report
@@ -749,16 +752,34 @@ ordinary-token precedence over fingerprint identity. The caller credential alone
 never authenticates the human. Keep caller audit identity separate from token
 provenance and keep assertion secrets/names out of failure traces.
 
-Every human has one durable identity-access gate, created transactionally with
-the principal, even without token inventory. Preserve gate pause across inventory
-set/remove/generate. Username bindings and inventory revisions are independent;
-never recreate removed inventory on login. Gate incarnation/version, binding
-ID/version and inventory revision prevent old sessions from regaining authority
-when values are restored. Reject kind changes to/from human. Missing gate rows
-fail closed. Identity inventory remains encrypted; ordinary reads and audit must
-not expose plaintext or fingerprints. Only explicit administrator reveal returns
+Every human has one durable identity-access gate and exactly one identity-token
+row, both created transactionally with the principal, even without token
+inventory; a row without a secret is not configured. Preserve gate pause across
+inventory set/remove/generate. Username bindings and inventory revisions are
+independent; never recreate removed inventory on login, and never recreate or
+repair a missing identity-token row. Each binding and the identity token carry
+their own Enabled and Read-only settings; secret set/generate/remove keep them.
+Every actual settings change advances the binding version or inventory revision
+once (a no-op writes nothing), and the attested proof includes the read-only
+value. Gate incarnation/version, binding ID/version and inventory revision
+prevent old sessions from regaining authority when values are restored. A
+disabled binding or token resolves exactly like an unknown name or fingerprint.
+Reject kind changes to/from human. Missing gate or identity-token rows fail
+closed. Identity inventory remains encrypted; ordinary reads and audit must not
+expose plaintext or fingerprints. Only explicit administrator reveal returns
 plaintext. Shared pause belongs to identity-access administration, independently
 of issued Broker token pause and browser login.
+
+Read-only is a per-path class ceiling, not a person setting and not a grant
+filter: apply it in the one agent-invoke ceiling rule (execution context,
+read-only, service/action caveats) that invocation, Git admission, discovery and
+resource clauses share, before grant selection and without removing grants, so
+precedence is unchanged. A missing or unserved descriptor counts as a write.
+Refuse writes before credential, OAuth, scope or provider work; Git push is
+refused at receive-pack discovery and POST before the body is read. Carry the
+setting as serialized `identitySource.readOnlyAccess`, never in `token_scopes`
+or stored token caveats. Browser sessions and issued Broker tokens are
+unaffected.
 
 Carry one private proof through MCP intake/session/final governed admission.
 Revalidate it before credential or provider work; never resolve a queued request

@@ -747,7 +747,11 @@ exercise direct and relayed aggregate/service MCP, strict field parsing and rout
 rejection, binding and shared-gate administration, migration preservation, and
 session/final-admission races. Include username operation without inventory,
 fingerprint and ordinary-token regressions, all MCP trailer rejection, stale
-session pruning at the cap, and completion of already admitted work. These
+session pruning at the cap, and completion of already admitted work. Path-control
+coverage exercises per-binding and identity-token Enabled and Read-only settings on
+every surface each path reaches, including filtered discovery, refused writes
+before provider work, Git push refusal, unchanged grant precedence and session
+invalidation. These
 fixtures establish Broker's contract; they do not validate an external attester or
 cross-product ingress implementation. For a deployment test, select freshly built
 components explicitly and record that integration separately.

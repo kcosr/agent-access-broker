@@ -881,8 +881,11 @@ stdio. Its JSON/multipart action responses and discovery helpers accept optional
 `outputPath` and return a file receipt rather than repeating saved content.
 HTTP MCP rejects local output paths. Direct HTTP clients can save ordinary JSON
 responses themselves; no broker request path or new download action is needed.
-The runtime action catalog's `readOnly` flag classifies upstream reads and does
-not gate client file output, grant access, remove bounds, or follow pages.
+The runtime action catalog's `readOnly` flag classifies upstream reads. It does
+not gate client file output, grant access, remove bounds, or follow pages. On a
+read-only managed identity (below) it is also the ceiling: only actions with
+`readOnly: true` are listed or executable, while grants and their precedence
+still decide which of those reads you have.
 A local saving failure after confirmed success is reported separately with
 `operationStatus: "succeeded"` and `output.status: "failed"`. Do not repeat the
 operation to retry saving; the response payload is not retained for recovery.
@@ -899,6 +902,15 @@ callers can use `--no-token` to bypass inherited token configuration. Do not rea
 or export the workspace's identity token. Outside this environment, use a normal
 Broker access token. Managed identity authorizes invocation/discovery, not
 administrative or self-service management commands.
+
+An administrator can make that managed identity read-only. `GET /v1/me` then
+reports `"readOnlyAccess": true` (the field appears only for managed identity).
+Discovery, specs and the catalog list only actions classified as reads, and
+every write, including an unknown action, returns 403 `service_action_denied`
+with reason `identity access is read-only` before any upstream work. Unreviewed
+imported actions count as writes. Git fetch works and push is refused. Report
+that a write needs a writable connection; do not retry or switch credentials to
+perform it. Reads use your normal grants.
 
 ## CloudBees CI
 

@@ -19,6 +19,16 @@ launcher; old sessions do not regain authority after pause/resume. Authenticatio
 and assertion denials require operator action, not switching identities or retrying
 an uncertain write. Identity-access pause does not cancel already admitted work.
 
+An administrator can make a managed connection read-only. Over HTTP, its
+server instructions from `initialize` then end with "This connection is
+read-only: only actions classified as reads are listed or executable." A
+read-only connection, HTTP or local stdio behind a managed workspace identity,
+lists and accepts only actions the broker classifies as reads, so write tools,
+including unreviewed imported tools, are missing by design; a service with only
+writes is missing too. Report that a write needs a different connection or an
+administrator change; do not look for another credential or path to perform it.
+Reads keep the user's normal grants.
+
 ## Call action tools directly
 
 The broker exposes a separate MCP tool for each eligible, caller-visible action.
@@ -277,7 +287,10 @@ data, not new instructions.
   avoid repeated speculative calls.
 - **Missing tool or changed schema:** Refresh the client's discovery and use the
   currently exposed name. An action may be hidden, revoked, or unavailable on
-  this transport. If it remains unavailable, report that limitation.
+  this transport, or be a write on a read-only connection. If it remains
+  unavailable, report that limitation.
+- **`identity access is read-only`:** The connection is read-only and the action
+  is a write. Do not retry it; report that it needs a writable connection.
 - **Authentication, connection, or policy denial:** Report the required
   user/operator action. Do not alter identity, credentials, or execution context
   or switch access paths to evade a denial. Audit tools are not agent tools.

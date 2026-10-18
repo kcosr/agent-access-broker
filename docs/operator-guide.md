@@ -809,7 +809,11 @@ canonical per-service action/resource restrictions. It never includes the raw
 token secret. Runtime denial continues to use existing reason codes:
 `service_action_denied` for service/action/resource caveat rejection,
 `scope_unresolved` when a restricted canonical scope cannot be resolved, and
-`execution_context_denied` for context caveat rejection.
+`execution_context_denied` for context caveat rejection. A write refused on a
+[read-only identity path](managed-identity.md#read-only-paths) is
+`service_action_denied` with reason `identity access is read-only` and audit
+`identityAccess: {readOnly, requestedService, requestedAction}`; attested
+invocation records carry `identitySource.readOnlyAccess`.
 
 Configure the audit store explicitly. The SQLite backend is a standalone
 database that the portal, CLI, and API can query:
@@ -1274,6 +1278,24 @@ the previous binary refuses the migrated store. Revocations that were pending at
 rollback are lost with the restored backup, and their tokens stay valid at the
 provider; revoke the application there for the affected people.
 
+Migration `029_identity_access_path_controls` follows `028_oauth_revocations`.
+It adds the per-path **Enabled** and **Read-only** settings of
+[managed identity](managed-identity.md#access-path-controls): `read_only` on
+username bindings, and `enabled` and `read_only` on identity-token records. Every
+existing path stays enabled and not read-only, so access is unchanged. It adds a
+not-configured identity-token record (no secret) for each human without one and
+leaves existing secrets, fingerprints and revisions unchanged; from this version
+every human must have exactly one record, and a missing record fails readiness.
+No operator action is needed beyond the usual forward-migration steps. Deploy the
+matching portal and CLI, which change these settings with
+`identity-bindings update` and `identity-token update`. Review scripts and
+[management API](http-api.md#administrator-identity-access-and-bindings)
+automation that change bindings or read identity-token metadata against
+[breaking changes](../CHANGELOG.md). Rolling back
+across `029` needs the backup taken before it: the previous binary refuses the
+migrated store, and settings changed after the upgrade are lost with the restored
+backup.
+
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
 fresh store at a new path, then reconstruct principals, credentials, resources,
@@ -1436,12 +1458,13 @@ thresholds; raising invocation limits does not raise login budgets.
 | `caller_authentication_required` / `caller_authentication_invalid` | Configure the attesting service as a named trusted caller and verify its injected credential matches Broker's loaded secret. Protected context/fingerprint headers always require valid caller authentication. |
 | `identity_assertion_invalid` / `identity_assertion_unsupported` | Check exact username/bearer fields, competing identity carriers, protected Connection/trailer fields, and that the request targets HTTP MCP. Never send the user header on REST, browser, management or Git routes. |
 | `caller_user_assertion_denied` | The authenticated caller lacks a username namespace. Review its explicit capability; do not switch to a token fallback. |
-| `identity_assertion_denied` | Administratively inspect the exact binding, namespace availability, human status and shared identity-access gate. Reinitialize MCP after identity transitions. The response deliberately does not identify which check denied access. |
+| `identity_assertion_denied` | Administratively inspect the exact binding and whether it is enabled, namespace availability, human status and shared identity-access gate. Reinitialize MCP after identity transitions. The response deliberately does not identify which check denied access. |
 | `identity_unavailable` | Restore managed-store/caller-security availability before retrying a new request; preserve any earlier uncertain write outcome. |
 | `caller_identity_forwarding_denied` | The caller may not forward principal identity. Use an ordinary Broker token, or review the operator-managed forwarding capability. |
 | `execution_context_required` | Asserted callers must supply their approved context. Header-free direct clients need a configured `default_context`; asserted callers never inherit it. |
 | `execution_context_invalid` | Check duplicate, malformed, or globally unknown context values. Fixed callers must omit context headers; asserted ingress must replace client values with one approved slug. |
 | `execution_context_denied` | The context is outside the caller allowlist, token caveat, or matching grant. Issue a correctly narrowed token only after the principal has an active grant for that context. |
+| `service_action_denied` with reason `identity access is read-only` | The request came through a read-only username binding or identity token and the action is classified as a write. Grants are not the cause. If the path must allow writes, an administrator clears its Read-only setting; imported actions count as writes until reviewed as reads. |
 | `right_missing` | Review the classless static credential right for the exact principal and credential connection (credential name `default`), including expiry/revocation. Ordinary managed connection-token routes use `user_manage`/browser authority and per-user policy visibility. OAuth connect/reconnect uses a matching active `per_user` grant and a credential connection with OAuth instead of credential rights. Administrative credential routes use the administrator role separately. See [credential-right setup](administrator-guide.md#grant-personal-credential-rights). |
 | `scope_unresolved` | Check provider input, locators, and scope resolvers. The broker could not derive an authorized resource scope. |
 | `mutation_verification_failed` | A GitLab review write may already have applied, but readback could not prove the final state. Do not retry automatically; refresh through the safe result locators and reconcile first. |

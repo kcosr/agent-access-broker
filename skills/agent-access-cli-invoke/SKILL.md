@@ -783,6 +783,16 @@ or export the workspace's identity token. Outside this environment, use a normal
 Broker access token. Managed identity authorizes invocation/discovery, not
 administrative or self-service management commands.
 
+An administrator can make that managed identity read-only.
+`agent-access auth status` then shows `"readOnlyAccess": true`. Discovery and
+the catalog list only actions classified as reads (catalog `readOnly: true`),
+and a write fails with `service_action_denied` and reason
+`identity access is read-only` before any upstream work. Unreviewed imported
+actions count as writes, and Git push is refused while fetch works. Report that
+a write needs a writable connection; do not retry or switch credentials to
+perform it. Reads use your normal grants, and local output destinations are
+unaffected.
+
 
 ## CloudBees CI
 

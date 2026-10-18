@@ -23,7 +23,9 @@ trusted-caller integration, the broker can also receive verified execution conte
 and, when configured, user identity from that infrastructure. An **execution
 context**, such as an internal workspace or external automation environment,
 helps determine permitted actions and resources. The agent cannot gain more
-access simply by claiming a different context or identity.
+access simply by claiming a different context or identity. Administrators can
+disable each trusted identity path or limit it to read actions without changing
+the person's grants; see [managed workspace identity](docs/managed-identity.md).
 
 The portal supports local account sign-in or optional
 [Microsoft Entra ID sign-in](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation)
