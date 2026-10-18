@@ -460,10 +460,11 @@ non-page targets are not exposed.
 ## GitLab REST
 
 `project.search` discovers or browses authorized GitLab projects live, including
-namespace-granted projects not individually registered in `resources_list`. The
-six native full-text categories are `search.issues`, `search.merge_requests`,
-`search.code`, `search.commits`, `search.wiki`, and `search.comments`; they use the authorized
-repository set or an explicit project. `issue.search` and `merge_request.search`
+namespace-granted projects not individually listed by
+`GET /v1/services/{service}/resources`. The six native full-text categories are
+`search.issues`, `search.merge_requests`, `search.code`, `search.commits`,
+`search.wiki`, and `search.comments`; they use the authorized repository set or
+an explicit project. `issue.search` and `merge_request.search`
 list/filter within one required project instead.
 
 Use the same invoke route and envelope as any action: POST

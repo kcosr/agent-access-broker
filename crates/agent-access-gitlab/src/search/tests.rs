@@ -1262,6 +1262,52 @@ fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas(
     );
 }
 
+#[test]
+fn advertised_search_default_matches_runtime_selection() {
+    let mut config: GitlabProviderConfig = serde_json::from_value(json!({
+        "api_base_url": "https://gitlab.example/api/v4",
+        "web_base_url": "https://gitlab.example"
+    }))
+    .unwrap();
+    config.search.engines.advanced.project_categories = CATEGORIES
+        .iter()
+        .map(|category| (*category).into())
+        .collect();
+    config.search.engines.advanced.instance_categories = CATEGORIES
+        .iter()
+        .map(|category| (*category).into())
+        .collect();
+
+    for default_engine in ["basic", "advanced"] {
+        config.search.default_engine = default_engine.into();
+        let descriptor = gitlab_descriptor(&config);
+        descriptor.validate().unwrap();
+        for category in CATEGORIES {
+            let action_name = format!("search.{category}");
+            let action = descriptor
+                .actions
+                .iter()
+                .find(|action| action.action == action_name)
+                .unwrap();
+            let selected = parse_inputs(
+                &action_name,
+                &json!({"search": "needle", "project": "team/repo"}),
+                &config.search,
+            )
+            .unwrap();
+            assert_eq!(selected.engine.as_deref(), Some(default_engine));
+            assert_eq!(
+                action.input_schema["properties"]["engine"]["default"],
+                default_engine
+            );
+            assert_eq!(
+                action.documentation.as_ref().unwrap()["defaultEngine"],
+                default_engine
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn discovery_reapplies_archived_filter_and_rejects_duplicate_current_paths() {
     let server = MockServer::start().await;

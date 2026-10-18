@@ -67,7 +67,7 @@ pub(super) struct ContentSearchArgs {
     /// Canonical project path; required when the engine lacks instance search.
     #[arg(long)]
     project: Option<String>,
-    /// Configured search engine; omit to use the Broker's default.
+    /// Configured search engine; omit to use the service's configured default.
     #[arg(long, value_enum)]
     engine: Option<SearchEngine>,
     #[command(flatten)]

@@ -369,8 +369,8 @@ cross-space moves, or non-page targets.
 ## GitLab REST
 
 `project.search` discovers or browses authorized GitLab projects live, including
-namespace-granted projects not individually registered in `resources_list`. Native
-`search.issues`, `search.merge_requests`, `search.code`, `search.commits`,
+namespace-granted projects not individually listed by `agent-access resources list`.
+Native `search.issues`, `search.merge_requests`, `search.code`, `search.commits`,
 `search.wiki`, and `search.comments` search the authorized repository set or an
 explicit project. `issue.search` / `merge_request.search` list and filter within
 one required project; those structured-list actions remain distinct.

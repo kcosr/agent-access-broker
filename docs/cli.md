@@ -1516,8 +1516,9 @@ the optional `--project`. `gitlab issue search PROJECT` and
 `gitlab merge-request search PROJECT` list/filter within one required project
 and retain their existing structured filters.
 
-Content commands accept `--engine basic|advanced|zoekt`; omission uses the Broker
-default. Inspect the live action schema for configured engine/scope support.
+Content commands accept `--engine basic|advanced|zoekt`. Omit `--engine` to use
+the service's configured default. Inspect the live action schema for configured
+engine/scope support.
 `--project` is required when the selected/default engine has no instance route;
 with basic defaults this includes code, commits, wiki, and comments. `--regex`
 exists only on code and requires Zoekt. Native syntax, index coverage, and

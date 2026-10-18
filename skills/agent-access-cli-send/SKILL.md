@@ -550,8 +550,8 @@ Page attachment upload and stream download:
 ## GitLab REST
 
 `project.search` discovers or browses authorized GitLab projects live, including
-namespace-granted projects not individually registered in `resources_list`. The
-six native categories are `search.issues`, `search.merge_requests`, `search.code`,
+namespace-granted projects not individually listed by `agent-access resources list`.
+The six native categories are `search.issues`, `search.merge_requests`, `search.code`,
 `search.commits`, `search.wiki`, and `search.comments`. These full-text searches
 use the authorized repository set or an explicit `project`. `issue.search` and
 `merge_request.search` list/filter within one required project instead.

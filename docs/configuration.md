@@ -1398,8 +1398,9 @@ allow_disable_ssl_verification = false
   bounds caller-supplied normalized rich-content source bytes, the complete
   native Markdown body after conversion and attribution, and every declared
   issue/MR description or note/discussion body returned in native, embedded, or
-  whole-result read mode. It also bounds merge and commit messages under their
-  existing contracts. It must not exceed `limits.max_http_body_bytes`.
+  whole-result read mode. It also bounds `project.view` descriptions, merge
+  messages, and commit messages under their existing contracts. It must not
+  exceed `limits.max_http_body_bytes`.
   Oversized write input returns `body_size_denied`/413; malformed or oversized
   upstream read content returns the fixed `upstream_protocol_failed`/502. No
   path truncates or falls back to a partial/native result.

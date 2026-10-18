@@ -415,8 +415,8 @@ agent-access confluence page attachment download 123456789 --attachment-id att12
 ## GitLab REST
 
 Use `project.search` to discover authorized GitLab projects live, including
-namespace-granted projects not individually registered in `resources_list`, then
-use a separately authorized native content search:
+namespace-granted projects not individually listed by `agent-access resources list`,
+then use a separately authorized native content search:
 
 ```bash
 agent-access gitlab project search --search dispatch --archived false --max-results 20
