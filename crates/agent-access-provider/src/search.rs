@@ -237,7 +237,12 @@ impl SearchAuthorizationScope {
                 .included
                 .iter()
                 .chain(&clause.excluded)
-                .any(|selector| matches!(selector, ResourceSelector::Namespace { .. }))
+                .any(|selector| {
+                    !matches!(
+                        selector,
+                        ResourceSelector::Exact { .. } | ResourceSelector::All
+                    )
+                })
             {
                 return Err(SearchProjectionError);
             }

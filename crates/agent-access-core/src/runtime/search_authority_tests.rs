@@ -154,8 +154,8 @@ fn config() -> (BrokerConfig, Arc<AtomicUsize>) {
         resource("private", namespace("engineering/private")),
         resource("public-tool", exact("engineering/public/tool")),
         resource("private-tool", exact("engineering/private/tool")),
-        resource("secret", exact("engineering/private/secret")),
-        resource("secret-copy", exact("engineering/private/secret")),
+        resource("secret", namespace("engineering/private/secret")),
+        resource("secret-copy", exact("engineering/private/secret/tool")),
         resource("labs", namespace("labs")),
         resource("labs-tool", exact("labs/tool")),
         resource("sibling-tool", exact("engineering2/tool")),
@@ -565,7 +565,7 @@ async fn inactive_exclusions_persist_and_an_independent_exact_grant_restores_one
         for (path, allowed) in [
             ("engineering/public/tool", true),
             ("engineering/private/tool", true),
-            ("engineering/private/secret", false),
+            ("engineering/private/secret/tool", false),
             ("engineering/private/tool/child", false),
             ("engineering2/tool", false),
         ] {
@@ -706,7 +706,7 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
         for (path, allowed) in [
             ("engineering/public/tool", true),
             ("engineering/private/tool", true),
-            ("engineering/private/secret", restore_secret),
+            ("engineering/private/secret/tool", restore_secret),
             ("engineering2/tool", false),
             ("labs/tool", false),
         ] {

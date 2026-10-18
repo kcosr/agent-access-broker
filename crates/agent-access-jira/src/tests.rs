@@ -9305,7 +9305,7 @@ fn jira_descriptor_declares_lookup_and_io_per_action() {
 
     let create = action("issue.create");
     assert_eq!(create.lookup, LookupRequirement::None);
-    assert!(!create.native_search.is_some());
+    assert!(create.native_search.is_none());
     assert_eq!(create.io, crate::ActionIo::Json);
 }
 
