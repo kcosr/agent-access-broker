@@ -103,7 +103,7 @@ fn all_selections(discovered: &Value) -> Value {
             .iter()
             .filter(|tool| tool["unsupportedReason"].is_null())
             .map(|tool| json!({"source": tool["definition"]["source"],
-                "action": tool["definition"]["action"], "readOnly": true}))
+                "action": tool["definition"]["action"], "readOnly": true,"secretInputs":[]}))
             .collect::<Vec<_>>()
     )
 }

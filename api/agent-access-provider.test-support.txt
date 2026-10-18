@@ -2004,6 +2004,7 @@ pub fn agent_access_provider::ActionDescriptor::sensitive_output(self, impl core
 pub fn agent_access_provider::ActionDescriptor::token_only(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::upstream_resource_ownership(self, agent_access_provider::UpstreamResourceOwnership) -> Self
 pub fn agent_access_provider::ActionDescriptor::validate_literal_secret_inputs(&self, &serde_json::value::Value) -> core::result::Result<(), agent_access_provider::SecretContractError>
+pub fn agent_access_provider::ActionDescriptor::validate_secret_contract(&self) -> core::result::Result<(), agent_access_provider::SecretContractError>
 impl core::clone::Clone for agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::clone(&self) -> agent_access_provider::ActionDescriptor
 impl core::cmp::PartialEq for agent_access_provider::ActionDescriptor

@@ -307,7 +307,7 @@ async fn import(app: &Router, token: &str, service: &str, command: &str, modes: 
             .iter()
             .map(|tool| json!({"source": tool["definition"]["source"],
                 "action": tool["definition"]["action"],
-                "readOnly": tool["definition"]["action"] != "issue.create"}))
+                "readOnly": tool["definition"]["action"] != "issue.create", "secretInputs":[]}))
             .collect::<Vec<_>>()
     );
     let mut current = admin(

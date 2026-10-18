@@ -386,6 +386,13 @@ impl ActionDescriptor {
         self
     }
 
+    /// Validate declared secret fields against the fixed schema profile without
+    /// allocating a reference-admission schema. Eligibility has the same rules
+    /// as [`Self::reference_input_schema`].
+    pub fn validate_secret_contract(&self) -> Result<(), crate::SecretContractError> {
+        crate::secret::validate_secret_contract(self)
+    }
+
     /// Projects only declared input fields as literal-or-reference values.
     /// The provider's original literal schemas are preserved in `input_schema`.
     pub fn reference_input_schema(&self) -> Result<Value, crate::SecretContractError> {

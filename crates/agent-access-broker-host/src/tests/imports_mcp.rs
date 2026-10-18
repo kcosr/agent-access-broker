@@ -18,11 +18,16 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+mod receivers;
+
 #[derive(Clone, Default)]
 struct Upstream {
     requests: Arc<Mutex<Vec<(String, HeaderMap, Value)>>>,
     fail_calls: Arc<AtomicBool>,
     discovery_tools: Arc<Mutex<Option<Vec<Value>>>>,
+    call_result: Arc<Mutex<Option<Value>>>,
+    startup_gate: Arc<Mutex<Option<receivers::Gate>>>,
+    call_gate: Arc<Mutex<Option<receivers::Gate>>>,
 }
 async fn upstream(
     State(state): State<Upstream>,
@@ -38,6 +43,11 @@ async fn upstream(
     let method = request["method"].as_str().unwrap();
     let result = match method {
         "server/discover" => {
+            let gate = state.startup_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
             json!({"supportedVersions":[agent_access_mcp_upstream::PROTOCOL_VERSION],"capabilities":{"tools":{}},"ttlMs":0,"cacheScope":"private"})
         }
         "tools/call" => {
@@ -45,7 +55,12 @@ async fn upstream(
                 headers["mcp-name"],
                 request["params"]["name"].as_str().unwrap()
             );
-            json!({"content":[{"type":"text","text":"synthetic-sensitive-upstream-body"}],"structuredContent":{"ok":true},"isError":state.fail_calls.load(Ordering::Relaxed)})
+            let gate = state.call_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+            state.call_result.lock().unwrap().clone().unwrap_or_else(|| json!({"content":[{"type":"text","text":"synthetic-sensitive-upstream-body"}],"structuredContent":{"ok":true},"isError":state.fail_calls.load(Ordering::Relaxed)}))
         }
         "tools/list" => json!({"tools": state.discovery_tools.lock().unwrap().as_ref()
             .expect("unexpected discovery during execution").clone()}),
@@ -89,6 +104,9 @@ fn action(read_only: bool) -> ImportedActionDefinition {
     }
 }
 async fn fixture(limit: Option<u32>) -> Fixture {
+    fixture_with_producer(limit, false).await
+}
+async fn fixture_with_producer(limit: Option<u32>, producer: bool) -> Fixture {
     let upstream_state = Upstream::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -106,6 +124,24 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     let mut config = context_aware_fake_config(audit_path.to_str().unwrap());
     config.providers = ProvidersConfig::new(Arc::new(crate::backend_registry()));
     config.credentials = CredentialsConfig::default();
+    if producer {
+        config
+            .providers
+            .insert(agent_access_fake::FakeProviderConfig {});
+        config.secret_outputs.mode = agent_access_core::SecretOutputMode::Reference;
+        config.credentials.service.insert(
+            "fake".into(),
+            CredentialConfig {
+                kind: "bearer_token".into(),
+                token_ref: Some(format!("file:{}", key.display())),
+                username_ref: None,
+                provider: None,
+                path: None,
+                read_only: None,
+                connection: None,
+            },
+        );
+    }
     config.limits.upload_spool_dir = directory.path().join("spool").display().to_string();
     config.identity = IdentityConfig {
         trusted_callers: Default::default(),
@@ -241,6 +277,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
                     actions: vec![true, false]
                         .into_iter()
                         .map(|read| ImportedActionWrite {
+                            secret_inputs: Vec::new(),
                             definition: action(read),
                             status: ImportedActionStatus::Enabled,
                         })
@@ -272,11 +309,15 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     }
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let tokens=["alice","bob","charlie"].into_iter().map(|principal|{
-        let issued=store.issue_broker_token(&hasher,BrokerTokenIssueRequest{principal_id:principal.into(),name:"MCP fixture".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":["one","two"],"allowedExecutionContexts":["internal","external"]}),expires_at:None,created_by:"admin".into()}).unwrap();
+        let issued=store.issue_broker_token(&hasher,BrokerTokenIssueRequest{principal_id:principal.into(),name:"MCP fixture".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":if producer {vec!["one","two","fake"]} else {vec!["one","two"]},"allowedExecutionContexts":["internal","external"]}),expires_at:None,created_by:"admin".into()}).unwrap();
         (principal.into(),issued.token)
     }).collect();
     drop(initial);
-    let broker = TestBroker::start_config(&config).await;
+    let broker = if producer {
+        TestBroker::start_with_providers(&config, vec![Arc::new(receivers::Producer)]).await
+    } else {
+        TestBroker::start_config(&config).await
+    };
     let runtime = broker.runtime();
     for service in ["one", "two"] {
         for (principal, mode) in [
@@ -304,6 +345,23 @@ async fn fixture(limit: Option<u32>) -> Fixture {
                 })
                 .unwrap();
         }
+    }
+    if producer {
+        runtime
+            .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
+                grant_id: Some("receiver-producer".into()),
+                subjects: vec!["user:alice".into()],
+                execution_contexts: vec!["internal".into()],
+                service: "fake".into(),
+                actions: vec!["issue".into()],
+                resources: ResourceSelection::default(),
+                credential_mode: "service".into(),
+                priority: None,
+                status: None,
+                description: None,
+                created_by: "admin".into(),
+            })
+            .unwrap();
     }
     assert!(
         upstream_state.requests.lock().unwrap().is_empty(),
@@ -631,10 +689,10 @@ async fn scoped_mcp_admin_warnings_do_not_block_aggregate_and_follow_publication
     accept["manifestHash"] = preview["preview"]["manifestHash"].clone();
     accept["confirmAffectedGrants"] = json!(true);
     accept["selections"] = json!([
-        {"source":{"toolName":"read_item"},"action":"inspect","readOnly":true},
-        {"source":{"toolName":"update_item"},"action":"update","readOnly":false},
-        {"source":{"toolName":"bad/name"},"action":"bad.name","readOnly":true},
-        {"source":{"toolName":"resources_list"},"action":"reserved","readOnly":true},
+        {"source":{"toolName":"read_item"},"action":"inspect","readOnly":true,"secretInputs":[]},
+        {"source":{"toolName":"update_item"},"action":"update","readOnly":false,"secretInputs":[]},
+        {"source":{"toolName":"bad/name"},"action":"bad.name","readOnly":true,"secretInputs":[]},
+        {"source":{"toolName":"resources_list"},"action":"reserved","readOnly":true,"secretInputs":[]},
     ]);
     let accepted = management(&fixture.app, &admin, Method::POST, "/accept", Some(accept)).await;
     assert_eq!(accepted["scopedMcp"]["ready"], false);

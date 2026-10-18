@@ -26,6 +26,7 @@ fn record(service: &str, names: &[&str]) -> ImportedServiceRecord {
         actions: names
             .iter()
             .map(|name| ImportedActionRecord {
+                secret_inputs: Vec::new(),
                 definition: ImportedActionDefinition {
                     action: (*name).into(),
                     source: json!({"toolName":name}),

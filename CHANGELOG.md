@@ -34,6 +34,14 @@ All notable changes to this project are documented in this file.
   and the old one-target query shape are removed.
 - The host's test-support `ManagedStoreError` adds `ManagementDenied` and
   `CommitUnknown`; exhaustive downstream matches must handle both.
+- Import acceptance selections require an explicit `secretInputs` array. Full
+  administrators may designate fixed MCP string fields as secret receivers;
+  marked actions always suppress upstream response content and return only a
+  completion receipt. Clearing the array restores the ordinary output contract
+  and participates in affected-grant confirmation.
+- Managed-store schema `030_imported_secret_inputs` stores operator receiver
+  overlays separately from upstream definitions. Existing actions receive empty
+  overlays; rollback requires a pre-migration backup.
 
 - Connection credential PUTs, including literal tokens, return `409 version_conflict` before writing when a runtime publication overtakes admission; retry the PUT using current configuration.
 
@@ -480,6 +488,8 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Invocation audit records retain safe source categories for native and imported
+  secret receiver fields: declared pointer plus reference, literal, or absent.
 - Confidential fixed-length continuations use AES-256-GCM with binding-separated
   HKDF keys and carried absolute expiry. Bounded upstream operations share atomic
   HTTP attempt and decoded-body byte budgets.

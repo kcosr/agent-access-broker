@@ -67,7 +67,10 @@ containment. A command can declare resource types: the Broker checks resources
 named in an action's inputs before the command runs, and hands other actions
 the caller's grants to filter by.
 Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
-connections.
+connections. Administrators can also designate fixed MCP string fields as
+[secret receivers](docs/imported-services.md#secret-receiver-fields): callers may
+send authorized temporary references, and every call to a marked action returns
+only a completion receipt with upstream response content suppressed.
 
 The core-owned [Broker administration service](docs/broker-management.md) supports
 explicitly delegated service-account creation, membership and grant assignments,

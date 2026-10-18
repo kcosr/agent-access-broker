@@ -22,6 +22,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 url.workspace = true
+zeroize = "1.9"
 
 [dev-dependencies]
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }

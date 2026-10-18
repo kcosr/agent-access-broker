@@ -79,7 +79,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_SECRET_REFERENCES_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION;
+const MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION: &str = "030_imported_secret_inputs";
 const MANAGED_STORE_SECRET_REFERENCES_VERSION: &str = "029_secret_references";
 const MANAGED_STORE_OAUTH_REVOCATIONS_VERSION: &str = "028_oauth_revocations";
 const MANAGED_STORE_COMMAND_IMPORTS_VERSION: &str = "027_command_imports";
@@ -247,6 +248,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/secret_references.sql"),
         seed: None,
         structural_validation: secret_references::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION,
+        checksum: "a84b08605cf0bcad5a925adce38655b159dc1849a93f0474f707d8f83caebfed",
+        sql: include_str!("managed_store/imported_secret_inputs.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_secret_inputs_structure,
     },
 ];
 
@@ -9906,7 +9914,8 @@ mod tests {
         assert_eq!(rows[13].0, MANAGED_STORE_COMMAND_IMPORTS_VERSION);
         assert_eq!(rows[14].0, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION);
         assert_eq!(rows[15].0, MANAGED_STORE_SECRET_REFERENCES_VERSION);
-        assert_eq!(rows[15].0, MANAGED_STORE_SCHEMA_VERSION);
+        assert_eq!(rows[16].0, MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION);
+        assert_eq!(rows[16].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

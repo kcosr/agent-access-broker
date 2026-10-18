@@ -593,6 +593,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
                 ]
                 .into_iter()
                 .map(|(action, name, read_only)| ImportedActionWrite {
+                    secret_inputs: Vec::new(),
                     definition: ImportedActionDefinition {
                         action: action.into(),
                         source: json!({"toolName":name}),
@@ -625,6 +626,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .actions
         .iter()
         .map(|action| ImportedActionWrite {
+            secret_inputs: Vec::new(),
             definition: action.definition.clone(),
             status: action.status,
         })

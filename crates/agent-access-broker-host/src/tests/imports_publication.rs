@@ -73,6 +73,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Enabled,
                 actions: vec![ImportedActionWrite {
+                    secret_inputs: Vec::new(),
                     definition: conformance_import_action(),
                     status: ImportedActionStatus::Enabled,
                 }],

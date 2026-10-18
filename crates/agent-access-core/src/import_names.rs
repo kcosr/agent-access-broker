@@ -189,6 +189,7 @@ mod tests {
         }
         assert_eq!(first.tools[4].definition.action, "valid.read");
         record.actions.push(ImportedActionRecord {
+            secret_inputs: Vec::new(),
             definition: ImportedActionDefinition {
                 action: "custom".into(),
                 ..first.tools[0].definition.clone()
@@ -220,6 +221,7 @@ mod tests {
             );
             proposed.validate("search").unwrap();
             record.actions.push(ImportedActionRecord {
+                secret_inputs: Vec::new(),
                 definition: proposed.clone(),
                 status: ImportedActionStatus::Enabled,
                 version,

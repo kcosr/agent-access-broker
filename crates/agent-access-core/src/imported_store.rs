@@ -53,6 +53,7 @@ impl ImportedActionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedActionRecord {
+    pub secret_inputs: Vec<agent_access_provider::SecretInputDescriptor>,
     pub definition: ImportedActionDefinition,
     pub status: ImportedActionStatus,
     pub version: u64,
@@ -107,6 +108,7 @@ pub struct ImportedPreview {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedActionWrite {
+    pub secret_inputs: Vec<agent_access_provider::SecretInputDescriptor>,
     pub definition: ImportedActionDefinition,
     pub status: ImportedActionStatus,
 }
@@ -387,15 +389,22 @@ impl ManagedStore {
                 .actions
                 .iter()
                 .find(|v| v.definition.action == action.definition.action);
-            let changed = old_action
-                .is_none_or(|v| v.definition != action.definition || v.status != action.status);
+            let changed = old_action.is_none_or(|v| {
+                v.definition != action.definition
+                    || v.status != action.status
+                    || v.secret_inputs != action.secret_inputs
+            });
             let version = old_action.map_or(1, |v| v.version + u64::from(changed));
             let definition_json =
                 bounded_json(&action.definition, crate::imports::IMPORT_MAX_TOOL_BYTES)?;
             let hash = sha256_hex(definition_json.as_bytes());
+            let secret_inputs = bounded_json(
+                &action.secret_inputs,
+                crate::imports::IMPORT_MAX_SECRET_INPUT_BYTES,
+            )?;
             let source =
                 serde_json::to_string(&action.definition.source).map_err(|_| invalid_data())?;
-            tx.execute("INSERT INTO imported_actions(service,action,source_json,definition_json,definition_hash,status,version) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(service,action) DO UPDATE SET definition_json=excluded.definition_json,definition_hash=excluded.definition_hash,status=excluded.status,version=excluded.version", params![request.definition.service,action.definition.action,source,definition_json,hash,action.status.as_str(),db_version(version)?]).map_err(sql_unavailable)?;
+            tx.execute("INSERT INTO imported_actions(service,action,source_json,definition_json,definition_hash,status,version,secret_inputs_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(service,action) DO UPDATE SET definition_json=excluded.definition_json,definition_hash=excluded.definition_hash,status=excluded.status,version=excluded.version,secret_inputs_json=excluded.secret_inputs_json", params![request.definition.service,action.definition.action,source,definition_json,hash,action.status.as_str(),db_version(version)?,secret_inputs]).map_err(sql_unavailable)?;
         }
         let json = bounded_json(&request.definition, 32768)?;
         tx.execute("UPDATE imported_services SET definition_json=?2,status=?3,version=version+1,updated_at=?4,updated_by=?5 WHERE service=?1",params![request.definition.service,json,request.status.as_str(),normalized_now_string(),request.actor]).map_err(sql_unavailable)?;
@@ -707,6 +716,7 @@ fn validate_actions(
     let mut names = BTreeSet::new();
     let mut sources = BTreeSet::new();
     for action in actions {
+        crate::imports::validate_receiver_storage(&action.secret_inputs).map_err(input_invalid)?;
         let previous = old
             .iter()
             .find(|previous| previous.definition.action == action.definition.action);
@@ -895,11 +905,13 @@ enum ImportSchema {
     /// `023_imported_services` through `026_trusted_user_identity`: no
     /// `accepted_metadata_json`.
     BeforeCommandImports,
-    /// `027_command_imports` and later.
+    /// `027_command_imports` through `029_secret_references`.
     CommandImports,
+    /// `030_imported_secret_inputs` and later.
+    SecretInputs,
 }
 fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
-    catalog_at(conn, ImportSchema::CommandImports)
+    catalog_at(conn, ImportSchema::SecretInputs)
 }
 fn catalog_at(
     conn: &Connection,
@@ -929,7 +941,7 @@ fn service_record(
     conn: &Connection,
     service: &str,
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
-    service_record_at(conn, service, ImportSchema::CommandImports)
+    service_record_at(conn, service, ImportSchema::SecretInputs)
 }
 fn service_record_at(
     conn: &Connection,
@@ -938,7 +950,7 @@ fn service_record_at(
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
     let metadata_column = match schema {
         ImportSchema::BeforeCommandImports => "NULL",
-        ImportSchema::CommandImports => "accepted_metadata_json",
+        ImportSchema::CommandImports | ImportSchema::SecretInputs => "accepted_metadata_json",
     };
     type ServiceRow = (
         String,
@@ -983,25 +995,46 @@ fn service_record_at(
         return Err(invalid_data());
     }
     let status = serde_json::from_value(Value::String(status)).map_err(|_| invalid_data())?;
-    let mut statement = conn.prepare("SELECT definition_json,status,version,definition_hash FROM imported_actions WHERE service=?1 ORDER BY action").map_err(sql_unavailable)?;
-    let rows: Vec<(String, String, u64, String)> = collect_rows(
+    let receivers = if matches!(schema, ImportSchema::SecretInputs) {
+        "secret_inputs_json"
+    } else {
+        "'[]'"
+    };
+    let mut statement = conn.prepare(&format!("SELECT definition_json,status,version,definition_hash,{receivers} FROM imported_actions WHERE service=?1 ORDER BY action")).map_err(sql_unavailable)?;
+    let rows: Vec<(String, String, u64, String, String)> = collect_rows(
         statement
             .query_map([service], |r| {
-                Ok((r.get(0)?, r.get(1)?, row_version(r, 2)?, r.get(3)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    row_version(r, 2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                ))
             })
             .map_err(sql_unavailable)?,
     )?;
     let actions = rows
         .into_iter()
-        .map(|(definition, status, version, definition_hash)| {
-            Ok(ImportedActionRecord {
-                definition: serde_json::from_str(&definition).map_err(|_| invalid_data())?,
-                status: serde_json::from_value(Value::String(status))
-                    .map_err(|_| invalid_data())?,
-                version,
-                definition_hash,
-            })
-        })
+        .map(
+            |(definition, status, version, definition_hash, secret_inputs)| {
+                if secret_inputs.len() > crate::imports::IMPORT_MAX_SECRET_INPUT_BYTES {
+                    return Err(invalid_data());
+                }
+                let secret_inputs: Vec<agent_access_provider::SecretInputDescriptor> =
+                    serde_json::from_str(&secret_inputs).map_err(|_| invalid_data())?;
+                crate::imports::validate_receiver_storage(&secret_inputs)
+                    .map_err(|_| invalid_data())?;
+                Ok(ImportedActionRecord {
+                    secret_inputs,
+                    definition: serde_json::from_str(&definition).map_err(|_| invalid_data())?,
+                    status: serde_json::from_value(Value::String(status))
+                        .map_err(|_| invalid_data())?,
+                    version,
+                    definition_hash,
+                })
+            },
+        )
         .collect::<Result<Vec<_>, ManagedStoreError>>()?;
     let mut statement = conn.prepare("SELECT purpose,material_version FROM imported_secret_material WHERE service=?1 ORDER BY purpose").map_err(sql_unavailable)?;
     let versions: Vec<(String, String)> = collect_rows(
@@ -1449,17 +1482,21 @@ pub(super) fn validate_oauth_revocations_structure(
 ) -> Result<(), ManagedStoreError> {
     validate_structure_through(conn, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION)
 }
+pub(super) fn validate_secret_inputs_structure(conn: &Connection) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION)
+}
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
 fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {
+    let through = MANAGED_STORE_MIGRATIONS
+        .iter()
+        .position(|migration| migration.version == version)
+        .ok_or_else(invalid_data)?;
     let expected = Connection::open_in_memory().map_err(sql_unavailable)?;
-    for migration in MANAGED_STORE_MIGRATIONS {
+    for migration in &MANAGED_STORE_MIGRATIONS[..=through] {
         expected
             .execute_batch(migration.sql)
             .map_err(sql_unavailable)?;
-        if migration.version == version {
-            break;
-        }
     }
     compare_schema(conn, &expected)?;
     run_foreign_key_check(conn)?;
@@ -1467,8 +1504,24 @@ fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), Ma
     identity_access::check_integrity(conn)?;
     check_secret_material_ready(conn, None)?;
     check_policy_revision_ready(conn)?;
-    catalog(conn)?;
+    catalog_at(conn, import_schema_through(through))?;
     Ok(())
+}
+/// Select by the applied migration prefix, so later migrations retain every
+/// previously introduced imported-record field.
+fn import_schema_through(through: usize) -> ImportSchema {
+    let includes = |version| {
+        MANAGED_STORE_MIGRATIONS[..=through]
+            .iter()
+            .any(|migration| migration.version == version)
+    };
+    if includes(MANAGED_STORE_IMPORTED_SECRET_INPUTS_VERSION) {
+        ImportSchema::SecretInputs
+    } else if includes(MANAGED_STORE_COMMAND_IMPORTS_VERSION) {
+        ImportSchema::CommandImports
+    } else {
+        ImportSchema::BeforeCommandImports
+    }
 }
 pub(super) fn validate_structure_with_extension(
     conn: &Connection,
@@ -1506,6 +1559,7 @@ mod tests {
     use serde_json::json;
     include!("managed_store/imported_store_golden_tests.rs");
     include!("managed_store/command_imports_store_tests.rs");
+    include!("managed_store/imported_secret_inputs_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,
@@ -1572,6 +1626,7 @@ mod tests {
     }
     fn action() -> ImportedActionWrite {
         ImportedActionWrite {
+            secret_inputs: Vec::new(),
             definition: ImportedActionDefinition {
                 action: "query".into(),
                 source: json!({"toolName":"upstream_query"}),
@@ -1600,6 +1655,7 @@ mod tests {
                 .actions
                 .iter()
                 .map(|a| ImportedActionWrite {
+                    secret_inputs: a.secret_inputs.clone(),
                     definition: a.definition.clone(),
                     status: a.status,
                 })

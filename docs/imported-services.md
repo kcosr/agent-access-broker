@@ -293,6 +293,90 @@ write authority and normal browser CSRF protection. They are not agent-facing MC
 managers may manage grants for approved actions but cannot import tools or change
 credentials/endpoints through these admin routes.
 
+## Secret receiver fields
+
+A full administrator can mark fixed string payload properties of an `mcp_http`
+action as secret receivers during discovery review. Callers with the ordinary
+action grant may then supply a literal string or a temporary reference returned
+to their exact authenticated origin and execution context. The Broker resolves
+an authorized reference and sends a string to the accepted upstream endpoint.
+This does not grant secret reveal rights, authorize another user's reference, or
+add resource scope to an imported MCP action.
+
+Invocation audit records include only each declared receiver pointer and its
+submitted source kind (`reference`, `literal`, or `absent`) in
+`providerAudit.secretInputs`. This host-owned metadata is captured before
+reference resolution and contains no secret value or reference capability.
+
+Every call to a marked action returns a completion receipt only, including calls
+using a literal or omitting an optional receiver field. Upstream text, structured
+data, images, audio, resources, links, metadata, error details and identifiers are
+validated internally and discarded. A successful write returns:
+
+```json
+{"receiverOutcome":"reported_success","responseSuppressed":true,"mutationStatus":"applied_unverified","retrySafe":false}
+```
+
+A read-only action omits the mutation fields. A valid remote tool error uses
+`upstream_failed`, `receiverOutcome:"reported_error"`, and a write outcome of
+`unknown`, with `retrySafe:false`. Malformed responses, output-schema failures,
+and transport failures use fixed errors; a dispatched write remains uncertain.
+A call proven unsent keeps the ordinary `not_applied` receipt. No automatic retry
+occurs. Use a separately authorized read action and caller-known identifier to
+inspect safe stored metadata; a success receipt does not prove persistent storage.
+
+Discovery and saved-preview results include `secretInputCandidates`, an array of
+`{toolIndex, pointers}` derived from the saved source schema. Eligibility is not
+a recommendation to select every string. In the portal, select the intended
+fields under **Accept secret references** and review the completion-receipt
+notice. Accepted action details show the selected paths and distinguish the raw
+source schema from the derived Broker input schema.
+
+Acceptance requires an explicit `secretInputs` array in **every** selection:
+
+```json
+{
+  "expectedVersion": 7,
+  "expectedCatalogRevision": 18,
+  "manifestHash": "saved-preview-hash",
+  "selections": [{
+    "source": {"toolName": "store_token"},
+    "action": "store_token",
+    "readOnly": false,
+    "secretInputs": [{"pointer": "/inputs/value"}]
+  }],
+  "confirmAffectedGrants": true
+}
+```
+
+Submit this body to `POST /v1/admin/imports/{service}/accept`, including when using
+the CLI's JSON-send contract. `[]` selects no receivers and restores ordinary
+upstream output for that action. Omitted tools retain their previous settings.
+Setting, replacing, or clearing receivers requires a fresh saved discovery
+preview and its version/hash pins. Receiver changes participate in affected-grant
+confirmation. Service-policy managers and auditors cannot change these settings.
+
+Paths follow explicit object `properties` under `/inputs` and end at an
+unambiguous `type:"string"` leaf. At most 16 paths are accepted, each at most
+1024 UTF-8 bytes and 16 property components. The SDK rejects duplicates,
+overlaps, wildcards, arrays, dynamic properties, references, ambiguous schema
+branches and invalid pointer escapes. String length, pattern, enum and const
+constraints still apply after resolution. MCP `x-mcp-header` fields cannot be
+receivers. OpenAPI and command imports require an empty array.
+
+The operator overlay is stored separately from accepted upstream schemas and
+annotations. Refresh preserves the overlay; a changed or missing source tool is
+quarantined. An invalid retained path must be explicitly removed or corrected
+before reacceptance. Receiver changes advance action, service and catalog
+versions. Publication and final MCP dispatch share one short fence: a retired
+contract cannot send a later tool call, while a call already admitted completes
+at its original endpoint under its original receipt policy. This does not recall
+an already dispatched call.
+
+The receiver necessarily obtains the plaintext. Receipt suppression controls
+this invocation's return path; it does not control the receiver's own storage,
+logging, or a different action's later output.
+
 ## Imported resource types
 
 A command's manifest may declare resource types. Each accepted type is

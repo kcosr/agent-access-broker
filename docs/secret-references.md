@@ -119,6 +119,12 @@ Native providers can designate string payload fields as reference-capable. Those
 fields accept their ordinary literal value or a reference object in the same
 position. The runtime authorizes the consuming action and resources before
 resolution, then validates the resolved string against the original field schema.
+Invocation audit records carry host-owned `providerAudit.secretInputs` entries
+containing only the declared `pointer` and `kind` (`reference`, `literal`, or
+`absent`). The Broker captures these categories before resolving references and
+keeps them through denied and completed outcomes. Native receivers, imported
+receivers and the reference-only `broker_management.credential.install` action
+use the same metadata; it contains no handle, envelope, value length or fingerprint.
 Secret fields cannot determine resource scope. Objects containing a Broker-shaped
 `secretRef` capability are rejected in undeclared positions. Ordinary upstream
 fields such as Kubernetes `secretRef: {name: "db"}` remain valid. A Broker
