@@ -4901,7 +4901,7 @@ async fn project_lookup(
 /// the request URL: the path must end in `api/v4/projects/<id>`. GitLab
 /// appends the request path's extension, so a moved path whose last segment
 /// contains a dot names `<id>.<suffix>`; only the leading digits are the ID.
-fn moved_project_id(
+pub(crate) fn moved_project_id(
     request_url: &Url,
     headers: &reqwest::header::HeaderMap,
 ) -> Result<u64, GitlabBackendError> {

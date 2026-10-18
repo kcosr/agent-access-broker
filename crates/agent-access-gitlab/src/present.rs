@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
+    NativeSearch,
     Project,
     Issue,
     IssueList,
@@ -124,6 +125,41 @@ const GITLAB_DRAFT_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
 )];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
+    ResultDescriptor {
+        action: "project.search",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.issues",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.merge_requests",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.code",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.commits",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.wiki",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.comments",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
     ResultDescriptor {
         action: "project.view",
         embedded_bodies: NO_BODIES,
@@ -485,6 +521,7 @@ impl WholeResultRenderer for WholeRenderer {
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
+            WholeRenderer::NativeSearch => render_native_search(result, out, budget)?,
             WholeRenderer::Project => render_gitlab_project_view(result, out, budget)?,
             WholeRenderer::Issue => render_gitlab_issue_view(result, out, max_body_bytes, budget)?,
             WholeRenderer::IssueList => {
@@ -2513,6 +2550,13 @@ mod tests {
                 "pipeline.list",
                 "pipeline.view",
                 "project.view",
+                "project.search",
+                "search.issues",
+                "search.merge_requests",
+                "search.code",
+                "search.commits",
+                "search.wiki",
+                "search.comments",
                 "protected_branch.list",
                 "protected_branch.verify",
                 "protected_branch.view",
@@ -2812,6 +2856,9 @@ mod tests {
 
     fn gitlab_whole_fixture(renderer: WholeRenderer) -> Value {
         match renderer {
+            WholeRenderer::NativeSearch => {
+                json!({"items":[{"project":"group/repo","id":12,"title":"Found","bodyPreview":"Preview","previewTruncated":false}],"count":1,"maxResults":20,"scanStatus":"more","nextPageToken":"opaque-token"})
+            }
             WholeRenderer::Project => json!({"project":{
                 "id":9,"pathWithNamespace":"group/repo","name":"Repo","webUrl":"https://gitlab.test/group/repo",
                 "defaultBranch":"main","visibility":"private","archived":false
@@ -2961,6 +3008,14 @@ mod tests {
 
     fn assert_gitlab_whole_semantics(renderer: WholeRenderer, markdown: &str) {
         let expected: &[&str] = match renderer {
+            WholeRenderer::NativeSearch => &[
+                "GitLab search",
+                "group/repo",
+                "Found",
+                "Preview",
+                "Continuation",
+                "opaque-token",
+            ],
             WholeRenderer::Project => &[
                 "Project ID",
                 "Path",
@@ -4169,4 +4224,80 @@ mod tests {
             assert!(markdown.contains(exact), "missing {exact:?}: {markdown}");
         }
     }
+}
+
+fn render_native_search(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let result = as_object(value)?;
+    let items = array(required(result, "items")?)?;
+    budget.charge_work(result.len().saturating_add(items.len()))?;
+    out.push("# GitLab search\n")?;
+    if items.is_empty() {
+        if result.get("nextPageToken").is_some() {
+            out.push("No matching authorized items in this page; continue the search.\n")?;
+        } else {
+            out.push("No matching authorized items in this page.\n")?;
+        }
+    }
+    for item in items {
+        let item = as_object(item)?;
+        budget.charge_work(item.len())?;
+        out.push("\n## ")?;
+        out.push_code(required_scalar(item, "project")?)?;
+        if let Some(title) = optional_scalar(item, "title")?
+            .or(optional_scalar(item, "name")?)
+            .or(optional_scalar(item, "path")?)
+        {
+            out.push(" — ")?;
+            out.push_heading_text(title)?;
+        }
+        out.push("\n")?;
+        for (name, label) in [
+            ("id", "ID"),
+            ("iid", "IID"),
+            ("state", "State"),
+            ("parentKind", "Parent"),
+            ("ref", "Ref"),
+            ("startLine", "Starting line"),
+        ] {
+            if let Some(value) = optional_display(item, name)? {
+                field_code(out, label, &value)?;
+            }
+        }
+        if let Some(url) = optional_scalar(item, "webUrl")? {
+            field_url(out, "URL", url)?;
+        }
+        for name in [
+            "description",
+            "descriptionPreview",
+            "messagePreview",
+            "bodyPreview",
+            "snippet",
+        ] {
+            if let Some(text) = optional_scalar(item, name)? {
+                if name == "snippet" {
+                    out.push("\nUpstream snippet:\n\n")?;
+                } else {
+                    out.push("\n")?;
+                }
+                out.push_escaped(text)?;
+                out.push("\n")?;
+            }
+        }
+        if item.get("previewTruncated").and_then(Value::as_bool) == Some(true) {
+            out.push("\nPreview truncated.\n")?;
+        }
+    }
+    if result.get("scanStatus").and_then(Value::as_str) == Some("upstream_window") {
+        out.push("\nSearch coverage is incomplete: the upstream retrieval window was reached.\n")?;
+    }
+    if let Some(token) = optional_scalar(result, "nextPageToken")? {
+        out.push("\nContinuation (another authorized match is not guaranteed):\n\n")?;
+        out.push_code(token)?;
+        out.push("\n")?;
+    }
+    Ok(())
 }

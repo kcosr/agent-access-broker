@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    ActionIo, GitlabContentConfig, GitlabWebhooksConfig, SearchLimitsConfig, raw_download_io,
+    ActionIo, GitlabContentConfig, GitlabSearchConfig, GitlabWebhooksConfig, raw_download_io,
 };
 use agent_access_provider::test_support::{InvocationBuilder, bearer_credential, test_signing_key};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -49,7 +49,7 @@ fn config() -> GitlabProviderConfig {
         webhooks: GitlabWebhooksConfig::default(),
         attachments: crate::GitlabUploadLimitsConfig::default(),
         content: GitlabContentConfig::default(),
-        search: SearchLimitsConfig { max_results: 50 },
+        search: GitlabSearchConfig::default(),
     }
 }
 
@@ -81,7 +81,8 @@ fn build_creates_upload_and_request_clients_for_the_api_base() {
         built,
         [
             (label.clone(), base.clone(), ClientProfile::Upload),
-            (label, base, ClientProfile::Request),
+            (label.clone(), base.clone(), ClientProfile::Request),
+            (label, base, ClientProfile::SingleAttempt),
         ]
     );
 }
@@ -1938,7 +1939,10 @@ fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
     let sensitive = descriptor
         .actions
         .iter()
-        .filter(|action| !action.sensitive_output_pointers.is_empty())
+        .filter(|action| {
+            !action.sensitive_output_pointers.is_empty()
+                && !search::is_search_action(&action.action)
+        })
         .map(|action| {
             assert_eq!(
                 action.sensitive_output_pointers,
@@ -6855,9 +6859,18 @@ fn gitlab_rest_is_a_project_scoped_invoke_surface_over_the_host_repository_type(
             Some("repository"),
             "{name}"
         );
-        // Searches are ordinary project-scoped calls, not search-contained.
-        assert!(!action.search_contained, "{name}");
-        assert_eq!(action.lookup, LookupRequirement::ScopeResolution, "{name}");
+        if search::is_search_action(name) {
+            assert_eq!(
+                action.native_search,
+                Some(NativeSearchEnforcement::ResultFiltered),
+                "{name}"
+            );
+            assert_eq!(action.lookup, LookupRequirement::None, "{name}");
+        } else {
+            // Existing structured searches remain ordinary project-scoped calls.
+            assert!(action.native_search.is_none(), "{name}");
+            assert_eq!(action.lookup, LookupRequirement::ScopeResolution, "{name}");
+        }
         for transport in [
             "clone",
             "fetch",
