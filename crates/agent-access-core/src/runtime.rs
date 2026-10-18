@@ -194,6 +194,10 @@ pub struct IdentitySummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policy_groups: Vec<String>,
     pub authenticated: bool,
+    /// Whether the admitted trusted-identity path is read-only; present only
+    /// for an attested identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_access: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -234,7 +238,14 @@ impl IdentityContext {
             groups: self.groups.clone(),
             policy_groups: self.policy_groups.clone(),
             authenticated: self.authenticated,
+            read_only_access: self.read_only_access(),
         }
+    }
+
+    /// The admitted trusted-identity path's read-only setting; `None` for
+    /// every other identity source.
+    pub fn read_only_access(&self) -> Option<bool> {
+        self.source.as_ref()?.read_only_access
     }
 }
 
@@ -410,6 +421,12 @@ pub struct IdentitySourceAudit {
     pub namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_id: Option<String>,
+    /// The read-only setting of an attested identity's admitted path, which
+    /// limits it to actions the runtime catalog classifies as reads. `None`
+    /// for every other source. Unlike `token_scopes` it is serialized, so it
+    /// appears in audit and binds discovery cursors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_access: Option<bool>,
     #[serde(skip)]
     pub token_scopes: Option<Value>,
 }
@@ -3297,21 +3314,21 @@ impl BrokerRuntime {
                     .actions
                     .iter()
                     .filter(|action| {
-                        self.enforce_agent_invoke_token_caveats_with(
-                            token_caveats.as_ref(),
-                            &descriptor.service,
-                            &action.action,
-                            execution_context,
-                        )
-                        .is_ok()
-                            && self.action_has_effective_access(
-                                policy_snapshot,
-                                identity,
+                        token_caveats.as_ref().is_none_or(|parsed| {
+                            self.agent_invoke_permits_action(
+                                parsed,
                                 execution_context,
                                 &descriptor.service,
                                 &action.action,
-                                token_caveats.as_ref().map(|parsed| &parsed.caveats),
                             )
+                        }) && self.action_has_effective_access(
+                            policy_snapshot,
+                            identity,
+                            execution_context,
+                            &descriptor.service,
+                            &action.action,
+                            token_caveats.as_ref(),
+                        )
                     })
                     .cloned()
                     .collect::<Vec<_>>();
@@ -3328,19 +3345,19 @@ impl BrokerRuntime {
         context: &ExecutionContext,
         service: &str,
         action: &str,
-        caveats: Option<&AgentInvokeTokenCaveats>,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
     ) -> bool {
         if self.action_resource_scope(service, action).is_none() {
             // Resource restrictions cannot authorize a scope-free action.
             // Use the same explicit grant/credential-mode selection as invocation.
-            return caveats.is_none_or(|c| {
-                self.token_resource_boundary(snapshot, context, c, service, action)
+            return token.is_none_or(|parsed| {
+                self.token_resource_boundary(snapshot, context, &parsed.caveats, service, action)
                     .is_none()
             }) && self
                 .scope_free_action_admitted(snapshot, identity, context, service, action);
         }
         !self
-            .effective_resource_clauses(snapshot, identity, context, service, action, caveats)
+            .effective_resource_clauses(snapshot, identity, context, service, action, token)
             .is_empty()
     }
 
@@ -3364,21 +3381,21 @@ impl BrokerRuntime {
                     .iter()
                     .filter(|action| {
                         configured_contexts.iter().any(|execution_context| {
-                            self.enforce_agent_invoke_token_caveats_with(
-                                token_caveats.as_ref(),
-                                &descriptor.service,
-                                &action.action,
-                                execution_context,
-                            )
-                            .is_ok()
-                                && self.action_has_effective_access(
-                                    &policy_snapshot,
-                                    identity,
+                            token_caveats.as_ref().is_none_or(|parsed| {
+                                self.agent_invoke_permits_action(
+                                    parsed,
                                     execution_context,
                                     &descriptor.service,
                                     &action.action,
-                                    token_caveats.as_ref().map(|parsed| &parsed.caveats),
                                 )
+                            }) && self.action_has_effective_access(
+                                &policy_snapshot,
+                                identity,
+                                execution_context,
+                                &descriptor.service,
+                                &action.action,
+                                token_caveats.as_ref(),
+                            )
                         })
                     })
                     .cloned()
@@ -4686,12 +4703,8 @@ impl BrokerRuntime {
         };
 
         let service_descriptor = self.services.get(&service).cloned();
-        let Some(action_descriptor) = service_descriptor
-            .as_ref()
-            .and_then(|descriptor| descriptor.action(&action))
-            // An action whose I/O kind this host does not serve is not admitted.
-            .filter(|action| crate::api::supported_action_io(&action.io))
-            .cloned()
+        // An action whose I/O kind this host does not serve is not admitted.
+        let Some(action_descriptor) = self.served_action_descriptor(&service, &action).cloned()
         else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
@@ -5899,6 +5912,66 @@ impl BrokerRuntime {
         )
     }
 
+    /// The one rule an `agent_invoke` ceiling applies to an action, shared
+    /// by invocation, Git admission, discovery and resource previews. It
+    /// runs before grant selection and never removes grants, so it cannot
+    /// change which grant wins for an action it permits.
+    fn agent_invoke_action_refusal(
+        &self,
+        parsed: &ParsedAgentInvokeTokenCaveats<'_>,
+        execution_context: &ExecutionContext,
+        service: &str,
+        action: &str,
+    ) -> Option<AgentInvokeRefusal> {
+        if !parsed.permits_execution_context(execution_context) {
+            return Some(AgentInvokeRefusal::ExecutionContext);
+        }
+        if parsed.read_only_access && !self.action_is_read_only(service, action) {
+            return Some(AgentInvokeRefusal::ReadOnly);
+        }
+        let caveats = &parsed.caveats;
+        if caveats
+            .allowed_services
+            .as_ref()
+            .is_some_and(|services| !services.iter().any(|allowed| allowed == service))
+        {
+            return Some(AgentInvokeRefusal::Service);
+        }
+        caveats
+            .service_restrictions
+            .as_ref()
+            .and_then(|restrictions| restrictions.get(service))
+            .is_some_and(|restriction| !restriction.actions.iter().any(|allowed| allowed == action))
+            .then_some(AgentInvokeRefusal::Action)
+    }
+
+    /// Whether the ceiling permits the action: [`Self::agent_invoke_action_refusal`]
+    /// as a predicate.
+    fn agent_invoke_permits_action(
+        &self,
+        parsed: &ParsedAgentInvokeTokenCaveats<'_>,
+        execution_context: &ExecutionContext,
+        service: &str,
+        action: &str,
+    ) -> bool {
+        self.agent_invoke_action_refusal(parsed, execution_context, service, action)
+            .is_none()
+    }
+
+    /// Whether the runtime catalog classifies the action as a read this host
+    /// serves. A missing descriptor or an unserved I/O kind is not a read.
+    fn action_is_read_only(&self, service: &str, action: &str) -> bool {
+        self.served_action_descriptor(service, action)
+            .is_some_and(|descriptor| descriptor.read_only)
+    }
+
+    /// The runtime catalog descriptor of an action whose I/O kind this host
+    /// serves; invocation admits no other.
+    fn served_action_descriptor(&self, service: &str, action: &str) -> Option<&ActionDescriptor> {
+        self.action_descriptor(service, action)
+            .filter(|descriptor| crate::api::supported_action_io(&descriptor.io))
+    }
+
     fn enforce_agent_invoke_token_caveats_with(
         &self,
         parsed: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
@@ -5906,41 +5979,31 @@ impl BrokerRuntime {
         action: &str,
         execution_context: &ExecutionContext,
     ) -> Result<(), ProviderError> {
-        self.admit_agent_invoke_execution_context_with(parsed, execution_context)?;
         let Some(parsed) = parsed else {
             return Ok(());
         };
-        let source = parsed.source;
-        let caveats = &parsed.caveats;
-        if caveats
-            .allowed_services
-            .as_ref()
-            .is_some_and(|services| !services.iter().any(|allowed| allowed == service))
-        {
-            return Err(token_caveat_denial(
-                source,
-                service,
-                action,
-                "broker token is not allowed to invoke this service",
-            ));
-        }
-        let Some(restriction) = caveats
-            .service_restrictions
-            .as_ref()
-            .and_then(|restrictions| restrictions.get(service))
-        else {
-            return Ok(());
-        };
-        if !restriction.actions.iter().any(|allowed| allowed == action) {
-            return Err(token_caveat_denial(
-                source,
-                service,
-                action,
-                "broker token is not allowed to invoke this service action",
-            ));
-        }
-
-        Ok(())
+        let message =
+            match self.agent_invoke_action_refusal(parsed, execution_context, service, action) {
+                None => return Ok(()),
+                Some(AgentInvokeRefusal::ExecutionContext) => {
+                    return Err(execution_context_denial(parsed, execution_context));
+                }
+                Some(AgentInvokeRefusal::ReadOnly) => {
+                    return Err(read_only_access_denial(service, action));
+                }
+                Some(AgentInvokeRefusal::Service) => {
+                    "broker token is not allowed to invoke this service"
+                }
+                Some(AgentInvokeRefusal::Action) => {
+                    "broker token is not allowed to invoke this service action"
+                }
+            };
+        Err(token_caveat_denial(
+            parsed.token_id,
+            service,
+            action,
+            message,
+        ))
     }
 
     pub fn admit_agent_invoke_token_operation(
@@ -6041,7 +6104,7 @@ impl BrokerRuntime {
             resource_type,
         } = self.action_resource_scope(service, action).ok_or_else(|| {
             token_caveat_denial(
-                parsed.source,
+                parsed.token_id,
                 service,
                 action,
                 "token resource restriction cannot apply to this action",
@@ -6067,7 +6130,7 @@ impl BrokerRuntime {
         }
         if !values.iter().all(|value| boundary.matches(value)) {
             return Err(token_caveat_denial(
-                parsed.source,
+                parsed.token_id,
                 service,
                 action,
                 "broker token is not allowed to invoke the resolved resource",
@@ -6122,7 +6185,7 @@ impl BrokerRuntime {
             .intersection(&search_scope_from_boundary(&boundary));
         if narrowed.is_empty() {
             return Err(token_caveat_denial(
-                parsed.source,
+                parsed.token_id,
                 service,
                 action,
                 "broker token search boundary has no currently authorized resources",
@@ -6151,26 +6214,12 @@ impl BrokerRuntime {
         parsed: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
         execution_context: &ExecutionContext,
     ) -> Result<(), ProviderError> {
-        let Some(parsed) = parsed else {
-            return Ok(());
-        };
-        let Some(allowed_contexts) = parsed.caveats.allowed_execution_contexts.as_ref() else {
-            return Ok(());
-        };
-        let allowed = allowed_contexts.contains(execution_context);
-        if allowed {
-            return Ok(());
-        }
-        Err(ProviderError::deny(
-            ReasonCode::ExecutionContextDenied,
-            "broker token is not allowed in this execution context",
-        )
-        .with_audit(json!({
-            "brokerToken": {
-                "tokenId": parsed.source.token_id,
-                "requestedExecutionContext": execution_context
+        match parsed {
+            Some(parsed) if !parsed.permits_execution_context(execution_context) => {
+                Err(execution_context_denial(parsed, execution_context))
             }
-        })))
+            _ => Ok(()),
+        }
     }
 
     async fn resolve_execution_credential(
@@ -7708,6 +7757,7 @@ fn load_identity_sources(
     let mut loaded_static_tokens = BTreeSet::new();
     for source in &config.identity.sources {
         let audit = IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: source.name.clone(),
@@ -8012,9 +8062,33 @@ fn candidate_authorizes_scopes(candidate: &PolicyCandidate, resolved: &ResourceS
     })
 }
 
+/// The ceiling an `agent_invoke` identity places on its grants: an issued
+/// token's caveats, or an attested identity's synthetic caveats plus its
+/// path's read-only setting. [`BrokerRuntime::agent_invoke_action_refusal`]
+/// is the one rule that judges an action against it.
 struct ParsedAgentInvokeTokenCaveats<'a> {
-    source: &'a IdentitySourceAudit,
+    /// The issued token named in caveat denial audit; attested identities
+    /// and proposed (previewed) tokens have none.
+    token_id: Option<&'a str>,
     caveats: AgentInvokeTokenCaveats,
+    /// Limits the identity to actions the runtime catalog classifies as reads.
+    read_only_access: bool,
+}
+
+impl ParsedAgentInvokeTokenCaveats<'_> {
+    fn permits_execution_context(&self, execution_context: &ExecutionContext) -> bool {
+        self.caveats
+            .allowed_execution_contexts
+            .as_ref()
+            .is_none_or(|contexts| contexts.contains(execution_context))
+    }
+}
+
+fn invalid_agent_invoke_caveats() -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::ServiceActionDenied,
+        "broker token caveats are invalid",
+    )
 }
 
 fn parsed_agent_invoke_token_caveats(
@@ -8024,33 +8098,78 @@ fn parsed_agent_invoke_token_caveats(
         return Ok(None);
     };
     if source.token_class.as_ref() != Some(&BrokerTokenClass::AgentInvoke) {
-        return Ok(None);
+        // An attested identity always carries synthetic agent-invoke caveats;
+        // one without them lists nothing and is denied rather than unlimited.
+        return match source.read_only_access {
+            Some(_) => Err(invalid_agent_invoke_caveats()),
+            None => Ok(None),
+        };
     }
-    let scopes = source.token_scopes.as_ref().ok_or_else(|| {
-        ProviderError::deny(
-            ReasonCode::ServiceActionDenied,
-            "broker token caveats are invalid",
-        )
-    })?;
+    let scopes = source
+        .token_scopes
+        .as_ref()
+        .ok_or_else(invalid_agent_invoke_caveats)?;
     AgentInvokeTokenCaveats::parse_stored(scopes)
-        .map(|caveats| Some(ParsedAgentInvokeTokenCaveats { source, caveats }))
-        .map_err(|_| {
-            ProviderError::deny(
-                ReasonCode::ServiceActionDenied,
-                "broker token caveats are invalid",
-            )
+        .map(|caveats| {
+            Some(ParsedAgentInvokeTokenCaveats {
+                token_id: source.token_id.as_deref(),
+                caveats,
+                read_only_access: source.read_only_access == Some(true),
+            })
         })
+        .map_err(|_| invalid_agent_invoke_caveats())
+}
+
+/// Why an `agent_invoke` ceiling refuses an action, before any grant is
+/// considered.
+enum AgentInvokeRefusal {
+    ExecutionContext,
+    ReadOnly,
+    Service,
+    Action,
 }
 
 fn token_caveat_denial(
-    source: &IdentitySourceAudit,
+    token_id: Option<&str>,
     service: &str,
     action: &str,
     message: &'static str,
 ) -> ProviderError {
     ProviderError::deny(ReasonCode::ServiceActionDenied, message).with_audit(json!({
         "brokerToken": {
-            "tokenId": source.token_id,
+            "tokenId": token_id,
+            "requestedService": service,
+            "requestedAction": action
+        }
+    }))
+}
+
+fn execution_context_denial(
+    parsed: &ParsedAgentInvokeTokenCaveats<'_>,
+    execution_context: &ExecutionContext,
+) -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::ExecutionContextDenied,
+        "broker token is not allowed in this execution context",
+    )
+    .with_audit(json!({
+        "brokerToken": {
+            "tokenId": parsed.token_id,
+            "requestedExecutionContext": execution_context
+        }
+    }))
+}
+
+/// A write refused on a read-only identity path. It names no fingerprint,
+/// username or token, and is not an admission failure.
+fn read_only_access_denial(service: &str, action: &str) -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::ServiceActionDenied,
+        "identity access is read-only",
+    )
+    .with_audit(json!({
+        "identityAccess": {
+            "readOnly": true,
             "requestedService": service,
             "requestedAction": action
         }

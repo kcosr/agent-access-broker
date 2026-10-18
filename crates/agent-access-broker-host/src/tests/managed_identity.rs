@@ -1497,3 +1497,267 @@ async fn trusted_caller_git_capabilities_apply_even_with_valid_basic_identity() 
         ReasonCode::GatewayUpstreamDenied.as_str()
     );
 }
+
+/// The token-free Git gateway with fetch and push granted to alice and the
+/// audit file the gateway writes.
+async fn managed_git_push_fixture() -> (Fixture, PathBuf) {
+    let mut audit_path = PathBuf::new();
+    let f = fixture_serving(
+        |config| {
+            external_default(config);
+            let mut gateway = test_git_gateway_config();
+            gateway.allow_forwarded_identity = true;
+            gateway.git.as_mut().unwrap().allow_push = true;
+            config.gateways.insert("gitlab_git".into(), gateway);
+            let dir = PathBuf::from(&config.managed_store.as_ref().unwrap().path)
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let upstream_token = dir.join("git-upstream-token");
+            std::fs::write(&upstream_token, "synthetic-git-upstream-token").unwrap();
+            config.credentials.service.insert(
+                "gitlab_git".into(),
+                CredentialConfig {
+                    kind: "bearer_token".into(),
+                    token_ref: Some(format!("file:{}", upstream_token.display())),
+                    username_ref: None,
+                    provider: None,
+                    path: None,
+                    read_only: None,
+                    connection: None,
+                },
+            );
+            audit_path = dir.join("git-audit.jsonl");
+            config.audit = Some(agent_access_core::AuditConfig::new(
+                agent_access_core::AuditStoreType::Jsonl,
+                audit_path.display().to_string(),
+            ));
+            config.policy.grants.push(PolicyGrantConfig {
+                subjects: vec!["user:alice".into()],
+                execution_contexts: Some(vec!["external".into(), "internal".into()]),
+                service: "gitlab_git".into(),
+                actions: vec!["repo.fetch".into(), "repo.push".into()],
+                resources: selected_resources(&[("repository", &["sip/service"])]),
+                credential_mode: "service".into(),
+                priority: None,
+            });
+        },
+        Served::Gateway,
+    )
+    .await;
+    (f, audit_path)
+}
+
+async fn git_request(
+    f: &Fixture,
+    method: Method,
+    uri: &str,
+    request_id: &str,
+    body: Body,
+) -> axum::response::Response {
+    git_request_as(f, &f.hash, method, uri, request_id, body).await
+}
+
+async fn git_request_as(
+    f: &Fixture,
+    fingerprint: &str,
+    method: Method,
+    uri: &str,
+    request_id: &str,
+    body: Body,
+) -> axum::response::Response {
+    gateway_request(GatewayRequestSpec {
+        app: f.app.clone(),
+        method,
+        uri: uri.parse().unwrap(),
+        host: Some("git.example.test"),
+        request_id: Some(request_id),
+        authorization: None,
+        headers: &[
+            ("x-agent-access-caller-authorization", PROXY),
+            ("x-aw-identity-token-sha256", fingerprint),
+            (EXECUTION_CONTEXT_HEADER, "internal"),
+            (
+                CONTENT_TYPE.as_str(),
+                "application/x-git-receive-pack-request",
+            ),
+        ],
+        body,
+    })
+    .await
+}
+
+const UPLOAD_PACK_REFS: &str = "/sip/service.git/info/refs?service=git-upload-pack";
+const RECEIVE_PACK_REFS: &str = "/sip/service.git/info/refs?service=git-receive-pack";
+
+fn update_identity_token(f: &Fixture, update: agent_access_core::IdentityTokenSettingsUpdate) {
+    let revision = f.store.identity_token_metadata("alice").unwrap().revision;
+    f.store
+        .update_identity_token_settings("alice", update, revision)
+        .unwrap();
+}
+
+/// Reaching the deliberately blocked upstream proves authentication and
+/// grant evaluation passed without a network request.
+fn assert_reaches_upstream(response: &axum::response::Response, case: &str) {
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY, "{case}");
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        ReasonCode::GatewayUpstreamDenied.as_str(),
+        "{case}"
+    );
+}
+
+#[tokio::test]
+async fn read_only_fingerprint_fetches_but_push_is_refused_before_the_pack_body() {
+    let (f, audit_path) = managed_git_push_fixture().await;
+    for uri in [UPLOAD_PACK_REFS, RECEIVE_PACK_REFS] {
+        let response = git_request(&f, Method::GET, uri, "git-full", Body::empty()).await;
+        assert_reaches_upstream(&response, uri);
+    }
+
+    update_identity_token(
+        &f,
+        agent_access_core::IdentityTokenSettingsUpdate {
+            enabled: None,
+            read_only: Some(true),
+        },
+    );
+    let response = git_request(
+        &f,
+        Method::GET,
+        UPLOAD_PACK_REFS,
+        "git-fetch",
+        Body::empty(),
+    )
+    .await;
+    assert_reaches_upstream(&response, "read-only fetch");
+    let response = git_request(
+        &f,
+        Method::GET,
+        RECEIVE_PACK_REFS,
+        "git-push-discovery",
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        ReasonCode::ServiceActionDenied.as_str()
+    );
+    let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let polled_by_body = Arc::clone(&polled);
+    let body = Body::from_stream(futures_util::stream::poll_fn(move |_| {
+        polled_by_body.store(true, Ordering::SeqCst);
+        std::task::Poll::Ready(Some(Ok::<Bytes, std::io::Error>(Bytes::from_static(
+            b"never-read receive-pack body",
+        ))))
+    }));
+    let response = git_request(
+        &f,
+        Method::POST,
+        "/sip/service.git/git-receive-pack",
+        "git-push",
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        ReasonCode::ServiceActionDenied.as_str()
+    );
+    assert!(
+        !polled.load(Ordering::SeqCst),
+        "the read-only denial must precede receive-pack body parsing"
+    );
+
+    let records = read_audit_records(&audit_path);
+    let denials = records
+        .iter()
+        .filter(|record| {
+            record["action"] == "repo.push" && record["reasonCode"] == "service_action_denied"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        denials
+            .iter()
+            .map(|record| record["agentRequestId"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["git-push-discovery", "git-push"]
+    );
+    for denial in denials {
+        // Like other Git caveat denials, the classified repository is kept.
+        assert_eq!(
+            denial["resourceScopes"],
+            json!({"repository": ["sip/service"]}),
+            "{denial}"
+        );
+        assert_eq!(
+            denial["providerAudit"],
+            json!({"identityAccess": {
+                "readOnly": true,
+                "requestedService": "gitlab_git",
+                "requestedAction": "repo.push"
+            }})
+        );
+        assert_eq!(denial["identitySource"]["readOnlyAccess"], true);
+        assert!(denial.get("matchedGrant").is_none(), "{denial}");
+        assert!(denial.get("credentialMode").is_none(), "{denial}");
+        assert!(!denial.to_string().contains(&f.hash), "{denial}");
+    }
+}
+
+#[tokio::test]
+async fn disabled_identity_token_is_an_unknown_fingerprint_on_git() {
+    let (f, _) = managed_git_push_fixture().await;
+    let unknown = git_request_as(
+        &f,
+        &format!("sha256:{}", "0".repeat(64)),
+        Method::GET,
+        UPLOAD_PACK_REFS,
+        "git-unknown",
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(unknown.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        unknown.headers()[REASON_CODE_HEADER],
+        ReasonCode::GatewayAuthInvalid.as_str()
+    );
+    update_identity_token(
+        &f,
+        agent_access_core::IdentityTokenSettingsUpdate {
+            enabled: Some(false),
+            read_only: None,
+        },
+    );
+    let response = git_request(
+        &f,
+        Method::GET,
+        UPLOAD_PACK_REFS,
+        "git-disabled",
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        ReasonCode::GatewayAuthInvalid.as_str()
+    );
+    update_identity_token(
+        &f,
+        agent_access_core::IdentityTokenSettingsUpdate {
+            enabled: Some(true),
+            read_only: None,
+        },
+    );
+    let response = git_request(
+        &f,
+        Method::GET,
+        UPLOAD_PACK_REFS,
+        "git-enabled",
+        Body::empty(),
+    )
+    .await;
+    assert_reaches_upstream(&response, "re-enabled fetch");
+}

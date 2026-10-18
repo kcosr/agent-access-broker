@@ -27,6 +27,8 @@ mod gitlab_dialect;
 mod gitlab_gateway;
 #[path = "oauth/gitlab_rest.rs"]
 mod gitlab_rest;
+#[path = "oauth/read_only_identity.rs"]
+mod read_only_identity;
 #[path = "oauth/token_only.rs"]
 mod token_only;
 

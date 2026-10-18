@@ -632,13 +632,13 @@ impl BrokerRuntime {
                     )
                 }),
             (CommandDenial::TokenInapplicable, Some(parsed)) => token_caveat_denial(
-                parsed.source,
+                parsed.token_id,
                 service,
                 action,
                 "token resource restriction cannot apply to this action",
             ),
             (CommandDenial::TokenEmpty, Some(parsed)) => token_caveat_denial(
-                parsed.source,
+                parsed.token_id,
                 service,
                 action,
                 "broker token command boundary has no currently authorized resources",

@@ -457,6 +457,7 @@ mod tests {
     fn token(resources: ResourceSelection) -> IdentityContext {
         let mut identity = IdentityContext::anonymous();
         identity.source = Some(IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "test".into(),

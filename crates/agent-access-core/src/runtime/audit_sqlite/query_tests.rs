@@ -153,6 +153,7 @@ async fn seed_filter_records(fixture: &Fixture) {
     let records = vec![
         with(record("a1", 10, "alice", "fake", "echo"), |record| {
             record.identity_source = Some(IdentitySourceAudit {
+                read_only_access: None,
                 namespace: None,
                 binding_id: None,
                 name: "broker".to_string(),
@@ -1048,6 +1049,7 @@ async fn audit_query_scale() {
                     record.reason_code = Some(ReasonCode::ServiceActionDenied.into());
                 }
                 record.identity_source = Some(IdentitySourceAudit {
+                    read_only_access: None,
                     namespace: None,
                     binding_id: None,
                     name: "broker".to_string(),

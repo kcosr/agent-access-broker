@@ -407,6 +407,7 @@ async fn private_destination_group_exclusions_and_token_narrowing_apply_before_e
     for (target, expected) in [("one", 200), ("three", 403)] {
         let mut ctx = context("default");
         ctx.operation.identity.source = Some(IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "fixture".into(),

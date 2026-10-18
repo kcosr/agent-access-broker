@@ -77,6 +77,7 @@ mod gitlab_uploads;
 mod gitlab_webhooks;
 mod gmail;
 mod identity_management;
+mod identity_path_controls;
 mod imports_foundation;
 mod imports_mcp;
 mod imports_publication;

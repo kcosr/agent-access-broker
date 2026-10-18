@@ -271,6 +271,13 @@ impl BrokerRuntime {
         caveats: &AgentInvokeTokenCaveats,
     ) -> Result<EffectiveAccessPreview, ManagedStoreError> {
         let snapshot = self.policy_snapshot();
+        // The previewed ceiling is an issued Broker token's, which is never
+        // read-only.
+        let token = ParsedAgentInvokeTokenCaveats {
+            token_id: None,
+            caveats: caveats.clone(),
+            read_only_access: false,
+        };
         if let Some(restrictions) = &caveats.service_restrictions {
             for restriction in restrictions.values() {
                 if let Some(selection) = &restriction.resources {
@@ -291,16 +298,19 @@ impl BrokerRuntime {
                     self.action_resource_type(&service.service, &action.action)
                 else {
                     for context in &configured_contexts {
-                        if caveats_permit_action(caveats, context, &service.service, &action.action)
-                            && self.action_has_effective_access(
-                                &snapshot,
-                                identity,
-                                context,
-                                &service.service,
-                                &action.action,
-                                Some(caveats),
-                            )
-                        {
+                        if self.agent_invoke_permits_action(
+                            &token,
+                            context,
+                            &service.service,
+                            &action.action,
+                        ) && self.action_has_effective_access(
+                            &snapshot,
+                            identity,
+                            context,
+                            &service.service,
+                            &action.action,
+                            Some(&token),
+                        ) {
                             access.push(EffectiveAccessEntry {
                                 service: service.service.clone(),
                                 action: action.action.clone(),
@@ -319,7 +329,7 @@ impl BrokerRuntime {
                         context,
                         &service.service,
                         &action.action,
-                        Some(caveats),
+                        Some(&token),
                     );
                     if !clauses.is_empty() {
                         access.push(EffectiveAccessEntry {
@@ -384,7 +394,7 @@ impl BrokerRuntime {
         context: &ExecutionContext,
         service: &str,
         action: &str,
-        token: Option<&AgentInvokeTokenCaveats>,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
     ) -> Vec<EffectiveAccessClause> {
         self.effective_resource_clauses_for_modes(
             snapshot,
@@ -407,12 +417,15 @@ impl BrokerRuntime {
         context: &ExecutionContext,
         service: &str,
         action: &str,
-        token: Option<&AgentInvokeTokenCaveats>,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
         mode_available: impl Fn(&str) -> bool,
     ) -> Vec<EffectiveAccessClause> {
-        if token.is_some_and(|caveats| !caveats_permit_action(caveats, context, service, action)) {
+        if token.is_some_and(|parsed| {
+            !self.agent_invoke_permits_action(parsed, context, service, action)
+        }) {
             return Vec::new();
         }
+        let token = token.map(|parsed| &parsed.caveats);
         if self.command_enforced(service, action) {
             return deduplicate_clauses(self.command_effective_clauses(
                 snapshot,
@@ -591,27 +604,6 @@ impl BrokerRuntime {
             .collect();
         (resources, groups)
     }
-}
-
-fn caveats_permit_action(
-    caveats: &AgentInvokeTokenCaveats,
-    context: &ExecutionContext,
-    service: &str,
-    action: &str,
-) -> bool {
-    caveats
-        .allowed_execution_contexts
-        .as_ref()
-        .is_none_or(|contexts| contexts.contains(context))
-        && caveats
-            .allowed_services
-            .as_ref()
-            .is_none_or(|services| services.iter().any(|value| value == service))
-        && caveats
-            .service_restrictions
-            .as_ref()
-            .and_then(|restrictions| restrictions.get(service))
-            .is_none_or(|restriction| restriction.actions.iter().any(|value| value == action))
 }
 
 fn resource_preview_validation_error(errors: Vec<String>) -> ManagedStoreError {

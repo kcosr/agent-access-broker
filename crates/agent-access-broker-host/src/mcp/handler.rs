@@ -11,8 +11,9 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, DiscoverResult, Implementation,
+        InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
+        ProtocolVersion, ServerCapabilities, ServerConfig, Tool,
     },
     service::RequestContext,
 };
@@ -23,6 +24,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::Instrument;
+
+/// Appended to the server instructions of a read-only identity path.
+pub(super) const READ_ONLY_INSTRUCTION: &str =
+    "This connection is read-only: only actions classified as reads are listed or executable.";
 
 #[derive(Clone)]
 pub(super) struct Handler {
@@ -48,6 +53,10 @@ impl Handler {
             .filter(|request| request.view == self.view)
             .cloned()
             .ok_or_else(|| ErrorData::internal_error("Missing Broker request admission", None))
+    }
+    /// Whether the identity admitted for this request uses a read-only path.
+    fn read_only_access(&self, context: &RequestContext<RoleServer>) -> Result<bool, ErrorData> {
+        Ok(self.admitted(context)?.identity.read_only_access() == Some(true))
     }
     fn catalog(request: &Admitted) -> ApiCatalog {
         let mut catalog = agent_access_core::empty_catalog(json!({}));
@@ -365,6 +374,35 @@ impl ServerHandler for Handler {
         info.protocol_version = ProtocolVersion::V_2025_11_25;
         info
     }
+    /// The pinned SDK's default `initialize` (store the peer info, negotiate
+    /// the protocol version), plus the read-only notice for an admitted
+    /// read-only identity path. Changing that setting ends the session, so
+    /// the notice holds for the session's lifetime.
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        let read_only = self.read_only_access(&context)?;
+        context.peer.set_peer_info(request.clone());
+        let mut result = self.negotiate_initialize(&request)?;
+        with_read_only_notice(&mut result.instructions, read_only);
+        Ok(result)
+    }
+    /// The pinned SDK's default `discover`, which reports the same server
+    /// instructions, with the same read-only notice as `initialize`.
+    async fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        let read_only = self.read_only_access(&context)?;
+        let mut result = DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        );
+        with_read_only_notice(&mut result.instructions, read_only);
+        Ok(result)
+    }
     async fn list_tools(
         &self,
         _params: Option<PaginatedRequestParams>,
@@ -569,6 +607,13 @@ impl ServerHandler for Handler {
         let result = output::broker(response, &control, limit, &action.sensitive_output_pointers);
         *request.delivery_started.lock().unwrap() = Some(Instant::now());
         Ok(result.into())
+    }
+}
+
+fn with_read_only_notice(instructions: &mut Option<String>, read_only: bool) {
+    if read_only && let Some(instructions) = instructions.as_mut() {
+        instructions.push(' ');
+        instructions.push_str(READ_ONLY_INSTRUCTION);
     }
 }
 
