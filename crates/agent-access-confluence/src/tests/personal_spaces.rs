@@ -413,13 +413,9 @@ async fn personal_space_page_and_blog_searches_enforce_finite_and_excluded_scope
                 Arc::new(http_confluence_backend_for_server(&server)),
             );
             let scope = if all_except {
-                SearchAuthorizationScope::AllExcept {
-                    excluded_values: vec!["~bob".to_string()],
-                }
+                SearchAuthorizationScope::excluding_exact_values(vec!["~bob".to_string()])
             } else {
-                SearchAuthorizationScope::Finite {
-                    values: vec!["~alice".to_string()],
-                }
+                SearchAuthorizationScope::from_exact_values(vec!["~alice".to_string()])
             };
             let request = InvocationBuilder::from(invocation(
                 action,

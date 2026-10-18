@@ -3919,8 +3919,13 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                     ),
                 ));
             }
-            let command_enforced =
-                crate::runtime::command_enforced_action(imported, catalog, grant.service, action);
+            let command_enforced = crate::runtime::command_enforced_action(
+                config,
+                imported,
+                catalog,
+                grant.service,
+                action,
+            );
             let Some(action_spec) = service.action(action) else {
                 issues.push(normalized_policy_issue(
                     NormalizedPolicyGrantIssueField::Actions,

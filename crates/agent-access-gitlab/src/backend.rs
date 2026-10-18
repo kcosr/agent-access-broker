@@ -804,10 +804,13 @@ pub struct GitlabProject {
     pub id: u64,
     pub path_with_namespace: String,
     pub name: Option<String>,
+    pub description: Option<String>,
     pub web_url: Option<String>,
     pub default_branch: Option<String>,
     pub visibility: Option<String>,
     pub archived: Option<bool>,
+    pub last_activity_at: Option<String>,
+    pub star_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -4901,7 +4904,7 @@ async fn project_lookup(
 /// the request URL: the path must end in `api/v4/projects/<id>`. GitLab
 /// appends the request path's extension, so a moved path whose last segment
 /// contains a dot names `<id>.<suffix>`; only the leading digits are the ID.
-fn moved_project_id(
+pub(crate) fn moved_project_id(
     request_url: &Url,
     headers: &reqwest::header::HeaderMap,
 ) -> Result<u64, GitlabBackendError> {
@@ -5116,10 +5119,13 @@ pub(crate) fn project_from_value(value: Value) -> Result<GitlabProject, GitlabBa
         id: required_u64(&value, "id")?,
         path_with_namespace,
         name: optional_string(&value, "name"),
+        description: optional_string(&value, "description"),
         web_url: optional_string(&value, "web_url"),
         default_branch: optional_string(&value, "default_branch"),
         visibility: optional_string(&value, "visibility"),
         archived: value.get("archived").and_then(Value::as_bool),
+        last_activity_at: optional_string(&value, "last_activity_at"),
+        star_count: value.get("star_count").and_then(Value::as_u64),
     })
 }
 

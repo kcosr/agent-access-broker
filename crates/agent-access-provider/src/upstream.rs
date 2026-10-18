@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use reqwest::{Method, RequestBuilder, Response};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -111,6 +112,9 @@ impl<'a> UpstreamClientSpec<'a> {
 pub enum UpstreamError {
     #[error("upstream URL is not allowlisted")]
     NotAllowed,
+    /// The shared operation budget has no permit for another actual send.
+    #[error("upstream request budget is exhausted")]
+    RequestBudgetExceeded,
     /// The request never reached the upstream: it could not be built, it
     /// carried credentials to another origin than the service's, or no
     /// connection was established. Nothing upstream acted on it.
@@ -141,7 +145,9 @@ impl UpstreamError {
                 timed_out: true, ..
             } => ReasonCode::UpstreamTimeout,
             Self::Transport(_) | Self::NotSent { .. } => ReasonCode::UpstreamConnectionFailed,
-            Self::NotAllowed | Self::Redirect => ReasonCode::UpstreamProtocolFailed,
+            Self::NotAllowed | Self::Redirect | Self::RequestBudgetExceeded => {
+                ReasonCode::UpstreamProtocolFailed
+            }
             Self::Authorization(failure) => failure
                 .reason_code()
                 .standard()
@@ -159,6 +165,7 @@ pub struct UpstreamCall<'a> {
     /// 1 for the first request; redirect hops and retries count up.
     pub attempt: u32,
     authorizations: &'a [UpstreamAuthorization],
+    request_budget: Option<&'a UpstreamRequestBudget>,
 }
 
 impl<'a> UpstreamCall<'a> {
@@ -168,7 +175,23 @@ impl<'a> UpstreamCall<'a> {
             operation,
             attempt: 1,
             authorizations: &[],
+            request_budget: None,
         }
+    }
+
+    /// Charges the operation budget immediately before the transport sends.
+    /// Every explicit replay must carry the same budget. Budgeted calls require
+    /// [`ClientProfile::SingleAttempt`] or [`ClientProfile::Bounded`], so hidden
+    /// transport retries cannot bypass accounting. Token-endpoint recovery may
+    /// use its own separately bounded budget.
+    ///
+    /// Budgeted operations must resolve approved redirects through explicit
+    /// [`UpstreamClient::send`] calls carrying this same budget. They must not
+    /// use [`UpstreamClient::get_following_redirects`], which cannot carry a
+    /// request budget.
+    pub fn with_request_budget(mut self, budget: &'a UpstreamRequestBudget) -> Self {
+        self.request_budget = Some(budget);
+        self
     }
 
     /// A later attempt: 1 is the first request, and redirect hops and
@@ -195,6 +218,65 @@ impl<'a> UpstreamCall<'a> {
     pub fn with_authorizations(mut self, authorizations: &'a [UpstreamAuthorization]) -> Self {
         self.authorizations = authorizations;
         self
+    }
+}
+
+/// Operation-owned count of actual HTTP send attempts, shared across concurrent
+/// calls and explicit replays. A failed send still consumes its permit. There
+/// are no refunds; checking remaining capacity does not reserve it.
+#[derive(Debug, Clone)]
+pub struct UpstreamRequestBudget {
+    remaining: Arc<AtomicU32>,
+}
+
+impl UpstreamRequestBudget {
+    pub fn new(requests: u32) -> Self {
+        Self {
+            remaining: Arc::new(AtomicU32::new(requests)),
+        }
+    }
+
+    pub fn remaining_requests(&self) -> u32 {
+        self.remaining.load(Ordering::Relaxed)
+    }
+
+    fn debit(&self) -> Result<(), UpstreamError> {
+        self.remaining
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(1)
+            })
+            .map(|_| ())
+            .map_err(|_| UpstreamError::RequestBudgetExceeded)
+    }
+}
+
+/// Aggregate decoded response-body allowance for one operation. Clones share
+/// atomic accounting across collection, confirmation, and consumed error bodies.
+/// Rejected chunks are never retained and previously charged bytes are never
+/// refunded. Providers must pass this same budget to every body they consume.
+#[derive(Debug, Clone)]
+pub struct SharedBodyBudget {
+    remaining: Arc<AtomicU64>,
+}
+
+impl SharedBodyBudget {
+    pub fn new(bytes: u64) -> Self {
+        Self {
+            remaining: Arc::new(AtomicU64::new(bytes)),
+        }
+    }
+
+    pub fn remaining_bytes(&self) -> u64 {
+        self.remaining.load(Ordering::Relaxed)
+    }
+
+    fn debit(&self, bytes: u64) -> Result<(), BodyReadError> {
+        self.remaining
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(bytes)
+            })
+            .map(|_| ())
+            .map_err(|_| BodyReadError::BudgetExceeded)
     }
 }
 
@@ -369,6 +451,7 @@ pub struct UpstreamClient {
     base: Url,
     allowed_upstream_hosts: Arc<[String]>,
     status_reasons: &'static [(u16, ReasonCode)],
+    single_attempt: bool,
 }
 
 impl std::fmt::Debug for UpstreamClient {
@@ -406,6 +489,10 @@ impl UpstreamClient {
             base: spec.base.clone(),
             allowed_upstream_hosts: spec.allowed_upstream_hosts.into(),
             status_reasons: spec.status_reasons,
+            single_attempt: matches!(
+                spec.profile,
+                ClientProfile::SingleAttempt | ClientProfile::Bounded { .. }
+            ),
         })
     }
 
@@ -495,6 +582,9 @@ impl UpstreamClient {
         };
         let (request, trace) =
             self.prepare(request, call, AuthorizationPosition::AfterCorrelation, None)?;
+        if let Err(error) = self.debit_request_budget(call) {
+            return Err(trace.fail(error));
+        }
         let mut send = Box::pin(self.client.execute(request));
         loop {
             let deadline = *progress.borrow_and_update() + idle_timeout;
@@ -627,6 +717,9 @@ impl UpstreamClient {
         scope: Option<&Url>,
     ) -> Result<Response, UpstreamError> {
         let (request, trace) = self.prepare(request, call, position, scope)?;
+        if let Err(error) = self.debit_request_budget(call) {
+            return Err(trace.fail(error));
+        }
         let send = self.client.execute(request);
         let response = match deadline {
             Some(deadline) => match tokio::time::timeout(deadline, send).await {
@@ -636,6 +729,19 @@ impl UpstreamClient {
             None => send.await,
         };
         trace.finish(response)
+    }
+
+    fn debit_request_budget(&self, call: UpstreamCall<'_>) -> Result<(), UpstreamError> {
+        if let Some(budget) = call.request_budget {
+            if !self.single_attempt {
+                return Err(UpstreamError::NotSent {
+                    timed_out: false,
+                    detail: "budgeted requests require a single-attempt client".to_string(),
+                });
+            }
+            budget.debit()?;
+        }
+        Ok(())
     }
 
     /// Builds the provider's request and adds the call's authorizations at
@@ -748,6 +854,9 @@ pub enum BodyReadError {
     /// The declared `Content-Length`, or the bytes read, exceed the cap.
     #[error("upstream response body exceeds the byte cap")]
     TooLarge,
+    /// The operation's shared decoded-byte allowance cannot retain this chunk.
+    #[error("upstream response body exceeds the operation byte budget")]
+    BudgetExceeded,
     /// No chunk arrived within the idle timeout.
     #[error("upstream response body stalled")]
     IdleTimeout,
@@ -761,9 +870,23 @@ pub enum BodyReadError {
 /// over `byte_cap` fails before reading, and so does reading more than
 /// `byte_cap` bytes. With an `idle_timeout`, each chunk must arrive within it.
 pub async fn read_bounded_body(
+    response: Response,
+    byte_cap: u64,
+    idle_timeout: Option<Duration>,
+) -> Result<Vec<u8>, BodyReadError> {
+    read_bounded_body_with_budget(response, byte_cap, idle_timeout, None).await
+}
+
+/// [`read_bounded_body`] with an optional aggregate operation budget. Each
+/// decoded chunk is atomically charged before retention; concurrent readers
+/// cannot collectively exceed the allowance. Consumed error bodies must use
+/// the same budget. Content-Length is only an early per-response rejection,
+/// never a substitute for decoded-chunk accounting.
+pub async fn read_bounded_body_with_budget(
     mut response: Response,
     byte_cap: u64,
     idle_timeout: Option<Duration>,
+    budget: Option<&SharedBodyBudget>,
 ) -> Result<Vec<u8>, BodyReadError> {
     if response
         .content_length()
@@ -786,6 +909,9 @@ pub async fn read_bounded_body(
         let Some(chunk) = chunk else {
             return Ok(body);
         };
+        if let Some(budget) = budget {
+            budget.debit(chunk.len() as u64)?;
+        }
         if (body.len() as u64).saturating_add(chunk.len() as u64) > byte_cap {
             return Err(BodyReadError::TooLarge);
         }
@@ -950,6 +1076,10 @@ impl Drop for PendingTraceState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "upstream_budget_tests.rs"]
+mod budget_tests;
 
 #[cfg(test)]
 mod tests {

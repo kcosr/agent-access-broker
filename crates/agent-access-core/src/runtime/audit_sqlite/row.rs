@@ -2,7 +2,7 @@
 //! the derived query columns, and the broker-built full-text index text.
 
 use super::super::{AuditRecord, StampedAuditRecord};
-use agent_access_provider::SearchAuthorizationScope;
+use agent_access_provider::ResourceSelector;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -249,12 +249,18 @@ fn fts_text(record: &AuditRecord) -> String {
         text.push(&grant.subject);
     }
     if let Some(plan) = &record.search_authorization {
-        let values = match &plan.scope {
-            SearchAuthorizationScope::Finite { values } => values,
-            SearchAuthorizationScope::AllExcept { excluded_values } => excluded_values,
-        };
-        for value in values {
-            text.push(value);
+        for selector in plan
+            .scope
+            .clauses()
+            .iter()
+            .flat_map(|clause| clause.included().iter().chain(clause.excluded()))
+        {
+            match selector {
+                ResourceSelector::Exact { value } | ResourceSelector::Namespace { value } => {
+                    text.push(value)
+                }
+                _ => {}
+            }
         }
     }
     if let Some(provider_audit) = &record.provider_audit {
@@ -370,6 +376,52 @@ mod tests {
             "auth": { "phase": "auth-phase" }
         });
         assert_eq!(phase(Some(&audit)), Some("management-phase"));
+    }
+
+    #[test]
+    fn search_audit_preserves_clauses_and_indexes_policy_selectors() {
+        use agent_access_provider::SearchAuthorizationScope;
+        let mut record = crate::runtime::tests::test_audit_record();
+        let authority = SearchAuthorizationScope::from_selectors(
+            vec![ResourceSelector::Namespace {
+                value: "engineering".into(),
+            }],
+            vec![ResourceSelector::Namespace {
+                value: "engineering/private".into(),
+            }],
+        )
+        .union(&SearchAuthorizationScope::from_exact_values(vec![
+            "engineering/private/tool".into(),
+        ]));
+        record.search_authorization = Some(crate::runtime::SearchAuthorizationPlan {
+            scope_type: "repository".into(),
+            scope: authority.clone(),
+            credential_mode: "service".into(),
+            matched_grants: vec![],
+        });
+        let summary = record
+            .search_authorization
+            .as_ref()
+            .unwrap()
+            .resource_scope_summary();
+        assert_eq!(summary["repository"], ["*"]);
+        let stamped = StampedAuditRecord::new(record.clone(), "node-1");
+        let row = PreparedRow::prepare(&stamped).unwrap();
+        let json: Value = serde_json::from_str(&row.record_json).unwrap();
+        assert_eq!(
+            json["searchAuthorization"]["scope"],
+            serde_json::to_value(authority).unwrap()
+        );
+        let text = fts_text(&record);
+        for selector in [
+            "engineering",
+            "engineering/private",
+            "engineering/private/tool",
+        ] {
+            assert!(text.contains(selector), "{selector}: {text}");
+        }
+        assert!(!text.contains("clauses"));
+        assert!(!text.contains("included"));
     }
 
     #[test]

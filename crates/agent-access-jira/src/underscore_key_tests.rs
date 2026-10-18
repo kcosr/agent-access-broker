@@ -123,9 +123,7 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
         InvocationBuilder::from(search_request(vec![], token))
             .search(SearchAuthorization::new(
                 "project".to_string(),
-                SearchAuthorizationScope::Finite {
-                    values: vec!["PROJ".to_string()],
-                },
+                SearchAuthorizationScope::from_exact_values(vec!["PROJ".to_string()]),
             ))
             .build()
     };
@@ -190,9 +188,7 @@ fn search_request(excluded: Vec<String>, token: Option<&str>) -> ProviderInvocat
     InvocationBuilder::from(per_user_invocation("search", inputs, vec![]))
         .search(SearchAuthorization::new(
             "project".to_string(),
-            SearchAuthorizationScope::AllExcept {
-                excluded_values: excluded,
-            },
+            SearchAuthorizationScope::excluding_exact_values(excluded),
         ))
         .build()
 }

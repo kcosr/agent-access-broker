@@ -233,7 +233,7 @@ impl BrokerRuntime {
                 grants
                     .iter()
                     .flat_map(|grant| match &grant.scope {
-                        SearchAuthorizationScope::Finite { values } => values.as_slice(),
+                        CommandSearchScope::Finite { values } => values.as_slice(),
                         _ => &[],
                     })
                     .collect(),
@@ -866,10 +866,10 @@ fn request_authorization(
                     Ok(RequestGrant {
                         credential: credential(&grant.credential_mode)?,
                         boundary: match &grant.scope {
-                            SearchAuthorizationScope::Finite { values } => {
+                            CommandSearchScope::Finite { values } => {
                                 RequestBoundary::Resources(values.iter().map(resource).collect())
                             }
-                            SearchAuthorizationScope::AllExcept { excluded_values } => {
+                            CommandSearchScope::AllExcept { excluded_values } => {
                                 RequestBoundary::Any {
                                     except: excluded_values.clone(),
                                 }

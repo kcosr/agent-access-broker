@@ -102,7 +102,7 @@ impl InvocationBuilder {
         self
     }
 
-    /// The search boundary of a search-contained action.
+    /// The search boundary of a search action.
     pub fn search(mut self, search: SearchAuthorization) -> Self {
         self.authority = InvocationAuthority::Search(search);
         self

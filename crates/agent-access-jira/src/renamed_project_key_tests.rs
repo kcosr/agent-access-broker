@@ -468,15 +468,15 @@ fn search_invocation(inputs: Value, scope: SearchAuthorizationScope) -> Provider
 }
 
 fn all_projects_except<const N: usize>(excluded: [&str; N]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::AllExcept {
-        excluded_values: excluded.into_iter().map(ToString::to_string).collect(),
-    }
+    SearchAuthorizationScope::excluding_exact_values(
+        excluded.into_iter().map(ToString::to_string).collect(),
+    )
 }
 
 fn finite_projects<const N: usize>(values: [&str; N]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::Finite {
-        values: values.into_iter().map(ToString::to_string).collect(),
-    }
+    SearchAuthorizationScope::from_exact_values(
+        values.into_iter().map(ToString::to_string).collect(),
+    )
 }
 
 /// Jira resolves a previous project key or issue key inside JQL, so the
