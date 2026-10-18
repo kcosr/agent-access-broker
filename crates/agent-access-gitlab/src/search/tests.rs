@@ -1384,3 +1384,178 @@ async fn consumed_error_body_exhaustion_prevents_authentication_replay() {
     assert_eq!(lease.recoveries.load(Ordering::Acquire), 0);
     assert_eq!(*lease.rejected.lock().unwrap(), ["v1"]);
 }
+
+#[tokio::test]
+async fn explicit_routes_reject_non_repository_hits_while_instance_routes_discard_them() {
+    for (category, upstream, hit) in [
+        (
+            "wiki",
+            "wiki_blobs",
+            json!({"group_id":4,"project_id":null,"path":"home.md","data":"group wiki"}),
+        ),
+        (
+            "comments",
+            "notes",
+            json!({"id":9,"project_id":null,"noteable_type":"Snippet","body":"personal snippet"}),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let mut cfg = config(&server);
+        cfg.search.default_engine = "advanced".into();
+        cfg.search.engines.advanced.project_categories =
+            CATEGORIES.iter().map(|s| (*s).into()).collect();
+        cfg.search.engines.advanced.instance_categories =
+            CATEGORIES.iter().map(|s| (*s).into()).collect();
+        let provider = provider(cfg);
+        Mock::given(path("/api/v4/projects/team%2Frepo"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"id":1,"path_with_namespace":"team/repo"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        for route in ["/api/v4/projects/1/search", "/api/v4/search"] {
+            Mock::given(path(route))
+                .and(query_param("scope", upstream))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("X-Search-Type", "advanced")
+                        .insert_header("X-Next-Page", "")
+                        .set_body_json(json!([hit])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        assert_eq!(
+            provider
+                .invoke(invocation(
+                    &format!("search.{category}"),
+                    json!({"search":"needle","project":"team/repo"}),
+                    scope()
+                ))
+                .await
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::UpstreamProtocolFailed
+        );
+        let result = provider
+            .invoke(invocation(
+                &format!("search.{category}"),
+                json!({"search":"needle"}),
+                scope(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.result["count"], 0);
+        assert_eq!(result.result["scanStatus"], "exhausted");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn legal_git_names_and_empty_commit_titles_survive_http_projection() {
+    let server = MockServer::start().await;
+    let provider = provider(config(&server));
+    Mock::given(path("/api/v4/projects/team%2Frepo"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id":1,"path_with_namespace":"team/repo"})),
+        )
+        .mount(&server)
+        .await;
+    let paths = ["back\\slash.rs", "line\nbreak.rs", "carriage\rreturn.rs"];
+    let hits:Vec<_>=paths.iter().map(|path|json!({"project_id":1,"path":path,"ref":"topic#tag","startline":1,"data":"needle"})).collect();
+    Mock::given(path("/api/v4/projects/1/search"))
+        .and(query_param("scope", "blobs"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("X-Search-Type", "basic")
+                .insert_header("X-Next-Page", "")
+                .set_body_json(hits),
+        )
+        .mount(&server)
+        .await;
+    let result = provider
+        .invoke(invocation(
+            "search.code",
+            json!({"search":"needle","project":"team/repo"}),
+            scope(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(result.result["count"], 3);
+    for (item, original) in result.result["items"].as_array().unwrap().iter().zip(paths) {
+        assert_eq!(item["path"], original);
+        assert_eq!(item["ref"], "topic#tag");
+        if original.chars().any(char::is_control) {
+            assert!(item.get("webUrl").is_none());
+        } else {
+            let url = Url::parse(item["webUrl"].as_str().unwrap()).unwrap();
+            assert!(url.fragment().is_none());
+            let segments: Vec<_> = url
+                .path_segments()
+                .unwrap()
+                .map(|s| {
+                    percent_encoding::percent_decode_str(s)
+                        .decode_utf8()
+                        .unwrap()
+                        .into_owned()
+                })
+                .collect();
+            assert_eq!(&segments[segments.len() - 2..], &["topic#tag", original]);
+        }
+    }
+    Mock::given(path("/api/v4/projects/1/search"))
+        .and(query_param("scope", "commits"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("X-Search-Type", "basic")
+                .insert_header("X-Next-Page", "")
+                .set_body_json(
+                    json!([{"project_id":1,"id":"a".repeat(40),"title":"","message":""}]),
+                ),
+        )
+        .mount(&server)
+        .await;
+    let result = provider
+        .invoke(invocation(
+            "search.commits",
+            json!({"search":"needle","project":"team/repo"}),
+            scope(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(result.result["items"][0]["title"], "");
+    assert_eq!(result.result["count"], 1);
+}
+
+#[test]
+fn relaxed_git_data_still_rejects_invalid_paths_and_malformed_commit_titles() {
+    let config:GitlabProviderConfig=serde_json::from_value(json!({"api_base_url":"https://gitlab.example/api/v4","web_base_url":"https://gitlab.example"})).unwrap();
+    let project =
+        projection::Project::parse(&json!({"id":1,"path_with_namespace":"team/repo"})).unwrap();
+    for path in ["", "/absolute", "a//b", "a/./b", "a/../b", "nul\0name"] {
+        assert!(
+            projection::content_item(
+                "search.code",
+                &json!({"project_id":1,"path":path,"ref":"main","data":"preview"}),
+                &project,
+                &config
+            )
+            .is_err()
+        );
+    }
+    for title in [json!(null), json!(1), json!([])] {
+        assert!(
+            projection::content_item(
+                "search.commits",
+                &json!({"project_id":1,"id":"a".repeat(40),"title":title}),
+                &project,
+                &config
+            )
+            .is_err()
+        );
+    }
+}

@@ -657,6 +657,9 @@ impl GitlabProvider {
                     continue;
                 }
                 let Some(id) = projection::owner(action, candidate)? else {
+                    if project.is_some() {
+                        return Err(protocol());
+                    }
                     continue;
                 };
                 let current = if let Some(project) = project.as_ref() {

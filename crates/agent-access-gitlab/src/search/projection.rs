@@ -73,7 +73,7 @@ fn sha(value: &str) -> bool {
 fn relative_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 4096
-        && !path.contains(['\\', '\0', '\r', '\n'])
+        && !path.contains('\0')
         && path
             .split('/')
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
@@ -82,12 +82,20 @@ fn ref_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 1024
         && !value.chars().any(char::is_control)
-        && !value.contains(['\\', '?', '#'])
+        && !value.contains(['\\', '?'])
         && value
             .split('/')
             .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 fn expected_url(config: &GitlabProviderConfig, project: &Project, route: &[&str]) -> Option<Url> {
+    // Legal Git path data can contain controls, but it is not safe locator
+    // material. Keep the projected data and omit only its optional locator.
+    if route
+        .iter()
+        .any(|segment| segment.chars().any(char::is_control))
+    {
+        return None;
+    }
     let mut url = Url::parse(&config.web_base_url).ok()?;
     if !url.username().is_empty()
         || url.password().is_some()
@@ -276,7 +284,12 @@ pub(super) fn content_item(
                 return Err(protocol());
             }
             out.insert("id".into(), json!(id));
-            out.insert("title".into(), json!(string(value, "title")?));
+            // Git commits may deliberately have an empty message and title.
+            let title = value
+                .get("title")
+                .and_then(Value::as_str)
+                .ok_or_else(protocol)?;
+            out.insert("title".into(), json!(title));
             preview(
                 &mut out,
                 "messagePreview",
