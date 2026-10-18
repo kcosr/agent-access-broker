@@ -1449,6 +1449,15 @@ pub(super) fn validate_oauth_revocations_structure(
 ) -> Result<(), ManagedStoreError> {
     validate_structure_through(conn, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION)
 }
+/// The structure after `029_identity_access_path_controls`: every migration
+/// through it, with exactly one identity-token row for every human. Earlier
+/// versions admit humans without one.
+pub(super) fn validate_identity_access_path_controls_structure(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION)?;
+    identity_access::check_identity_token_rows(conn)
+}
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
 fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {

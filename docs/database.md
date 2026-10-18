@@ -59,7 +59,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `021_local_password_failures`, `022_principal_service_limits`, and
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
-`027_command_imports`, and `028_oauth_revocations` in order. The
+`027_command_imports`, `028_oauth_revocations`, and
+`029_identity_access_path_controls` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -128,8 +129,8 @@ erDiagram
 | `policy_grant_contexts` | Ordered finite execution contexts attached to every managed service policy grant. | `grant_id`, `execution_context`, `context_order` |
 | `service_policy_management_assignments` | Direct service scope for accounts explicitly assigned the service policy manager role. | `assignment_id`, `service`, required `principal_id`, `created_at`, `created_by` |
 | `principal_identity_access` | Shared attested-identity gate for each human. | `principal_id`, unique `incarnation`, `paused`, positive `version`, `updated_at`, `updated_by` |
-| `principal_username_bindings` | Exact namespace/name bindings to humans, including disabled name reservations. | immutable `binding_id`, `principal_id`, `namespace`, `username`, `enabled`, `version`, creation/update metadata |
-| `principal_identity_tokens` | Encrypted fingerprint identity inventory for humans. | `principal_id`, fingerprint/ciphertext/nonce/key ID, monotonic `revision`, `updated_at` |
+| `principal_username_bindings` | Exact namespace/name bindings to humans, including disabled name reservations. | immutable `binding_id`, `principal_id`, `namespace`, `username`, `enabled`, `read_only`, `version`, creation/update metadata |
+| `principal_identity_tokens` | Encrypted fingerprint identity inventory, exactly one row per human. | `principal_id`, fingerprint/ciphertext/nonce/key ID (all empty when not configured), `enabled`, `read_only`, monotonic `revision`, `updated_at` |
 | `principal_service_limits` | Per-principal service invocation limit overrides for managed identity authority. | `principal_id`, `service`, `requests`, `window_seconds`, `created_at`, `created_by`, `updated_at`, `updated_by` |
 | `oidc_provider_state` | Reconciled durable identity for the one configured Microsoft provider. | fixed `provider_id = 'microsoft'`, tenant/client IDs, enabled flag, config generation/fingerprint, membership TTL |
 | `oidc_authorization_flows` | Bounded, one-use browser authorization flows. | monotonic `flow_sequence`, hashed state/browser binding, provider generation, encrypted payload/nonce, return path, expiry/consumption outcome |
@@ -725,9 +726,10 @@ valid again after an administrative reversal.
 
 `principal_username_bindings` references only humans and cascades on principal
 delete. It has a server-generated immutable UUID, exact namespace/name, enabled
-state, positive version and creation/update actor/timestamp fields. The
-`UNIQUE(namespace, username)` constraint includes disabled rows. Enabled-state
-changes advance version. Rename/reassignment requires delete/create with a new
+and read-only states, positive version and creation/update actor/timestamp
+fields. The `UNIQUE(namespace, username)` constraint includes disabled rows. A
+change to either state advances the version once; an update that changes
+nothing writes nothing. Rename/reassignment requires delete/create with a new
 UUID. Removing a namespace from configuration keeps its rows, unavailable for
 admission until configured again. No identity lookup is inferred from principal
 IDs, display names, emails or OS users.
@@ -757,10 +759,25 @@ or row. Its structural validator compares the whole schema with the catalog
 through `028`. Rollback requires a pre-migration backup: an older binary
 refuses the newer ledger.
 
+Migration `029_identity_access_path_controls`, appended after
+`028_oauth_revocations`, adds `read_only` to `principal_username_bindings` and
+`enabled` and `read_only` to `principal_identity_tokens`, as 0/1 columns whose
+defaults keep every existing path enabled and not read-only. It inserts a
+not-configured identity-token row (no secret, revision 1, the principal's
+`updated_at`) for every human without one and leaves existing rows' secrets,
+fingerprints and revisions unchanged. Triggers create that row with every new
+human, in the creating transaction, and reject rows for other principals. From
+`029`, structural validation and readiness require exactly one row for every
+human; the validators of `026` through `028` still admit humans without one, so
+those stores upgrade. Rollback requires a pre-migration backup: an older binary
+refuses the newer ledger.
+
 ### Identity-token inventory
 
 `principal_identity_tokens` stores fingerprint identity inventory for managed
-humans independently of `principal_identity_access`. See
+humans independently of `principal_identity_access`. Every human has exactly one
+row, created with the principal; a row without a secret is not configured. A
+missing row is an integrity failure, and no operation recreates it. See
 [managed identity](managed-identity.md) for provisioning and invocation behavior.
 
 The inventory stores a unique `sha256:<lowercase hex>` fingerprint for exact-byte
@@ -771,11 +788,14 @@ credential rows. Hashes use plain SHA-256, independently of the HMAC hashing use
 for issued Broker access tokens. Imported values are 32–4096 RFC 9110 token bytes;
 no whitespace or newline is stripped. Generation uses random UUID v4 strings.
 
-Every set, generation and removal advances the inventory revision. Removal erases
-ciphertext and fingerprint but retains the row and revision; replacement advances
-it again. These operations invalidate fingerprint session proofs without changing
-the common gate version or username sessions. They preserve shared pause and
-username bindings and do not revoke issued tokens or change browser login.
+Every set, generation, removal and settings change advances the inventory
+revision. Secret writes change only the secret columns, so they keep the
+`enabled` and `read_only` settings. Removal erases ciphertext and fingerprint but
+retains the row and revision; replacement advances it again. A disabled token
+keeps its secret and resolves like an unknown fingerprint. These operations
+invalidate fingerprint session proofs without changing the common gate version
+or username sessions. They preserve shared pause and username bindings and do
+not revoke issued tokens or change browser login.
 
 Identity material participates in startup readiness/key checks and credential
 rewrap. Retain old keys until rewrap completes and readiness succeeds without

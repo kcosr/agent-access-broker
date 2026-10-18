@@ -227,17 +227,17 @@ fn schema_027_upgrades_to_028_with_rows_unchanged() {
     assert!(store.migration_applied_this_open(MANAGED_STORE_OAUTH_REVOCATIONS_VERSION));
     let ledger = migration_ledger(&path);
     assert_eq!(&ledger[..ledger_before.len()], ledger_before.as_slice());
-    assert_eq!(ledger.len(), ledger_before.len() + 1);
+    assert_eq!(ledger.len(), MANAGED_STORE_MIGRATIONS.len());
     assert_eq!(
-        ledger.last().unwrap(),
-        &(
+        ledger[ledger_before.len()],
+        (
             "028_oauth_revocations".to_string(),
             sha256_hex(include_str!("oauth_revocations.sql").as_bytes())
         )
     );
     assert_eq!(
         store.status().unwrap().schema_version,
-        "028_oauth_revocations"
+        MANAGED_STORE_SCHEMA_VERSION
     );
     let conn = store.connection.lock().unwrap();
     assert_eq!(snapshot(&conn), before);

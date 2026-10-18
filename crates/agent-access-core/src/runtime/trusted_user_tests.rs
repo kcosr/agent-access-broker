@@ -68,7 +68,7 @@ impl Fixture {
             })
             .unwrap();
         store
-            .create_username_binding("human-alice", "linux", "Alice", "operator")
+            .create_username_binding("human-alice", "linux", "Alice", false, "operator")
             .unwrap();
         Self {
             _directory: directory,
@@ -289,7 +289,7 @@ fn trusted_user_proof_revalidation_rejects_pause_aba_and_caller_rotation() {
         .unwrap();
     let store = fixture.runtime.managed_store().unwrap();
     store
-        .create_username_binding("human-alice", "linux", "Alias", "operator")
+        .create_username_binding("human-alice", "linux", "Alias", false, "operator")
         .unwrap();
     let alias_headers = Fixture::headers(true, "Alias");
     let alias_admission = fixture.runtime.admit_mcp_ingress(&alias_headers).unwrap();

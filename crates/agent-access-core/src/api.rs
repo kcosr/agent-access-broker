@@ -2363,9 +2363,11 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             | "admin.principals.identity_token.set"
             | "admin.principals.identity_token.generate"
             | "admin.principals.identity_token.remove" => Some(json!({
-                "type":"object", "additionalProperties":false, "required":["principalId","configured"],
+                "type":"object", "additionalProperties":false,
+                "required":["principalId","configured","enabled","readOnly","revision","updatedAt"],
                 "properties":{"principalId":{"type":"string"}, "configured":{"type":"boolean"},
-                    "revision":{"type":["integer","null"],"minimum":1}, "updatedAt":{"type":["string","null"],"format":"date-time"}}
+                    "enabled":{"type":"boolean"}, "readOnly":{"type":"boolean"},
+                    "revision":{"type":"integer","minimum":1}, "updatedAt":{"type":"string","format":"date-time"}}
             })),
             _ => route.result_schema.take(),
         };
@@ -2447,9 +2449,10 @@ fn identity_access_schema() -> Value {
 
 fn identity_binding_schema() -> Value {
     json!({"type":"object", "additionalProperties":false,
-        "required":["bindingId","principalId","namespace","username","enabled","version","createdAt","createdBy","updatedAt","updatedBy","namespaceAvailable"],
+        "required":["bindingId","principalId","namespace","username","enabled","readOnly","version","createdAt","createdBy","updatedAt","updatedBy","namespaceAvailable"],
         "properties":{"bindingId":{"type":"string","format":"uuid"}, "principalId":{"type":"string"},
             "namespace":identity_namespace_schema(), "username":identity_username_schema(), "enabled":{"type":"boolean"},
+            "readOnly":{"type":"boolean"},
             "version":{"type":"integer","minimum":1}, "createdAt":{"type":"string","format":"date-time"}, "createdBy":{"type":"string"},
             "updatedAt":{"type":"string","format":"date-time"}, "updatedBy":{"type":"string"}, "namespaceAvailable":{"type":"boolean"}}})
 }
@@ -3651,7 +3654,18 @@ mod managed_identity_contract_tests {
             .as_ref()
             .unwrap();
         assert!(inventory["properties"].get("paused").is_none());
-        assert!(inventory["properties"].get("revision").is_some());
+        assert_eq!(
+            inventory["required"],
+            json!([
+                "principalId",
+                "configured",
+                "enabled",
+                "readOnly",
+                "revision",
+                "updatedAt"
+            ])
+        );
+        assert_eq!(inventory["properties"]["revision"]["type"], "integer");
         assert!(
             routes
                 .iter()
@@ -3667,6 +3681,25 @@ mod managed_identity_contract_tests {
             listed["properties"]["bindings"]["items"]["properties"]
                 .get("namespaceAvailable")
                 .is_some()
+        );
+        for operation in [
+            "admin.principals.identity_bindings.create",
+            "admin.principals.identity_bindings.patch",
+        ] {
+            let binding = route(operation).result_schema.as_ref().unwrap();
+            assert!(
+                binding["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("readOnly"))
+            );
+            assert_eq!(binding["properties"]["readOnly"]["type"], "boolean");
+        }
+        assert!(
+            listed["properties"]["bindings"]["items"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("readOnly"))
         );
     }
 

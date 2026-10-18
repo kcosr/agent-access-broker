@@ -3,6 +3,7 @@ use super::*;
 use agent_access_core::{
     BrokerTokensConfig, CredentialKeyRing, ManagedStore, ManagedStoreConfig, PrincipalRole,
     TrustedCallerConfig, TrustedCallerContextMode, TrustedCallerCredentialTransport,
+    UsernameBindingUpdate,
 };
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderMap;
@@ -163,7 +164,7 @@ async fn fixture_with(
                     })
                     .unwrap();
                 store
-                    .create_username_binding(principal, "linux", principal, "fixture")
+                    .create_username_binding(principal, "linux", principal, false, "fixture")
                     .unwrap();
             }
         },
@@ -257,7 +258,7 @@ fn mapping_aba(store: &ManagedStore) {
         .delete_username_binding("alice", &binding.binding_id, binding.version)
         .unwrap();
     store
-        .create_username_binding("alice", "linux", "alice", "fixture")
+        .create_username_binding("alice", "linux", "alice", false, "fixture")
         .unwrap();
 }
 fn binding_enabled_aba(store: &ManagedStore) {
@@ -266,20 +267,26 @@ fn binding_enabled_aba(store: &ManagedStore) {
         .unwrap()
         .pop()
         .unwrap();
-    let disabled = store
-        .set_username_binding_enabled(
+    let (_, disabled) = store
+        .update_username_binding(
             "alice",
             &binding.binding_id,
-            false,
+            UsernameBindingUpdate {
+                enabled: Some(false),
+                read_only: None,
+            },
             binding.version,
             "fixture",
         )
         .unwrap();
     store
-        .set_username_binding_enabled(
+        .update_username_binding(
             "alice",
             &binding.binding_id,
-            true,
+            UsernameBindingUpdate {
+                enabled: Some(true),
+                read_only: None,
+            },
             disabled.version,
             "fixture",
         )
@@ -407,7 +414,7 @@ async fn trusted_user_body_intake_cannot_rebind_to_replacement_human() {
         .delete_username_binding("alice", &binding.binding_id, binding.version)
         .unwrap();
     store
-        .create_username_binding("bob", "linux", "alice", "fixture")
+        .create_username_binding("bob", "linux", "alice", false, "fixture")
         .unwrap();
     release_tx.send(()).unwrap();
     assert_assertion_denied(pending.await.unwrap()).await;
@@ -846,7 +853,7 @@ async fn trusted_user_service_scoped_sessions_keep_original_tool_names_and_view_
 async fn trusted_user_aliases_share_principal_capacity_without_sharing_session_owners() {
     let (fixture, store, _) = fixture(1).await;
     store
-        .create_username_binding("alice", "linux", "alias", "fixture")
+        .create_username_binding("alice", "linux", "alias", false, "fixture")
         .unwrap();
     let session = initialize(&fixture, false).await;
     let mut alias_init = user_request(false, None, init());
@@ -884,7 +891,7 @@ async fn trusted_user_remapped_human_reclaims_stale_global_capacity_immediately(
         .delete_username_binding("alice", &binding.binding_id, binding.version)
         .unwrap();
     store
-        .create_username_binding("bob", "linux", "alice", "fixture")
+        .create_username_binding("bob", "linux", "alice", false, "fixture")
         .unwrap();
     // The stale Alice session occupied the only global slot. Bob must not wait
     // for background expiry merely because the old binding names another human.

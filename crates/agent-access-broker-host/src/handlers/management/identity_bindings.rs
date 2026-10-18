@@ -3,7 +3,7 @@ use super::common::*;
 use super::identity_access::{committed_identity_mutation, invalid_input, parse_body};
 use super::policy::expected_version_query;
 use crate::state::AppState;
-use agent_access_core::{BrokerConfig, UsernameBindingRecord};
+use agent_access_core::{BrokerConfig, UsernameBindingRecord, UsernameBindingUpdate};
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, RawQuery, State},
@@ -190,7 +190,7 @@ pub(crate) async fn create(
     }
     let actor = context.identity.principal.clone();
     committed_identity_mutation(state, context, operation, target, move |store| {
-        let binding = store.create_username_binding(&principal, &body.namespace, &body.username, &actor)?;
+        let binding = store.create_username_binding(&principal, &body.namespace, &body.username, false, &actor)?;
         let completion = json!({"principal": binding.principal_id, "bindingId": binding.binding_id,
             "namespace": binding.namespace, "before": null, "after": {"enabled": binding.enabled, "version": binding.version}});
         Ok((json!(response(binding, &namespaces)), completion))
@@ -247,10 +247,10 @@ pub(crate) async fn patch(
     }
     let actor = context.identity.principal.clone();
     committed_identity_mutation(state, context, operation, target, move |store| {
-        let after = store.set_username_binding_enabled(&principal, &binding, body.enabled, body.expected_version, &actor)?;
-        let previous_enabled = if after.version == body.expected_version { after.enabled } else { !after.enabled };
+        let update = UsernameBindingUpdate { enabled: Some(body.enabled), read_only: None };
+        let (before, after) = store.update_username_binding(&principal, &binding, update, body.expected_version, &actor)?;
         let completion = json!({"principal": after.principal_id, "bindingId": after.binding_id, "namespace": after.namespace,
-            "before": {"enabled": previous_enabled, "version": body.expected_version},
+            "before": {"enabled": before.enabled, "version": before.version},
             "after": {"enabled": after.enabled, "version": after.version}});
         Ok((json!(response(after, &namespaces)), completion))
     }).await
