@@ -2442,6 +2442,82 @@ fn required_display(object: &Map<String, Value>, key: &str) -> Result<String, Re
     optional_display(object, key)?.ok_or(RenderError)
 }
 
+fn render_native_search(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let result = as_object(value)?;
+    let items = array(required(result, "items")?)?;
+    budget.charge_work(result.len().saturating_add(items.len()))?;
+    out.push("# GitLab search\n")?;
+    if items.is_empty() {
+        if result.get("nextPageToken").is_some() {
+            out.push("No matching authorized items in this page; continue the search.\n")?;
+        } else {
+            out.push("No matching authorized items in this page.\n")?;
+        }
+    }
+    for item in items {
+        let item = as_object(item)?;
+        budget.charge_work(item.len())?;
+        out.push("\n## ")?;
+        out.push_code(required_scalar(item, "project")?)?;
+        if let Some(title) = optional_scalar(item, "title")?
+            .or(optional_scalar(item, "name")?)
+            .or(optional_scalar(item, "path")?)
+        {
+            out.push(" — ")?;
+            out.push_heading_text(title)?;
+        }
+        out.push("\n")?;
+        for (name, label) in [
+            ("id", "ID"),
+            ("iid", "IID"),
+            ("state", "State"),
+            ("parentKind", "Parent"),
+            ("ref", "Ref"),
+            ("startLine", "Starting line"),
+        ] {
+            if let Some(value) = optional_display(item, name)? {
+                field_code(out, label, &value)?;
+            }
+        }
+        if let Some(url) = optional_scalar(item, "webUrl")? {
+            field_url(out, "URL", url)?;
+        }
+        for name in [
+            "description",
+            "descriptionPreview",
+            "messagePreview",
+            "bodyPreview",
+            "snippet",
+        ] {
+            if let Some(text) = optional_scalar(item, name)? {
+                if name == "snippet" {
+                    out.push("\nUpstream snippet:\n\n")?;
+                } else {
+                    out.push("\n")?;
+                }
+                out.push_escaped(text)?;
+                out.push("\n")?;
+            }
+        }
+        if item.get("previewTruncated").and_then(Value::as_bool) == Some(true) {
+            out.push("\nPreview truncated.\n")?;
+        }
+    }
+    if result.get("scanStatus").and_then(Value::as_str) == Some("upstream_window") {
+        out.push("\nSearch coverage is incomplete: the upstream retrieval window was reached.\n")?;
+    }
+    if let Some(token) = optional_scalar(result, "nextPageToken")? {
+        out.push("\nContinuation (another authorized match is not guaranteed):\n\n")?;
+        out.push_code(token)?;
+        out.push("\n")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4224,80 +4300,4 @@ mod tests {
             assert!(markdown.contains(exact), "missing {exact:?}: {markdown}");
         }
     }
-}
-
-fn render_native_search(
-    value: &Value,
-    out: &mut MarkdownWriter,
-    budget: &mut PresentationBudget,
-) -> Result<(), RenderError> {
-    let result = as_object(value)?;
-    let items = array(required(result, "items")?)?;
-    budget.charge_work(result.len().saturating_add(items.len()))?;
-    out.push("# GitLab search\n")?;
-    if items.is_empty() {
-        if result.get("nextPageToken").is_some() {
-            out.push("No matching authorized items in this page; continue the search.\n")?;
-        } else {
-            out.push("No matching authorized items in this page.\n")?;
-        }
-    }
-    for item in items {
-        let item = as_object(item)?;
-        budget.charge_work(item.len())?;
-        out.push("\n## ")?;
-        out.push_code(required_scalar(item, "project")?)?;
-        if let Some(title) = optional_scalar(item, "title")?
-            .or(optional_scalar(item, "name")?)
-            .or(optional_scalar(item, "path")?)
-        {
-            out.push(" — ")?;
-            out.push_heading_text(title)?;
-        }
-        out.push("\n")?;
-        for (name, label) in [
-            ("id", "ID"),
-            ("iid", "IID"),
-            ("state", "State"),
-            ("parentKind", "Parent"),
-            ("ref", "Ref"),
-            ("startLine", "Starting line"),
-        ] {
-            if let Some(value) = optional_display(item, name)? {
-                field_code(out, label, &value)?;
-            }
-        }
-        if let Some(url) = optional_scalar(item, "webUrl")? {
-            field_url(out, "URL", url)?;
-        }
-        for name in [
-            "description",
-            "descriptionPreview",
-            "messagePreview",
-            "bodyPreview",
-            "snippet",
-        ] {
-            if let Some(text) = optional_scalar(item, name)? {
-                if name == "snippet" {
-                    out.push("\nUpstream snippet:\n\n")?;
-                } else {
-                    out.push("\n")?;
-                }
-                out.push_escaped(text)?;
-                out.push("\n")?;
-            }
-        }
-        if item.get("previewTruncated").and_then(Value::as_bool) == Some(true) {
-            out.push("\nPreview truncated.\n")?;
-        }
-    }
-    if result.get("scanStatus").and_then(Value::as_str) == Some("upstream_window") {
-        out.push("\nSearch coverage is incomplete: the upstream retrieval window was reached.\n")?;
-    }
-    if let Some(token) = optional_scalar(result, "nextPageToken")? {
-        out.push("\nContinuation (another authorized match is not guaranteed):\n\n")?;
-        out.push_code(token)?;
-        out.push("\n")?;
-    }
-    Ok(())
 }

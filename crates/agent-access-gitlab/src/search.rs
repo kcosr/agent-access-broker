@@ -55,7 +55,7 @@ fn bounded_work() -> ProviderError {
     )
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct SearchInputs {
     search: Option<String>,
     project: Option<String>,
@@ -284,6 +284,11 @@ impl Operation {
         u32::from(!self.replay_used.load(Ordering::Acquire))
     }
 }
+enum ProjectLookup<'a> {
+    Explicit(&'a str),
+    Candidate(u64),
+}
+
 struct SearchResponse {
     status: u16,
     headers: HeaderMap,
@@ -366,6 +371,11 @@ impl HttpSearchBackend {
             let status = response.status().as_u16();
             let headers = response.headers().clone();
             complete_upstream_trace(&mut response, None);
+            if status == 401 && presented.is_delegated() {
+                credential
+                    .mark_rejected(&presented)
+                    .map_err(gitlab_backend_error)?;
+            }
             let body =
                 read_bounded_body_with_budget(response, self.response_cap, None, Some(&op.bytes))
                     .await
@@ -389,7 +399,7 @@ impl HttpSearchBackend {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok();
                 credential
-                    .rejected(&presented, replay.then_some(()))
+                    .recover_rejected(replay.then_some(()))
                     .await
                     .map_err(gitlab_backend_error)?;
                 attempt += 1;
@@ -404,14 +414,16 @@ impl HttpSearchBackend {
     }
     async fn project(
         &self,
-        locator: &str,
-        expected: Option<u64>,
-        candidate: bool,
+        lookup: ProjectLookup<'_>,
         action: &str,
         credential: &GitlabCredential,
         op: &Operation,
     ) -> Result<Option<projection::Project>, ProviderError> {
-        let url = self.endpoint(&format!("projects/{}", encoded_path_segment(locator)))?;
+        let (locator, expected, candidate) = match lookup {
+            ProjectLookup::Explicit(path) => (path.to_string(), None, false),
+            ProjectLookup::Candidate(id) => (id.to_string(), Some(id), true),
+        };
+        let url = self.endpoint(&format!("projects/{}", encoded_path_segment(&locator)))?;
         let mut response = self.get(&url, action, credential, op).await?;
         let mut moved_to = None;
         if !candidate && response.status == 301 {
@@ -532,7 +544,7 @@ impl GitlabProvider {
         let op = Operation::new(&self.config.search);
         let project = if let Some(path) = input.project.as_deref() {
             let confirmed = backend
-                .project(path, None, false, action, &credential, &op)
+                .project(ProjectLookup::Explicit(path), action, &credential, &op)
                 .await?
                 .ok_or_else(protocol)?;
             if !authority.scope.matches(&confirmed.path) {
@@ -605,10 +617,10 @@ impl GitlabProvider {
             let url = backend.collection_url(action, &input, project.as_ref(), position)?;
             let response = backend.get(&url, action, &credential, &op).await?;
             response.successful()?;
-            if let Some(engine) = input.engine.as_deref() {
-                if pagination::single_header(&response.headers, "x-search-type")? != Some(engine) {
-                    return Err(protocol());
-                }
+            if let Some(engine) = input.engine.as_deref()
+                && pagination::single_header(&response.headers, "x-search-type")? != Some(engine)
+            {
+                return Err(protocol());
             }
             let body = response.json()?;
             let candidates = body.as_array().ok_or_else(protocol)?;
@@ -656,7 +668,7 @@ impl GitlabProvider {
                     if let std::collections::btree_map::Entry::Vacant(entry) = projects.entry(id) {
                         entry.insert(
                             backend
-                                .project(&id.to_string(), Some(id), true, action, &credential, &op)
+                                .project(ProjectLookup::Candidate(id), action, &credential, &op)
                                 .await?,
                         );
                     }

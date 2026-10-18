@@ -1185,6 +1185,7 @@ struct Lease {
     target: String,
     version: std::sync::atomic::AtomicUsize,
     recoveries: std::sync::atomic::AtomicUsize,
+    rejected: std::sync::Mutex<Vec<String>>,
 }
 #[async_trait]
 impl DelegatedLease for Lease {
@@ -1204,7 +1205,8 @@ impl DelegatedLease for Lease {
     async fn revalidate(&self) -> Result<(), ProviderError> {
         Ok(())
     }
-    fn mark_rejected(&self, _version: &str) -> Result<(), ProviderError> {
+    fn mark_rejected(&self, version: &str) -> Result<(), ProviderError> {
+        self.rejected.lock().unwrap().push(version.to_string());
         Ok(())
     }
     async fn recover_after_unauthorized(&self) -> Result<DelegatedAccess, ProviderError> {
@@ -1236,6 +1238,7 @@ async fn one_candidate_page_allows_one_401_replay_and_smallest_budget_covers_ren
         target: server.uri(),
         version: std::sync::atomic::AtomicUsize::new(1),
         recoveries: std::sync::atomic::AtomicUsize::new(0),
+        rejected: std::sync::Mutex::new(Vec::new()),
     });
     Mock::given(path("/api/v4/projects/old%2Frepo"))
         .and(header("authorization", "Bearer oauth-1"))
@@ -1299,6 +1302,7 @@ async fn collection_replay_consumes_one_page_slot_and_repeated_401_cannot_recove
             target: server.uri(),
             version: std::sync::atomic::AtomicUsize::new(1),
             recoveries: std::sync::atomic::AtomicUsize::new(0),
+            rejected: std::sync::Mutex::new(Vec::new()),
         });
         Mock::given(path("/api/v4/search"))
             .and(header("authorization", "Bearer oauth-1"))
@@ -1358,6 +1362,7 @@ async fn consumed_error_body_exhaustion_prevents_authentication_replay() {
         target: server.uri(),
         version: std::sync::atomic::AtomicUsize::new(1),
         recoveries: std::sync::atomic::AtomicUsize::new(0),
+        rejected: std::sync::Mutex::new(Vec::new()),
     });
     Mock::given(path("/api/v4/search"))
         .respond_with(ResponseTemplate::new(401).set_body_string("too much error body"))
@@ -1377,4 +1382,5 @@ async fn consumed_error_body_exhaustion_prevents_authentication_replay() {
         ReasonCode::UpstreamProtocolFailed
     );
     assert_eq!(lease.recoveries.load(Ordering::Acquire), 0);
+    assert_eq!(*lease.rejected.lock().unwrap(), ["v1"]);
 }
