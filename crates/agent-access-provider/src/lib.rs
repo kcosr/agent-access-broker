@@ -19,7 +19,7 @@
 //!   It reaches upstream services through the host services defined here:
 //!   [`UpstreamClient`]s built through the host's client factory, upstream
 //!   allowlists, correlation ([`InvocationScope`]), upstream trace events
-//!   and signed continuation envelopes ([`ContinuationSigner`]). It turns
+//!   and authenticated continuation envelopes ([`ContinuationSigner`]). It turns
 //!   lent [`ExecutionCredential`]s and [`DelegatedAccess`] into opaque
 //!   [`UpstreamAuthorization`]s, in a [`CredentialPlacement`] when the
 //!   upstream needs one, and hands them to the client's send methods with
@@ -90,13 +90,14 @@
 //!
 //! # Continuations
 //!
-//! Resumable cursors, page tokens and handles use signed continuation
+//! Resumable cursors, page tokens and handles use authenticated continuation
 //! envelopes. A provider declares each token family as a
 //! [`ContinuationFamily`] constant, binds every token to the admitted context
 //! and its normalized settings with a [`ContinuationBinding`], and seals and
-//! opens tokens with its [`ContinuationSigner`]. The binding lives only in the
-//! MAC context, a token never carries authority, and the host authorizes every
-//! continuation again. [`ContinuationFailures`] reports each
+//! opens tokens with its [`ContinuationSigner`]. The binding authenticates the
+//! token without appearing in it; confidential families also encrypt payloads.
+//! A token never carries authority, and the host authorizes every continuation
+//! again. [`ContinuationFailures`] reports each
 //! [`ContinuationError`] as the provider's failure.
 //!
 //! # Compatibility
@@ -240,7 +241,7 @@ pub use config::{
 pub use continuation::{
     AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFailures,
     ContinuationFamily, ContinuationLifetime, ContinuationOwner, ContinuationSigner,
-    ContinuationStage, ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
+    ContinuationStage, OpenedContinuation, ScopeResolutionStage, UPSTREAM_QUERY_COMMITMENT_BYTES,
 };
 pub use correlation::{
     BROKER_REQUEST_ID_HEADER, CorrelationContext, InvocationScope, REQUEST_ID_HEADER,
@@ -302,8 +303,9 @@ pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDispositi
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};
 pub use upstream::{
     BodyReadError, ClientProfile, PendingUpstreamTrace, RedirectAuthorizer, RedirectRules,
-    UploadProgress, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    complete_upstream_trace, file_upload_body, read_bounded_body, take_upstream_trace,
+    SharedBodyBudget, UploadProgress, UpstreamCall, UpstreamClient, UpstreamClientSpec,
+    UpstreamError, UpstreamRequestBudget, complete_upstream_trace, file_upload_body,
+    read_bounded_body, read_bounded_body_with_budget, take_upstream_trace,
 };
 pub use upstream_allowlist::{path_matches_pattern, same_origin, url_allowed_by_patterns};
 pub use upstream_rate_limit::{

@@ -656,19 +656,23 @@ Agent Access Broker applies these controls in the request path:
   path).
 - **Broker-owned query parsing**: Jira JQL and Confluence CQL are parsed into a
   broker AST, re-emitted canonically, scoped by policy, and result-validated.
-- **Provider continuation tokens**: cursors, page tokens and handles sealed with
-  the provider SDK's continuation envelope are HMAC-signed and bound to the
-  service, purpose and version, the host-selected execution context, the
-  credential mode, the caller, the provider configuration and the request's
-  resources and normalized settings. GitLab, Jira and Confluence tokens also
-  bind the credential method and, for OAuth, the connection and its
-  generation, so a token cannot be replayed under another account, a
-  reconnected connection or another method. The binding enters only the MAC, never the
-  token, so a token reveals no bound value and fails under any other binding.
-  Tokens carry no authority: each continuation is authorized again under
-  current policy and the provider re-applies its containment checks, so a grant
-  change takes effect on the next page. Process-local keys make tokens expire
-  on reload or restart; durable handles require the configured stable key.
+- **Provider continuation tokens**: SDK envelopes bind the service, purpose,
+  version, host-selected execution context, credential mode, caller, provider
+  configuration, and normalized resource/query settings. Existing families are
+  HMAC-signed. New GitLab discovery/content-search families encrypt a fixed
+  32-byte payload with AES-256-GCM; only the numeric scan position and route kind
+  enter that payload. Binding-separated HKDF keys and authenticated headers keep
+  positions confidential and preserve the original 15-minute deadline across
+  pages. A 60-second future-deadline allowance handles clock differences without
+  accepting an expired token or renewing its expiry. The complete normalized
+  repository boundary and any explicit confirmed project identity are bound.
+  GitLab, Jira and Confluence tokens also bind the credential method and, for
+  OAuth, the connection and generation, so reconnection or a method change
+  invalidates them while routine access refresh does not. Binding values never
+  enter the token; key failures never downgrade protection. Tokens carry no
+  authority: every page is authorized again under current policy and checked by
+  the provider. Without a configured stable key, new GitLab search tokens are
+  invalidated on reload or restart; durable handles require a stable key.
 - **Credential containment**: agents never receive broker-held execution
   credentials. Deliberate GitLab token issuance/rotation returns a new token as
   explicitly sensitive output; it does not reveal the broker execution credential.

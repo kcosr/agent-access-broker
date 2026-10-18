@@ -1176,6 +1176,25 @@ returns a `BodyReadError` (`TooLarge`, `IdleTimeout`, or `Transport` with
 `timed_out` set when the client's deadline expired) for you to map to your own
 outcome.
 
+Bounded multi-request operations create one `UpstreamRequestBudget` and attach
+it with `UpstreamCall::with_request_budget` to every resource send, including
+identity confirmations, approved rename-resolution requests, and explicit
+replays. The client debits a permit immediately before sending; transport
+failures consume their permit, while pre-send validation failures do not.
+Budgeted calls require `SingleAttempt` or `Bounded`; retry-enabled profiles
+fail before sending. `remaining_requests()` is a capacity check, not a
+reservation: the provider owns whole-page admission and any concurrent work.
+An OAuth token endpoint uses the separately bounded credential recovery flow,
+which must never reset resource-request counters.
+
+For aggregate response limits, create one `SharedBodyBudget` and call
+`read_bounded_body_with_budget(response, byte_cap, idle_timeout, Some(&budget))`
+for every consumed body, including errors and authentication failures. Each
+decoded chunk is atomically charged before retention, across concurrent readers.
+The per-response cap still applies. `BodyReadError::BudgetExceeded` and
+`UpstreamError::RequestBudgetExceeded` abort unfinished pages without advancing
+a continuation. Accepted bytes and attempted requests are never refunded.
+
 Return a raw download with `ProviderResultStream::from_bounded_response`,
 bounded by a `BoundedDownload` with a label, the byte cap, the reason an overrun
 reports and the idle timeout. The stream fails once no chunk arrives within the
@@ -1242,8 +1261,9 @@ is never `upstream_rate_limited`, because a retry would repeat the write. Use
 ## Signing and continuations
 
 Seal every resumable cursor, page token or handle that a native action returns
-or relays in a signed continuation envelope. Never pass an upstream pagination
-token through unwrapped.
+or relays in an SDK continuation envelope. Signed families authenticate their
+payloads; confidential families also encrypt them. Never pass an upstream
+pagination token through unwrapped.
 
 ### Token families
 
@@ -1278,6 +1298,43 @@ Build one `ContinuationSigner` per provider instance from
 keys. Changing a token's format means a new version. Obsolete versions are
 rejected, never decoded alongside the new one.
 
+### Confidential continuations with carried expiry
+
+A new family selects `.confidential().expires_after(ttl)`. It has one fixed
+protection mode and cannot open signed tokens. `.fixed_payload_length()` requires
+exactly the declared payload cap, making every token the same length. For a
+32-byte payload the confidential envelope is 99 unpadded base64url ASCII bytes.
+Scope-resolution opening and relayed-token APIs apply only to signed families;
+confidential tokens require the complete admitted binding.
+
+At first admission call `signer.deadline(&binding)` to fix the expiry using the
+SDK clock, then `seal_until(&binding, payload, deadline)` after completing the
+page. First sealing requires `now < deadline <= now + TTL`. On later operations,
+`open_confidential(&binding, token)` returns an opaque `OpenedContinuation`:
+`payload()` exposes authenticated plaintext and `expiry()` the original deadline.
+Keep this value only within the current operation and use
+`seal_resumed(&binding, next_payload, &opened)` to preserve that exact deadline.
+The proof cannot be constructed or serialized by the provider; resealing checks
+its family and complete binding. Relative-expiry `seal`/`seal_at` reject these
+families, so they cannot accidentally renew a continuation.
+
+Opening permits an expiry no further than TTL plus the declared `.clock_skew`
+in the future. This is only a clock-difference allowance: expired tokens fail,
+and a resumed seal requires the original deadline to remain in the future.
+If a nonterminal page needs a token after expiry, return a sanitized
+`input_invalid` error. A legitimately terminal page needs no token.
+
+The SDK uses AES-256-GCM with independent random 96-bit nonces and 128-bit tags.
+A separate HMAC domain obtains 32 raw seed bytes from the selected stable or
+generation key, then HKDF-SHA256 binds the derived key to the service, purpose,
+family version, protection mode, and complete binding digest. The canonical
+binding and envelope header are authenticated associated data. The v1 header is
+`AACE`, format byte `1`, family-version byte, big-endian 64-bit expiry, and nonce.
+The seed, key, and implementation crypto types never enter the provider API,
+Debug, or serialization. Stable-key failure fails closed; it never selects a
+less protected mode. Existing signed families retain their wire and expiry
+behavior.
+
 ### Binding
 
 `family.bind(request.context(), configuration)` binds a token to the admitted
@@ -1294,14 +1351,17 @@ method it executes with, too: the static credential's `kind()`, or
 `.delegated(&credential)`, so a token does not open after a switch between
 them.
 
-The binding is a canonical, length-delimited encoding whose digest enters the
-MAC context. The token carries only its version, expiry, payload and MAC, so a
-changed context, principal, mode, configuration, resource or setting is
-indistinguishable from forgery. A token never carries authority. Do not bind the
-effective grant boundary: the host authorizes every continuation under current
-policy, and the provider applies its containment and result checks again on
-every page. When a newly rewritten query is incompatible with an upstream
-cursor, reject the token or restart rather than weakening a restriction.
+The binding uses a canonical, length-delimited encoding. Its digest enters the
+signed token's MAC context, or the confidential token's derived key and
+authenticated associated data. A changed context, principal, mode,
+configuration, resource or setting is
+indistinguishable from forgery. A token never carries authority. The host
+authorizes every continuation under current policy, and the provider applies its
+containment and result checks again on every page. Existing upstream-constrained
+searches bind their rewritten upstream query as described below. Result-filtered
+searches bind the complete normalized effective boundary, query, selected engine,
+page size, and any confirmed explicit resource identity; a changed value requires
+a fresh search. Never weaken a restriction to reuse a cursor.
 
 A page token's round trip:
 
