@@ -1353,6 +1353,22 @@ max_raw_download_bytes = 104857600  # 100 MiB; default
 
 [providers.gitlab.search]
 max_results = 50            # default
+default_engine = "basic"
+max_candidate_pages = 4
+max_upstream_requests = 128
+max_scan_bytes = 16777216   # 16 MiB aggregate decoded response bodies
+
+[providers.gitlab.search.engines.basic]
+project_categories = ["issues", "merge_requests", "code", "commits", "wiki", "comments"]
+instance_categories = ["issues", "merge_requests"]
+
+[providers.gitlab.search.engines.advanced]
+project_categories = []
+instance_categories = []
+
+[providers.gitlab.search.engines.zoekt]
+project_categories = []
+instance_categories = []
 
 [providers.gitlab.webhooks]
 allowed_destinations = [
@@ -1363,8 +1379,9 @@ allow_disable_ssl_verification = false
 ```
 
 - `api_base_url` is required and must end in `/api/v4`.
-- `web_base_url` is required and is used only to validate and parse GitLab web
-  URLs supplied as locators. Set it to GitLab's external URL, the origin of
+- `web_base_url` is required and is used to validate and parse GitLab web
+  URLs supplied as locators and to validate or construct search-result URLs.
+  Set it to GitLab's external URL, the origin of
   the links GitLab shows, even when `api_base_url` reaches GitLab through
   another host.
 - `allowed_upstream_hosts` must include the configured API base path prefix; each
@@ -1405,11 +1422,35 @@ allow_disable_ssl_verification = false
   bounds GitLab raw file, current merge-request raw diff, and CI job trace
   downloads. It must not exceed
   `limits.max_download_bytes`.
-- `[providers.gitlab.search].max_results` defaults to `50`; it bounds issue/MR
-  searches, note/discussion lists, and every merge-request review-context
+- `[providers.gitlab.search].max_results` defaults to `50`; it bounds repository
+  discovery, native content search, issue/MR list searches, note/discussion lists,
+  and every merge-request review-context
   collection. It must be non-zero and may not exceed GitLab's single-page REST
   cap of `100`. Draft-note list uses the same caller-visible cap for Broker-
   local slices of GitLab's single non-paginated response array.
+- Native discovery/content-search work budgets are `max_candidate_pages`
+  (default 4, range 1–32), `max_upstream_requests` (default 128, range 4–4096),
+  and `max_scan_bytes` (default 16 MiB, range 1–64 MiB). Request capacity must
+  also be at least `max(max_results + 2, 4)`. Requests include collection,
+  ownership-confirmation, safe rename resolution, and one permitted
+  authentication replay; decoded bodies share the byte cap. These are server
+  budgets, not caller inputs. Failures midpage return no advanced continuation.
+- `search.default_engine` is `basic`, `advanced`, or `zoekt` (default `basic`).
+  `search.engines.<engine>.project_categories` and `.instance_categories` are
+  closed lists of `issues`, `merge_requests`, `code`, `commits`, `wiki`, and
+  `comments`. Unknown engines/categories, duplicates, and impossible tuples
+  fail validation. Basic instance search supports only issues/merge requests;
+  Zoekt supports only code. Advanced project/instance categories require explicit
+  configuration and upstream infrastructure. Each exposed category must have a
+  route on the default engine; a category available only on another engine is
+  invalid. Empty lists on every engine disable content search while leaving
+  `project.search` independently available.
+- Category schemas expose configured engines and require `project` when the
+  selected/default engine has no instance route. Discovery does not probe GitLab
+  or indexing state. Qualify each tuple against the deployed GitLab version and
+  proxies: Search API responses must preserve the matching `X-Search-Type`.
+  The Broker never silently switches engines or crawls projects to emulate a
+  missing route. See [engine coverage and pagination](providers-gitlab-rest.md#configured-engines-and-coverage).
 - `[providers.gitlab.webhooks].allowed_destinations` defaults to `[]`. The
   absent/empty default denies project-hook creation and URL-changing updates,
   but does not disable catalog actions or management of existing hooks.
@@ -1434,12 +1475,16 @@ allow_disable_ssl_verification = false
 - GitLab REST credentials use `bearer_token` secret material. Per-user
   credentials come from a credential connection with the `gitlab-access-token`
   profile, which the GitLab Git gateway can share.
-- Service-mode GitLab REST grants require `credentials.lookup.gitlab` because
+- Ordinary lookup-backed service-mode GitLab REST grants require `credentials.lookup.gitlab` because
   project, issue, merge request, note, discussion, branch, and commit actions
   confirm the authoritative project path before final repository-scope
   authorization.
   Per-user-only GitLab policy uses the caller's per-user GitLab credential for
   that lookup.
+  `project.search` and the six `search.*` actions authorize their repository
+  boundary first and use only the selected execution credential for collection,
+  explicit-project resolution, and ownership confirmation; they neither require
+  nor use the separate lookup credential.
 - Draft-note CRUD/publication and `merge_request.review.submit` should normally
   be granted with `credential_mode = "per_user"`: GitLab makes drafts and
   reviewer state belong to the upstream credential owner. Service mode remains

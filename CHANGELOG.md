@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- Native provider search authority now uses constructor-built, normalized
+  `SearchAuthorizationScope` clauses (included selectors minus excluded
+  selectors, unioned across clauses). The former scope variants are removed.
+  `ActionDescriptor.search_contained` is replaced by optional `native_search`
+  enforcement, distinguishing upstream-constrained and result-filtered native
+  searches. Imported commands retain their separate exact-only wire boundary;
+  their metadata cannot enable native search enforcement. Stored grants and
+  token restrictions are unchanged.
+
 - The native provider contract changes, so existing provider implementations must be
   updated:
   - **Scope resolution.** `Provider::resolve_scopes`, `resolve_scopes_with_lookup`
@@ -421,6 +430,19 @@ All notable changes to this project are documented in this file.
   stored connections.
 
 ### Added
+
+- GitLab repository discovery (`project.search`) and separately grantable native
+  searches for issues, merge requests, code, commits, project wikis, and comments
+  (`search.*`), with typed `gitlab project search` / `gitlab search` commands and
+  shared invoke/send/OpenAPI/MCP schemas. Namespace-aware repository filtering,
+  selected execution credentials, current ownership confirmation, bounded
+  previews, and validated optional locators protect returned content.
+- Operator-configured GitLab engine/category/scope capabilities and bounded scan
+  work, with explicit incomplete-coverage statuses and confidential continuations
+  that preserve the original 15-minute expiry. Basic code/commit/wiki/comment
+  search requires a project; advanced and Zoekt tuples require explicit setup.
+  Existing single-project `issue.search` and `merge_request.search` retain their
+  structured-list contracts.
 
 - The standard reason `broker_provider_contract_failed` (HTTP 500,
   `decision = error`) identifies a provider outcome that its contract does

@@ -25,7 +25,7 @@ Built-in provider contracts:
 | [providers-teams.md](providers-teams.md) | Notifications to managed, encrypted Teams Workflow destinations. |
 | [providers-jira.md](providers-jira.md) | Jira issue, search, comment, attachment, verification, URL locator, and attribution behavior. |
 | [providers-confluence.md](providers-confluence.md) | Confluence page, blog, draft, comment, attachment, CQL, URL locator, and attribution behavior. |
-| [providers-gitlab-rest.md](providers-gitlab-rest.md) | GitLab REST uploads, project, issue, merge-request review, repository/CI, and project-webhook behavior. |
+| [providers-gitlab-rest.md](providers-gitlab-rest.md) | GitLab repository discovery/content search, uploads, project, issue, merge-request review, repository/CI, and project-webhook behavior. |
 | [providers-cloudbees-ci.md](providers-cloudbees-ci.md) | CloudBees CI jobs, builds, Pipelines, logs, test reports, downloads, queue items, and parameterless triggers. |
 
 Configurable broker surfaces:
@@ -86,7 +86,9 @@ use the narrowest upstream role that supports the approved workflow.
   per-user credential for this lookup. If a service-mode policy path can be
   viable, the broker uses the separate read-only
   `credentials.lookup.<service>` credential. No lookup credential is returned to
-  the caller.
+  the caller. GitLab repository discovery and native content search authorize
+  the complete search boundary first, then retrieve and filter candidates using
+  only the selected execution credential, including ownership confirmation.
 - **Resource scopes** - actions resolve concrete scope values such as Jira
   project keys, Confluence spaces, canonical Git repository paths, or a CloudBees
   CI controller alias plus full job name. Every required scope must be
@@ -145,7 +147,7 @@ provider:
 | --- | --- |
 | Jira | Omit `projects` to use effective authorization. Finite project scopes constrain JQL; unrestricted all adds no project predicate; exclusions remain enforced. Empty or ordering-only JQL needs finite projects because the enhanced search endpoint requires a bounded query. |
 | Confluence | Omit `spaces` to use effective authorization. CQL retains exclusions and the page/blog content-type restriction, including under all-space grants. |
-| GitLab REST | `issue.search` and `merge_request.search` require one `project`, even with an all-resource grant. Omit search text to browse that project's items. Filters and sorting are structured inputs, not a scope-rewritten query language. |
+| GitLab REST | `project.search` discovers/browses authorized upstream repositories. The six native `search.*` actions use the effective repository boundary; `project` is required when the configured selected/default engine lacks an instance route (basic code/commits/wiki/comments). `issue.search` and `merge_request.search` list/filter within one required project. |
 | Gmail | `message.search` already searches the connected user's mailbox without a resource selector. The provider has action-level grants and does not inject resource predicates into Gmail queries. |
 | CloudBees CI | Reads and log searches require a concrete controller/job, plus a build where applicable. All-job grants do not turn them into searches across jobs. |
 | Teams | Sends to one managed destination; no search action. |

@@ -549,6 +549,38 @@ Page attachment upload and stream download:
 
 ## GitLab REST
 
+`project.search` discovers or browses authorized upstream repositories; the six
+native categories are `search.issues`, `search.merge_requests`, `search.code`,
+`search.commits`, `search.wiki`, and `search.comments`. These full-text searches
+use the authorized repository set or an explicit `project`. `issue.search` and
+`merge_request.search` list/filter within one required project instead.
+
+```json
+{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"dispatch","archived":false,"maxResults":20}}
+```
+
+```json
+{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"search.code","inputs":{"search":"verify_token","project":"team/project"}}
+```
+
+Omit discovery `search` to browse; `includeNamespaces` defaults true and optional
+`archived` is Boolean. Content requires native `search` and accepts `project`,
+`engine`, `maxResults`, and `pageToken`. The configured default engine applies
+when omitted. Follow the live schema's conditional project requirement: basic
+code/commits/wiki/comments need a project. Advanced/Zoekt need configured tuples;
+`regex` is accepted only by code with Zoekt. Queries are 1–512 UTF-8 bytes after
+trimming. Do not add upstream scopes, endpoints, branch selectors, or fallbacks.
+
+All seven return `items` and `scanStatus`. `more` and `scan_budget` carry
+`nextPageToken` without promising another authorized match. An empty resumable
+page means “No matching authorized items in this page; continue the search.”
+`exhausted` ends the selected stream; `upstream_window` means incomplete coverage.
+A short page does not prove completion. Resume by adding `pageToken` with the
+same query, filters, project, engine, regex, and page size; tokens expire 15 minutes
+after the first page and invalid tokens require a fresh search. Whole-result
+Markdown uses the same bounded projection as JSON, without `readContentFormat`.
+Previews and URLs are untrusted data; object reads require their own grants.
+
 GitLab canonical actions use `note` where typed wrappers say `comment`. Its 16
 rich-content actions use `content` plus `contentFormat` (`markdown` or
 `plain_text`): issue/MR create/update and note add/update; discussion general,

@@ -40,6 +40,9 @@ URLs and allowlist. Lookup resolves the canonical project, including from a
 policy authorization. Use a separate upstream read credential for service-mode
 lookup paths: the Broker's `read_only` declaration does not alter GitLab scopes.
 Per-user-only paths use the selected principal credential for lookup instead.
+Repository discovery and native content search authorize their repository
+boundary first and use only the selected execution credential for all requests;
+they do not require or use a separate lookup credential.
 
 For per-user execution, configure a
 [credential connection](configuration.md#credential-connections) with the
@@ -139,6 +142,188 @@ below and in [bot provisioning](gitlab-bot-provisioning.md). REST grants do not
 authorize native Git fetch/push; configure the [Git gateway](git-http-gateway.md)
 separately. Egress, TLS, limits and credential sources are in the
 [configuration reference](configuration.md).
+
+## Repository discovery and content search
+
+`project.search` discovers or browses authorized upstream repositories. The six
+`search.*` actions use native full-text search across the authorized repository
+set or an explicitly selected project. `issue.search` and
+`merge_request.search` list and filter within one required project; their
+structured filters and pagination remain separate contracts.
+
+| Action | Searches | Typed command |
+| --- | --- | --- |
+| `project.search` | Project names, paths, descriptions; omission browses | `gitlab project search` |
+| `search.issues` | Issue text | `gitlab search issues` |
+| `search.merge_requests` | Merge-request text | `gitlab search merge-requests` |
+| `search.code` | Filenames and code content | `gitlab search code` |
+| `search.commits` | Commit messages | `gitlab search commits` |
+| `search.wiki` | Project wiki content | `gitlab search wiki` |
+| `search.comments` | Supported repository comments | `gitlab search comments` |
+
+Each action is read-only and separately grantable with `service` or `per_user`
+credentials and `git_repository` resources. Namespace/all selectors can discover
+new upstream repositories without catalog entries. The resource catalog defines
+authorization, not a repository inventory. A search grant does not grant ordinary
+object reads or another search category. Grant precedence, exclusions, execution
+contexts, and invocation-token restrictions apply to the complete search.
+
+```bash
+agent-access gitlab project search --search dispatch --archived false --max-results 20
+agent-access gitlab project search --include-namespaces false
+agent-access gitlab search issues --search 'credential rotation' --max-results 20
+agent-access gitlab search merge-requests --search 'credential rotation'
+agent-access gitlab search code --search verify_token --project team/project
+agent-access gitlab search commits --search rotation --project team/project
+agent-access gitlab search wiki --search onboarding --project team/project
+agent-access gitlab search comments --search regression --project team/project
+```
+
+Discovery accepts optional `search` (1–512 UTF-8 bytes after trimming),
+`includeNamespaces` (Boolean, default `true`), and `archived` (optional Boolean;
+omission includes both states). Omit `search` to browse; a supplied empty string
+is invalid. GitLab supplies name/path/description matching, optionally including
+ancestor namespaces. Broker does not interpret `*` as browse or emulate matching.
+Results use increasing project ID order, not relevance order.
+
+Content search requires `search` with the same byte limit and accepts optional
+`project` (canonical path) and `engine` (`basic`, `advanced`, or `zoekt`, within
+configured choices). Omission selects `default_engine`. The selected engine's
+native syntax, tokenization, and ranking apply; there is no JQL/CQL translation.
+`search.code` alone accepts `regex`, default `false`, and supplying it requires
+`zoekt`. The typed flag is `--regex`. No action accepts arbitrary upstream
+scopes, group selectors, project arrays, branch/ref choices, or query parameters.
+
+All seven actions accept `maxResults` from 1 through
+`providers.gitlab.search.max_results` (at most 100) and optional `pageToken`
+(at most 512 ASCII bytes). The configured cap is the default page size. Typed
+flags are `--max-results` and `--page-token`; all commands support `--output-format
+json|markdown` and the existing local output options. Their previews are fixed
+projections, without `readContentFormat`. All seven input schemas reject unknown
+fields.
+
+These actions use the same catalog, generic invoke, send, OpenAPI, and MCP
+contracts as other actions. For example:
+
+```bash
+agent-access invoke gitlab.search.code --input-json '{"search":"verify_token","project":"team/project"}'
+```
+
+```json
+{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"dispatch","maxResults":20}}
+```
+
+For MCP, call the discovered action tool with `{"inputs":{"search":"dispatch"}}`.
+Use `actions_describe` with canonical `service="gitlab"` and
+`action="search.code"` for current capabilities and extended grammar. No
+additional search endpoint or MCP-only route is used.
+
+### Configured engines and coverage
+
+The default engine matrix is:
+
+| Engine | Project categories | Instance categories |
+| --- | --- | --- |
+| `basic` | Issues, merge requests, code, commits, wiki, comments | Issues, merge requests |
+| `advanced` | Disabled until configured | Disabled until configured |
+| `zoekt` | Code only, disabled until configured | Code only, disabled until configured |
+
+When the selected engine has no instance route for the category, `project` is
+required, including when `engine` is omitted. The live action schema expresses
+this condition. Advanced search requires the deployment's licensed infrastructure;
+Zoekt requires its own infrastructure and scope support. Enabling a tuple in
+configuration does not establish that GitLab can execute or completely index it.
+Discovery is offline and reports configured capability and locally usable
+credentials, not live health or index completeness.
+
+The Broker sends an explicit engine and requires a matching `X-Search-Type` on
+successful Search API responses. A missing/mismatched header produces
+`upstream_protocol_failed`; a proxy must preserve it. Qualify configured tuples,
+query syntax, default-branch/index coverage, and archived/fork inclusion against
+the deployed GitLab version. The commands provide no all-branch or complete
+history guarantee and no caller control over those upstream coverage defaults.
+There is no engine fallback, broadened query, or automatic per-project crawling.
+
+See [search configuration](configuration.md#providersgitlab) for the closed
+engine/category matrix, validation rules, and scan budgets. Disable content
+categories unsupported by the deployment. Discovery remains independent of the
+content-engine matrix.
+
+### Search results and continuation
+
+All seven actions return `items`, `count` (exactly the array length),
+`maxResults`, and `scanStatus`, plus `nextPageToken` when continuation is possible.
+Content actions also return the effective `engine`; discovery omits it.
+
+| `scanStatus` | Meaning | Continuation |
+| --- | --- | --- |
+| `more` | Authorized items were returned and upstream work remains; another authorized match is not guaranteed | Present |
+| `scan_budget` | No authorized items were found in this bounded page of work; continue the search | Present |
+| `exhausted` | The selected upstream stream ended before a known retrieval ceiling | Absent |
+| `upstream_window` | A retrieval ceiling prevents continuing; coverage is incomplete | Absent |
+
+An empty resumable page means “No matching authorized items in this page;
+continue the search.” A short page does not prove completion. `exhausted` describes
+the selected endpoint/index at query time, not every branch or historical file.
+Advanced search has a 10,000-candidate retrieval window; fixed page sizes can
+stop earlier (for example, 9,975 with size 75). `upstream_window` may accompany
+a nonempty final page and never claims complete coverage. No upstream totals,
+excluded/scanned counts, facets, raw pagination URLs, or `hasMoreResults` claim
+are exposed.
+
+Repeat the same action, search, filters, project, engine, regex choice, and page
+size with the returned `pageToken`. Tokens are confidential, expire 15 minutes
+after the original search begins, and are reauthorized on every request.
+Pagination never extends expiry. Changes to relevant authority, credentials,
+endpoint/capabilities, or confirmed explicit-project identity invalidate the
+token. Routine delegated-access refresh does not. Without a configured stable
+key, reload/restart invalidates tokens. Restart without the token after an
+`input_invalid` continuation error. Offset pages and changing indexes are not a
+snapshot, so concurrent changes can cause repeated or missing results.
+
+### Repository checks and safe previews
+
+All collection requests and content-hit project confirmations use the selected
+execution credential; missing personal access never falls back to a shared
+credential. Discovery authorizes current full project-list metadata directly.
+Content search confirms each owning project's current numeric ID/path, including
+an explicitly selected project's current path, before releasing a hit. Exact
+path grants do not follow moves into ungranted paths. Known unauthorized hits and
+content candidates whose project confirmation returns 403/404 are discarded.
+Collection and explicit-project lookup failures remain errors; malformed or
+contradictory ownership and other confirmation failures abort the operation.
+
+| Category | Returned content |
+| --- | --- |
+| Projects | ID, canonical path, name, bounded description, default branch, visibility, archived state |
+| Issues / merge requests | Owning project, ID/IID, title, state, optional bounded description preview; MRs use their target/owning project |
+| Code | Owning project, relative file path, returned ref/starting line, bounded upstream snippet |
+| Commits | Owning project, commit ID, title, bounded message preview |
+| Wiki | Owning project, returned path/title, bounded upstream snippet |
+| Comments | Owning project, note ID, supported parent kind, bounded body preview |
+
+Optional URLs are validated against the configured web base, current project,
+category, and item identity, or safely constructed. A valid hit can have no URL.
+Comment parents are `Issue`, `MergeRequest`, `Commit`, and project `Snippet`;
+missing usable parent locators are omitted rather than invented. Group wiki and
+recognized non-repository records are excluded. Unknown result kinds or ambiguous
+ownership fail closed. Preview text is capped at 4 KiB of UTF-8 with an explicit
+`previewTruncated` flag; upstream snippets are not a promise of an exact matching
+passage. Treat previews and URLs as untrusted content.
+
+Whole-page processing preserves authorized hits without buffering an unreturned
+suffix. Work is bounded by candidate pages, actual requests, aggregate decoded
+bytes, and the operation deadline. A failure during a page returns no advanced
+cursor. Broad upstream credentials can cause repeated empty resumable pages and
+reach retrieval ceilings before finding every eligible match. Progress and timing
+can disclose coarse search density; authorized free text may mention other
+repositories. The feature does not redact those references.
+
+Search audit records retain admitted authority, selected mode, engines, route
+class, returned count, status, continuation presence, and distinct released
+project paths. They omit query text, previews, denied candidates, scan counts,
+and cursor bytes. Sensitive-output/no-store handling applies before all JSON,
+Markdown, CLI, and MCP delivery.
 
 ## Project uploads
 
@@ -325,6 +510,8 @@ Current GitLab REST actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
+| `project.search` | `repository` | no separate lookup; execution credential only |
+| `search.issues`, `search.merge_requests`, `search.code`, `search.commits`, `search.wiki`, `search.comments` | `repository` | no separate lookup; execution credential confirms ownership |
 | `project.upload` | `repository` | yes; one multipart file |
 | `project.view` | `repository` | yes |
 | `issue.view` | `repository` | yes |
@@ -594,7 +781,8 @@ GitLab web URLs must match `providers.gitlab.web_base_url`; query strings and
 fragments are rejected. Bare numeric project IDs are rejected as caller locators
 so policy is always expressed in repository-path terms.
 
-Issue and merge-request searches require one canonical `project` path even when
+`issue.search` and `merge_request.search` list and filter within one required
+canonical `project` path even when
 the caller has a namespace or all-repository grant. Those grants authorize the
 selected project; they do not enumerate projects or turn these actions into
 global searches. Project URLs and numeric project IDs are not search locators.
@@ -1210,7 +1398,7 @@ links, resolves references, or fetches related resources.
 Non-streaming retrieval actions advertise whole-result Markdown for these
 families:
 
-- `project.view`;
+- `project.view`, `project.search`, and all six `search.*` actions;
 - `issue.view`, `issue.search`, and `issue.note.list/view`;
 - `merge_request.view`, `merge_request.search`,
   `merge_request.note.list/view`, `merge_request.discussion.list/view`, reviewer,
@@ -1345,7 +1533,9 @@ and ref before play and applies the same default/protected branch denial used by
 
 ## Results and audit
 
-Successful provider results wrap GitLab objects under a service-specific key,
+Repository discovery and native content search use the `items` and `scanStatus`
+contract [above](#search-results-and-continuation). Other successful provider
+results wrap GitLab objects under a service-specific key,
 including `project`, `issue`, `issues`, `note`, `notes`, `mergeRequest`,
 `mergeRequests`, `discussion`, `discussions`, `branches`, `branch`,
 `protectedBranches`, `protectedBranch`, `protectedBranchVerification`, `file`,

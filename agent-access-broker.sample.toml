@@ -831,6 +831,24 @@ max_raw_download_bytes = 104857600
 
 [providers.gitlab.search]
 max_results = 50
+default_engine = "basic"
+max_candidate_pages = 4
+max_upstream_requests = 128
+max_scan_bytes = 16777216
+
+# Declare only engine/category/scope tuples qualified on this GitLab deployment.
+# Basic code, commits, wiki, and comments require an explicit project.
+[providers.gitlab.search.engines.basic]
+project_categories = ["issues", "merge_requests", "code", "commits", "wiki", "comments"]
+instance_categories = ["issues", "merge_requests"]
+
+[providers.gitlab.search.engines.advanced]
+project_categories = []
+instance_categories = []
+
+[providers.gitlab.search.engines.zoekt]
+project_categories = []
+instance_categories = []
 
 # [gateways.gitlab_git]
 # kind = "git_http"
