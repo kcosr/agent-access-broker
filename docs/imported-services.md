@@ -147,29 +147,34 @@ statement of an action's upstream effect. It selects grant actions, and it is th
 ceiling of [read-only identity paths](managed-identity.md#read-only-paths): a
 read-only username binding or identity token can list and call only actions
 classified as Read-only, within the person's grants. Unreviewed actions are
-Write-capable and stay hidden from those paths. A reclassification takes effect
-on every read-only path for requests admitted after acceptance publishes it; a
-request already admitted is judged on the catalog it was admitted with.
+Write-capable and stay hidden from those paths.
+
+A request is judged on the runtime snapshot it was admitted with, so a
+reclassification applies to requests admitted after acceptance publishes it. A
+request already in flight for a changed action can still be refused by the
+existing import fences: at grant selection (for command imports, "policy denied
+command action") or before dispatch ("imported service changed or is
+unavailable; repeat discovery").
 
 Acceptance confirms and reports these changes:
 
 - **Confirmation.** An accept request needs `confirmAffectedGrants: true` when an
   existing grant references a changed action, including one whose Read-only
-  selection changed. The grant inventory follows the active
-  [policy authority](configuration.md#policy): under `managed`, every
-  non-deleted managed grant, disabled ones included; under `toml`, every
-  configured grant, referenced as `toml:<index>`. A grant counts once however
-  many subjects it has. Preview, acceptance and refusal read the same inventory.
-- **Classification changes.** The accept response includes
+  selection changed. Every managed grant of the service that is not deleted
+  counts, disabled ones included, once however many subjects it has. Preview,
+  acceptance and refusal read the same grants.
+- **Classification changes.** The accept result always includes
   `classificationChanges`, a list of `{action, from, to}` where `from` is
   `"read"`, `"write"` or `null` (a newly accepted action) and `to` is `"read"` or
   `"write"`. It lists each selected action whose current non-retired accepted
   definition (enabled, disabled or quarantined) has the other classification, and
-  each newly accepted action. Unchanged, unselected and retired actions are
-  omitted. Broker computes it from the validated selections and the accepted
-  state, never from upstream hints. A refusal for a missing
-  `confirmAffectedGrants` carries the same list in its `target`. The saved preview
-  does not include it, and service settings updates cannot change classification.
+  each newly accepted action; an acceptance that reclassifies nothing returns an
+  empty list. Unchanged, unselected and retired actions are omitted. Broker
+  computes it from the validated selections and the accepted state, never from
+  upstream hints. A refusal for a missing `confirmAffectedGrants` keeps its
+  message and `input_invalid` code and carries the same list in its `target`.
+  Saved-preview reads, settings updates and status changes do not report it;
+  settings updates cannot change classification.
 - **Portal review.** The import-review confirmation lists the same changes,
   computed from the pending selections, and states that read-only identity access
   will include any action changed to Read-only. The server's refusal remains
@@ -325,7 +330,9 @@ and `resourceTypeChanges`, the decision for each resource type the command
 adds, changes, restores or removes; see
 [Imported resource types](#imported-resource-types). Discovery and preview
 results add `resourceTypeChanges` with the stored resources each decision
-currently depends on. List, inspect, and saved-preview reads permit
+currently depends on. Accept results add `classificationChanges`; see
+[classification review](#classification-and-read-only-identity-access). List,
+inspect, and saved-preview reads permit
 administrators and auditors. Discovery and all changes require administrator
 write authority and normal browser CSRF protection. They are not agent-facing MCP tools. Service-policy
 managers may manage grants for approved actions but cannot import tools or change

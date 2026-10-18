@@ -434,10 +434,7 @@ All notable changes to this project are documented in this file.
 - `agent-access admin principals identity-bindings enable` and `disable` are
   removed without an alias. Use `identity-bindings update PRINCIPAL BINDING_ID
   [--enabled BOOL] [--read-only BOOL] --expected-version N`, for example
-  `--enabled false` in place of `disable`. Under `policy.authority = "toml"`,
-  import acceptance now requires `confirmAffectedGrants` when a configured grant
-  references a changed action; it was never required there before, so automation
-  that accepts such changes must confirm them.
+  `--enabled false` in place of `disable`.
 
 ### Added
 
@@ -1015,10 +1012,9 @@ All notable changes to this project are documented in this file.
   revision, updatedAt}` with every field always present. Binding and
   identity-token audit records carry `{enabled, readOnly, version|revision}`
   before and after values read in the transaction. Import acceptance returns
-  `classificationChanges` (`{action, from, to}`), also in its
-  `confirmAffectedGrants` refusal, and counts the active policy authority's
-  grants: every non-deleted managed grant, disabled ones included, or every
-  configured grant as `toml:<index>`. The portal's principal page shows an
+  `classificationChanges` (`{action, from, to}`) in its result and in the
+  `target` of its `confirmAffectedGrants` refusal; a reclassification applies to
+  requests admitted after it is published. The portal's principal page shows an
   **Access paths** table (identity token first, then bindings) with Enabled and
   Read-only toggles, read-only for auditors, and the import confirmation lists
   read/write changes. Managed-store migration

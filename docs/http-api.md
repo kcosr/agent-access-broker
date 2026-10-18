@@ -3143,10 +3143,11 @@ Creation accepts optional `readOnly`, default `false`. The binding PATCH takes
 optional `enabled` and `readOnly` with the required `expectedVersion`; at least one
 setting is required and unknown fields are rejected. A change to either setting
 advances the version once and ends the binding's MCP sessions; a PATCH that
-changes nothing returns the binding unchanged. Success audit targets are
-`{principal, bindingId, namespace, before, after}`, where `before` and `after` are
-`{enabled, readOnly, version}` read inside the transaction (`before` is null on
-creation).
+changes nothing returns the binding unchanged at the same version and still
+writes a success audit record whose `before` equals `after`. Success audit
+targets are `{principal, bindingId, namespace, before, after}`, where `before` and
+`after` are `{enabled, readOnly, version}` read inside the transaction (`before`
+is null on creation and `after` is null on deletion).
 
 `configuredNamespaces` entries contain `{namespace, credentialTransports}`, with
 transport values `authorization_user` or `caller_authorization`; no caller secrets
@@ -3188,14 +3189,15 @@ write) takes optional `enabled` and `readOnly` with the required
 `expectedRevision`; at least one setting is required and unknown fields are
 rejected. A stale revision returns 409 `identity_version_conflict`. A change
 advances the revision once and ends fingerprint MCP sessions; a PATCH that
-changes nothing returns the metadata unchanged. Its audit preflight and success
-records use target `{principal, before, after}` with `{enabled, readOnly,
-revision}` read inside the transaction. Set, generation and removal keep both
-settings, and their success records' `after` includes `configured`, `enabled`,
-`readOnly` and `revision`. A disabled token is denied like an unknown fingerprint
-and keeps its secret, so reveal, replace, generate and remove still work.
-Inventory operations preserve the separate identity-access gate and username
-bindings.
+changes nothing returns the metadata unchanged at the same revision and still
+writes a success audit record whose `before` equals `after`. Its audit preflight
+target is `{principal}`; its success target is `{principal, before, after}` with
+`{enabled, readOnly, revision}` read inside the transaction. Set, generation and
+removal keep both settings, and their success records' `after` includes
+`configured`, `enabled`, `readOnly` and `revision`. A disabled token is denied
+like an unknown fingerprint and keeps its secret, so reveal, replace, generate
+and remove still work. Inventory operations preserve the separate
+identity-access gate and username bindings.
 The runtime catalog and send schema mark import `/body/token` as sensitive and
 reveal `/result/token` as sensitive output. See [managed identity](managed-identity.md)
 for trust, provisioning and rotation.
@@ -3375,6 +3377,18 @@ token input is marked sensitive and plaintext is never returned. These routes ar
 excluded from agent MCP tools. Restoring retained grants requires confirmation.
 Preview results include grant IDs by action, so reviewing one changed action need
 not confirm unrelated grants on the same service.
+
+The `POST /v1/admin/imports/{service}/accept` result always includes
+`classificationChanges: [{action, from, to}]`, with `from` `"read"`, `"write"` or
+`null` (a newly accepted action) and `to` `"read"` or `"write"`: each selected
+action whose `readOnly` differs from its current accepted definition, and each
+action the acceptance adds. The list is empty when nothing is reclassified. A
+refusal for a missing `confirmAffectedGrants` is a 400 `input_invalid` whose
+`target.classificationChanges` carries the same list. Preview, settings and status
+results do not include it. A reclassification limits
+[read-only identity paths](managed-identity.md#read-only-paths) for requests
+admitted after it is published; see
+[classification review](imported-services.md#classification-and-read-only-identity-access).
 
 Approved OAuth registrations returned by `GET /v1/admin/imports` include
 `scopeMode` on each `permissionProfiles` entry, alongside its `id` and `scopes`

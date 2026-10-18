@@ -271,10 +271,12 @@ permitted read selects the same grant as on a full-access path.
   administrator classifies them as reads.
 
 A request is judged against the runtime snapshot it was admitted with: a
-reclassification applies to requests admitted after it is published. Existing
-import fences can still refuse an already resolved call with their changed or
-unavailable denial. Local stdio behind fingerprint-aware ingress sees the same
-filtered catalog through REST, where a write call returns 403
+reclassification applies to requests admitted after it is published. A call
+already in flight for a changed imported action can still be refused by the
+existing import fences, at grant selection (for command imports, "policy denied
+command action") or before dispatch ("imported service changed or is
+unavailable; repeat discovery"). Local stdio behind fingerprint-aware ingress
+sees the same filtered catalog through REST, where a write call returns 403
 `service_action_denied` with reason `identity access is read-only`. Read-only
 paths do not restrict local output files.
 

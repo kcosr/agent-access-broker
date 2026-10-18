@@ -435,8 +435,8 @@ catalog classifies as reads, and refuses writes before credential lookup, OAuth
 leasing or provider dispatch. It removes no grant, so it cannot let a
 lower-precedence grant win. The ceiling is only as accurate as classification:
 actions are writes unless a backend or a reviewed import selection classifies
-them as reads, and reclassification applies to read-only paths immediately.
-Issued Broker tokens and browser sign-in keep the person's full grants.
+them as reads, and a reclassification applies to requests admitted after it is
+published. Issued Broker tokens and browser sign-in keep the person's full grants.
 
 MCP proofs pin the original human, binding or identity-token revision, and the
 path's read-only setting through body intake and final admission. Identity

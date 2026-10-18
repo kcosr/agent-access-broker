@@ -678,16 +678,18 @@ Identity-access pause gates trusted username and fingerprint invocation together
 it does not pause issued Broker tokens or browser login. Bindings are exact
 namespace/name mappings to humans. Each binding and the identity token has its
 own Enabled and Read-only settings; the two `update` commands require at least
-one of `--enabled` and `--read-only` (`true` or `false`). A read-only path can use
-only actions classified as reads. Read the current version or revision before a
-mutation; a conflict requires refreshing state. Disabling a binding reserves its
-name; renaming or moving it requires delete/create. Disabling the identity token
-keeps its secret. Inventory changes preserve bindings, the shared pause and the
-identity token's settings. Import bytes are exact, so files must not end with a
-newline; only `reveal` returns the stored secret. All commands use an
-administration credential. Inspect/list permit auditors; reveal and changes
-require the administrator role. See [managed identity](managed-identity.md) for
-lifecycle and [access path controls](managed-identity.md#access-path-controls).
+one of `--enabled` and `--read-only`, each taking `true` or `false`, while
+`identity-bindings create --read-only` is a flag without a value. A read-only
+path can use only actions classified as reads. Read the current version or
+revision before a mutation; a conflict requires refreshing state. Disabling a
+binding reserves its name; renaming or moving it requires delete/create.
+Disabling the identity token keeps its secret. Inventory changes preserve
+bindings, the shared pause and the identity token's settings. Import bytes are
+exact, so files must not end with a newline; only `reveal` returns the stored
+secret. All commands use an administration credential. Inspect/list permit
+auditors; reveal and changes require the administrator role. See
+[managed identity](managed-identity.md) for lifecycle and
+[access path controls](managed-identity.md#access-path-controls).
 
 
 Administrative management of principals, rights, tokens, credentials, and

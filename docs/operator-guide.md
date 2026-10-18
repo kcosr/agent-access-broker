@@ -1288,10 +1288,8 @@ leaves existing secrets, fingerprints and revisions unchanged; from this version
 every human must have exactly one record, and a missing record fails readiness.
 No operator action is needed beyond the usual forward-migration steps. Deploy the
 matching portal and CLI, which change these settings with
-`identity-bindings update` and `identity-token update`. Review scripts and
-[management API](http-api.md#administrator-identity-access-and-bindings)
-automation that change bindings or read identity-token metadata against
-[breaking changes](../CHANGELOG.md). Rolling back
+`identity-bindings update` and `identity-token update`. Review CLI scripts that
+change bindings against [breaking changes](../CHANGELOG.md). Rolling back
 across `029` needs the backup taken before it: the previous binary refuses the
 migrated store, and settings changed after the upgrade are lost with the restored
 backup.

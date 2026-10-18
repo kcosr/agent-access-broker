@@ -195,6 +195,8 @@ export type ImportRecordResult = {
   /** Acceptances that deleted attribute values or dropped resource types. */
   resourceTypeEffects?: ImportResourceTypeEffects;
 };
+/** An acceptance's result, with how it reclassified its selected actions (empty when nothing changed). */
+export type ImportAcceptResult = ImportRecordResult & { classificationChanges: ImportClassificationChange[] };
 export type ImportPreviewResult = ImportRecordResult & {
   scopedMcpWarnings: ImportScopedMcpWarning[];
   preview: ImportPreview | null;

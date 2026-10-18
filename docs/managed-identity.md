@@ -132,7 +132,8 @@ rejected as usual. Pause is the only person-level control.
 Changing **Enabled** or **Read-only** advances that binding's version or the
 identity token's revision once and ends the path's open MCP sessions at their
 next request; clients initialize a new session. An update that changes nothing
-writes nothing, advances nothing and ends no session. Restoring an earlier value
+stores nothing, advances nothing and ends no session; it is still audited, with
+the same settings before and after. Restoring an earlier value
 does not revive old sessions. Identity-token changes leave username sessions
 intact, and binding changes leave fingerprint sessions intact. Resource discovery
 cursors bind the read-only setting, so a cursor issued under the other setting is
