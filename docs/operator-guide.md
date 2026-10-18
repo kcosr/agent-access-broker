@@ -1281,8 +1281,9 @@ provider; revoke the application there for the affected people.
 Migration `029_identity_access_path_controls` follows `028_oauth_revocations`.
 It adds the per-path **Enabled** and **Read-only** settings of
 [managed identity](managed-identity.md#access-path-controls): `read_only` on
-username bindings, and `enabled` and `read_only` on identity-token records. Every
-existing path stays enabled and not read-only, so access is unchanged. It adds a
+username bindings, and `enabled` and `read_only` on identity-token records. Access
+is unchanged: existing binding Enabled values and shared pauses are kept, identity
+tokens default to enabled, and Read-only defaults to off. It adds a
 not-configured identity-token record (no secret) for each human without one and
 leaves existing secrets, fingerprints and revisions unchanged; from this version
 every human must have exactly one record, and a missing record fails readiness.

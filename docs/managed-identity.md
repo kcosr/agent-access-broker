@@ -66,8 +66,10 @@ username binding (any number, HTTP MCP only). Each path has its own controls:
 | Identity token | **Enabled** | A disabled token is denied like an unknown fingerprint and keeps its secret |
 | Identity token | **Read-only** | Fingerprint access can use only actions classified as reads |
 
-Every existing and new path is enabled and not read-only until an administrator
-changes it. There is no person-level read-only setting and no write-only mode.
+New paths are enabled and not read-only until an administrator changes them.
+Upgrading keeps each existing binding's Enabled setting, enables existing
+identity tokens and leaves every path not read-only. There is no person-level
+read-only setting and no write-only mode.
 
 ### Read-only paths
 
@@ -291,6 +293,7 @@ remain supported.
 
 Follow the [upgrade and rollback runbook](operator-guide.md#upgrade-and-rollback)
 for the managed-store migrations. They preserve existing pauses, create no
-username bindings, keep every existing path enabled and not read-only, add a
+username bindings, keep each binding's Enabled setting, enable identity tokens,
+leave every path not read-only, add a
 not-configured identity-token record for each human without one, and require a
 pre-upgrade backup for rollback.

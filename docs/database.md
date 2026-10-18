@@ -761,8 +761,9 @@ refuses the newer ledger.
 
 Migration `029_identity_access_path_controls`, appended after
 `028_oauth_revocations`, adds `read_only` to `principal_username_bindings` and
-`enabled` and `read_only` to `principal_identity_tokens`, as 0/1 columns whose
-defaults keep every existing path enabled and not read-only. It inserts a
+`enabled` and `read_only` to `principal_identity_tokens`, as 0/1 columns.
+Existing binding `enabled` values and shared pauses are preserved, identity-token
+`enabled` defaults to 1, and both `read_only` columns default to 0. It inserts a
 not-configured identity-token row (no secret, revision 1, the principal's
 `updated_at`) for every human without one and leaves existing rows' secrets,
 fingerprints and revisions unchanged. Triggers create that row with every new

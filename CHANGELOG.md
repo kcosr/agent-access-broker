@@ -1018,8 +1018,9 @@ All notable changes to this project are documented in this file.
   **Access paths** table (identity token first, then bindings) with Enabled and
   Read-only toggles, read-only for auditors, and the import confirmation lists
   read/write changes. Managed-store migration
-  `029_identity_access_path_controls` adds the settings with defaults that keep
-  every existing path enabled and not read-only, backfills a not-configured
+  `029_identity_access_path_controls` adds the settings without changing access:
+  existing binding Enabled values and pauses are kept, identity tokens default to
+  enabled, and Read-only defaults to off. It backfills a not-configured
   identity-token record for every human without one, and creates it with every
   new human; rolling back across it needs a pre-migration backup. See
   [managed identity](docs/managed-identity.md#access-path-controls).
