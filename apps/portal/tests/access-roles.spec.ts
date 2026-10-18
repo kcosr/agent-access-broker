@@ -42,9 +42,9 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
     else if (pathname === "/v1/admin/principals") result = [principal()];
     else if (pathname === "/v1/admin/principals/target") result = principal();
     else if (pathname.endsWith("/login-methods")) result = [{ method: "local_password", status: "active" }];
-    else if (pathname.endsWith("/identity-token")) result = { principalId: "target", configured: true, revision: 1, updatedAt: "2026-10-10T00:00:00Z" };
+    else if (pathname.endsWith("/identity-token")) result = { principalId: "target", configured: true, enabled: false, readOnly: true, revision: 1, updatedAt: "2026-10-10T00:00:00Z" };
     else if (pathname.endsWith("/identity-access")) result = { principalId: "target", incarnation: "gate-fixture", paused: false, version: 1, updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin" };
-    else if (pathname.endsWith("/identity-bindings")) result = { bindings: [{ bindingId: "binding-fixture", principalId: "target", namespace: "retired_namespace", username: "Alice", enabled: true, version: 3, createdAt: "2026-10-10T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin", namespaceAvailable: false }], configuredNamespaces: [{ namespace: "managed_linux", credentialTransports: ["authorization_user", "caller_authorization"] }] };
+    else if (pathname.endsWith("/identity-bindings")) result = { bindings: [{ bindingId: "binding-fixture", principalId: "target", namespace: "retired_namespace", username: "Alice", enabled: true, readOnly: false, version: 3, createdAt: "2026-10-10T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin", namespaceAvailable: false }], configuredNamespaces: [{ namespace: "managed_linux", credentialTransports: ["authorization_user", "caller_authorization"] }] };
     else if (pathname === "/v1/admin/policy/status") result = { ...config, writable: true, policyGeneration: 1, counts: { active: 1, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };
     else if (pathname === "/v1/admin/policy/catalog") result = catalog;
     else if (pathname === "/v1/admin/policy/grants") result = [grant];
@@ -101,11 +101,17 @@ test("Auditor inspects managed grants, principals, tokens and system without adm
   await expect(page.getByText("This grant is read-only.", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Save grant", exact: true })).toHaveCount(0);
   await page.goto(`${baseUrl}/ui/admin/principals/target`);
-  await expect(page.getByText("Identity token", { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Identity access", exact: true })).toContainText("Namespace unavailable");
-  await expect(page.getByRole("table", { name: "Username bindings" })).toContainText("Alice");
-  for (const name of ["Pause identity access", "Add username binding", "Disable binding retired_namespace/Alice", "Delete binding retired_namespace/Alice", "Reveal identity token", "Copy identity token", "Save access", "Reset local password", "Disable user", "Save profile"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Identity token", exact: true })).toContainText("This identity token is disabled in Access paths.");
+  // Auditors see every access path and its settings, without controls.
+  const paths = page.getByRole("table", { name: "Access paths", exact: true });
+  await expect(paths.getByRole("row")).toHaveCount(3);
+  await expect(paths.getByRole("row").nth(1)).toHaveAccessibleName(/^Identity token/);
+  await expect(paths.getByRole("row", { name: /^Identity token/ })).toContainText(/Configured\s*Disabled\s*Read-only\s*1/);
+  await expect(paths.getByRole("row", { name: /^retired_namespace\/Alice/ })).toContainText(/Namespace unavailable\s*Enabled\s*Full access\s*3/);
+  await expect(paths.getByRole("switch")).toHaveCount(0);
+  for (const name of ["Pause identity access", "Add username binding", "Delete binding retired_namespace/Alice", "Reveal identity token", "Copy identity token", "Save access", "Reset local password", "Disable user", "Save profile"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Exact username", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: "Read-only", exact: true })).toHaveCount(0);
   await page.goto(`${baseUrl}/ui/admin/principals/target/tokens`);
   for (const name of ["Issue token", "Issue setup token", "Issue admin token"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
   await page.goto(`${baseUrl}/ui/admin/system`);
@@ -144,7 +150,7 @@ test("identity pause works without inventory and a stale gate refreshes without 
   await fixture(page, "admin", false);
   let access = { principalId: "target", incarnation: "gate-fixture", paused: false, version: 4, updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin" };
   const writes: unknown[] = [];
-  await page.route("**/v1/admin/principals/target/identity-token", (route) => route.fulfill({ json: envelope({ principalId: "target", configured: false, revision: null, updatedAt: null }) }));
+  await page.route("**/v1/admin/principals/target/identity-token", (route) => route.fulfill({ json: envelope({ principalId: "target", configured: false, enabled: true, readOnly: false, revision: 1, updatedAt: "2026-10-10T00:00:00Z" }) }));
   await page.route("**/v1/admin/principals/target/identity-access", async (route) => {
     if (route.request().method() === "PATCH") {
       const body = route.request().postDataJSON();
@@ -174,12 +180,14 @@ test("identity pause works without inventory and a stale gate refreshes without 
   await expect(identity).toContainText("Independently valid issued Broker tokens and browser sign-in remain available.");
 });
 
-test("username bindings preserve exact names, namespace availability and version checks", async ({ page }) => {
+test("username bindings preserve exact names, namespace availability, read-only creation and version checks", async ({ page }) => {
   await fixture(page, "admin", false);
-  const binding = { bindingId: "new-binding", principalId: "target", namespace: "managed_linux", username: "Alice+01@example.test", enabled: true, version: 1, createdAt: "2026-10-10T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin", namespaceAvailable: true };
+  const binding = { bindingId: "new-binding", principalId: "target", namespace: "managed_linux", username: "Alice+01@example.test", enabled: true, readOnly: false, version: 1, createdAt: "2026-10-10T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin", namespaceAvailable: true };
   let bindings: typeof binding[] = [];
   const writes: unknown[] = [];
-  let conflict = true;
+  let patchConflict = true;
+  let deleteConflict = true;
+  const conflict = { status: 409, json: { ok: false, reasonCode: "identity_version_conflict", error: { message: "Version changed" } } };
   await page.route("**/v1/admin/principals/target/identity-bindings**", async (route) => {
     const request = route.request();
     if (request.method() === "GET") {
@@ -189,12 +197,22 @@ test("username bindings preserve exact names, namespace availability and version
     const body = request.postDataJSON();
     writes.push({ method: request.method(), body, query: new URL(request.url()).search });
     if (request.method() === "POST") bindings = [{ ...binding, ...body }];
-    if (request.method() === "PATCH") bindings = [{ ...bindings[0]!, enabled: body.enabled, version: bindings[0]!.version + 1, namespaceAvailable: false }];
+    if (request.method() === "PATCH") {
+      // Another administrator changes the binding before the first Read-only change.
+      if (patchConflict && "readOnly" in body) {
+        patchConflict = false;
+        bindings = [{ ...bindings[0]!, version: bindings[0]!.version + 1 }];
+        await route.fulfill(conflict);
+        return;
+      }
+      const { expectedVersion: _expected, ...change } = body;
+      bindings = [{ ...bindings[0]!, ...change, version: bindings[0]!.version + 1, namespaceAvailable: false }];
+    }
     if (request.method() === "DELETE") {
-      if (conflict) {
-        conflict = false;
-        bindings = [{ ...bindings[0]!, version: 4 }];
-        await route.fulfill({ status: 409, json: { ok: false, reasonCode: "identity_version_conflict", error: { message: "Version changed" } } });
+      if (deleteConflict) {
+        deleteConflict = false;
+        bindings = [{ ...bindings[0]!, version: bindings[0]!.version + 1 }];
+        await route.fulfill(conflict);
         return;
       }
       bindings = [];
@@ -202,35 +220,123 @@ test("username bindings preserve exact names, namespace availability and version
     await route.fulfill({ json: envelope(bindings[0] ?? {}) });
   });
   await page.goto(`${baseUrl}/ui/admin/principals/target`);
-  await page.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
-  await page.getByLabel("Exact username", { exact: true }).fill(" Alice ");
-  await expect(page.getByRole("button", { name: "Add username binding", exact: true })).toBeDisabled();
-  await expect(page.getByText("Enter an exact username using the allowed characters; spaces are not removed.", { exact: true })).toBeVisible();
-  await page.getByLabel("Exact username", { exact: true }).fill(binding.username);
-  await page.getByRole("button", { name: "Add username binding", exact: true }).click();
-  const row = page.getByRole("table", { name: "Username bindings" }).getByRole("row").filter({ hasText: binding.username });
-  await expect(row).toContainText("Enabled");
-  await row.getByRole("button", { name: /^Disable binding/ }).click();
-  await expect(row).toContainText("Disabled");
+  const identity = page.getByRole("region", { name: "Identity access", exact: true });
+  const paths = identity.getByRole("table", { name: "Access paths", exact: true });
+  await expect(paths.getByRole("row")).toHaveCount(2);
+  await expect(identity.getByText("No username bindings.", { exact: true })).toBeVisible();
+  await identity.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
+  await identity.getByLabel("Exact username", { exact: true }).fill(" Alice ");
+  await expect(identity.getByRole("button", { name: "Add username binding", exact: true })).toBeDisabled();
+  await expect(identity.getByText("Enter an exact username using the allowed characters; spaces are not removed.", { exact: true })).toBeVisible();
+  await identity.getByLabel("Exact username", { exact: true }).fill(binding.username);
+  const createReadOnly = identity.getByRole("checkbox", { name: "Read-only", exact: true });
+  await expect(createReadOnly).not.toBeChecked();
+  await createReadOnly.check();
+  await identity.getByRole("button", { name: "Add username binding", exact: true }).click();
+  const name = `managed_linux/${binding.username}`;
+  const row = paths.getByRole("row", { name: new RegExp(`^${name.replace(/[.+]/g, "\\$&")}`) });
+  const enabled = row.getByRole("switch", { name: `Binding ${name} enabled`, exact: true });
+  const readOnly = row.getByRole("switch", { name: `Binding ${name} read-only`, exact: true });
+  await expect(enabled).toBeChecked();
+  await expect(readOnly).toBeChecked();
+  await expect(createReadOnly).not.toBeChecked();
+  await expect(identity.getByLabel("Exact username", { exact: true })).toHaveValue("");
+  // The identity token stays the first row.
+  await expect(paths.getByRole("row").nth(1)).toHaveAccessibleName(/^Identity token/);
+  await enabled.click();
+  await expect(enabled).not.toBeChecked();
   await expect(row).toContainText("Namespace unavailable");
-  await row.getByRole("button", { name: /^Enable binding/ }).click();
-  await expect(row).toContainText("Enabled");
-  await expect(row).toContainText("Namespace unavailable");
-  await row.getByRole("button", { name: /^Delete binding/ }).click();
+  await enabled.click();
+  await expect(enabled).toBeChecked();
+  await expect(readOnly).toBeChecked();
+  // A stale version refreshes the row and asks for a fresh change; nothing is replayed.
+  await readOnly.click();
+  await expect(identity.getByText("Identity settings changed. Review the refreshed state before trying again.", { exact: true })).toBeVisible();
+  await expect(row).toContainText(/Namespace unavailable\s*4\s*Delete$/);
+  await expect(readOnly).toBeChecked();
+  expect(writes).toHaveLength(4);
+  await readOnly.click();
+  await expect(readOnly).not.toBeChecked();
+  await expect(enabled).toBeChecked();
+  await row.getByRole("button", { name: `Delete binding ${name}`, exact: true }).click();
   await page.getByRole("alertdialog", { name: "Delete username binding?", exact: true }).getByRole("button", { name: "Delete binding", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await expect(page.getByText("Identity settings changed. Review the refreshed state before trying again.", { exact: true })).toBeVisible();
-  expect(writes).toHaveLength(4);
-  await row.getByRole("button", { name: /^Delete binding/ }).click();
+  await expect(identity.getByText("Identity settings changed. Review the refreshed state before trying again.", { exact: true })).toBeVisible();
+  expect(writes).toHaveLength(6);
+  await row.getByRole("button", { name: `Delete binding ${name}`, exact: true }).click();
   await page.getByRole("alertdialog", { name: "Delete username binding?", exact: true }).getByRole("button", { name: "Delete binding", exact: true }).click();
-  await expect(page.getByText("No username bindings.", { exact: true })).toBeVisible();
+  await expect(identity.getByText("No username bindings.", { exact: true })).toBeVisible();
+  await expect(paths.getByRole("row")).toHaveCount(2);
   expect(writes).toEqual([
-    { method: "POST", body: { namespace: "managed_linux", username: binding.username }, query: "" },
+    { method: "POST", body: { namespace: "managed_linux", username: binding.username, readOnly: true }, query: "" },
     { method: "PATCH", body: { enabled: false, expectedVersion: 1 }, query: "" },
     { method: "PATCH", body: { enabled: true, expectedVersion: 2 }, query: "" },
-    { method: "DELETE", body: null, query: "?expectedVersion=3" },
-    { method: "DELETE", body: null, query: "?expectedVersion=4" }
+    { method: "PATCH", body: { readOnly: false, expectedVersion: 3 }, query: "" },
+    { method: "PATCH", body: { readOnly: false, expectedVersion: 4 }, query: "" },
+    { method: "DELETE", body: null, query: "?expectedVersion=5" },
+    { method: "DELETE", body: null, query: "?expectedVersion=6" }
   ]);
+});
+
+test("the identity token is the first, undeletable access path and its toggles send the current revision", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.setViewportSize({ width: 1024, height: 800 });
+  await fixture(page, "admin", false);
+  let token = { principalId: "target", configured: true, enabled: true, readOnly: false, revision: 4, updatedAt: "2026-10-10T00:00:00Z" };
+  const writes: unknown[] = [];
+  let conflict = true;
+  await page.route("**/v1/admin/principals/target/identity-token", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      if (conflict) {
+        // Another administrator made the token read-only first.
+        conflict = false;
+        token = { ...token, readOnly: true, revision: token.revision + 1 };
+        await route.fulfill({ status: 409, json: { ok: false, reasonCode: "identity_version_conflict", error: { message: "identity token revision changed" } } });
+        return;
+      }
+      const { expectedRevision: _expected, ...change } = body;
+      token = { ...token, ...change, revision: token.revision + 1 };
+    }
+    await route.fulfill({ json: envelope(token) });
+  });
+  await page.goto(`${baseUrl}/ui/admin/principals/target`);
+  const identity = page.getByRole("region", { name: "Identity access", exact: true });
+  const secret = page.getByRole("region", { name: "Identity token", exact: true });
+  const paths = identity.getByRole("table", { name: "Access paths", exact: true });
+  const row = paths.getByRole("row").nth(1);
+  await expect(row).toHaveAccessibleName(/^Identity token Built-in/);
+  await expect(row.getByRole("button")).toHaveCount(0);
+  const enabled = row.getByRole("switch", { name: "Identity token enabled", exact: true });
+  const readOnly = row.getByRole("switch", { name: "Identity token read-only", exact: true });
+  await expect(enabled).toBeChecked();
+  await expect(readOnly).not.toBeChecked();
+  await expect(row).toContainText(/Configured\s*4$/);
+  await enabled.click();
+  await expect(identity.getByRole("alert")).toHaveText("Identity settings changed. Review the refreshed state before trying again.");
+  await expect(readOnly).toBeChecked();
+  await expect(enabled).toBeChecked();
+  await expect(row).toContainText(/Configured\s*5$/);
+  expect(writes).toEqual([{ enabled: false, expectedRevision: 4 }]);
+  await enabled.click();
+  await expect(enabled).not.toBeChecked();
+  await expect(identity.getByRole("alert")).toHaveCount(0);
+  await expect(secret).toContainText("This identity token is disabled in Access paths. Fingerprint access is denied while the secret is kept.");
+  await readOnly.click();
+  await expect(readOnly).not.toBeChecked();
+  await expect(row).toContainText(/Configured\s*7$/);
+  expect(writes).toEqual([{ enabled: false, expectedRevision: 4 }, { enabled: false, expectedRevision: 5 }, { readOnly: false, expectedRevision: 6 }]);
+  // Secret management stays in the identity-token section, whatever the path settings.
+  await expect(secret.getByRole("button", { name: "Reveal identity token", exact: true })).toBeEnabled();
+  await expect(secret.getByRole("button", { name: "Generate token", exact: true })).toBeEnabled();
+  await expect(secret.getByRole("button", { name: "Remove token", exact: true })).toBeEnabled();
+  await expect(identity.getByRole("button", { name: "Pause identity access", exact: true })).toBeVisible();
+  // The table and form fit a 1024px window without horizontal scrolling.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  expect(await paths.evaluate((table) => table.parentElement!.scrollWidth <= table.parentElement!.clientWidth + 1)).toBe(true);
+  expect(errors).toEqual([]);
 });
 
 test("authorization denial refreshes the session and closes stale mutation dialogs without replay", async ({ page }) => {

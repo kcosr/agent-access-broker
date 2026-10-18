@@ -463,6 +463,8 @@ export type IdentitySummary = {
   groups: string[];
   policyGroups?: string[];
   authenticated: boolean;
+  /** Present for a trusted fingerprint identity: whether its access path is read-only. */
+  readOnlyAccess?: boolean;
 };
 
 /** The limit a caller sees for one visible service on `/v1/me`; no default/override distinction. */
@@ -678,11 +680,20 @@ export type PolicyMutationResult = {
 /** A managed-store grant as policy mutations return it: identified by `grantId` (its grant reference). */
 export type ManagedPolicyGrant = Omit<PolicyGrantRecord, "grantRef" | "writable" | "grantId" | "index"> & { grantId: string };
 
+/** Every human has exactly one identity-token record; `configured` reports whether it stores a secret. */
 export type IdentityTokenMetadata = {
   principalId: string;
   configured: boolean;
-  revision?: number | null;
-  updatedAt?: string | null;
+  enabled: boolean;
+  readOnly: boolean;
+  revision: number;
+  updatedAt: string;
+};
+
+/** A partial Enabled/Read-only change to one access path; at least one setting is required. */
+export type IdentityPathSettings = {
+  enabled?: boolean;
+  readOnly?: boolean;
 };
 
 export type PrincipalIdentityAccess = {
@@ -700,6 +711,7 @@ export type PrincipalUsernameBinding = {
   namespace: string;
   username: string;
   enabled: boolean;
+  readOnly: boolean;
   version: number;
   createdAt: string;
   createdBy: string;
@@ -751,6 +763,8 @@ export type AuditRecord = {
     type: string;
     tokenClass?: string | null;
     tokenId?: string | null;
+    /** Present for attested identities: whether the admitted access path was read-only. */
+    readOnlyAccess?: boolean;
     [key: string]: unknown;
   } | null;
   source?: { listener?: string; remote?: string; proxyChain?: string[]; [key: string]: unknown } | null;

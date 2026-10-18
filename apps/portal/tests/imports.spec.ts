@@ -240,6 +240,16 @@ test("administrator imports, classifies, refreshes and retires an HTTP MCP servi
   await expect(dialog.getByText("Existing grants to review: metrics-grant", { exact: true })).toBeVisible();
   await expect(dialog.getByText(/Existing grants to review:.*metrics-write-grant/)).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Accept selected tools" })).toBeDisabled();
+  // The confirmation lists each selected action whose read/write class changes.
+  const classificationChanges = dialog.getByRole("list", { name: "Classification changes", exact: true });
+  await expect(classificationChanges.getByRole("listitem")).toHaveText(["query changes from read to write"]);
+  await expect(dialog.getByText(/^Read-only identity access will include/)).toHaveCount(0);
+  await dialog.getByLabel("Effects for update.item", { exact: true }).selectOption("read");
+  await expect(classificationChanges.getByRole("listitem")).toHaveText(["query changes from read to write", "update.item changes from write to read"]);
+  await expect(dialog.getByText("Read-only identity access will include: update.item.", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Existing grants to review: metrics-grant, metrics-write-grant", { exact: true })).toBeVisible();
+  await dialog.getByLabel("Effects for update.item", { exact: true }).selectOption("write");
+  await expect(classificationChanges.getByRole("listitem")).toHaveText(["query changes from read to write"]);
   await dialog.getByLabel("I reviewed the affected grants and approve these action changes.").check();
   await expect(dialog.getByRole("button", { name: "Accept selected tools" })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("imports-review.png"), fullPage: true });

@@ -32,6 +32,21 @@ test("refused import changes carry the grants and resources that block them", as
   expect((plain as { blocked?: unknown }).blocked).toBeUndefined();
 });
 
+test("an acceptance refused for confirmation carries the broker's classification changes", async () => {
+  const classificationChanges = [{ action: "entry.list", from: "write", to: "read" }, { action: "entry.note", from: null, to: "write" }];
+  const body = { expectedVersion: 1, expectedCatalogRevision: 1, manifestHash: "hash", selections: [], confirmAffectedGrants: false };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "accepted changes affect existing grants; confirmAffectedGrants is required" }, target: { service: "ledger", classificationChanges } }), { status: 400 })));
+  const refused = await brokerApi.acceptImport({ authenticated: true, role: "admin" }, "ledger", body).catch((error: unknown) => error);
+  expect(refused).toMatchObject({ status: 400, reasonCode: "input_invalid", classificationChanges });
+  expect((refused as ApiError).blocked).toBeUndefined();
+  // An empty list still identifies the confirmation refusal.
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "refused" }, target: { service: "ledger", classificationChanges: [] } }), { status: 400 })));
+  await expect(brokerApi.acceptImport({ authenticated: true, role: "admin" }, "ledger", body)).rejects.toMatchObject({ classificationChanges: [] });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "select at least one discovered tool" }, target: { service: "ledger" } }), { status: 400 })));
+  const plain = await brokerApi.acceptImport({ authenticated: true, role: "admin" }, "ledger", body).catch((error: unknown) => error);
+  expect((plain as ApiError).classificationChanges).toBeUndefined();
+});
+
 test("management errors preserve structured conflict identity independently of message text", async () => {
   const conflict = { kind: "resource", id: "existing", displayName: "Payments API", version: 2 };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "Already exists" }, target: { conflict } }), { status: 400 })));

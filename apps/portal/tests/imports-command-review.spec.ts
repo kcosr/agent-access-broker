@@ -205,6 +205,62 @@ test("a refused acceptance lists the retained grants or the stored resources to 
   expect(api.errors).toEqual([]);
 });
 
+test("acceptance confirmation lists classification changes and the broker's refusal list is authoritative", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandRefreshed());
+  api.acceptances.push({ result: commandAccepted() });
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  const dialog = review(page);
+  const accept = dialog.getByRole("button", { name: "Accept selected actions", exact: true });
+  const confirmation = dialog.getByLabel("I reviewed the affected grants and approve these action changes.", { exact: true });
+  const changes = dialog.getByRole("list", { name: "Classification changes", exact: true });
+  // A grant on the changed issue.search needs confirmation, which lists the class changes.
+  await dialog.getByRole("checkbox", { name: "Accept issue.search", exact: true }).check();
+  await expect(dialog.getByText("Existing grants to review: grant-search", { exact: true })).toBeVisible();
+  await expect(changes.getByRole("listitem")).toHaveText(["issue.search changes from read to write"]);
+  await expect(dialog.getByText(/^Read-only identity access will include/)).toHaveCount(0);
+  await dialog.getByLabel("Effects for issue.search", { exact: true }).selectOption("read");
+  await dialog.getByRole("checkbox", { name: "Accept issue.comment", exact: true }).check();
+  await dialog.getByLabel("Effects for issue.comment", { exact: true }).selectOption("read");
+  await dialog.getByLabel("Effects for issue.create", { exact: true }).selectOption("read");
+  // Unchanged issue.view is omitted; the added action comes from no class.
+  await expect(changes.getByRole("listitem")).toHaveText(["issue.comment is added as a read", "issue.create changes from write to read"]);
+  await expect(dialog.getByText("Read-only identity access will include: issue.comment, issue.create.", { exact: true })).toBeVisible();
+  await expect(accept).toBeDisabled();
+  // Without a grant the portal can see, no confirmation is asked for before the Broker decides.
+  await dialog.getByRole("checkbox", { name: "Accept issue.search", exact: true }).uncheck();
+  await expect(dialog.getByText(/^Existing grants to review/)).toHaveCount(0);
+  await expect(accept).toBeEnabled();
+  // The Broker refuses for a grant the preview did not list; its classification changes replace the portal's.
+  api.acceptConfirmation = [
+    { action: "issue.comment", from: null, to: "read" },
+    { action: "issue.create", from: "write", to: "read" },
+    { action: "issue.view", from: "write", to: "read" }
+  ];
+  await accept.click();
+  await expect(dialog.getByRole("alert")).toHaveText("The broker found existing grants that these changes affect. Review the changes and confirm to accept them.");
+  await expect(changes.getByRole("listitem")).toHaveText(["issue.comment is added as a read", "issue.create changes from write to read", "issue.view changes from write to read"]);
+  await expect(dialog.getByText("Read-only identity access will include: issue.comment, issue.create, issue.view.", { exact: true })).toBeVisible();
+  await expect(confirmation).not.toBeChecked();
+  await expect(accept).toBeDisabled();
+  // Editing the selections drops the refusal; the next acceptance asks the Broker again.
+  await dialog.getByLabel("Effects for issue.create", { exact: true }).selectOption("write");
+  await expect(dialog.getByText(/^Existing grants to review/)).toHaveCount(0);
+  await dialog.getByLabel("Effects for issue.create", { exact: true }).selectOption("read");
+  await accept.click();
+  await expect(changes.getByRole("listitem")).toHaveCount(3);
+  await confirmation.check();
+  await accept.click();
+  await expect(dialog).toHaveCount(0);
+  const selections = [
+    { source: { name: "issue.view" }, action: "issue.view", readOnly: true },
+    { source: { name: "issue.create" }, action: "issue.create", readOnly: true },
+    { source: { name: "issue.comment" }, action: "issue.comment", readOnly: true }
+  ];
+  expect(api.accepted.map((body) => [body.selections, body.confirmAffectedGrants])).toEqual([[selections, false], [selections, false], [selections, true]]);
+  expect(api.errors).toEqual([]);
+});
+
 test("the Actions tab shows who checks each action's resources", async ({ page }) => {
   const api = await mockCommandImportApi(page, commandAccepted());
   await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing`);

@@ -1,4 +1,4 @@
-import type { ImportActionRecord, ImportPreviewResult, ImportScopedMcpWarning, ImportSelection, ImportedServiceRecord, ImportedTool } from "../import-types";
+import type { ImportActionRecord, ImportClassification, ImportClassificationChange, ImportPreviewResult, ImportScopedMcpWarning, ImportSelection, ImportedServiceRecord, ImportedTool } from "../import-types";
 
 /** Adapter locators are compared by value, independently of JSON key order. */
 export function importSourceKey(value: unknown): string {
@@ -91,6 +91,24 @@ export function affectedImportGrants(data: ImportPreviewResult, rows: ImportRevi
   return [...new Set(rows.filter((row) => row.selected && row.selectable && row.existing && row.existing.status !== "retired"
     && (row.existing.status !== "enabled" || row.readOnly !== row.existing.definition.readOnly || behaviorChanged(row.existing.definition, row.tool.definition)))
     .flatMap((row) => ownEntry(data.affectedGrantsByAction, row.existing!.definition.action) ?? []))].sort();
+}
+/**
+ * The read/write class change of each selected action against its current
+ * accepted definition (enabled, disabled or quarantined), or from null for an
+ * action the acceptance adds, ordered by action. Unchanged and unselected
+ * actions are omitted; retired identities are never reclassified. The broker
+ * computes the same list for the submitted selections, never from upstream hints.
+ */
+export function importClassificationChanges(rows: ImportReviewRow[]): ImportClassificationChange[] {
+  const classOf = (readOnly: boolean): ImportClassification => (readOnly ? "read" : "write");
+  return rows
+    .filter((row) => row.selected && row.selectable)
+    .flatMap((row) => {
+      const from = row.existing && row.existing.status !== "retired" ? classOf(row.existing.definition.readOnly) : null;
+      const to = classOf(row.readOnly);
+      return from === to ? [] : [{ action: row.action.trim(), from, to }];
+    })
+    .sort((a, b) => (a.action < b.action ? -1 : a.action > b.action ? 1 : 0));
 }
 export function importVersions(data: { catalogRevision: number; service: ImportedServiceRecord }) {
   return { expectedVersion: data.service.version, expectedCatalogRevision: data.catalogRevision };
