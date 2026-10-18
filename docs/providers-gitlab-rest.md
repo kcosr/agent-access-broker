@@ -255,6 +255,11 @@ All seven actions return `items`, `count` (exactly the array length),
 `maxResults`, and `scanStatus`, plus `nextPageToken` when continuation is possible.
 Content actions also return the effective `engine`; discovery omits it.
 
+Repository discovery validates GitLab's project keyset links, including known
+default parameters GitLab adds to them. It checks the destination, requested
+filters, ordering, page size, and cursor, then rebuilds continuation requests
+from the authorized inputs. Upstream pagination URLs are never followed.
+
 | `scanStatus` | Meaning | Continuation |
 | --- | --- | --- |
 | `more` | Authorized items were returned and upstream work remains; another authorized match is not guaranteed | Present |
@@ -305,8 +310,9 @@ contradictory ownership and other confirmation failures abort the operation.
 Optional URLs are validated against the configured web base, current project,
 category, and item identity, or safely constructed. A valid hit can have no URL.
 Comment parents are `Issue`, `MergeRequest`, `Commit`, and project `Snippet`;
-missing usable parent locators are omitted rather than invented. Group wiki and
-recognized non-repository records are excluded. Unknown result kinds or ambiguous
+missing usable parent locators are omitted rather than invented. A project wiki
+can include its parent group as metadata; its project remains the authority.
+Group wiki and recognized non-repository records are excluded. Unknown result kinds or ambiguous
 ownership fail closed. Preview text is capped at 4 KiB of UTF-8 with an explicit
 `previewTruncated` flag; upstream snippets are not a promise of an exact matching
 passage. Treat previews and URLs as untrusted content.

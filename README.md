@@ -50,6 +50,8 @@ Each category is separately grantable. Engine and instance-wide availability are
 operator configured; basic code, commit, wiki, and comment search require a
 project. Search pages report bounded progress and incomplete retrieval coverage
 explicitly, and may return no items with a continuation.
+Repository discovery accepts GitLab's defaulted keyset pagination links while
+preserving the requested filters and repository authorization on every page.
 
 Administrators can import [MCP HTTP servers](docs/imported-services.md),
 [OpenAPI definitions](docs/imported-openapi.md), and operator-approved

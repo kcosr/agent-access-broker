@@ -106,7 +106,29 @@ fn links(headers: &HeaderMap) -> Result<BTreeMap<String, Url>, ProviderError> {
     }
     Ok(links)
 }
-fn strict_position(url: &Url, current: &Url, key: &str) -> Result<u64, ProviderError> {
+// The Projects API serializes these omitted defaults into keyset links. Only
+// their exact default values may supplement the query we actually requested.
+const PROJECT_KEYSET_DEFAULTS: &[(&str, &str)] = &[
+    ("imported", "false"),
+    ("include_hidden", "false"),
+    ("membership", "false"),
+    ("owned", "false"),
+    ("page", "1"),
+    ("repository_checksum_failed", "false"),
+    ("starred", "false"),
+    ("statistics", "false"),
+    ("wiki_checksum_failed", "false"),
+    ("with_custom_attributes", "false"),
+    ("with_issues_enabled", "false"),
+    ("with_merge_requests_enabled", "false"),
+];
+
+fn strict_position(
+    url: &Url,
+    current: &Url,
+    key: &str,
+    defaults: &[(&str, &str)],
+) -> Result<u64, ProviderError> {
     if url.origin() != current.origin()
         || url.path() != current.path()
         || !url.username().is_empty()
@@ -119,6 +141,11 @@ fn strict_position(url: &Url, current: &Url, key: &str) -> Result<u64, ProviderE
     let position = decimal(&supplied.remove(key).ok_or_else(protocol)?)?;
     let mut expected = query(current)?;
     expected.remove(key);
+    for &(key, value) in defaults {
+        if !expected.contains_key(key) && supplied.get(key).is_some_and(|v| v == value) {
+            supplied.remove(key);
+        }
+    }
     if supplied != expected {
         return Err(protocol());
     }
@@ -170,7 +197,7 @@ pub(super) fn offset(
         let position = if numeric.is_some() {
             numeric_position(link, size)?
         } else {
-            strict_position(link, url, "page")?
+            strict_position(link, url, "page", &[])?
         };
         relations.insert(name.as_str(), position);
     }
@@ -246,7 +273,7 @@ pub(super) fn keyset(
     }
     let relations = links(headers)?;
     if let Some(next) = relations.get("next") {
-        let next = strict_position(next, url, "id_after")?;
+        let next = strict_position(next, url, "id_after", PROJECT_KEYSET_DEFAULTS)?;
         if items.is_empty() || next != last {
             return Err(protocol());
         }

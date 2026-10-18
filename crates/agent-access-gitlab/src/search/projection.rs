@@ -195,10 +195,11 @@ pub(super) fn owner(action: &str, value: &Value) -> Result<Option<u64>, Provider
     }
     if action == "search.wiki" && value.get("group_id").is_some_and(|v| !v.is_null()) {
         positive(value, "group_id")?;
-        if value.get("project_id").is_some_and(|v| !v.is_null()) {
-            return Err(protocol());
+        // Advanced search includes a project wiki's parent group as metadata.
+        // Only a wiki with no project owner is a group wiki.
+        if value.get("project_id").is_none_or(Value::is_null) {
+            return Ok(None);
         }
-        return Ok(None);
     }
     if action == "search.comments" {
         let kind = string(value, "noteable_type")?;

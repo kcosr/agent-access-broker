@@ -390,6 +390,242 @@ fn keyset_validates_complete_page_progress_and_exact_next_id() {
     );
 }
 
+fn project_keyset_url(after: u64) -> Url {
+    let mut url = Url::parse("https://gitlab.example/api/v4/projects?per_page=2&simple=false&pagination=keyset&order_by=id&sort=asc&search_namespaces=true").unwrap();
+    if after > 0 {
+        url.query_pairs_mut()
+            .append_pair("id_after", &after.to_string());
+    }
+    url
+}
+
+fn project_keyset_default_link() -> &'static str {
+    // Synthetic reserved-host reproduction of GitLab's added Link defaults.
+    include_str!("fixtures/project-keyset-defaults.link").trim()
+}
+
+#[test]
+fn project_keyset_accepts_known_link_defaults_for_browse_filters_and_later_pages() {
+    let items = [json!({"id":11}), json!({"id":15})];
+    for after in [0, 10] {
+        for archived in [None, Some(false), Some(true)] {
+            let mut url = project_keyset_url(after);
+            let mut next = project_keyset_default_link().to_string();
+            if let Some(archived) = archived {
+                url = Url::parse(
+                    &url.to_string()
+                        .replace("search_namespaces=true", "search_namespaces=false"),
+                )
+                .unwrap();
+                url.query_pairs_mut()
+                    .append_pair("search", "needle & hay")
+                    .append_pair("archived", if archived { "true" } else { "false" });
+                next = next
+                    .replace("search_namespaces=true", "search_namespaces=false")
+                    .replace(
+                        ">;",
+                        &format!("&search=needle%20%26%20hay&archived={archived}>;"),
+                    );
+            }
+            assert_eq!(
+                pagination::keyset(&headers(&[("link", &next)]), &url, after, &items).unwrap(),
+                pagination::Next::Position(15),
+                "after={after}, archived={archived:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn project_keyset_default_links_reject_mutated_contracts_and_duplicate_fields() {
+    let url = project_keyset_url(10);
+    let next = project_keyset_default_link();
+    let items = [json!({"id":11}), json!({"id":15})];
+    let mut invalid = Vec::new();
+    for key in [
+        "imported",
+        "include_hidden",
+        "membership",
+        "owned",
+        "repository_checksum_failed",
+        "starred",
+        "statistics",
+        "wiki_checksum_failed",
+        "with_custom_attributes",
+        "with_issues_enabled",
+        "with_merge_requests_enabled",
+    ] {
+        invalid.push(next.replace(&format!("{key}=false"), &format!("{key}=true")));
+    }
+    for (original, replacement) in [
+        ("page=1&", "page=2&"),
+        ("page=1&", "page=0&"),
+        ("membership=false", "membership=0"),
+        ("membership=false", "membership=False"),
+        ("membership=false", "membership="),
+        ("simple=false&", ""),
+        ("simple=false", "simple=true"),
+        ("pagination=keyset&", ""),
+        ("pagination=keyset", "pagination=offset"),
+        ("order_by=id&", ""),
+        ("order_by=id", "order_by=name"),
+        ("sort=asc&", ""),
+        ("sort=asc", "sort=desc"),
+        ("per_page=2&", ""),
+        ("per_page=2", "per_page=3"),
+        ("search_namespaces=true&", ""),
+        ("search_namespaces=true", "search_namespaces=false"),
+        ("id_after=15&", ""),
+        ("id_after=15", "id_after=16"),
+        ("id_after=15", "id_after=10"),
+        ("id_after=15", "id_after=0"),
+        ("id_after=15", "id_after=-1"),
+        ("id_after=15", "id_after=18446744073709551616"),
+        ("https://", "http://"),
+        ("gitlab.example", "elsewhere.example"),
+        ("gitlab.example", "gitlab.example:8443"),
+        ("gitlab.example", "user:password@gitlab.example"),
+        ("/api/v4/projects?", "/api/v4/groups?"),
+        (">;", "#fragment>;"),
+    ] {
+        assert!(next.contains(original));
+        invalid.push(next.replace(original, replacement));
+    }
+    for added in [
+        "unknown=false",
+        "archived=false",
+        "search=needle",
+        "page=1",
+        "membership=false",
+        "id_after=15",
+        "per_page=2",
+        "per_%70age=2",
+        "search_namespaces=true",
+    ] {
+        invalid.push(next.replace(">;", &format!("&{added}>;")));
+    }
+    invalid.push(format!("{next}, {next}"));
+    for next in invalid {
+        assert_eq!(
+            pagination::keyset(&headers(&[("link", &next)]), &url, 10, &items)
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::UpstreamProtocolFailed,
+            "{next}"
+        );
+    }
+
+    let mut filtered = Url::parse(
+        &url.to_string()
+            .replace("search_namespaces=true", "search_namespaces=false"),
+    )
+    .unwrap();
+    filtered
+        .query_pairs_mut()
+        .append_pair("search", "needle")
+        .append_pair("archived", "true");
+    let next = next
+        .replace("search_namespaces=true", "search_namespaces=false")
+        .replace(">;", "&search=needle&archived=true>;");
+    for (original, replacement) in [
+        ("&search=needle", ""),
+        ("search=needle", "search=other"),
+        ("&archived=true", ""),
+        ("archived=true", "archived=false"),
+        ("search_namespaces=false&", ""),
+        ("search_namespaces=false", "search_namespaces=true"),
+    ] {
+        let next = next.replace(original, replacement);
+        assert!(
+            pagination::keyset(&headers(&[("link", &next)]), &filtered, 10, &items).is_err(),
+            "{next}"
+        );
+    }
+    for (key, value) in [("membership", "true"), ("page", "2")] {
+        let mut url = url.clone();
+        url.query_pairs_mut().append_pair(key, value);
+        assert!(
+            pagination::keyset(
+                &headers(&[("link", project_keyset_default_link())]),
+                &url,
+                10,
+                &items
+            )
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn project_search_default_links_filter_results_and_reconstruct_continuation_requests() {
+    let server = MockServer::start().await;
+    let provider = provider(config(&server));
+    let next = project_keyset_default_link().replace("https://gitlab.example", &server.uri());
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects"))
+        .and(header("authorization", "Bearer execution-only"))
+        .respond_with(move |request: &wiremock::Request| {
+            let after = request.url.query_pairs().find(|(key, _)| key == "id_after").map(|(_, value)| value.into_owned());
+            let (body, next) = match after.as_deref() {
+                None => (json!([
+                    {"id":11,"path_with_namespace":"hidden/secret","name":"DENIED_NAME","description":"DENIED_BODY"},
+                    {"id":15,"path_with_namespace":"team/first","name":"First"}
+                ]), Some(next.clone())),
+                Some("15") => (json!([
+                    {"id":16,"path_with_namespace":"team/private/secret","name":"DENIED_NAME","description":"DENIED_BODY"},
+                    {"id":20,"path_with_namespace":"team/second","name":"Second"}
+                ]), Some(next.replace("id_after=15", "id_after=20"))),
+                Some("20") => (json!([]), None),
+                _ => return ResponseTemplate::new(400),
+            };
+            let mut response = ResponseTemplate::new(200).set_body_json(body);
+            if let Some(next) = next {
+                response = response.insert_header("Link", next.as_str());
+            }
+            response
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let mut input = json!({"maxResults":2});
+    for expected in [Some("team/first"), Some("team/second"), None] {
+        let result = provider
+            .invoke(invocation("project.search", input.clone(), scope()))
+            .await
+            .unwrap();
+        let released = format!(
+            "{:?}{:?}{:?}",
+            result.result, result.audit, result.object_ids
+        );
+        for denied in ["DENIED", "hidden/secret", "team/private/secret"] {
+            assert!(!released.contains(denied));
+        }
+        if let Some(expected) = expected {
+            assert_eq!(result.result["count"], 1);
+            assert_eq!(result.result["items"][0]["project"], expected);
+            assert_eq!(result.result["scanStatus"], "more");
+            input["pageToken"] = result.result["nextPageToken"].clone();
+            assert!(input["pageToken"].is_string());
+        } else {
+            assert_eq!(result.result["count"], 0);
+            assert_eq!(result.result["scanStatus"], "exhausted");
+            assert!(result.result.get("nextPageToken").is_none());
+        }
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    for (request, after) in requests.iter().zip([0, 15, 20]) {
+        let actual: BTreeMap<_, _> = request.url.query_pairs().collect();
+        let expected = project_keyset_url(after);
+        let expected: BTreeMap<_, _> = expected.query_pairs().collect();
+        assert_eq!(
+            actual, expected,
+            "Upstream Link defaults must not become request inputs"
+        );
+    }
+}
+
 #[tokio::test]
 async fn discovery_filters_live_listing_without_project_lookups_and_resumes_keysets() {
     let server = MockServer::start().await;
@@ -958,7 +1194,10 @@ fn projections_validate_owned_locators_preview_boundaries_and_comment_parents() 
         projection::owner("search.wiki", &json!({"group_id":4,"project_id":null})).unwrap(),
         None
     );
-    assert!(projection::owner("search.wiki", &json!({"group_id":4,"project_id":1})).is_err());
+    assert_eq!(
+        projection::owner("search.wiki", &json!({"group_id":4,"project_id":1})).unwrap(),
+        Some(1)
+    );
     assert!(
         projection::owner(
             "search.merge_requests",
@@ -1383,6 +1622,124 @@ async fn consumed_error_body_exhaustion_prevents_authentication_replay() {
     );
     assert_eq!(lease.recoveries.load(Ordering::Acquire), 0);
     assert_eq!(*lease.rejected.lock().unwrap(), ["v1"]);
+}
+
+#[test]
+fn wiki_parent_group_metadata_preserves_project_ownership() {
+    for hit in [
+        json!({"project_id":1}),
+        json!({"project_id":1,"group_id":null}),
+        json!({"project_id":1,"group_id":4}),
+    ] {
+        assert_eq!(projection::owner("search.wiki", &hit).unwrap(), Some(1));
+    }
+    for hit in [
+        json!({"group_id":4}),
+        json!({"project_id":null,"group_id":4}),
+    ] {
+        assert_eq!(projection::owner("search.wiki", &hit).unwrap(), None);
+    }
+    for hit in [
+        json!({}),
+        json!({"project_id":null,"group_id":null}),
+        json!({"project_id":0,"group_id":4}),
+        json!({"project_id":"1","group_id":4}),
+        json!({"project_id":-1,"group_id":4}),
+        json!({"project_id":1,"group_id":0}),
+        json!({"project_id":1,"group_id":"4"}),
+        json!({"project_id":1,"group_id":-1}),
+    ] {
+        assert_eq!(
+            projection::owner("search.wiki", &hit)
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::UpstreamProtocolFailed,
+            "{hit}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn wiki_parent_group_metadata_uses_current_project_authority_on_both_routes() {
+    for explicit in [false, true] {
+        let server = MockServer::start().await;
+        let mut cfg = config(&server);
+        cfg.search.default_engine = "advanced".into();
+        cfg.search.engines.advanced.project_categories = vec!["wiki".into()];
+        cfg.search.engines.advanced.instance_categories = vec!["wiki".into()];
+        let provider = provider(cfg);
+        let hit = json!({"project_id":1,"group_id":4,"basename":"guide","path":"guide.md","filename":"guide.md","id":null,"ref":"main","startline":5,"data":"visible wiki"});
+        let (route, input, body) = if explicit {
+            Mock::given(path("/api/v4/projects/team%2Frepo"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"id":1,"path_with_namespace":"team/repo"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            (
+                "/api/v4/projects/1/search",
+                json!({"search":"needle","project":"team/repo","maxResults":3}),
+                json!([hit]),
+            )
+        } else {
+            project(&server, 1, "team/repo", 200).await;
+            project(&server, 2, "team/private/secret", 200).await;
+            (
+                "/api/v4/search",
+                json!({"search":"needle","maxResults":3}),
+                json!([
+                    hit,
+                    {"project_id":2,"group_id":4,"path":"denied.md","data":"DENIED_WIKI"},
+                    {"project_id":null,"group_id":4,"path":"group.md","data":"DENIED_GROUP_WIKI"}
+                ]),
+            )
+        };
+        // A terminal advanced-search response still carries first/last links
+        // with GitLab's include_archived default and an empty X-Next-Page.
+        let page_url = format!(
+            "{}{route}?include_archived=false&page=1&per_page=3&scope=wiki_blobs&search=needle&search_type=advanced",
+            server.uri()
+        );
+        let links = format!("<{page_url}>; rel=\"first\", <{page_url}>; rel=\"last\"");
+        Mock::given(method("GET"))
+            .and(path(route))
+            .and(query_param("scope", "wiki_blobs"))
+            .and(query_param("search_type", "advanced"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("X-Search-Type", "advanced")
+                    .insert_header("X-Next-Page", "")
+                    .insert_header("X-Page", "1")
+                    .insert_header("X-Prev-Page", "")
+                    .insert_header("X-Per-Page", "3")
+                    .insert_header("Link", links)
+                    .set_body_json(body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = provider
+            .invoke(invocation("search.wiki", input, scope()))
+            .await
+            .unwrap();
+        assert_eq!(result.result["count"], 1);
+        assert_eq!(result.result["items"][0]["project"], "team/repo");
+        assert_eq!(result.result["items"][0]["projectId"], 1);
+        assert_eq!(result.result["scanStatus"], "exhausted");
+        let released = format!(
+            "{:?}{:?}{:?}",
+            result.result, result.audit, result.object_ids
+        );
+        for denied in ["DENIED", "team/private/secret", "group_id", "groupId"] {
+            assert!(!released.contains(denied), "{released}");
+        }
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            if explicit { 2 } else { 3 }
+        );
+    }
 }
 
 #[tokio::test]

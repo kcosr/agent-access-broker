@@ -232,6 +232,25 @@ impl Respond for GitlabHttp {
             };
         }
         if route == "/api/v4/projects" {
+            // GitLab adds these defaults to its Link header. The Broker must
+            // reconstruct requests from approved inputs instead of copying it.
+            let defaults = [
+                ("imported", "false"),
+                ("include_hidden", "false"),
+                ("membership", "false"),
+                ("owned", "false"),
+                ("page", "1"),
+                ("repository_checksum_failed", "false"),
+                ("starred", "false"),
+                ("statistics", "false"),
+                ("wiki_checksum_failed", "false"),
+                ("with_custom_attributes", "false"),
+                ("with_issues_enabled", "false"),
+                ("with_merge_requests_enabled", "false"),
+            ];
+            for (key, _) in defaults {
+                assert!(!query.contains_key(key), "forwarded Link default: {key}");
+            }
             for (key, value) in [
                 ("simple", "false"),
                 ("pagination", "keyset"),
@@ -251,7 +270,18 @@ impl Respond for GitlabHttp {
                 .filter(|id| *id > after)
                 .map(|id| self.project(id, &state.first_path))
                 .collect();
-            return ResponseTemplate::new(200).set_body_json(projects);
+            let response = ResponseTemplate::new(200).set_body_json(&projects);
+            return if let Some(last) = projects.last() {
+                let mut next = request.url.clone();
+                next.set_query(None);
+                next.query_pairs_mut()
+                    .extend_pairs(query.iter().filter(|(key, _)| key.as_str() != "id_after"))
+                    .extend_pairs(defaults)
+                    .append_pair("id_after", &last["id"].to_string());
+                response.insert_header("Link", format!("<{next}>; rel=\"next\""))
+            } else {
+                response
+            };
         }
         if let Some(locator) = route.strip_prefix("/api/v4/projects/") {
             let locator = percent_encoding::percent_decode_str(locator)
@@ -320,6 +350,7 @@ impl GitlabHttp {
                 hit["message"] = json!(body);
             }
             "wiki_blobs" => {
+                hit["group_id"] = json!(42);
                 hit["path"] = json!("Operations/Rotation");
                 hit["data"] = json!(body);
             }
