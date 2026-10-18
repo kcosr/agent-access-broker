@@ -996,3 +996,143 @@ async fn management_grant_patch_keeps_live_authority_cas_and_active_snapshot_pub
         store.policy_revision().unwrap().generation
     );
 }
+
+async fn assert_subject_mutation_keeps_only_unrelated_grant_active(
+    fixture: &AuditFixture,
+    generation: u64,
+) {
+    let snapshot = fixture.state.current();
+    let runtime = &snapshot.runtime;
+    assert_eq!(runtime.policy_generation(), generation);
+    assert_eq!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .policy_revision()
+            .unwrap()
+            .generation,
+        generation
+    );
+    let identity = runtime
+        .resolve_identity(&headers(&fixture.alice_agent, "subject-snapshot-discovery"))
+        .unwrap();
+    let execution_context = agent_access_core::ExecutionContext::new("default").unwrap();
+    let discovery = runtime
+        .service_discovery(&identity, &execution_context, "fake")
+        .expect("the unrelated active grant remains visible");
+    assert!(
+        discovery
+            .actions(Some("TEST"), None, None, None)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
+    assert_eq!(
+        discovery
+            .actions(Some("OPS"), None, None, None)
+            .unwrap()
+            .actions,
+        vec!["echo"]
+    );
+    for (project, expected_status) in [("TEST", StatusCode::FORBIDDEN), ("OPS", StatusCode::OK)] {
+        let body =
+            json!({"inputs": {"project": project, "message": "subject snapshot"}}).to_string();
+        let (status, response) = fixture
+            .request(
+                Method::POST,
+                &fixture.alice_agent,
+                "/v1/invoke/fake/echo",
+                Some(&body),
+                &format!("subject-snapshot-invoke-{project}"),
+            )
+            .await;
+        assert_eq!(status, expected_status, "{project}: {response}");
+    }
+}
+
+#[tokio::test]
+async fn management_grant_subject_add_to_disabled_grant_preserves_active_snapshot() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let snapshot = fixture.state.current();
+    let runtime = &snapshot.runtime;
+    let mut inactive = patch_test_grant("subject-target");
+    inactive.subjects = vec!["user:carol".into()];
+    inactive.status = Some("disabled".into());
+    let target = runtime.create_managed_policy_grant(inactive).unwrap().grant;
+    let mut unrelated = patch_test_grant("subject-unrelated");
+    unrelated.resources.resource_ids = vec![resource_id("project", "OPS")];
+    let unrelated = runtime
+        .create_managed_policy_grant(unrelated)
+        .unwrap()
+        .grant;
+    let body = json!({"expectedVersion": target.version, "subject": "user:alice"}).to_string();
+    let (status, response) = fixture
+        .request(
+            Method::POST,
+            &fixture.bob,
+            "/v1/admin/policy/grants/subject-target/subjects",
+            Some(&body),
+            "subject-add-disabled",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let store = runtime.managed_store().unwrap();
+    let updated = store.policy_grant("subject-target").unwrap();
+    assert_eq!(updated.status, "disabled");
+    assert_eq!(updated.subjects, vec!["user:carol", "user:alice"]);
+    assert_eq!(updated.version, target.version + 1);
+    assert_eq!(store.policy_grant("subject-unrelated").unwrap(), unrelated);
+    assert_subject_mutation_keeps_only_unrelated_grant_active(
+        &fixture,
+        response["result"]["revision"]["generation"]
+            .as_u64()
+            .unwrap(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn management_grant_subject_remove_last_and_disable_preserves_active_snapshot() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let snapshot = fixture.state.current();
+    let runtime = &snapshot.runtime;
+    let target = runtime
+        .create_managed_policy_grant(patch_test_grant("subject-target"))
+        .unwrap()
+        .grant;
+    let mut unrelated = patch_test_grant("subject-unrelated");
+    unrelated.resources.resource_ids = vec![resource_id("project", "OPS")];
+    let unrelated = runtime
+        .create_managed_policy_grant(unrelated)
+        .unwrap()
+        .grant;
+    let body = json!({
+        "expectedVersion": target.version,
+        "subject": "user:alice",
+        "lastSubjectBehavior": "disable_grant",
+    })
+    .to_string();
+    let (status, response) = fixture
+        .request(
+            Method::POST,
+            &fixture.bob,
+            "/v1/admin/policy/grants/subject-target/subjects/remove",
+            Some(&body),
+            "subject-remove-disable",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let store = runtime.managed_store().unwrap();
+    let updated = store.policy_grant("subject-target").unwrap();
+    assert_eq!(updated.status, "disabled");
+    assert!(updated.subjects.is_empty());
+    assert_eq!(updated.version, target.version + 1);
+    assert_eq!(store.policy_grant("subject-unrelated").unwrap(), unrelated);
+    assert_subject_mutation_keeps_only_unrelated_grant_active(
+        &fixture,
+        response["result"]["revision"]["generation"]
+            .as_u64()
+            .unwrap(),
+    )
+    .await;
+}

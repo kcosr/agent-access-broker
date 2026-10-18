@@ -1209,6 +1209,9 @@ All notable changes to this project are documented in this file.
   connection credentials while preserving approved receiver use.
 - Grant PATCH rechecks current authentication and policy-write authority inside
   its transaction, including when replacing grant subjects.
+- Grant-subject edits preserve the active policy snapshot when the edited grant
+  is disabled or the final subject is removed with `disable_grant`. Disabled
+  grants cannot become effective or displace unrelated active grants.
 - Delegated writes that fail before starting a transaction report
   `not_dispatched`; shared management adapters return storage unavailability for
   a poisoned connection lock.

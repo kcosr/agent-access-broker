@@ -17,14 +17,19 @@ async fn local_writes_report_not_dispatched_when_transaction_cannot_start() {
         ("principal.create", "missing_store"),
         ("principal.create", "read_only_store"),
         ("principal.create", "poisoned_store"),
+        ("credential.install", "missing_store"),
         ("token.create", "missing_store"),
         ("token.create", "poisoned_store"),
         ("grant.subject.add", "poisoned_store"),
         ("grant.subject.add", "poisoned_policy_lock"),
     ] {
         let fixture = fixture(false);
+        let reference = (action == "credential.install")
+            .then(|| capture_reference(&fixture, "missing-store-private-gitlab-token"));
         let inputs = if action == "principal.create" {
             json!({"principalId":"new-worker"})
+        } else if action == "credential.install" {
+            json!({"principalId":"worker","connectionId":"gitlab-main","token":{"secretRef":reference.as_ref().unwrap()}})
         } else if action == "token.create" {
             token_create_input(&fixture, &Uuid::new_v4().to_string())
         } else {
@@ -97,6 +102,13 @@ async fn local_writes_report_not_dispatched_when_transaction_cannot_start() {
         assert_eq!(new_principals, 0, "{failure}");
         assert_eq!(grant_version, 1, "{failure}");
         assert_eq!(new_tokens, 0, "{failure}");
+        let new_credentials: i64 = db
+            .query_row("SELECT COUNT(*) FROM credentials", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(new_credentials, 0, "{failure}");
+        if let Some(reference) = reference {
+            assert_reference_value(&fixture, &reference, "missing-store-private-gitlab-token");
+        }
         if action == "token.create" && failure == "missing_store" {
             let outcome: String = db
                 .query_row(
@@ -176,10 +188,16 @@ fn http_management_adapters_return_unavailable_for_poisoned_store() {
         ManagementOperation::PersonalTokenIssue,
         ManagementOperation::GrantSubjectAdd,
         ManagementOperation::GrantSubjectRemove,
+        ManagementOperation::GrantPatch,
+        ManagementOperation::AdminCredentialPut,
+        ManagementOperation::PersonalCredentialPut,
     ]
     .into_iter()
     .map(|operation| {
-        let headers = if operation == ManagementOperation::PersonalTokenIssue {
+        let headers = if matches!(
+            operation,
+            ManagementOperation::PersonalTokenIssue | ManagementOperation::PersonalCredentialPut
+        ) {
             &personal_headers
         } else {
             &admin_headers
@@ -270,11 +288,63 @@ fn http_management_adapters_return_unavailable_for_poisoned_store() {
                     |_, _, _, _| panic!("poisoned store must not reach validation"),
                 )
                 .map(|_| ()),
-            _ => unreachable!(),
+            ManagementOperation::GrantPatch => store
+                .patch_policy_grant_with_management_authority(
+                    ManagedPolicyGrantPatchRequest {
+                        grant_id: "service-access".into(),
+                        expected_version: 1,
+                        subjects: None,
+                        execution_contexts: None,
+                        service: None,
+                        actions: None,
+                        resources: None,
+                        credential_mode: None,
+                        priority: None,
+                        status: None,
+                        description: Some(Some("not-applied".into())),
+                        updated_by: "http-admin".into(),
+                    },
+                    authority,
+                    |_, _, _, _| panic!("poisoned store must not reach validation"),
+                )
+                .map(|_| ()),
+            ManagementOperation::AdminCredentialPut | ManagementOperation::PersonalCredentialPut => {
+                let (owner, purpose) = if operation == ManagementOperation::AdminCredentialPut {
+                    ("worker", crate::CredentialManagementPurpose::Administrative)
+                } else {
+                    ("http-admin", crate::CredentialManagementPurpose::Personal)
+                };
+                runtime
+                    .store_connection_credential_with_management_authority(
+                        authority,
+                        crate::CredentialWriteRequest {
+                            owner_principal_id: owner.into(),
+                            service: "gitlab-main".into(),
+                            name: crate::CONNECTION_CREDENTIAL_NAME.into(),
+                            profile: "gitlab-access-token".into(),
+                            credential_kind: "bearer_token".into(),
+                            secret: json!({"token":"not-stored-private-gitlab-token"}),
+                            metadata: json!({}),
+                            actor: "http-admin".into(),
+                        },
+                        purpose,
+                    )
+                    .map(|_| ())
+            }
         };
         assert!(
             matches!(result, Err(ManagedStoreError::Unavailable(_))),
             "{operation:?}: {result:?}"
         );
     }
+    let db = rusqlite::Connection::open(fixture.directory.path().join("store.sqlite")).unwrap();
+    let (new_credentials, grant_version): (i64, i64) = db
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM credentials), (SELECT version FROM policy_grants WHERE grant_id='service-access')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(new_credentials, 0);
+    assert_eq!(grant_version, 1);
 }

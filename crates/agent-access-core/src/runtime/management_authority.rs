@@ -170,11 +170,15 @@ impl BrokerRuntime {
                 self.validate_managed_policy_candidate_for_store(
                     grants, revision, subjects, catalog, &baseline,
                 )?;
-                next_snapshot = Some(Arc::new(PolicySnapshot::from_managed(
-                    revision.generation,
-                    grants.to_vec(),
-                    catalog.clone(),
-                )));
+                // The first candidate is the active snapshot. Validation of
+                // an edited inactive grant must not replace it.
+                if next_snapshot.is_none() {
+                    next_snapshot = Some(Arc::new(PolicySnapshot::from_managed(
+                        revision.generation,
+                        grants.to_vec(),
+                        catalog.clone(),
+                    )));
+                }
                 Ok(())
             },
         )?;
@@ -207,11 +211,15 @@ impl BrokerRuntime {
                 self.validate_managed_policy_candidate_for_store(
                     grants, revision, subjects, catalog, &baseline,
                 )?;
-                next_snapshot = Some(Arc::new(PolicySnapshot::from_managed(
-                    revision.generation,
-                    grants.to_vec(),
-                    catalog.clone(),
-                )));
+                // The first candidate is the active snapshot. Validation of
+                // an edited inactive grant must not replace it.
+                if next_snapshot.is_none() {
+                    next_snapshot = Some(Arc::new(PolicySnapshot::from_managed(
+                        revision.generation,
+                        grants.to_vec(),
+                        catalog.clone(),
+                    )));
+                }
                 Ok(())
             },
         )?;
