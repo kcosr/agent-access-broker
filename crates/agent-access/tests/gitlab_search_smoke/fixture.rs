@@ -272,8 +272,8 @@ impl Respond for GitlabHttp {
                 .collect();
             let response = ResponseTemplate::new(200).set_body_json(&projects);
             return if let Some(last) = projects.last() {
-                let mut next = request.url.clone();
-                next.set_query(None);
+                let mut next = url::Url::parse(&self.origin).unwrap();
+                next.set_path(route);
                 next.query_pairs_mut()
                     .extend_pairs(query.iter().filter(|(key, _)| key.as_str() != "id_after"))
                     .extend_pairs(defaults)

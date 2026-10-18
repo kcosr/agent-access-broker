@@ -312,8 +312,9 @@ category, and item identity, or safely constructed. A valid hit can have no URL.
 Comment parents are `Issue`, `MergeRequest`, `Commit`, and project `Snippet`;
 missing usable parent locators are omitted rather than invented. A project wiki
 can include its parent group as metadata; its project remains the authority.
-Group wiki and recognized non-repository records are excluded. Unknown result kinds or ambiguous
-ownership fail closed. Preview text is capped at 4 KiB of UTF-8 with an explicit
+Recognized non-repository records, including group wikis, are discarded from
+instance-wide results and fail closed on project-scoped searches. Unknown result
+kinds or ambiguous ownership fail closed. Preview text is capped at 4 KiB of UTF-8 with an explicit
 `previewTruncated` flag; upstream snippets are not a promise of an exact matching
 passage. Treat previews and URLs as untrusted content.
 

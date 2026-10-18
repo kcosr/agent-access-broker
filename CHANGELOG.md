@@ -444,6 +444,11 @@ All notable changes to this project are documented in this file.
   shared invoke/send/OpenAPI/MCP schemas. Namespace-aware repository filtering,
   selected execution credentials, current ownership confirmation, bounded
   previews, and validated optional locators protect returned content.
+  Discovery accepts GitLab's defaulted keyset links while validating destination,
+  requested filters, ordering, page size, and cursor. Project wiki hits may
+  include their parent group as metadata without granting group authority.
+  Group-only wiki hits are discarded from instance-wide results and fail closed
+  on project-scoped searches.
 - Operator-configured GitLab engine/category/scope capabilities and bounded scan
   work, with explicit incomplete-coverage statuses and confidential continuations
   that preserve the original 15-minute expiry. Basic code/commit/wiki/comment
@@ -1185,15 +1190,6 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
-- GitLab advanced wiki search accepts project wiki results that include their
-  parent `group_id` alongside `project_id`. Both instance-wide and project-scoped
-  searches authorize the current project; group-only wiki results remain excluded
-  from repository search.
-- GitLab repository discovery accepts the default parameters GitLab adds to
-  project keyset pagination links, avoiding `upstream_protocol_failed` for valid
-  search and browse responses. Destination, requested filters, ordering, page
-  size, and cursor checks remain enforced; continuation requests are rebuilt
-  from the authorized inputs.
 - GitLab REST resolves the old path or web URL of a renamed, moved or
   transferred project to the project's current identity. GitLab 16.7 and later
   answer a lookup of the old path with a redirect naming the project's numeric
