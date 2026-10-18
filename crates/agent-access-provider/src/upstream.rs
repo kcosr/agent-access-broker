@@ -184,6 +184,11 @@ impl<'a> UpstreamCall<'a> {
     /// [`ClientProfile::SingleAttempt`] or [`ClientProfile::Bounded`], so hidden
     /// transport retries cannot bypass accounting. Token-endpoint recovery may
     /// use its own separately bounded budget.
+    ///
+    /// Budgeted operations must resolve approved redirects through explicit
+    /// [`UpstreamClient::send`] calls carrying this same budget. They must not
+    /// use [`UpstreamClient::get_following_redirects`], which cannot carry a
+    /// request budget.
     pub fn with_request_budget(mut self, budget: &'a UpstreamRequestBudget) -> Self {
         self.request_budget = Some(budget);
         self

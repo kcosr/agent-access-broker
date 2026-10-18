@@ -695,8 +695,10 @@ Agent Access Broker applies these controls in the request path:
   invalidates them while routine access refresh does not. Binding values never
   enter the token; key failures never downgrade protection. Tokens carry no
   authority: every page is authorized again under current policy and checked by
-  the provider. Without a configured stable key, new GitLab search tokens are
-  invalidated on reload or restart; durable handles require a stable key.
+  the provider. `Generation` tokens are invalidated on every reload or restart,
+  even when a stable key is configured. `StableWhenConfigured` tokens, including
+  new GitLab search tokens, are invalidated on reload or restart when no stable
+  key is configured. `Durable` handles require the configured stable key.
 - **Credential containment**: agents never receive broker-held execution
   credentials. Deliberate GitLab token issuance/rotation returns a new token as
   explicitly sensitive output; it does not reveal the broker execution credential.

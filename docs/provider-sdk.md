@@ -1199,6 +1199,9 @@ failures consume their permit, while pre-send validation failures do not.
 Budgeted calls require `SingleAttempt` or `Bounded`; retry-enabled profiles
 fail before sending. `remaining_requests()` is a capacity check, not a
 reservation: the provider owns whole-page admission and any concurrent work.
+Budgeted operations must resolve approved redirects through explicit `send`
+calls carrying the same budget. They must never use `get_following_redirects`,
+which cannot carry a request budget.
 An OAuth token endpoint uses the separately bounded credential recovery flow,
 which must never reset resource-request counters.
 
