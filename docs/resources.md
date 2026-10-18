@@ -418,8 +418,27 @@ counts. Exclusions remain part of those constraints, and returned objects are
 checked against the same boundary. Missing or ambiguous project/space
 containment fails closed. An all-except boundary is not treated as unrestricted
 all for lookup or audit purposes. Search audit records include
-`searchAuthorization` with the complete finite or all-except boundary, including
+`searchAuthorization` with the complete normalized clause authority, including
 credential failures after authorization and before provider dispatch.
+
+Native search chooses the global highest subject-rank and priority band from
+nonempty, context-eligible grant candidates, requires one usable credential mode,
+then unions its resource clauses and intersects the token boundary. An empty
+token intersection or unavailable selected credential never exposes a lower band.
+Disabled or context-ineligible positive entries contribute no authority, while
+exclusions remain effective. Each clause is included selectors minus exclusions;
+union keeps exclusions local so an independent grant may restore an exception.
+Namespace selectors match descendants, including nested namespaces, but neither
+the namespace itself nor similarly named siblings. Effective-access previews,
+caller discovery and token pickers use these same clauses and coverage proofs.
+
+Jira and Confluence derive exact-only finite/cofinite query constraints from the
+clauses; namespace authority is a contract error. Native providers declare either
+`UpstreamConstrained` enforcement or `ResultFiltered` enforcement. The latter may
+retrieve unauthorized candidates inside the trusted provider, but must discard
+them before results, presentation, audit, object IDs, traces, or continuation
+payloads. Imported actions cannot enable either native search mode. Commands keep
+per-grant credential modes and their distinct exact-only protocol boundaries.
 
 ## Configuration contract
 

@@ -687,11 +687,15 @@ async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link(
 /// access, and an exclusion of `RAILS` holds whichever name the caller used.
 #[tokio::test]
 async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() {
-    let all_except = |excluded: &[&str]| SearchAuthorizationScope::AllExcept {
-        excluded_values: excluded.iter().map(ToString::to_string).collect(),
+    let all_except = |excluded: &[&str]| {
+        SearchAuthorizationScope::excluding_exact_values(
+            excluded.iter().map(ToString::to_string).collect(),
+        )
     };
-    let finite = |values: &[&str]| SearchAuthorizationScope::Finite {
-        values: values.iter().map(ToString::to_string).collect(),
+    let finite = |values: &[&str]| {
+        SearchAuthorizationScope::from_exact_values(
+            values.iter().map(ToString::to_string).collect(),
+        )
     };
     let alias_cql = json!({ "query": { "type": "cql", "value": "space = VLABS" } });
     let alias_spaces = json!({ "query": { "type": "cql", "value": "" }, "spaces": ["VLABS"] });

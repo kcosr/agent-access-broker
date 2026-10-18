@@ -75,9 +75,10 @@ The broker therefore assumes an agent may:
 A user's native permissions answer the first question but not the second. They
 were granted for a human's full judgment, not for an injectable tool acting on
 the user's behalf. Agent Access Broker adds a second layer that constrains the
-agent to approved operations and approved scopes before any upstream request is
-made, so native permissions remain necessary but are no longer sufficient on
-their own to approve agent use.
+agent to approved operations and approved resource boundaries. Search grants
+may authorize bounded candidate retrieval inside a trusted native provider;
+only resources within the admitted boundary may be released. Native permissions
+remain necessary but are no longer sufficient on their own to approve agent use.
 
 ## Ownership of agent authorization
 
@@ -191,13 +192,34 @@ before resource-type-specific query validation, preventing locator errors from
 revealing hidden service types. Cursors bind current policy and caller state
 and never carry authority independently of renewed checks.
 
-Search is different for Jira and Confluence. Those searches do not need a
-separate metadata lookup. The runtime plans search authorization from policy,
-the provider parses JQL/CQL into a broker-owned AST, finite policy scopes are
-injected into the canonical query, and every returned result is revalidated
-before any result is returned. GitLab REST search remains explicitly
-project-scoped and uses project lookup before final repository-scope
-authorization.
+Native search plans one normalized clause authority before obtaining execution
+access. It selects the globally highest subject-rank and priority band among
+nonempty grant candidates, requires one eligible credential mode, unions the
+selected grant clauses, then intersects token restrictions. Missing selected
+credentials, mixed modes, and empty token intersections deny without trying a
+lower grant band. Each clause keeps its own exclusions, so an independent grant
+can restore a specific exception. Namespace selectors match descendants only.
+
+Jira and Confluence declare `UpstreamConstrained` enforcement: they derive strict
+exact-only boundaries, inject them into canonical JQL/CQL queries before upstream
+pagination, and validate every returned result. GitLab's repository discovery
+and full-text searches declare `ResultFiltered`: policy authorizes bounded
+candidate retrieval with the selected execution credential, then the trusted
+provider confirms current repository ownership and filters against the complete
+boundary before projecting any output. Candidates outside the Broker boundary
+can enter that provider and must be discarded before responses, presentation,
+audit, object IDs, traces, or continuations. Ordinary project-scoped GitLab
+`issue.search` and `merge_request.search` retain project lookup and authorization
+before execution. Search grants authorize only their own categories and do not
+implicitly permit object reads.
+
+This boundary protects structured ownership and locators, not references to
+other repositories inside authorized free text. Timing, continuation presence,
+and repeated scan-budget responses can reveal coarse search progress or density.
+Audit stores the full admitted clause authority, while the lossy `resourceScopes`
+summary may be `["*"]` despite namespace or exact exclusions. Imported actions
+cannot enable native search modes; command imports retain their separate
+per-grant modes and exact-only protocol boundaries.
 
 ```mermaid
 sequenceDiagram
@@ -323,7 +345,7 @@ flowchart TB
 | User-created upstream tokens | Users may hand agents tokens that carry broad user access. | Users can store credentials behind the broker and give agents broker tokens constrained by organization policy; network policy prevents normal agent runtimes from using self-minted upstream tokens directly against Jira or Confluence. |
 | Request surface | Potentially broad REST API or vendor CLI surface. | Narrow typed operations. |
 | Agent ergonomics | Agents may need mixed CLI/API/version-specific logic. | Agents use one discoverable service/action interface for built-in providers and configured route actions. |
-| Resource validation | Depends on upstream endpoint and caller behavior. | Broker validates containing project/space and repository scope before execution. |
+| Resource validation | Depends on upstream endpoint and caller behavior. | Broker validates ordinary action scope before execution; native search admits a complete resource boundary and validates every released result. |
 | Search containment | Caller may attempt broad JQL/CQL if token permits. | Broad or unresolved JQL/CQL is denied before upstream execution. |
 | Audit | Distributed across token usage, upstream logs, and agent logs. | Central broker audit with resource and action context. |
 | Agent-specific policy | Difficult without many tokens/accounts. | Native broker policy model. |
@@ -648,27 +670,35 @@ Agent Access Broker applies these controls in the request path:
   Identity and admin boundary).
 - **Deny-by-default policy**: unknown services, unknown actions, missing grants,
   unsupported scopes, and ambiguous credential modes fail closed.
-- **Provider scope resolution**: providers resolve the containing Jira project or
-  Confluence space, and canonical Git repositories, before execution.
+- **Provider scope resolution**: ordinary scoped actions resolve the containing
+  Jira project or Confluence space, and canonical Git repository, before execution.
+  Native search admits clause authority before bounded candidate retrieval and
+  checks every released result against it.
 - **Lookup-before-policy metadata resolution**: lookup-backed actions resolve
   ambiguous locators and opaque IDs with the caller's database-managed credential
   before policy authorization, with normalized failures (see Authorization lookup
   path).
 - **Broker-owned query parsing**: Jira JQL and Confluence CQL are parsed into a
   broker AST, re-emitted canonically, scoped by policy, and result-validated.
-- **Provider continuation tokens**: cursors, page tokens and handles sealed with
-  the provider SDK's continuation envelope are HMAC-signed and bound to the
-  service, purpose and version, the host-selected execution context, the
-  credential mode, the caller, the provider configuration and the request's
-  resources and normalized settings. GitLab, Jira and Confluence tokens also
-  bind the credential method and, for OAuth, the connection and its
-  generation, so a token cannot be replayed under another account, a
-  reconnected connection or another method. The binding enters only the MAC, never the
-  token, so a token reveals no bound value and fails under any other binding.
-  Tokens carry no authority: each continuation is authorized again under
-  current policy and the provider re-applies its containment checks, so a grant
-  change takes effect on the next page. Process-local keys make tokens expire
-  on reload or restart; durable handles require the configured stable key.
+- **Provider continuation tokens**: SDK envelopes bind the service, purpose,
+  version, host-selected execution context, credential mode, caller, provider
+  configuration, and normalized resource/query settings. Existing families are
+  HMAC-signed. New GitLab discovery/content-search families encrypt a fixed
+  32-byte payload with AES-256-GCM; only the numeric scan position and route kind
+  enter that payload. Binding-separated HKDF keys and authenticated headers keep
+  positions confidential and preserve the original 15-minute deadline across
+  pages. A 60-second future-deadline allowance handles clock differences without
+  accepting an expired token or renewing its expiry. The complete normalized
+  repository boundary and any explicit confirmed project identity are bound.
+  GitLab, Jira and Confluence tokens also bind the credential method and, for
+  OAuth, the connection and generation, so reconnection or a method change
+  invalidates them while routine access refresh does not. Binding values never
+  enter the token; key failures never downgrade protection. Tokens carry no
+  authority: every page is authorized again under current policy and checked by
+  the provider. `Generation` tokens are invalidated on every reload or restart,
+  even when a stable key is configured. `StableWhenConfigured` tokens, including
+  new GitLab search tokens, are invalidated on reload or restart when no stable
+  key is configured. `Durable` handles require the configured stable key.
 - **Credential containment**: agents never receive broker-held execution
   credentials. GitLab token issuance/rotation returns an encrypted temporary
   reference by default. Explicit raw mode exports only the newly issued token;

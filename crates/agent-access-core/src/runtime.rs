@@ -16,7 +16,8 @@ mod client_category_tests;
 mod command_authority;
 pub(crate) use command_authority::command_enforced_action;
 pub use command_authority::{
-    CommandAuthorization, CommandGrantAuthority, CommandResourceType, ResourcesCheckedBy,
+    CommandAuthorization, CommandGrantAuthority, CommandResourceType, CommandSearchScope,
+    ResourcesCheckedBy,
 };
 mod command_dispatch;
 mod discovery;
@@ -40,6 +41,8 @@ mod provider_state_tests;
 mod resource_attribute_tests;
 #[cfg(test)]
 mod resource_coverage_tests;
+#[cfg(test)]
+mod search_authority_tests;
 mod secret_reference_credentials;
 pub(crate) mod secret_reference_identity;
 mod secret_references;
@@ -371,82 +374,30 @@ pub struct SearchAuthorizationPlan {
 }
 
 fn search_scope_from_boundary(boundary: &ResourceBoundary) -> SearchAuthorizationScope {
-    if boundary.is_empty() {
-        return SearchAuthorizationScope::Finite { values: Vec::new() };
-    }
-    if boundary
-        .included
-        .iter()
-        .any(|selector| matches!(selector, ResourceSelector::All))
-    {
-        // Search containment types support exact/all only. Any other exclusion,
-        // including a selector form this build does not know, yields an empty
-        // boundary: invalid data is never broadened.
-        let mut excluded_values = BTreeSet::new();
-        for selector in &boundary.excluded {
-            let ResourceSelector::Exact { value } = selector else {
-                return SearchAuthorizationScope::Finite { values: Vec::new() };
-            };
-            excluded_values.insert(value.clone());
-        }
-        return SearchAuthorizationScope::AllExcept {
-            excluded_values: excluded_values.into_iter().collect(),
-        };
-    }
-    SearchAuthorizationScope::Finite {
-        values: boundary
-            .included
-            .iter()
-            .filter_map(|selector| match selector {
-                ResourceSelector::Exact { value } if boundary.matches(value) => Some(value.clone()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-    }
+    SearchAuthorizationScope::from_selectors(boundary.included.clone(), boundary.excluded.clone())
 }
 
-pub(crate) fn search_scope_boundary(scope: &SearchAuthorizationScope) -> ResourceBoundary {
-    match scope {
-        SearchAuthorizationScope::Finite { values } => ResourceBoundary {
-            included: values
-                .iter()
-                .map(|value| ResourceSelector::Exact {
-                    value: value.clone(),
-                })
-                .collect(),
-            excluded: Vec::new(),
-        },
-        SearchAuthorizationScope::AllExcept { excluded_values } => ResourceBoundary {
-            included: vec![ResourceSelector::All],
-            excluded: excluded_values
-                .iter()
-                .map(|value| ResourceSelector::Exact {
-                    value: value.clone(),
-                })
-                .collect(),
-        },
+fn search_clause_boundary(clause: &SearchAuthorizationClause) -> ResourceBoundary {
+    ResourceBoundary {
+        included: clause.included().to_vec(),
+        excluded: clause.excluded().to_vec(),
     }
 }
 
 impl SearchAuthorizationPlan {
-    /// The provider's view: the scope type and the complete finite or
-    /// all-except boundary. The credential mode travels in the admitted
+    /// The provider's view: the scope type and the complete normalized
+    /// clause boundary. The credential mode travels in the admitted
     /// context, not here.
     pub fn authorization(&self) -> SearchAuthorization {
         SearchAuthorization::new(self.scope_type.clone(), self.scope.clone())
     }
 
     /// The envelope and audit `resourceScopes` summary of the boundary:
-    /// finite values, or `["*"]` for an all-except boundary. It is lossy by
-    /// design and never reaches a provider; authorization always uses the
-    /// complete boundary.
+    /// sorted exact values, or `["*"]` when any surviving positive selector
+    /// is all or a namespace. It is lossy and may hide exclusions; authorization
+    /// always uses the complete clauses.
     pub fn resource_scope_summary(&self) -> ResourceScopes {
-        let values = match &self.scope {
-            SearchAuthorizationScope::Finite { values } => values.clone(),
-            SearchAuthorizationScope::AllExcept { .. } => vec!["*".to_string()],
-        };
+        let values = self.scope.resource_scope_summary();
         BTreeMap::from([(self.scope_type.clone(), values)])
     }
 }
@@ -5046,7 +4997,7 @@ impl BrokerRuntime {
                         )));
                     }
                 }
-            } else if action_descriptor.search_contained {
+            } else if action_descriptor.native_search.is_some() {
                 let mut search_authorization = match self.plan_search_authorization(
                     &policy_snapshot,
                     &identity,
@@ -5373,7 +5324,12 @@ impl BrokerRuntime {
                 Ok((
                     lookup,
                     admitted_credential_mode(&policy.credential_mode)?,
-                    admitted_authority(&action_descriptor, &scopes, search_authorization)?,
+                    admitted_authority(
+                        &action_descriptor,
+                        &scopes,
+                        search_authorization,
+                        self.command_enforced(&service, &action),
+                    )?,
                 ))
             }) {
             Ok(selected) => selected,
@@ -5944,7 +5900,15 @@ impl BrokerRuntime {
     ) -> Result<SearchAuthorizationPlan, ProviderError> {
         let scope_type = self
             .action_descriptor(service, action)
-            .filter(|descriptor| descriptor.search_contained)
+            .filter(|descriptor| {
+                matches!(
+                    descriptor.native_search,
+                    Some(
+                        NativeSearchEnforcement::UpstreamConstrained
+                            | NativeSearchEnforcement::ResultFiltered
+                    )
+                )
+            })
             .and_then(|descriptor| descriptor.resource_scopes.first().cloned())
             .ok_or_else(|| {
                 ProviderError::deny(
@@ -5968,6 +5932,12 @@ impl BrokerRuntime {
         }
         let top_band = top_policy_band(candidates);
         let credential_mode = single_policy_credential_mode(&top_band)?;
+        if !self.action_supports_mode(service, action, &credential_mode) {
+            return Err(ProviderError::deny(
+                ReasonCode::CredentialNotProvisioned,
+                "selected credential mode is not supported by this action",
+            ));
+        }
         self.check_action_credential_eligibility(service, action, &credential_mode, identity)?;
         if !credential_mode_available(
             &self.effective_credentials,
@@ -5983,14 +5953,13 @@ impl BrokerRuntime {
             ));
         }
 
-        let scope = top_band.iter().fold(
-            SearchAuthorizationScope::Finite { values: Vec::new() },
-            |scope, candidate| {
+        let scope = top_band
+            .iter()
+            .fold(SearchAuthorizationScope::empty(), |scope, candidate| {
                 scope.union(&search_scope_from_boundary(
                     &candidate.scopes[&scope_type].boundary,
                 ))
-            },
-        );
+            });
         if scope.is_empty() {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
@@ -8304,13 +8273,14 @@ fn admitted_credential_mode(mode: &str) -> Result<CredentialMode, ProviderError>
 }
 
 /// The exact authority an admitted action receives, from its validated
-/// contract: a search boundary for search-contained actions, the resolved
+/// contract: a search boundary for search actions, the resolved
 /// resources for ordinary scoped actions, and nothing for action-only ones.
 /// Policy already required those shapes, so any mismatch fails closed.
 fn admitted_authority(
     action: &ActionDescriptor,
     scopes: &ResourceScopes,
     search: Option<SearchAuthorization>,
+    command_enforced: bool,
 ) -> Result<InvocationAuthority, ProviderError> {
     let mismatch = || {
         ProviderError::error(
@@ -8318,18 +8288,43 @@ fn admitted_authority(
             "admitted authority does not match the action contract",
         )
     };
-    match (action.search_contained, search) {
-        (true, Some(search)) if action.resource_scopes.len() == 1 => {
+    if command_enforced {
+        return match (
+            action.native_search,
+            action.resource_scopes.as_slice(),
+            search,
+        ) {
+            (None, [scope], Some(search))
+                if search.scope_type == scope.as_str()
+                    && !search.scope.is_empty()
+                    && search.scope.exact_projection().is_ok() =>
+            {
+                Ok(InvocationAuthority::Search(search))
+            }
+            (None, [], None) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
+            _ => Err(mismatch()),
+        };
+    }
+    match (
+        action.native_search,
+        search,
+        action.resource_scopes.as_slice(),
+    ) {
+        (
+            Some(
+                NativeSearchEnforcement::UpstreamConstrained
+                | NativeSearchEnforcement::ResultFiltered,
+            ),
+            Some(search),
+            [scope],
+        ) if search.scope_type == scope.as_str() && !search.scope.is_empty() => {
             Ok(InvocationAuthority::Search(search))
         }
-        (false, None) if action.resource_scopes.is_empty() && scopes.is_empty() => {
-            Ok(InvocationAuthority::ActionOnly)
-        }
-        (false, None)
-            if !action.resource_scopes.is_empty()
-                && scopes.len() == action.resource_scopes.len()
-                && action
-                    .resource_scopes
+        (None, None, []) if scopes.is_empty() => Ok(InvocationAuthority::ActionOnly),
+        (None, None, declared)
+            if !declared.is_empty()
+                && scopes.len() == declared.len()
+                && declared
                     .iter()
                     .all(|scope| scopes.get(scope).is_some_and(|values| !values.is_empty())) =>
         {

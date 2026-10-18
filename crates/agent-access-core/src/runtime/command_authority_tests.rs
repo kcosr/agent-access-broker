@@ -522,7 +522,7 @@ async fn prepare(
 }
 
 /// The command-enforced grants an admitted call passes.
-fn passed(prepared: &PreparedInvocation) -> Vec<(String, SearchAuthorizationScope, Option<i32>)> {
+fn passed(prepared: &PreparedInvocation) -> Vec<(String, CommandSearchScope, Option<i32>)> {
     match prepared.command_authorization().unwrap() {
         CommandAuthorization::Command { grants, .. } => grants
             .iter()
@@ -538,14 +538,14 @@ fn passed(prepared: &PreparedInvocation) -> Vec<(String, SearchAuthorizationScop
     }
 }
 
-fn finite(values: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::Finite {
+fn finite(values: &[&str]) -> CommandSearchScope {
+    CommandSearchScope::Finite {
         values: values.iter().map(|value| (*value).into()).collect(),
     }
 }
 
-fn all_except(values: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::AllExcept {
+fn all_except(values: &[&str]) -> CommandSearchScope {
+    CommandSearchScope::AllExcept {
         excluded_values: values.iter().map(|value| (*value).into()).collect(),
     }
 }
@@ -581,7 +581,11 @@ fn reached(prepared: &PreparedInvocation) -> BTreeSet<&'static str> {
     let grants = passed(prepared);
     PROBES
         .into_iter()
-        .filter(|probe| grants.iter().any(|(_, scope, _)| scope.matches(probe)))
+        .filter(|probe| {
+            grants
+                .iter()
+                .any(|(_, scope, _)| scope.authority().matches(probe))
+        })
         .collect()
 }
 
@@ -611,7 +615,10 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         view.resource_scopes.first().map(String::as_str),
         Some("project")
     );
-    assert!(!view.search_contained, "inputs mean the Broker checks them");
+    assert!(
+        view.native_search.is_none(),
+        "inputs mean the Broker checks them"
+    );
     assert!(!view.requires_resource_attributes);
     let search = descriptor.action("issue.search").unwrap();
     assert_eq!(
@@ -619,11 +626,11 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         Some("project")
     );
     assert!(
-        search.search_contained,
-        "a type without inputs is command-enforced"
+        search.native_search.is_none(),
+        "command enforcement never enables native search"
     );
     let stats = descriptor.action("issue.stats").unwrap();
-    assert!(stats.resource_scopes.is_empty() && !stats.search_contained);
+    assert!(stats.resource_scopes.is_empty() && stats.native_search.is_none());
     assert_eq!(stats.credential_modes, ["service", "per_user"]);
     assert_eq!(
         descriptor
@@ -645,26 +652,63 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     let corrupt = descriptor.action("issue.corrupt").unwrap();
     // The unresolved scope is command-enforced, so retained grants mixing
     // modes stay valid; it never reaches a resource.
-    assert!(corrupt.search_contained);
+    assert!(corrupt.native_search.is_none());
     assert_eq!(
         descriptor.resource_scopes[corrupt.resource_scopes.first().map(String::as_str).unwrap()]
             .resource_type,
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
+    let imported = ImportedCatalog {
+        revision: 1,
+        services: vec![declaring],
+    };
+    let services = BTreeMap::from([(SERVICE.into(), Arc::new(descriptor))]);
+    for (name, command_enforced) in [
+        ("issue.search", true),
+        ("issue.corrupt", true),
+        ("issue.view", false),
+        ("issue.orphan", false),
+    ] {
+        assert_eq!(
+            command_enforced_action(&config, &imported, &services, SERVICE, name),
+            command_enforced,
+            "{name}"
+        );
+    }
     // Without the command adapter the import is unavailable, and every
     // action binds the unresolved type.
     let unlinked_record = record(&modes, actions());
+    let unlinked_config = crate::runtime::tests::base_fake_config();
     let unlinked = crate::runtime::imports::descriptor(
         &unlinked_record,
-        &crate::runtime::tests::base_fake_config(),
+        &unlinked_config,
         &published_types(&unlinked_record),
     );
-    assert!(unlinked.actions.iter().all(|action| {
-        action.search_contained
-            && unlinked.resource_scopes[action.resource_scopes.first().map(String::as_str).unwrap()]
-                .resource_type
-                == *UNRESOLVED_RESOURCE_TYPE.id()
-    }));
+    let unlinked_imported = ImportedCatalog {
+        revision: 1,
+        services: vec![unlinked_record],
+    };
+    let unlinked_services = BTreeMap::from([(SERVICE.into(), Arc::new(unlinked))]);
+    let unlinked = &unlinked_services[SERVICE];
+    for action in &unlinked.actions {
+        assert!(action.native_search.is_none());
+        assert_eq!(
+            unlinked.resource_scopes[action.resource_scopes.first().map(String::as_str).unwrap()]
+                .resource_type,
+            *UNRESOLVED_RESOURCE_TYPE.id()
+        );
+        assert!(
+            command_enforced_action(
+                &unlinked_config,
+                &unlinked_imported,
+                &unlinked_services,
+                SERVICE,
+                &action.action,
+            ),
+            "{}",
+            action.action
+        );
+    }
     // A credential-free import's actions use service mode.
     let free_record = record(&[], actions());
     let free =
@@ -674,6 +718,44 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         ["service"]
     );
     assert!(!free.credentials.execution_required);
+}
+
+#[tokio::test]
+async fn unreadable_command_authority_retains_mixed_mode_grants_without_admitting_resources() {
+    let mut declared = actions();
+    declared.push(action("issue.corrupt", json!("unreadable")));
+    let mut runtime = publish_retained(
+        declared,
+        ["per_user", "service"]
+            .into_iter()
+            .map(|mode| {
+                grant(
+                    "group:engineering",
+                    "issue.corrupt",
+                    mode,
+                    10,
+                    &["p-ops"],
+                    &[],
+                )
+            })
+            .collect(),
+    )
+    .expect("an unreadable command declaration must preserve retained mixed-mode grants");
+    assert_eq!(
+        runtime.resources_checked_by(SERVICE, "issue.corrupt"),
+        Some(ResourcesCheckedBy::Command)
+    );
+    credentials_present(&mut runtime);
+    let caller = identity(None);
+    assert_eq!(
+        prepare(&runtime, &caller, "issue.corrupt", json!({}))
+            .await
+            .err()
+            .unwrap()
+            .reason_code(),
+        ReasonCode::ServiceActionDenied
+    );
+    assert_eq!(discovered(&runtime, &caller, "issue.corrupt"), None);
 }
 
 #[tokio::test]
@@ -753,7 +835,7 @@ async fn command_enforced_calls_pass_the_top_band_with_per_grant_credentials_and
             .search()
             .unwrap()
             .scope,
-        all_except(&["FIN", "HR", "SEC"])
+        all_except(&["FIN", "HR", "SEC"]).authority()
     );
     // Audit records grants, modes and boundaries, never attributes.
     let audit = serde_json::to_value(plan).unwrap();

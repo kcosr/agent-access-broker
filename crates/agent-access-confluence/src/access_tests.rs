@@ -347,9 +347,7 @@ async fn oauth_searches_a_personal_space_through_the_gateway() {
     ))
     .search(SearchAuthorization::new(
         "space".to_string(),
-        SearchAuthorizationScope::Finite {
-            values: vec!["~alice".to_string()],
-        },
+        SearchAuthorizationScope::from_exact_values(vec!["~alice".to_string()]),
     ))
     .build();
     let result = invoke(&provider(&server), request).await.unwrap();

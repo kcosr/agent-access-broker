@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
+    NativeSearch,
     Project,
     Issue,
     IssueList,
@@ -124,6 +125,41 @@ const GITLAB_DRAFT_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
 )];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
+    ResultDescriptor {
+        action: "project.search",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.issues",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.merge_requests",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.code",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.commits",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.wiki",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
+    ResultDescriptor {
+        action: "search.comments",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::NativeSearch),
+    },
     ResultDescriptor {
         action: "project.view",
         embedded_bodies: NO_BODIES,
@@ -485,7 +521,10 @@ impl WholeResultRenderer for WholeRenderer {
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
-            WholeRenderer::Project => render_gitlab_project_view(result, out, budget)?,
+            WholeRenderer::NativeSearch => render_native_search(result, out, budget)?,
+            WholeRenderer::Project => {
+                render_gitlab_project_view(result, out, max_body_bytes, budget)?
+            }
             WholeRenderer::Issue => render_gitlab_issue_view(result, out, max_body_bytes, budget)?,
             WholeRenderer::IssueList => {
                 render_gitlab_issue_list(result, out, max_body_bytes, budget)?
@@ -554,6 +593,7 @@ impl WholeResultRenderer for WholeRenderer {
 fn render_gitlab_project_view(
     value: &Value,
     out: &mut MarkdownWriter,
+    max_body_bytes: u64,
     budget: &mut PresentationBudget,
 ) -> Result<(), RenderError> {
     let project = as_object(required(as_object(value)?, "project")?)?;
@@ -565,7 +605,16 @@ fn render_gitlab_project_view(
         out.push_heading_text(name)?;
     }
     out.push("\n")?;
-    gitlab_project_fields(project, out)
+    gitlab_project_fields(project, out)?;
+    render_gitlab_body(
+        project,
+        "description",
+        "Description",
+        "## ",
+        out,
+        max_body_bytes,
+        budget,
+    )
 }
 
 fn gitlab_project_fields(
@@ -574,12 +623,14 @@ fn gitlab_project_fields(
 ) -> Result<(), RenderError> {
     let id = optional_display(project, "id")?;
     let archived = optional_display(project, "archived")?;
+    let star_count = optional_display(project, "starCount")?;
     code_fields(
         out,
         &[
             ("Project ID", id.as_deref()),
             ("Path", optional_scalar(project, "pathWithNamespace")?),
             ("Default branch", optional_scalar(project, "defaultBranch")?),
+            ("Last activity", optional_scalar(project, "lastActivityAt")?),
         ],
     )?;
     fields(
@@ -588,6 +639,7 @@ fn gitlab_project_fields(
             ("Name", optional_scalar(project, "name")?),
             ("Visibility", optional_scalar(project, "visibility")?),
             ("Archived", archived.as_deref()),
+            ("Stars", star_count.as_deref()),
         ],
     )?;
     if let Some(url) = optional_scalar(project, "webUrl")? {
@@ -2405,6 +2457,82 @@ fn required_display(object: &Map<String, Value>, key: &str) -> Result<String, Re
     optional_display(object, key)?.ok_or(RenderError)
 }
 
+fn render_native_search(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let result = as_object(value)?;
+    let items = array(required(result, "items")?)?;
+    budget.charge_work(result.len().saturating_add(items.len()))?;
+    out.push("# GitLab search\n")?;
+    if items.is_empty() {
+        if result.get("nextPageToken").is_some() {
+            out.push("No matching authorized items in this page; continue the search.\n")?;
+        } else {
+            out.push("No matching authorized items in this page.\n")?;
+        }
+    }
+    for item in items {
+        let item = as_object(item)?;
+        budget.charge_work(item.len())?;
+        out.push("\n## ")?;
+        out.push_code(required_scalar(item, "project")?)?;
+        if let Some(title) = optional_scalar(item, "title")?
+            .or(optional_scalar(item, "name")?)
+            .or(optional_scalar(item, "path")?)
+        {
+            out.push(" — ")?;
+            out.push_heading_text(title)?;
+        }
+        out.push("\n")?;
+        for (name, label) in [
+            ("id", "ID"),
+            ("iid", "IID"),
+            ("state", "State"),
+            ("parentKind", "Parent"),
+            ("ref", "Ref"),
+            ("startLine", "Starting line"),
+        ] {
+            if let Some(value) = optional_display(item, name)? {
+                field_code(out, label, &value)?;
+            }
+        }
+        if let Some(url) = optional_scalar(item, "webUrl")? {
+            field_url(out, "URL", url)?;
+        }
+        for name in [
+            "description",
+            "descriptionPreview",
+            "messagePreview",
+            "bodyPreview",
+            "snippet",
+        ] {
+            if let Some(text) = optional_scalar(item, name)? {
+                if name == "snippet" {
+                    out.push("\nUpstream snippet:\n\n")?;
+                } else {
+                    out.push("\n")?;
+                }
+                out.push_escaped(text)?;
+                out.push("\n")?;
+            }
+        }
+        if item.get("previewTruncated").and_then(Value::as_bool) == Some(true) {
+            out.push("\nPreview truncated.\n")?;
+        }
+    }
+    if result.get("scanStatus").and_then(Value::as_str) == Some("upstream_window") {
+        out.push("\nSearch coverage is incomplete: the upstream retrieval window was reached.\n")?;
+    }
+    if let Some(token) = optional_scalar(result, "nextPageToken")? {
+        out.push("\nContinuation (another authorized match is not guaranteed):\n\n")?;
+        out.push_code(token)?;
+        out.push("\n")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2513,6 +2641,13 @@ mod tests {
                 "pipeline.list",
                 "pipeline.view",
                 "project.view",
+                "project.search",
+                "search.issues",
+                "search.merge_requests",
+                "search.code",
+                "search.commits",
+                "search.wiki",
+                "search.comments",
                 "protected_branch.list",
                 "protected_branch.verify",
                 "protected_branch.view",
@@ -2812,9 +2947,13 @@ mod tests {
 
     fn gitlab_whole_fixture(renderer: WholeRenderer) -> Value {
         match renderer {
+            WholeRenderer::NativeSearch => {
+                json!({"items":[{"project":"group/repo","id":12,"title":"Found","bodyPreview":"Preview","previewTruncated":false}],"count":1,"maxResults":20,"scanStatus":"more","nextPageToken":"opaque-token"})
+            }
             WholeRenderer::Project => json!({"project":{
                 "id":9,"pathWithNamespace":"group/repo","name":"Repo","webUrl":"https://gitlab.test/group/repo",
-                "defaultBranch":"main","visibility":"private","archived":false
+                "defaultBranch":"main","visibility":"private","archived":false,
+                "description":"Project description","lastActivityAt":"2026-08-01T12:00:00Z","starCount":0
             }}),
             WholeRenderer::Issue => json!({"issue":gitlab_issue_fixture()}),
             WholeRenderer::IssueList => json!({
@@ -2961,6 +3100,14 @@ mod tests {
 
     fn assert_gitlab_whole_semantics(renderer: WholeRenderer, markdown: &str) {
         let expected: &[&str] = match renderer {
+            WholeRenderer::NativeSearch => &[
+                "GitLab search",
+                "group/repo",
+                "Found",
+                "Preview",
+                "Continuation",
+                "opaque-token",
+            ],
             WholeRenderer::Project => &[
                 "Project ID",
                 "Path",
@@ -2969,6 +3116,11 @@ mod tests {
                 "Visibility",
                 "Archived",
                 "URL",
+                "Last activity",
+                "2026-08-01T12:00:00Z",
+                "Stars",
+                "Description",
+                "Project description",
             ],
             WholeRenderer::Issue | WholeRenderer::IssueList => &[
                 "Issue ID",
@@ -3646,6 +3798,40 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
             assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+        }
+    }
+
+    #[test]
+    fn project_details_render_in_markdown_and_remain_optional() {
+        let mut result = gitlab_whole_fixture(WholeRenderer::Project);
+        present_provider_result(
+            "project.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let rendered = result["value"].as_str().unwrap();
+        for field in ["Project description", "2026-08-01T12:00:00Z", "Stars"] {
+            assert!(rendered.contains(field), "missing {field:?}: {rendered}");
+        }
+
+        let mut result = json!({"project":{
+            "id":9,"pathWithNamespace":"group/repo",
+            "description":null,"lastActivityAt":null,"starCount":null
+        }});
+        present_provider_result(
+            "project.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let rendered = result["value"].as_str().unwrap();
+        for label in ["Description", "Last activity", "Stars"] {
+            assert!(!rendered.contains(label), "invented {label:?}: {rendered}");
         }
     }
 

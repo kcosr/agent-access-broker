@@ -270,9 +270,6 @@ pub(super) fn descriptor(
             }
             if let Some(scope) = shape.scope {
                 action = action.scopes([scope.name.clone()]);
-                if scope.search_contained {
-                    action = action.search_contained();
-                }
                 resource_scopes.insert(scope.name.clone(), authority::scope_binding(&scope));
             }
             action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {

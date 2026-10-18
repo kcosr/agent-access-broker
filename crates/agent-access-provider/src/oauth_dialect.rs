@@ -855,6 +855,7 @@ impl OAuthHttp {
                 // sent; a single send never has one.
                 UpstreamError::NotAllowed
                 | UpstreamError::NotSent { .. }
+                | UpstreamError::RequestBudgetExceeded
                 | UpstreamError::Authorization(_) => OAuthDialectError::NotSent,
                 UpstreamError::Timeout | UpstreamError::Transport(_) | UpstreamError::Redirect => {
                     OAuthDialectError::Failed
