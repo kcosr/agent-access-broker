@@ -487,7 +487,7 @@ fn credential_availability_filters_the_selected_band_without_selecting_a_lower_m
     assert!(
         filtered(&PolicySnapshot::from_config(&config, 2))
             .iter()
-            .any(|clause| clause.matches("labs/tool"))
+            .any(|clause| clause.matches_request(&repository_target("labs/tool")))
     );
 }
 
@@ -581,7 +581,7 @@ async fn inactive_exclusions_persist_and_an_independent_exact_grant_restores_one
             assert_eq!(
                 effective(&runtime, None)
                     .iter()
-                    .any(|clause| clause.matches(&repository_target(path))),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed
             );
         }
@@ -615,7 +615,8 @@ async fn inactive_exclusions_persist_and_an_independent_exact_grant_restores_one
         assert!(
             effective(&runtime, Some(&restricted_caveats))
                 .iter()
-                .all(|clause| !clause.matches(&repository_target("engineering/private/tool")))
+                .all(|clause| !clause
+                    .matches_request(&repository_target("engineering/private/tool")))
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -718,14 +719,14 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
             assert_eq!(
                 effective(&runtime, Some(&caveats))
                     .iter()
-                    .any(|clause| clause.matches(&repository_target(path))),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed,
                 "effective: {path}"
             );
             assert_eq!(
                 picker_clauses
                     .iter()
-                    .any(|clause| clause.matches(&repository_target(path))),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed,
                 "picker: {path}"
             );
@@ -733,7 +734,7 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
                 preview.access[0]
                     .clauses
                     .iter()
-                    .any(|clause| clause.matches(&repository_target(path))),
+                    .any(|clause| clause.matches_request(&repository_target(path))),
                 allowed,
                 "preview: {path}"
             );
