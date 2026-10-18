@@ -431,6 +431,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Confidential fixed-length continuations use AES-256-GCM with binding-separated
+  HKDF keys and carried absolute expiry. Bounded upstream operations share atomic
+  HTTP attempt and decoded-body byte budgets.
+
 - GitLab repository discovery (`project.search`) and separately grantable native
   searches for issues, merge requests, code, commits, project wikis, and comments
   (`search.*`), with typed `gitlab project search` / `gitlab search` commands and

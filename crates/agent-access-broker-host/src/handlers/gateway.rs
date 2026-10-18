@@ -6193,7 +6193,7 @@ mod tests {
                 "https://gitlab.example.com/git/root/api/v4/**".to_string(),
             ],
             content: agent_access_gitlab::GitlabContentConfig::default(),
-            search: agent_access_provider::SearchLimitsConfig::default(),
+            search: Default::default(),
             webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
         };
         let descriptor = agent_access_gitlab::gitlab_descriptor(&gitlab_config);

@@ -21,7 +21,8 @@ use agent_access_core::{
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
-    GitlabContentConfig, GitlabProviderConfig, GitlabProvisioningConfig, GitlabUploadLimitsConfig,
+    GitlabContentConfig, GitlabProviderConfig, GitlabProvisioningConfig, GitlabSearchConfig,
+    GitlabSearchEngineConfig, GitlabSearchEnginesConfig, GitlabUploadLimitsConfig,
     GitlabWebhooksConfig,
 };
 use agent_access_gmail::GmailConfig;
@@ -1149,6 +1150,48 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         .value()
 }
 
+fn gitlab_search_value(search: &GitlabSearchConfig) -> Value {
+    let GitlabSearchConfig {
+        max_results,
+        default_engine,
+        max_candidate_pages,
+        max_upstream_requests,
+        max_scan_bytes,
+        engines,
+    } = search;
+    let GitlabSearchEnginesConfig {
+        basic,
+        advanced,
+        zoekt,
+    } = engines;
+    Fields::default()
+        .int("max_results", *max_results)
+        .put("default_engine", default_engine.as_str())
+        .int("max_candidate_pages", *max_candidate_pages)
+        .int("max_upstream_requests", *max_upstream_requests)
+        .int("max_scan_bytes", *max_scan_bytes)
+        .put(
+            "engines",
+            Fields::default()
+                .put("basic", gitlab_search_engine_value(basic))
+                .put("advanced", gitlab_search_engine_value(advanced))
+                .put("zoekt", gitlab_search_engine_value(zoekt))
+                .value(),
+        )
+        .value()
+}
+
+fn gitlab_search_engine_value(engine: &GitlabSearchEngineConfig) -> Value {
+    let GitlabSearchEngineConfig {
+        project_categories,
+        instance_categories,
+    } = engine;
+    Fields::default()
+        .put("project_categories", strings(project_categories))
+        .put("instance_categories", strings(instance_categories))
+        .value()
+}
+
 fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
     let GitlabProviderConfig {
         provisioning,
@@ -1226,7 +1269,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
                 .int("max_raw_download_bytes", *max_raw_download_bytes)
                 .value(),
         )
-        .put("search", search_value(search))
+        .put("search", gitlab_search_value(search))
         .value()
 }
 

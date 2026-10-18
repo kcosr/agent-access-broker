@@ -1803,7 +1803,7 @@ async fn invoke_malformed_gitlab_draft_readback(
         egress_proxy: None,
         allowed_upstream_hosts: vec![format!("{}/api/v4/**", server.uri())],
         content: agent_access_gitlab::GitlabContentConfig::default(),
-        search: agent_access_provider::SearchLimitsConfig::default(),
+        search: Default::default(),
         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
     };
     let mut config = base_fake_config();
@@ -8101,7 +8101,7 @@ fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
                             "https://gitlab.example.com/api/v4/**".to_string(),
                         ],
                         content: agent_access_gitlab::GitlabContentConfig::default(),
-                        search: agent_access_provider::SearchLimitsConfig::default(),
+                        search: Default::default(),
                         webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
                     });
             }

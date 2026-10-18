@@ -45,7 +45,7 @@ use agent_access_gitlab::{
     GitlabWebhookEvent, GitlabWebhookEventListRequest, GitlabWebhookListRequest,
     GitlabWebhookNamedSecret, GitlabWebhookWriteRequest, GitlabWebhooksConfig,
 };
-use agent_access_provider::{GIT_REPOSITORY_RESOURCE, ProviderResultStream, SearchLimitsConfig};
+use agent_access_provider::{GIT_REPOSITORY_RESOURCE, ProviderResultStream};
 use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::pin::Pin;
@@ -10115,7 +10115,7 @@ provisioning = {{ enabled = {enabled}, max_access_level = {max_access_level}, ma
 attachments = {{ max_bytes = {max_bytes}, max_total_bytes = {max_total_bytes}, media_types = {media_types} }}
 webhooks = {{ allowed_destinations = {allowed_destinations}, allow_disable_ssl_verification = {allow_disable_ssl_verification} }}
 content = {{ max_body_bytes = {max_body_bytes}, max_commit_actions = {max_commit_actions}, max_file_bytes = {max_file_bytes}, max_raw_download_bytes = {max_raw_download_bytes} }}
-search = {{ max_results = {max_results} }}
+search = {{ max_results = {max_results}, default_engine = {default_engine}, max_candidate_pages = {max_candidate_pages}, max_upstream_requests = {max_upstream_requests}, max_scan_bytes = {max_scan_bytes}, engines = {{ basic = {{ project_categories = {basic_project_categories}, instance_categories = {basic_instance_categories} }}, advanced = {{ project_categories = {advanced_project_categories}, instance_categories = {advanced_instance_categories} }}, zoekt = {{ project_categories = {zoekt_project_categories}, instance_categories = {zoekt_instance_categories} }} }} }}
 "#,
         api_base_url = toml_string(api_base_url),
         web_base_url = toml_string(web_base_url),
@@ -10134,6 +10134,16 @@ search = {{ max_results = {max_results} }}
         max_file_bytes = content.max_file_bytes,
         max_raw_download_bytes = content.max_raw_download_bytes,
         max_results = search.max_results,
+        default_engine = toml_string(&search.default_engine),
+        max_candidate_pages = search.max_candidate_pages,
+        max_upstream_requests = search.max_upstream_requests,
+        max_scan_bytes = search.max_scan_bytes,
+        basic_project_categories = toml_strings(&search.engines.basic.project_categories),
+        basic_instance_categories = toml_strings(&search.engines.basic.instance_categories),
+        advanced_project_categories = toml_strings(&search.engines.advanced.project_categories),
+        advanced_instance_categories = toml_strings(&search.engines.advanced.instance_categories),
+        zoekt_project_categories = toml_strings(&search.engines.zoekt.project_categories),
+        zoekt_instance_categories = toml_strings(&search.engines.zoekt.instance_categories),
     )
 }
 
@@ -10166,7 +10176,10 @@ fn gitlab_provider_config(max_results: u32) -> GitlabProviderConfig {
         },
         attachments: Default::default(),
         content: GitlabContentConfig::default(),
-        search: SearchLimitsConfig { max_results },
+        search: agent_access_gitlab::GitlabSearchConfig {
+            max_results,
+            ..Default::default()
+        },
     }
 }
 
