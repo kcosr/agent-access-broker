@@ -80,8 +80,41 @@ pub struct CommandGrantAuthority {
     /// exceptions include excluded entries that are disabled or not eligible
     /// in the execution context. An untyped action's grants reach every
     /// value with no exceptions.
-    pub scope: SearchAuthorizationScope,
+    pub scope: CommandSearchScope,
     pub grant: MatchedGrantAudit,
+}
+
+/// The exact-only command protocol boundary. This core-owned projection retains
+/// command wire and audit serialization; it is never an SDK invocation authority.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CommandSearchScope {
+    Finite { values: Vec<String> },
+    AllExcept { excluded_values: Vec<String> },
+}
+
+impl CommandSearchScope {
+    fn project(scope: &SearchAuthorizationScope) -> Result<Self, CommandDenial> {
+        match scope.exact_projection() {
+            Ok(ExactSearchProjection::Finite { values }) => Ok(Self::Finite { values }),
+            Ok(ExactSearchProjection::AllExcept { excluded_values }) => {
+                Ok(Self::AllExcept { excluded_values })
+            }
+            _ => Err(CommandDenial::Contract),
+        }
+    }
+    fn authority(&self) -> SearchAuthorizationScope {
+        match self {
+            Self::Finite { values } => SearchAuthorizationScope::from_exact_values(values.clone()),
+            Self::AllExcept { excluded_values } => {
+                SearchAuthorizationScope::excluding_exact_values(excluded_values.clone())
+            }
+        }
+    }
 }
 
 impl CommandAuthorization {
@@ -123,10 +156,7 @@ impl CommandAuthorization {
                 resource_type: Some(resource_type),
                 ..
             } => {
-                let values = match self.union_scope() {
-                    SearchAuthorizationScope::Finite { values } => values,
-                    SearchAuthorizationScope::AllExcept { .. } => vec!["*".to_owned()],
-                };
+                let values = self.union_scope().resource_scope_summary();
                 BTreeMap::from([(resource_type.id.clone(), values)])
             }
             Self::Command { .. } => ResourceScopes::new(),
@@ -135,13 +165,14 @@ impl CommandAuthorization {
 
     fn union_scope(&self) -> SearchAuthorizationScope {
         match self {
-            Self::Command { grants, .. } => grants.iter().fold(
-                SearchAuthorizationScope::Finite { values: Vec::new() },
-                |scope, grant| scope.union(&grant.scope),
-            ),
-            Self::Broker { values, .. } => SearchAuthorizationScope::Finite {
-                values: values.clone(),
-            },
+            Self::Command { grants, .. } => grants
+                .iter()
+                .fold(SearchAuthorizationScope::empty(), |scope, grant| {
+                    scope.union(&grant.scope.authority())
+                }),
+            Self::Broker { values, .. } => {
+                SearchAuthorizationScope::from_exact_values(values.clone())
+            }
         }
     }
 }
@@ -159,6 +190,8 @@ pub enum ResourcesCheckedBy {
 /// Why a command-enforced action has no grants to pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandDenial {
+    /// A command boundary unexpectedly contains non-exact selectors.
+    Contract,
     /// No grant of the caller covers the action in this context, or the top
     /// band's boundaries hold no resources.
     Policy,
@@ -186,18 +219,44 @@ fn command_import(imported: &ImportedCatalog, service: &str) -> bool {
 /// top band may mix credential modes, since every passed grant names its
 /// own. The planner and policy validation both classify actions here.
 pub(crate) fn command_enforced_action(
+    config: &BrokerConfig,
     imported: &ImportedCatalog,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
     service: &str,
     action: &str,
 ) -> bool {
-    command_import(imported, service)
-        && services
+    if !command_import(imported, service)
+        || services
             .get(service)
             .and_then(|descriptor| descriptor.action(action))
-            .is_some_and(|descriptor| {
-                descriptor.search_contained || descriptor.resource_scope.is_none()
-            })
+            .is_none()
+    {
+        return false;
+    }
+    // Read the accepted declaration through the adapter. An unresolved command
+    // remains command-enforced, with its unresolved scope admitting no resources.
+    let Some(record) = imported.service(service) else {
+        return false;
+    };
+    let Some(definition) = record
+        .actions
+        .iter()
+        .find(|candidate| candidate.definition.action == action)
+        .map(|candidate| &candidate.definition)
+    else {
+        return true;
+    };
+    match config
+        .providers
+        .registry()
+        .imported_adapter(&record.definition.adapter_kind)
+        .map(|adapter| adapter.action_authority(definition))
+    {
+        Some(Ok(authority)) => authority
+            .resources
+            .is_none_or(|resources| !resources.broker_enforced()),
+        _ => true,
+    }
 }
 
 impl BrokerRuntime {
@@ -209,7 +268,13 @@ impl BrokerRuntime {
     /// Whether `action` of `service` is command-enforced; see
     /// [`command_enforced_action`].
     pub(super) fn command_enforced(&self, service: &str, action: &str) -> bool {
-        command_enforced_action(&self.imported_catalog, &self.services, service, action)
+        command_enforced_action(
+            &self.config,
+            &self.imported_catalog,
+            &self.services,
+            service,
+            action,
+        )
     }
 
     /// Who checks the resources of `action` of a command import, by the
@@ -288,7 +353,11 @@ impl BrokerRuntime {
         }) {
             None => None,
             Some(_) if resource_type.is_none() => return Err(CommandDenial::TokenInapplicable),
-            Some(boundary) => Some(search_scope_from_boundary(&boundary)),
+            Some(boundary) => {
+                let scope = search_scope_from_boundary(&boundary);
+                CommandSearchScope::project(&scope)?;
+                Some(scope)
+            }
         };
         let mut grants = Vec::<CommandGrantAuthority>::new();
         let mut token_emptied = false;
@@ -297,13 +366,13 @@ impl BrokerRuntime {
             let granted = if resource_type.is_some() {
                 search_scope_from_boundary(&candidate.boundary)
             } else {
-                SearchAuthorizationScope::AllExcept {
-                    excluded_values: Vec::new(),
-                }
+                SearchAuthorizationScope::excluding_exact_values(Vec::new())
             };
+            CommandSearchScope::project(&granted)?;
             let scope = token_scope
                 .as_ref()
                 .map_or_else(|| granted.clone(), |token| granted.intersection(token));
+            let projected = CommandSearchScope::project(&scope)?;
             if scope.is_empty() {
                 token_emptied |= !granted.is_empty();
                 continue;
@@ -329,7 +398,7 @@ impl BrokerRuntime {
             }
             grants.push(CommandGrantAuthority {
                 credential_mode: candidate.credential_mode.clone(),
-                scope,
+                scope: projected,
                 grant,
             });
         }
@@ -417,7 +486,9 @@ impl BrokerRuntime {
             }) => grants
                 .iter()
                 .map(|grant| {
-                    EffectiveAccessClause::from_boundary(search_scope_boundary(&grant.scope))
+                    EffectiveAccessClause::from_boundary(search_clause_boundary(
+                        &grant.scope.authority().clauses()[0],
+                    ))
                 })
                 .collect(),
             _ => Vec::new(),
@@ -571,6 +642,10 @@ impl BrokerRuntime {
                 service,
                 action,
                 "broker token command boundary has no currently authorized resources",
+            ),
+            (CommandDenial::Contract, _) => ProviderError::error(
+                ReasonCode::BrokerProviderContractFailed,
+                "command authority is not exact-only",
             ),
             _ => ProviderError::deny(
                 ReasonCode::ServiceActionDenied,

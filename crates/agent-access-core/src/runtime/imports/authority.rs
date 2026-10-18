@@ -23,7 +23,6 @@ pub(super) struct ImportedActionShape {
 pub(super) struct ImportedActionScope {
     pub name: String,
     pub resource_type: ResourceType,
-    pub search_contained: bool,
 }
 
 fn command_endpoint(definition: &ImportedServiceDefinition) -> bool {
@@ -79,7 +78,6 @@ pub(super) fn action_shape(
         scope: Some(ImportedActionScope {
             name: UNREADABLE_SCOPE.into(),
             resource_type: UNRESOLVED_RESOURCE_TYPE.id().clone(),
-            search_contained: command_endpoint(&record.definition),
         }),
         credential_modes: declared_modes.to_vec(),
     };
@@ -110,7 +108,6 @@ pub(super) fn action_shape(
     ImportedActionShape {
         scope: authority.resources.map(|resources| ImportedActionScope {
             resource_type: broker_type(record, &resources.resource_type, registry),
-            search_contained: !resources.broker_enforced(),
             name: resources.resource_type,
         }),
         credential_modes,

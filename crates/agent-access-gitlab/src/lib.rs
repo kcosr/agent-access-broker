@@ -8,6 +8,7 @@ mod config;
 mod oauth;
 mod present;
 mod provisioning;
+mod search;
 #[cfg(test)]
 mod tests;
 mod validation;
@@ -166,6 +167,7 @@ pub struct GitlabProvider {
     instance_target: Option<Arc<str>>,
     limits: ProviderLimits,
     backend: Arc<dyn GitlabBackend>,
+    search_backend: Option<Arc<search::HttpSearchBackend>>,
     pagination_signer: ContinuationSigner,
     attribution: ProviderAttributionConfig,
 }
@@ -202,6 +204,11 @@ impl GitlabProvider {
             limits.clone(),
             host.clients(),
         )?);
+        let search_backend = Some(Arc::new(search::HttpSearchBackend::new(
+            &config,
+            &limits,
+            host.clients(),
+        )?));
         let config_fingerprint = gitlab_config_fingerprint(&config);
         Ok(Self {
             instance_target: gitlab_instance_target(&config),
@@ -209,6 +216,7 @@ impl GitlabProvider {
             config_fingerprint,
             limits,
             backend,
+            search_backend,
             pagination_signer: ContinuationSigner::new(host.stable_signing_key().cloned()),
             attribution: host.attribution().clone(),
         })
@@ -222,6 +230,7 @@ impl GitlabProvider {
             config_fingerprint,
             limits: ProviderLimits::default(),
             backend,
+            search_backend: None,
             pagination_signer: ContinuationSigner::new(None),
             attribution: ProviderAttributionConfig::default(),
         }
@@ -588,6 +597,9 @@ impl Provider for GitlabProvider {
         if PROVISIONING_ACTIONS.contains(&request.action()) {
             return self.invoke_provisioning(request).await;
         }
+        if search::is_search_action(request.action()) {
+            return self.invoke_native_search(request).await;
+        }
         match request.action() {
             "project.view" => self.invoke_project_view(request).await,
             "project.upload" => self.invoke_project_upload(request).await,
@@ -820,6 +832,11 @@ impl GitlabProvider {
             .await
             .map_err(gitlab_backend_error)?;
         ensure_same_project(&lookup_project, &response.value)?;
+        ensure_gitlab_description_within_cap(
+            "project",
+            response.value.description.as_deref(),
+            self.config.content.max_body_bytes,
+        )?;
         Ok(gitlab_result(
             "project.view",
             &lookup_project,
@@ -6709,7 +6726,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
         ),
         gitlab_read_action(
             "issue.search",
-            "Search or list GitLab issues in one required authorized project. Omit search text to browse; use structured filters and sorting.",
+            "List and filter GitLab issues within one required authorized project. Omit search text to browse; use structured filters and sorting.",
             issue_search_schema(config.search.max_results),
         )
         .documentation(gitlab_search_documentation(false, config.search.max_results)),
@@ -6758,7 +6775,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
         ),
         gitlab_read_action(
             "merge_request.search",
-            "Search or list GitLab merge requests in one required authorized project. Omit search text to browse; use structured filters and sorting.",
+            "List and filter GitLab merge requests within one required authorized project. Omit search text to browse; use structured filters and sorting.",
             merge_request_search_schema(config.search.max_results),
         )
         .documentation(gitlab_search_documentation(true, config.search.max_results)),
@@ -7014,7 +7031,10 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             "file.view",
             "View bounded GitLab repository file metadata and inline content",
             file_view_schema(),
-        ),
+        )
+        .documentation(json!({
+            "content":"Reads files from a project's source repository. Wiki pages are separate and cannot be read through this action. Full wiki-page reading is not currently supported by the Broker."
+        })),
         gitlab_read_action(
             "file.raw.download",
             "Download a bounded GitLab repository file as a raw stream",
@@ -7185,6 +7205,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             )
         }
     }));
+    actions.extend(search::descriptors(config));
     let descriptor = ServiceDescriptor::new("gitlab", "GitLab")
         .with_resource_scopes(BTreeMap::from([(
             "repository".to_string(),

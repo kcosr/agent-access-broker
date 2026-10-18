@@ -569,7 +569,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "additionalProperties": false
             }),
         )
-        .search_contained()
+        .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained)
         .documentation(cql_documentation(ConfluenceSearchContentKind::Page)),
         confluence_action(
             "page.create",
@@ -762,7 +762,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "additionalProperties": false
             }),
         )
-        .search_contained()
+        .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained)
         .documentation(cql_documentation(ConfluenceSearchContentKind::BlogPost)),
         confluence_action(
             "blog.create",

@@ -4042,9 +4042,7 @@ fn scope_only_jql_requires_positive_bound_for_all_project_access() {
     for excluded in [BTreeSet::new(), set(["PRIVATE"])] {
         let authorization = SearchAuthorization::new(
             "project".to_string(),
-            SearchAuthorizationScope::AllExcept {
-                excluded_values: excluded.iter().cloned().collect(),
-            },
+            SearchAuthorizationScope::excluding_exact_values(excluded.iter().cloned().collect()),
         );
         for value in ["", "ORDER BY updated DESC"] {
             let inputs =
@@ -4385,9 +4383,7 @@ fn all_except_jql_preserves_caller_grouping_and_exclusions() {
     );
     let authorization = SearchAuthorization::new(
         "project".to_string(),
-        SearchAuthorizationScope::AllExcept {
-            excluded_values: vec!["PRIVATE".to_string()],
-        },
+        SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
     );
     assert!(effective_search_scope(&authorization, &set(["PRIVATE"])).is_err());
     assert_eq!(
@@ -4428,9 +4424,7 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
         request = InvocationBuilder::from(request)
             .search(SearchAuthorization::new(
                 "project".to_string(),
-                SearchAuthorizationScope::AllExcept {
-                    excluded_values: vec!["PRIVATE".to_string()],
-                },
+                SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
             ))
             .build();
         let result = provider.invoke(request).await;
@@ -4538,9 +4532,9 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
             InvocationBuilder::from(per_user_invocation("search", inputs, vec![]))
                 .search(SearchAuthorization::new(
                     "project".to_string(),
-                    SearchAuthorizationScope::AllExcept {
-                        excluded_values: excluded.iter().map(|v| (*v).to_string()).collect(),
-                    },
+                    SearchAuthorizationScope::excluding_exact_values(
+                        excluded.iter().map(|v| (*v).to_string()).collect(),
+                    ),
                 ))
                 .build()
         };
@@ -8892,9 +8886,9 @@ fn test_lookup_credential() -> ExecutionCredential {
 fn search_preflight<const N: usize>(projects: [&str; N]) -> SearchAuthorization {
     SearchAuthorization::new(
         "project".to_string(),
-        SearchAuthorizationScope::Finite {
-            values: projects.into_iter().map(ToString::to_string).collect(),
-        },
+        SearchAuthorizationScope::from_exact_values(
+            projects.into_iter().map(ToString::to_string).collect(),
+        ),
     )
 }
 
@@ -9305,13 +9299,13 @@ fn jira_descriptor_declares_lookup_and_io_per_action() {
 
     let search = action("search");
     assert_eq!(search.lookup, LookupRequirement::None);
-    assert!(search.search_contained);
+    assert!(search.native_search.is_some());
     assert_eq!(search.resource_scope.as_deref(), Some("project"));
     assert_eq!(search.io, crate::ActionIo::Json);
 
     let create = action("issue.create");
     assert_eq!(create.lookup, LookupRequirement::None);
-    assert!(!create.search_contained);
+    assert!(create.native_search.is_none());
     assert_eq!(create.io, crate::ActionIo::Json);
 }
 
@@ -9415,4 +9409,43 @@ async fn stalled_upload_response_bodies_are_traced_as_timeouts() {
     assert_eq!(events[0]["http.statusCode"], 200);
     assert_eq!(events[0]["reasonCode"], "upstream_timeout");
     server.abort();
+}
+
+#[test]
+fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
+    let scope =
+        SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".into(), "HIDDEN".into()])
+            .union(&SearchAuthorizationScope::from_exact_values(vec![
+                "PRIVATE".into(),
+            ]));
+    let authorization = SearchAuthorization::new("project", scope);
+    assert_eq!(
+        jql::authorized_search_scope(&authorization).unwrap(),
+        EffectiveSearchScope::AllExcept(std::collections::BTreeSet::from(["HIDDEN".to_string()]))
+    );
+    for (included, excluded) in [
+        (
+            vec![agent_access_provider::ResourceSelector::Namespace {
+                value: "engineering".into(),
+            }],
+            vec![],
+        ),
+        (
+            vec![agent_access_provider::ResourceSelector::All],
+            vec![agent_access_provider::ResourceSelector::Namespace {
+                value: "engineering/private".into(),
+            }],
+        ),
+    ] {
+        let authority = SearchAuthorization::new(
+            "project",
+            SearchAuthorizationScope::from_selectors(included, excluded),
+        );
+        assert_eq!(
+            jql::authorized_search_scope(&authority)
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::BrokerProviderContractFailed
+        );
+    }
 }

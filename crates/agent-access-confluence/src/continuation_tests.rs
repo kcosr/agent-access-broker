@@ -1116,9 +1116,7 @@ fn search_invocation(
 }
 
 fn finite(spaces: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::Finite {
-        values: spaces.iter().map(ToString::to_string).collect(),
-    }
+    SearchAuthorizationScope::from_exact_values(spaces.iter().map(ToString::to_string).collect())
 }
 
 #[tokio::test]

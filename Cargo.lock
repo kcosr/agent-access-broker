@@ -438,11 +438,14 @@ dependencies = [
 name = "agent-access-provider"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "base64 0.22.1",
  "bytes",
  "chrono",
  "futures-util",
+ "h2",
+ "hkdf",
  "hmac",
  "jsonschema",
  "rand 0.8.6",
@@ -2872,6 +2875,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",

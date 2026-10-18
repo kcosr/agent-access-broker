@@ -103,7 +103,7 @@ fn descriptor_declares_transfer_io_and_search_containment() {
     let contained = descriptor
         .actions
         .iter()
-        .filter(|action| action.search_contained)
+        .filter(|action| action.native_search.is_some())
         .map(|action| action.action.as_str())
         .collect::<BTreeSet<_>>();
     assert_eq!(contained, BTreeSet::from(["search", "blog.search"]));
@@ -2299,9 +2299,7 @@ fn all_except_cql_preserves_caller_grouping_and_exclusions() {
     );
     let authorization = SearchAuthorization::new(
         "space".to_string(),
-        SearchAuthorizationScope::AllExcept {
-            excluded_values: vec!["PRIVATE".to_string()],
-        },
+        SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
     );
     assert!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()])).is_err()
@@ -2336,9 +2334,7 @@ async fn all_except_confluence_search_checks_returned_containment() {
         request = InvocationBuilder::from(request)
             .search(SearchAuthorization::new(
                 "space".to_string(),
-                SearchAuthorizationScope::AllExcept {
-                    excluded_values: vec!["PRIVATE".to_string()],
-                },
+                SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
             ))
             .build();
         let result = provider.invoke(request).await;
@@ -2437,9 +2433,7 @@ fn wildcard_cql_space_predicates_narrow_the_query_not_containment() {
     // against the space the caller named.
     let boundary = authorized_search_scope(&SearchAuthorization::new(
         "space".to_string(),
-        SearchAuthorizationScope::AllExcept {
-            excluded_values: Vec::new(),
-        },
+        SearchAuthorizationScope::excluding_exact_values(Vec::new()),
     ))
     .unwrap();
     assert_eq!(boundary, EffectiveSearchScope::AllExcept(BTreeSet::new()));
@@ -8161,9 +8155,9 @@ fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
 fn confluence_search_preflight<const N: usize>(spaces: [&str; N]) -> SearchAuthorization {
     SearchAuthorization::new(
         "space".to_string(),
-        SearchAuthorizationScope::Finite {
-            values: spaces.into_iter().map(ToString::to_string).collect(),
-        },
+        SearchAuthorizationScope::from_exact_values(
+            spaces.into_iter().map(ToString::to_string).collect(),
+        ),
     )
 }
 
@@ -9839,9 +9833,7 @@ fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
     let inputs = parse_search_inputs(&json!({"query": {"type": "cql", "value": ""}})).unwrap();
     let authorization = SearchAuthorization::new(
         "space".to_string(),
-        SearchAuthorizationScope::Finite {
-            values: vec!["ENG".to_string(), "OPS".to_string()],
-        },
+        SearchAuthorizationScope::from_exact_values(vec!["ENG".to_string(), "OPS".to_string()]),
     );
     let scope =
         effective_search_scope(&authorization, &requested_spaces(&inputs).unwrap()).unwrap();
@@ -9914,5 +9906,44 @@ fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
             .find(|action| action.action == name)
             .unwrap();
         assert_eq!(action.documentation, Some(documentation));
+    }
+}
+
+#[test]
+fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
+    let scope =
+        SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".into(), "HIDDEN".into()])
+            .union(&SearchAuthorizationScope::from_exact_values(vec![
+                "PRIVATE".into(),
+            ]));
+    let authorization = SearchAuthorization::new("space", scope);
+    assert_eq!(
+        cql::authorized_search_scope(&authorization).unwrap(),
+        EffectiveSearchScope::AllExcept(std::collections::BTreeSet::from(["HIDDEN".to_string()]))
+    );
+    for (included, excluded) in [
+        (
+            vec![agent_access_provider::ResourceSelector::Namespace {
+                value: "engineering".into(),
+            }],
+            vec![],
+        ),
+        (
+            vec![agent_access_provider::ResourceSelector::All],
+            vec![agent_access_provider::ResourceSelector::Namespace {
+                value: "engineering/private".into(),
+            }],
+        ),
+    ] {
+        let authority = SearchAuthorization::new(
+            "space",
+            SearchAuthorizationScope::from_selectors(included, excluded),
+        );
+        assert_eq!(
+            cql::authorized_search_scope(&authority)
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::BrokerProviderContractFailed
+        );
     }
 }

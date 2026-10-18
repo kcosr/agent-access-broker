@@ -69,6 +69,14 @@ actions and exposes typed wrappers for supported services.
   supported modes: refuse them only where `per_user` selects OAuth, with no
   fallback to lower grants, and before acquiring or looking up with the
   caller's OAuth access.
+- Native searches declare `native_search` as `UpstreamConstrained` or
+  `ResultFiltered` and receive normalized clause authority. Reuse SDK selector
+  matching, union/intersection and coverage; never flatten grant exclusions.
+  Query-constrained exact-only providers use strict `exact_projection()` and
+  treat namespaces as contract errors. Result-filtered providers discard denied
+  candidates before any release. Imports always declare no native search mode;
+  command enforcement is core-owned and preserves its exact-only wire format
+  and per-grant credential modes.
 - Backend invocation context comes from the host-authorized execution context,
   never a tool input. Seal resumable provider cursors with the SDK continuation
   envelope, bound to that context and current principal/resource/query settings

@@ -575,7 +575,7 @@ advertised read and response formats derive from the same presentation.
 A descriptor declares the service's resource scopes and the resource type each
 one authorizes, and for every action its input schema, resource scope (if any),
 credential modes, lookup requirement (none, execution-time only, or before
-policy to resolve scope), whether it is search-contained, upstream resource
+policy to resolve scope), its optional native search enforcement mode, upstream resource
 ownership, JSON/multipart-upload/raw-download I/O, explicit `read_only`,
 sensitive output pointers, optional extended `documentation`,
 attribution capability, and whether it issues durable handles that need a stable
@@ -847,7 +847,7 @@ sequenceDiagram
     B->>I: Resolve principal and groups
     B->>B: Charge the (principal, service) invocation window
     B->>A: Plan lookup credential when metadata lookup is required
-    B->>A: Build search authorization for search-contained actions
+    B->>A: Build clause authority for native search actions
     B->>R: Load shared lookup or caller per-user lookup credential
     B->>P: Resolve resource scope or compose scoped search
     B->>A: Authorize service/action/scope
@@ -895,9 +895,9 @@ sequenceDiagram
    service-mode grant can be viable, it uses the shared
    `credentials.lookup.<service>` credential for the pre-authorization metadata
    lookup.
-8. **Scope resolution.** For search-contained actions, the runtime builds the
+8. **Scope resolution.** For native search actions, the runtime builds the
    search boundary from policy and skips provider scope lookup; the provider
-   receives the complete boundary (scope type and finite or all-except scope)
+   receives the complete boundary (scope type and normalized resource clauses)
    as its admitted `InvocationAuthority::Search`, never the envelope's lossy
    `["*"]` summary. The matched grants stay with the broker and appear only in
    the audit record's `searchAuthorization`. For

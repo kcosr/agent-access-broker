@@ -12,7 +12,7 @@ use thiserror::Error;
 /// The exact authority the host admitted, chosen from the action's validated
 /// contract: an ordinary scoped action never receives empty resource
 /// authority, an action-only action never inherits resources, and a search
-/// action receives its complete finite or all-except boundary.
+/// action receives its complete normalized clause boundary.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum InvocationAuthority {
@@ -20,7 +20,7 @@ pub enum InvocationAuthority {
     ActionOnly,
     /// The canonical resources one admitted grant covers.
     Resources(ResourceScopes),
-    /// The search boundary a search-contained action must enforce.
+    /// The search boundary a search action must enforce.
     Search(SearchAuthorization),
 }
 
@@ -341,9 +341,7 @@ mod tests {
 
         let search = SearchAuthorization::new(
             "project".to_string(),
-            SearchAuthorizationScope::AllExcept {
-                excluded_values: vec!["SECRET".to_string()],
-            },
+            SearchAuthorizationScope::excluding_exact_values(vec!["SECRET".to_string()]),
         );
         let searching = InvocationBuilder::new("svc", "search")
             .search(search.clone())

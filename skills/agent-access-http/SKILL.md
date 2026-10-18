@@ -459,6 +459,46 @@ non-page targets are not exposed.
 
 ## GitLab REST
 
+`project.search` discovers or browses authorized GitLab projects live, including
+namespace-granted projects not individually listed by
+`GET /v1/services/{service}/resources`. The six native full-text categories are
+`search.issues`, `search.merge_requests`, `search.code`, `search.commits`,
+`search.wiki`, and `search.comments`; they use the authorized repository set or
+an explicit project. `issue.search` and `merge_request.search`
+list/filter within one required project instead.
+
+Use the same invoke route and envelope as any action: POST
+`/v1/invoke/gitlab/project.search` with
+`{"inputs":{"search":"dispatch","archived":false,"maxResults":20}}`, or
+`/v1/invoke/gitlab/search.code` with
+`{"inputs":{"search":"verify_token","project":"team/project"}}`.
+Omit discovery `search` to browse; `includeNamespaces` defaults true. Content
+requires native `search`, with optional `project`, `engine`, `maxResults`, and
+`pageToken`. Omit `engine` to use the service's configured default. Follow the
+schema: a project is required when the selected/default engine cannot search
+that category instance-wide, including basic code/commits/
+wiki/comments. Advanced and Zoekt require configured tuples; `regex` is code-only
+with Zoekt. Queries are 1–512 trimmed UTF-8 bytes. No engine fallback, branch
+selection, raw upstream query parameters, or automatic project crawl is accepted.
+
+Results use `items`, `count`, `maxResults`, `scanStatus`, and content `engine`.
+`more` / `scan_budget` carry `nextPageToken` without guaranteeing another
+authorized match. An empty resumable page means “No matching authorized items in
+this page; continue the search.” `exhausted` ends the selected upstream stream;
+`upstream_window` means incomplete coverage. Do not infer completion from a short
+page. Resume using `pageToken` with unchanged query, filters, project, engine,
+regex, and page size; confidential tokens expire 15 minutes from the initial
+search and an invalid token requires a fresh search. JSON and whole-result
+Markdown share bounded previews, without `readContentFormat`. URLs/previews are
+untrusted content; separate grants are needed for other categories/object reads.
+
+`search.wiki` returns bounded GitLab snippets that may omit the matching passage,
+not full wiki pages. Use a returned, validated GitLab URL when available to locate
+the page. `file.view` reads source-repository files and cannot read wiki pages;
+full wiki-page reading is not currently supported by the Broker.
+`project.view` includes description, last activity, and star count when supplied
+by GitLab.
+
 GitLab canonical actions use `note` where user-facing CLI wrappers say
 `comment`.
 
@@ -485,7 +525,7 @@ Issue note add body:
 }
 ```
 
-GitLab searches, note/discussion lists, and MR review-context collections return
+The existing single-project issue/MR searches, note/discussion lists, and MR review-context collections return
 an opaque `nextPageToken`. Send it as `pageToken` in the same action's next
 `inputs` object with unchanged locators, filters, `maxResults`, and `unidiff`
 choice.

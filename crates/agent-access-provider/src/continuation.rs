@@ -1,4 +1,4 @@
-//! Signed continuation envelopes: the opaque, versioned tokens a provider
+//! Authenticated continuation envelopes: the opaque, versioned tokens a provider
 //! returns so a caller can resume an operation, such as a page token, a log
 //! cursor or a draft handle.
 //!
@@ -11,7 +11,7 @@
 //! the provider instance's [`ContinuationSigner`].
 //!
 //! The binding never appears in the token. Its canonical, length-delimited
-//! encoding is digested into the MAC context together with the service,
+//! encoding is digested into a signed token's MAC context with the service,
 //! purpose and version, so the token carries only the version, the expiry, the
 //! provider's payload and the MAC. A token opens only for the same family and
 //! the same binding: a changed execution context, principal, credential mode,
@@ -19,6 +19,12 @@
 //! fails as [`ContinuationError::Invalid`]. A token never carries authority;
 //! the host authorizes every continuation again and the provider re-applies
 //! its containment checks.
+//!
+//! New confidential families select [`ContinuationFamily::confidential`] and
+//! use [`ContinuationSigner::seal_until`], [`ContinuationSigner::open_confidential`]
+//! and [`ContinuationSigner::seal_resumed`] to encrypt payloads and carry one
+//! absolute expiry across pages. The [`OpenedContinuation`] proof stays within
+//! the current operation. Signed families keep their existing wire behavior.
 //!
 //! Two token shapes have dedicated support:
 //!
@@ -67,6 +73,9 @@
 //!     signer.seal(&binding, &offset.to_be_bytes())
 //! }
 //! ```
+mod confidential;
+pub use confidential::OpenedContinuation;
+
 use crate::signing::{generate_local_key, local_hmac};
 use crate::{
     AdmittedContext, CredentialMode, DelegatedCredential, ProviderError, ScopeRequest,
@@ -166,6 +175,8 @@ pub struct ContinuationFamily {
     action_bound: bool,
     scope_resolved: bool,
     token_prefix: &'static str,
+    confidential: bool,
+    fixed_payload_length: bool,
 }
 
 impl ContinuationFamily {
@@ -210,7 +221,33 @@ impl ContinuationFamily {
             action_bound: true,
             scope_resolved: false,
             token_prefix: "",
+            confidential: false,
+            fixed_payload_length: false,
         }
+    }
+
+    /// Encrypts and authenticates this family's payloads with AES-256-GCM.
+    /// Only the absolute-expiry and resumed operations on
+    /// [`ContinuationSigner`] accept confidential families. Declare an expiry
+    /// with [`Self::expires_after`]; opening before admission is unsupported.
+    /// Existing signed families retain their wire format.
+    ///
+    /// # Panics
+    /// When this family is opened during scope resolution.
+    pub const fn confidential(mut self) -> Self {
+        assert!(
+            !self.scope_resolved,
+            "confidential continuations require admission"
+        );
+        self.confidential = true;
+        self
+    }
+
+    /// Requires every payload to have exactly the declared payload cap. This
+    /// also fixes the token length, hiding differences in payload length.
+    pub const fn fixed_payload_length(mut self) -> Self {
+        self.fixed_payload_length = true;
+        self
     }
 
     /// The same family with a payload cap chosen at run time, such as a
@@ -276,6 +313,10 @@ impl ContinuationFamily {
     /// [`ContinuationSigner::open`] accepts it only for the admitted mode and
     /// principal.
     pub const fn opened_during_scope_resolution(mut self) -> Self {
+        assert!(
+            !self.confidential,
+            "confidential continuations require admission"
+        );
         self.scope_resolved = true;
         self
     }
@@ -323,7 +364,8 @@ impl ContinuationFamily {
     /// base64 (unpadded) of a version byte, an 8-byte expiry when the family
     /// expires, a 32-byte ownership commitment when
     /// [`Self::opened_during_scope_resolution`], the payload and a 32-byte
-    /// MAC.
+    /// MAC for signed families. Confidential families instead carry the
+    /// 26-byte authenticated header and 16-byte AEAD tag.
     pub const fn max_token_bytes(&self) -> usize {
         self.token_prefix.len().saturating_add(unpadded_base64_len(
             self.raw_overhead().saturating_add(self.max_payload_bytes),
@@ -431,6 +473,9 @@ impl ContinuationFamily {
     }
 
     const fn raw_overhead(&self) -> usize {
+        if self.confidential {
+            return confidential::HEADER_BYTES + confidential::TAG_BYTES;
+        }
         VERSION_BYTES
             + if self.time_to_live.is_some() {
                 EXPIRY_BYTES
@@ -873,12 +918,18 @@ impl ContinuationSigner {
         now: SystemTime,
     ) -> Result<String, ContinuationError> {
         let family = binding.family;
+        if family.confidential {
+            return Err(ContinuationError::Invalid);
+        }
         let payload_len = parts.iter().map(|part| part.len()).sum::<usize>();
         let max_payload_bytes = family.max_payload_bytes();
         if payload_len > max_payload_bytes {
             return Err(ContinuationError::PayloadTooLarge {
                 limit: max_payload_bytes,
             });
+        }
+        if family.fixed_payload_length && payload_len != max_payload_bytes {
+            return Err(ContinuationError::Invalid);
         }
         let mut body = Vec::with_capacity(family.raw_overhead() + payload_len);
         body.push(family.version);
@@ -935,6 +986,9 @@ impl ContinuationSigner {
         now: SystemTime,
     ) -> Result<Opened, ContinuationError> {
         let family = binding.family;
+        if family.confidential {
+            return Err(ContinuationError::Invalid);
+        }
         if token.len() > family.max_token_bytes() {
             return Err(ContinuationError::TokenTooLarge {
                 limit: family.max_token_bytes(),
@@ -982,7 +1036,9 @@ impl ContinuationSigner {
             Vec::new()
         };
         let payload = &body[family.header_bytes()..];
-        if payload.len() > family.max_payload_bytes() {
+        if payload.len() > family.max_payload_bytes()
+            || (family.fixed_payload_length && payload.len() != family.max_payload_bytes())
+        {
             return Err(ContinuationError::Invalid);
         }
         Ok(Opened {
