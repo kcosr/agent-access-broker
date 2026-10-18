@@ -18368,10 +18368,17 @@ fn assert_gitlab_read_response_capability_matrix(
         "merge_request.view",
         "pipeline.list",
         "pipeline.view",
+        "project.search",
         "project.view",
         "protected_branch.list",
         "protected_branch.verify",
         "protected_branch.view",
+        "search.code",
+        "search.comments",
+        "search.commits",
+        "search.issues",
+        "search.merge_requests",
+        "search.wiki",
     ];
 
     let actions = catalog["services"]

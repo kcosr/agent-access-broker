@@ -11,7 +11,10 @@ All notable changes to this project are documented in this file.
   selectors, unioned across clauses). The former scope variants are removed.
   `ActionDescriptor.search_contained` is replaced by optional `native_search`
   enforcement, distinguishing upstream-constrained and result-filtered native
-  searches. Imported commands retain their separate exact-only wire boundary;
+  searches; exact-only query providers use `exact_projection()`. New native-search
+  audit records store `searchAuthorization.scope` as
+  `{clauses:[{included,excluded}]}`; historical records retain their stored JSON.
+  Imported commands retain their separate exact-only wire boundary;
   their metadata cannot enable native search enforcement. Stored grants and
   token restrictions are unchanged.
 
