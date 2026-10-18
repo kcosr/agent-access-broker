@@ -259,7 +259,7 @@ its builder methods:
 | `.token_only()` | That the upstream accepts only a static (token) credential for the action, never delegated (OAuth) access. See [token-only actions](#token-only-actions). |
 | `.read_only()` | A reviewed read. Actions default to `read_only = false`; never infer it from a name. |
 | `.lookup(LookupRequirement::ScopeResolution)` | That scope resolution needs a host-selected lookup credential before policy. `LookupRequirement::Execution` asks for one only at execution. |
-| `.search_contained()` | That the host computes a search boundary and the provider constrains its query to it. |
+| `.native_search(NativeSearchEnforcement::UpstreamConstrained)` or `.native_search(NativeSearchEnforcement::ResultFiltered)` | Reviewed native search with a complete host-admitted boundary and the declared query/result enforcement. |
 | `.raw_download()`, `.multipart_upload(plan)` | Streamed response bodies, or admitted file uploads. |
 | `.resource_attributes()` | That dispatch needs the private attributes of the one admitted exact resource. |
 | `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. The host sends such responses with `Cache-Control: no-store`. |
@@ -566,14 +566,29 @@ sequenceDiagram
 - `Resources(ResourceScopes)`: the canonical resources one admitted grant
   covers. An ordinary scoped action never receives empty authority.
 - `Search(SearchAuthorization)`: the complete search boundary of a
-  search-contained action, a scope type with a `SearchAuthorizationScope` of
-  `Finite { values }` or `AllExcept { excluded_values }`.
+  native search or scoped command-enforced action: a scope type and a normalized
+  `SearchAuthorizationScope`, constructed from `SearchAuthorizationClause` values.
+  Each clause admits its included selectors minus its excluded selectors; the
+  scope unions clauses. Empty clauses admit nothing. Namespace selectors use the
+  shared descendant matcher and retain exclusions local to each grant.
 
 `resource_scopes()` and `search_authorization()` return the expected variant,
 or an `AuthorityMismatch` that `?` turns into `broker_provider_contract_failed`.
-A search provider rewrites its upstream query within the boundary and checks
-every returned item with `SearchAuthorizationScope::matches`. It never receives a
-lossy `*` in place of an all-except boundary.
+`UpstreamConstrained` providers constrain the upstream query before pagination
+and check every result. `ResultFiltered` providers may retrieve unauthorized
+candidates with the admitted execution credential, but discard them before any
+output, presentation, audit, object IDs, traces, or continuation payload. Both
+check current resource ownership with `SearchAuthorizationScope::matches`.
+Neither mode replaces authority with the descriptive `*` envelope summary.
+Imported descriptors always have `native_search: None`; core separately classifies
+command enforcement from accepted resource declarations and input pointers.
+
+The SDK supplies normalized union/intersection, `covers` proofs over the complete
+union, and `exact_projection()` for consumers with exact/all resource types.
+Jira and Confluence use that strict projection to compose JQL/CQL; unexpected
+namespaces are contract errors. `ExactSearchProjection` is derived query data,
+not an alternative accepted invocation authority. Core owns the command
+protocol's exact resources/any-except projection and preserves per-grant modes.
 
 Act on the admitted resources, not on raw inputs. When an input names the
 resource, check that it equals the admitted value before you use it.

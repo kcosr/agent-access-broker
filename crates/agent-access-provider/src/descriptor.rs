@@ -86,8 +86,8 @@ pub struct ActionDescriptor {
     pub token_only: bool,
     pub lookup: LookupRequirement,
     /// The broker computes the search boundary from policy and hands it to
-    /// the provider, which must constrain its upstream query and results.
-    pub search_contained: bool,
+    /// the native provider, which enforces it according to its declared mode.
+    pub native_search: Option<NativeSearchEnforcement>,
     pub upstream_resource_ownership: Option<UpstreamResourceOwnership>,
     pub io: ActionIo,
     /// JSON pointers into sensitive response values, including deliberate secret
@@ -100,6 +100,17 @@ pub struct ActionDescriptor {
     /// Read-content normalization and whole-result Markdown the action
     /// supports; `None` means JSON results only.
     pub presentation: Option<ActionPresentation>,
+}
+
+/// How a reviewed native search enforces its admitted resource boundary.
+/// Imports cannot declare native search enforcement.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSearchEnforcement {
+    /// The upstream query applies the boundary before pagination; every result is checked.
+    UpstreamConstrained,
+    /// The provider may retrieve unauthorized candidates, but discards them before release.
+    ResultFiltered,
 }
 
 /// Imported source names cannot fall back to a built-in canonical action name.
@@ -253,7 +264,7 @@ impl ActionDescriptor {
             credential_modes: Vec::new(),
             token_only: false,
             lookup: LookupRequirement::None,
-            search_contained: false,
+            native_search: None,
             upstream_resource_ownership: None,
             io: ActionIo::Json,
             sensitive_output_pointers: Vec::new(),
@@ -314,8 +325,8 @@ impl ActionDescriptor {
         self
     }
 
-    pub fn search_contained(mut self) -> Self {
-        self.search_contained = true;
+    pub fn native_search(mut self, enforcement: NativeSearchEnforcement) -> Self {
+        self.native_search = Some(enforcement);
         self
     }
 
@@ -608,15 +619,15 @@ impl ServiceDescriptor {
                 ));
             }
             if action.requires_resource_attributes
-                && (action.resource_scope.is_none() || action.search_contained)
+                && (action.resource_scope.is_none() || action.native_search.is_some())
             {
                 errors.push(format!(
                     "{service}.{name} private attributes require one exact scoped target"
                 ));
             }
-            if action.search_contained && action.resource_scope.is_none() {
+            if action.native_search.is_some() && action.resource_scope.is_none() {
                 errors.push(format!(
-                    "{service}.{name} is search-contained without a resource scope"
+                    "{service}.{name} declares native search without a resource scope"
                 ));
             }
             if action.credential_modes.is_empty() {

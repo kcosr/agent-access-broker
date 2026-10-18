@@ -73,7 +73,9 @@ impl DescribedProvider for TokenOnlyRecords {
                     .token_only(),
                 action("token.search", &unscoped)
                     .scope("collection")
-                    .search_contained()
+                    .native_search(
+                        agent_access_provider::NativeSearchEnforcement::UpstreamConstrained,
+                    )
                     .token_only(),
                 action("token.status", &unscoped).token_only(),
                 action("record.view", &scoped)

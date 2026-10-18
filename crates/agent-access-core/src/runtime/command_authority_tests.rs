@@ -519,7 +519,7 @@ async fn prepare(
 }
 
 /// The command-enforced grants an admitted call passes.
-fn passed(prepared: &PreparedInvocation) -> Vec<(String, SearchAuthorizationScope, Option<i32>)> {
+fn passed(prepared: &PreparedInvocation) -> Vec<(String, CommandSearchScope, Option<i32>)> {
     match prepared.command_authorization().unwrap() {
         CommandAuthorization::Command { grants, .. } => grants
             .iter()
@@ -535,14 +535,14 @@ fn passed(prepared: &PreparedInvocation) -> Vec<(String, SearchAuthorizationScop
     }
 }
 
-fn finite(values: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::Finite {
+fn finite(values: &[&str]) -> CommandSearchScope {
+    CommandSearchScope::Finite {
         values: values.iter().map(|value| (*value).into()).collect(),
     }
 }
 
-fn all_except(values: &[&str]) -> SearchAuthorizationScope {
-    SearchAuthorizationScope::AllExcept {
+fn all_except(values: &[&str]) -> CommandSearchScope {
+    CommandSearchScope::AllExcept {
         excluded_values: values.iter().map(|value| (*value).into()).collect(),
     }
 }
@@ -574,7 +574,11 @@ fn reached(prepared: &PreparedInvocation) -> BTreeSet<&'static str> {
     let grants = passed(prepared);
     PROBES
         .into_iter()
-        .filter(|probe| grants.iter().any(|(_, scope, _)| scope.matches(probe)))
+        .filter(|probe| {
+            grants
+                .iter()
+                .any(|(_, scope, _)| scope.authority().matches(probe))
+        })
         .collect()
 }
 
@@ -601,16 +605,19 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     descriptor.validate().unwrap();
     let view = descriptor.action("issue.view").unwrap();
     assert_eq!(view.resource_scope.as_deref(), Some("project"));
-    assert!(!view.search_contained, "inputs mean the Broker checks them");
+    assert!(
+        view.native_search.is_none(),
+        "inputs mean the Broker checks them"
+    );
     assert!(!view.requires_resource_attributes);
     let search = descriptor.action("issue.search").unwrap();
     assert_eq!(search.resource_scope.as_deref(), Some("project"));
     assert!(
-        search.search_contained,
-        "a type without inputs is command-enforced"
+        search.native_search.is_none(),
+        "command enforcement never enables native search"
     );
     let stats = descriptor.action("issue.stats").unwrap();
-    assert!(stats.resource_scope.is_none() && !stats.search_contained);
+    assert!(stats.resource_scope.is_none() && stats.native_search.is_none());
     assert_eq!(stats.credential_modes, ["service", "per_user"]);
     assert_eq!(
         descriptor
@@ -632,7 +639,7 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     let corrupt = descriptor.action("issue.corrupt").unwrap();
     // The unresolved scope is command-enforced, so retained grants mixing
     // modes stay valid; it never reaches a resource.
-    assert!(corrupt.search_contained);
+    assert!(corrupt.native_search.is_none());
     assert_eq!(
         descriptor.resource_scopes[corrupt.resource_scope.as_deref().unwrap()].resource_type,
         *UNRESOLVED_RESOURCE_TYPE.id()
@@ -646,7 +653,7 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         &published_types(&unlinked_record),
     );
     assert!(unlinked.actions.iter().all(|action| {
-        action.search_contained
+        action.native_search.is_none()
             && unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type
                 == *UNRESOLVED_RESOURCE_TYPE.id()
     }));
@@ -733,7 +740,7 @@ async fn command_enforced_calls_pass_the_top_band_with_per_grant_credentials_and
     assert!(prepared.request.execution().is_none());
     assert_eq!(
         prepared.request.authority().search().unwrap().scope,
-        all_except(&["FIN", "HR", "SEC"])
+        all_except(&["FIN", "HR", "SEC"]).authority()
     );
     // Audit records grants, modes and boundaries, never attributes.
     let audit = serde_json::to_value(plan).unwrap();

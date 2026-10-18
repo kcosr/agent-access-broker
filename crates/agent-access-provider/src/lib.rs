@@ -202,6 +202,7 @@ mod reason;
 mod resource;
 mod result;
 mod scope;
+mod search;
 mod signing;
 mod state;
 #[cfg(any(test, feature = "test-support"))]
@@ -256,9 +257,9 @@ pub use delegated::{
 };
 pub use descriptor::{
     ActionDescriptor, ActionIo, CredentialDescriptor, CredentialProfile, DelegatedConnection,
-    HeaderEncoding, LookupRequirement, MultipartUploadSpec, RESULT_METADATA_HEADER,
-    ScopedMcpNameSource, ServiceDescriptor, ServiceSurface, attachment_upload_plan,
-    raw_download_io,
+    HeaderEncoding, LookupRequirement, MultipartUploadSpec, NativeSearchEnforcement,
+    RESULT_METADATA_HEADER, ScopedMcpNameSource, ServiceDescriptor, ServiceSurface,
+    attachment_upload_plan, raw_download_io,
 };
 pub use domain_reason::{
     ProviderFailureStatus, ProviderReason, ProviderReasonDefinition, domain_reason_prefix,
@@ -270,8 +271,7 @@ pub use finalization::{
 };
 pub use identifiers::{ResourceScopes, is_action_name, is_service_name};
 pub use invocation::{
-    BrokerBodyPart, BrokerBodyPartFile, BrokerBodyPartSpec, InvocationIdentity,
-    SearchAuthorization, SearchAuthorizationScope,
+    BrokerBodyPart, BrokerBodyPartFile, BrokerBodyPartSpec, InvocationIdentity, SearchAuthorization,
 };
 pub use lookup::LookupAccess;
 pub use module::{ModuleMetadata, SDK_PACKAGE};
@@ -298,6 +298,10 @@ pub use result::{
     ProviderResult, ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
+pub use search::{
+    ExactSearchProjection, SearchAuthorizationClause, SearchAuthorizationScope,
+    SearchProjectionError,
+};
 pub use signing::{SigningError, StableSigningKey};
 pub use state::{BodyAdmission, ProviderState, ProviderStateError, StateDisposition};
 pub use trace::{UpstreamTrace, emit_upstream_request_completed};

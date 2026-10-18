@@ -252,10 +252,20 @@ terminal audit record reports `upstream_rate_limited`.
 After search authorization succeeds, broker audit records include
 `searchAuthorization`, even when credential resolution fails before upstream
 dispatch. This object contains `scopeType`, `credentialMode`, `matchedGrants`, and
-`scope`. Finite scope is `{"type":"finite","values":["ENG"]}`; all-except scope
-is `{"type":"all_except","excludedValues":["PRIVATE"]}`. An empty
-`excludedValues` array means unrestricted all. The full scope distinguishes
-wildcard exclusions that the summary `resourceScopes` cannot represent.
+`scope`. The scope is a union of clauses, each with `included` and `excluded`
+resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
+"excluded":[{"kind":"namespace","value":"engineering/private"}]}]}` permits
+all repositories except descendants of that namespace. Exclusions apply only to
+their own clause; a separate clause can restore an exact repository. An empty
+clause list denies all resources. Selectors use `exact`, `namespace`, or `all`;
+exact and namespace selectors carry `value`.
+
+The envelope's descriptive `resourceScopes` summary is `["*"]` if any normalized
+clause has an all or namespace positive selector. Otherwise it contains sorted,
+deduplicated exact values accepted by the complete predicate. A wildcard summary
+can still have exclusions and never authorizes a resource. Audit retains the
+complete clauses. Historical audit records remain their original stored JSON.
+Command audit authority retains its separate exact resources/any-except shape.
 
 Health and discovery:
 
