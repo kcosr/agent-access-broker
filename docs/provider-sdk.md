@@ -418,8 +418,9 @@ credential or fall back to a shared one.
   succeeded.
 
 The host then intersects the scopes with token restrictions and selects one
-grant covering every required resource. Search-contained actions skip this hook;
-the host plans their boundary from policy instead (see
+grant covering every required resource. Native search actions with `native_search`
+set to `UpstreamConstrained` or `ResultFiltered` skip this hook; the host plans
+their clause authority from policy instead (see
 [authority variants](#authority-variants)).
 
 ### Provider state and body admission
@@ -527,8 +528,8 @@ sequenceDiagram
 
     C->>H: Invoke service/action with inputs
     H->>H: Admit identity, context, action, schema and grant paths
-    alt Search-contained action
-        H->>H: Plan the search boundary from policy
+    alt Native search (UpstreamConstrained or ResultFiltered)
+        H->>H: Plan the search clause authority from policy
     else Any other action
         H->>P: resolve_scopes(ScopeRequest)
         opt LookupRequirement::ScopeResolution
