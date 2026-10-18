@@ -6,9 +6,8 @@ use super::mcp::{rpc_body, structured};
 use super::*;
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
-    IdentityTokenSettingsUpdate, ManagedPolicyGrantCreateRequest, ManagedStore, ManagedStoreConfig,
-    PrincipalRole, TrustedCallerConfig, TrustedCallerContextMode, TrustedCallerCredentialTransport,
-    UsernameBindingUpdate,
+    ManagedPolicyGrantCreateRequest, ManagedStoreConfig, PrincipalRole, TrustedCallerConfig,
+    TrustedCallerContextMode, TrustedCallerCredentialTransport,
 };
 use agent_access_provider::ServiceProvider;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -164,10 +163,10 @@ struct Fixture {
     _dir: tempfile::TempDir,
     _broker: TestBroker,
     app: Router,
-    store: ManagedStore,
     provider: Arc<PathProvider>,
     fingerprint: String,
     agent_token: String,
+    admin_token: String,
     audit_path: PathBuf,
 }
 
@@ -280,20 +279,28 @@ async fn fixture() -> Fixture {
         .unwrap();
     let fingerprint = format!("sha256:{:x}", Sha256::digest(secret.as_bytes()));
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
-    let agent_token = store
-        .issue_broker_token(
-            &hasher,
-            BrokerTokenIssueRequest {
-                principal_id: "alice".into(),
-                name: "fixture".into(),
-                token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["default"]}),
-                expires_at: None,
-                created_by: "fixture".into(),
-            },
-        )
-        .unwrap()
-        .token;
+    let issue = |principal: &str, token_class: BrokerTokenClass, scopes: Value| {
+        store
+            .issue_broker_token(
+                &hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: principal.into(),
+                    name: "fixture".into(),
+                    token_class,
+                    scopes,
+                    expires_at: None,
+                    created_by: "fixture".into(),
+                },
+            )
+            .unwrap()
+            .token
+    };
+    let agent_token = issue(
+        "alice",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedExecutionContexts": ["default"]}),
+    );
+    let admin_token = issue("admin", BrokerTokenClass::Admin, json!({}));
     drop(bootstrap);
 
     let provider = Arc::new(PathProvider::default());
@@ -341,10 +348,10 @@ async fn fixture() -> Fixture {
         _dir: dir,
         app: broker.app(),
         _broker: broker,
-        store,
         provider,
         fingerprint,
         agent_token,
+        admin_token,
         audit_path,
     }
 }
@@ -359,42 +366,66 @@ impl Fixture {
         headers
     }
 
-    /// Changes the read-only setting of one of alice's paths through the store.
-    fn set_read_only(&self, via: Via, read_only: bool) {
-        let (enabled, read_only) = (None, Some(read_only));
-        match via {
+    /// An administrator request to alice's identity administration.
+    async fn admin(&self, method: Method, path: &str, body: Option<Value>) -> Value {
+        let mut headers = vec![("authorization", format!("Bearer {}", self.admin_token))];
+        if body.is_some() {
+            headers.push((CONTENT_TYPE.as_str(), "application/json".into()));
+        }
+        let response = self
+            .rest(
+                method,
+                &format!("/v1/admin/principals/alice/{path}"),
+                &headers,
+                body.map_or_else(Body::empty, |body| Body::from(body.to_string())),
+            )
+            .await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        body["result"].clone()
+    }
+
+    /// Changes one of alice's paths' settings through its management PATCH,
+    /// fenced by the current version or revision.
+    async fn update_path(&self, via: Via, enabled: Option<bool>, read_only: Option<bool>) {
+        let mut body = serde_json::Map::new();
+        if let Some(enabled) = enabled {
+            body.insert("enabled".into(), json!(enabled));
+        }
+        if let Some(read_only) = read_only {
+            body.insert("readOnly".into(), json!(read_only));
+        }
+        let (path, current) = match via {
             Via::Username => {
-                let binding = self
-                    .store
-                    .list_username_bindings("alice")
-                    .unwrap()
-                    .pop()
-                    .unwrap();
-                self.store
-                    .update_username_binding(
-                        "alice",
-                        &binding.binding_id,
-                        UsernameBindingUpdate { enabled, read_only },
-                        binding.version,
-                        "fixture",
-                    )
-                    .unwrap();
+                let binding =
+                    self.admin(Method::GET, "identity-bindings", None).await["bindings"][0].clone();
+                body.insert("expectedVersion".into(), binding["version"].clone());
+                (
+                    format!(
+                        "identity-bindings/{}",
+                        binding["bindingId"].as_str().unwrap()
+                    ),
+                    binding,
+                )
             }
             Via::Fingerprint => {
-                self.update_token(IdentityTokenSettingsUpdate { enabled, read_only })
+                let inventory = self.admin(Method::GET, "identity-token", None).await;
+                body.insert("expectedRevision".into(), inventory["revision"].clone());
+                ("identity-token".to_owned(), inventory)
             }
+        };
+        let updated = self
+            .admin(Method::PATCH, &path, Some(Value::Object(body)))
+            .await;
+        for (field, value) in [("enabled", enabled), ("readOnly", read_only)] {
+            let expected = value.map_or_else(|| current[field].clone(), |value| json!(value));
+            assert_eq!(updated[field], expected, "{via:?}: {updated}");
         }
     }
 
-    fn update_token(&self, update: IdentityTokenSettingsUpdate) {
-        let revision = self
-            .store
-            .identity_token_metadata("alice")
-            .unwrap()
-            .revision;
-        self.store
-            .update_identity_token_settings("alice", update, revision)
-            .unwrap();
+    async fn set_read_only(&self, via: Via, read_only: bool) {
+        self.update_path(via, None, Some(read_only)).await;
     }
 
     async fn send(&self, request: Request<Body>) -> axum::response::Response {
@@ -611,7 +642,7 @@ async fn http_mcp_read_only_paths_announce_list_and_call_only_reads() {
     for via in [Via::Username, Via::Fingerprint] {
         let mut full_instructions = BTreeMap::new();
         for read_only in [false, true] {
-            f.set_read_only(via, read_only);
+            f.set_read_only(via, read_only).await;
             let case = format!("{via:?} read_only={read_only}");
 
             // initialize: the notice is appended to both views' instructions.
@@ -816,7 +847,7 @@ async fn http_mcp_read_only_paths_announce_list_and_call_only_reads() {
                 .await;
             assert_eq!(structured(&read)["decision"], "allow", "{case}: {read}");
         }
-        f.set_read_only(via, false);
+        f.set_read_only(via, false).await;
     }
 
     // Both paths' invocation audit records carry their path setting.
@@ -852,7 +883,7 @@ async fn fingerprint_rest_read_only_path_filters_specs_and_denies_writes_before_
         })
     };
     for read_only in [false, true] {
-        f.set_read_only(Via::Fingerprint, read_only);
+        f.set_read_only(Via::Fingerprint, read_only).await;
         let case = format!("read_only={read_only}");
         let fake_actions = if read_only {
             vec!["echo".to_owned()]
@@ -1005,7 +1036,7 @@ async fn fingerprint_rest_read_only_path_filters_specs_and_denies_writes_before_
     }
 
     // The full-access path and an issued Broker token still write.
-    f.set_read_only(Via::Fingerprint, false);
+    f.set_read_only(Via::Fingerprint, false).await;
     let (status, body) = f.invoke("fake/note.write", &headers, note()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let bearer = [(AUTHORIZATION.as_str(), format!("Bearer {}", f.agent_token))];
@@ -1060,7 +1091,7 @@ async fn resource_discovery_cursors_do_not_survive_a_read_only_toggle() {
     let next = format!("/v1/services/fake/resources?limit=1&cursor={cursor}");
     let (status, _) = f.get(&next).await;
     assert_eq!(status, StatusCode::OK);
-    f.set_read_only(Via::Fingerprint, true);
+    f.set_read_only(Via::Fingerprint, true).await;
     let (status, body) = f.get(&next).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
@@ -1086,10 +1117,7 @@ async fn disabled_identity_token_resolves_as_an_unknown_fingerprint_until_reenab
     let (status, _) = me(f.fingerprint.clone()).await;
     assert_eq!(status, StatusCode::OK);
 
-    f.update_token(IdentityTokenSettingsUpdate {
-        enabled: Some(false),
-        read_only: None,
-    });
+    f.update_path(Via::Fingerprint, Some(false), None).await;
     let (status, body) = me(f.fingerprint.clone()).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["reasonCode"], unknown_body["reasonCode"], "{body}");
@@ -1109,10 +1137,7 @@ async fn disabled_identity_token_resolves_as_an_unknown_fingerprint_until_reenab
     // The username path is a separate path and is unaffected.
     f.initialize("/mcp", Via::Username).await;
 
-    f.update_token(IdentityTokenSettingsUpdate {
-        enabled: Some(true),
-        read_only: None,
-    });
+    f.update_path(Via::Fingerprint, Some(true), None).await;
     let (status, body) = me(f.fingerprint.clone()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     f.initialize("/mcp", Via::Fingerprint).await;

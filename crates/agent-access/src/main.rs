@@ -1144,6 +1144,33 @@ enum AdminIdentityAccessCommand {
     },
 }
 
+/// One trusted-identity access path's settings; an update names at least one.
+#[derive(Debug, Args)]
+#[group(required = true, multiple = true)]
+struct IdentityPathSettingsArgs {
+    /// Admit (true) or refuse (false) requests through this path.
+    #[arg(long, action = clap::ArgAction::Set)]
+    enabled: Option<bool>,
+    /// Limit this path to actions classified as reads (true) or restore full access (false).
+    #[arg(long, action = clap::ArgAction::Set)]
+    read_only: Option<bool>,
+}
+
+impl IdentityPathSettingsArgs {
+    /// The request body: only the supplied settings and the version fence.
+    fn body(&self, fence: &str, expected: i64) -> serde_json::Value {
+        let mut body = serde_json::Map::new();
+        if let Some(enabled) = self.enabled {
+            body.insert("enabled".into(), serde_json::json!(enabled));
+        }
+        if let Some(read_only) = self.read_only {
+            body.insert("readOnly".into(), serde_json::json!(read_only));
+        }
+        body.insert(fence.into(), serde_json::json!(expected));
+        serde_json::Value::Object(body)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum AdminIdentityBindingsCommand {
     /// Show exact username bindings and currently configured namespaces.
@@ -1155,16 +1182,16 @@ enum AdminIdentityBindingsCommand {
         namespace: String,
         #[arg(long)]
         username: String,
+        /// Limit the new binding to actions classified as reads.
+        #[arg(long)]
+        read_only: bool,
     },
-    Enable {
+    /// Change a binding's Enabled and Read-only settings.
+    Update {
         principal: String,
         binding: String,
-        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
-        expected_version: i64,
-    },
-    Disable {
-        principal: String,
-        binding: String,
+        #[command(flatten)]
+        settings: IdentityPathSettingsArgs,
         #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
         expected_version: i64,
     },
@@ -1200,6 +1227,14 @@ enum AdminIdentityTokenCommand {
         identity_token_file: Option<PathBuf>,
         #[arg(long, required_unless_present = "identity_token_file")]
         identity_token_stdin: bool,
+    },
+    /// Change the identity token's Enabled and Read-only settings, keeping its secret.
+    Update {
+        principal: String,
+        #[command(flatten)]
+        settings: IdentityPathSettingsArgs,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_revision: i64,
     },
 }
 
@@ -12115,6 +12150,16 @@ async fn run_admin_identity_token_command(
                 Some(serde_json::json!({"token": token})),
             )
         }
+        AdminIdentityTokenCommand::Update {
+            principal,
+            settings,
+            expected_revision,
+        } => (
+            principal,
+            reqwest::Method::PATCH,
+            "",
+            Some(settings.body("expectedRevision", *expected_revision)),
+        ),
     };
     let path = format!(
         "/v1/admin/principals/{}/identity-token{suffix}",
@@ -12166,30 +12211,28 @@ async fn run_admin_identity_bindings_command(
             principal,
             namespace,
             username,
+            read_only,
         } => (
             principal,
             None,
             reqwest::Method::POST,
-            Some(serde_json::json!({"namespace": namespace, "username": username})),
+            Some(serde_json::json!({
+                "namespace": namespace,
+                "username": username,
+                "readOnly": read_only,
+            })),
             String::new(),
         ),
-        AdminIdentityBindingsCommand::Enable {
+        AdminIdentityBindingsCommand::Update {
             principal,
             binding,
-            expected_version,
-        }
-        | AdminIdentityBindingsCommand::Disable {
-            principal,
-            binding,
+            settings,
             expected_version,
         } => (
             principal,
             Some(binding),
             reqwest::Method::PATCH,
-            Some(serde_json::json!({
-                "enabled": matches!(command, AdminIdentityBindingsCommand::Enable { .. }),
-                "expectedVersion": expected_version,
-            })),
+            Some(settings.body("expectedVersion", *expected_version)),
             String::new(),
         ),
         AdminIdentityBindingsCommand::Delete {
@@ -17069,17 +17112,31 @@ mod tests {
             ],
             vec![
                 "identity-bindings",
-                "enable",
+                "create",
+                "alice",
+                "--namespace",
+                "managed_linux",
+                "--username",
+                "alice",
+                "--read-only",
+            ],
+            vec![
+                "identity-bindings",
+                "update",
                 "alice",
                 "binding",
+                "--enabled",
+                "false",
                 "--expected-version",
                 "1",
             ],
             vec![
                 "identity-bindings",
-                "disable",
+                "update",
                 "alice",
                 "binding",
+                "--read-only",
+                "true",
                 "--expected-version",
                 "2",
             ],
@@ -17090,6 +17147,17 @@ mod tests {
                 "binding",
                 "--expected-version",
                 "3",
+            ],
+            vec![
+                "identity-token",
+                "update",
+                "alice",
+                "--enabled",
+                "true",
+                "--read-only",
+                "false",
+                "--expected-revision",
+                "4",
             ],
         ] {
             super::Cli::try_parse_from(
@@ -17111,22 +17179,179 @@ mod tests {
                 "0",
             ],
             vec!["identity-bindings", "delete", "alice", "binding"],
+            // The update command replaced enable and disable outright.
+            vec![
+                "identity-bindings",
+                "enable",
+                "alice",
+                "binding",
+                "--expected-version",
+                "1",
+            ],
             vec![
                 "identity-bindings",
                 "disable",
                 "alice",
                 "binding",
                 "--expected-version",
+                "1",
+            ],
+            vec![
+                "identity-bindings",
+                "update",
+                "alice",
+                "binding",
+                "--enabled",
+                "true",
+                "--expected-version",
                 "0",
+            ],
+            vec![
+                "identity-bindings",
+                "update",
+                "alice",
+                "binding",
+                "--read-only",
+                "true",
+            ],
+            vec![
+                "identity-bindings",
+                "update",
+                "alice",
+                "binding",
+                "--read-only",
+                "yes",
+                "--expected-version",
+                "1",
+            ],
+            vec![
+                "identity-bindings",
+                "update",
+                "alice",
+                "binding",
+                "--expected-version",
+                "1",
+            ],
+            vec![
+                "identity-bindings",
+                "create",
+                "alice",
+                "--namespace",
+                "managed_linux",
+                "--username",
+                "alice",
+                "--read-only",
+                "true",
+            ],
+            vec![
+                "identity-token",
+                "update",
+                "alice",
+                "--expected-revision",
+                "1",
+            ],
+            vec![
+                "identity-token",
+                "update",
+                "alice",
+                "--enabled",
+                "false",
+                "--expected-revision",
+                "0",
+            ],
+            vec!["identity-token", "update", "alice", "--enabled", "false"],
+            vec![
+                "identity-token",
+                "update",
+                "alice",
+                "--enabled",
+                "false",
+                "--expected-version",
+                "1",
             ],
         ] {
             assert!(
                 super::Cli::try_parse_from(
                     ["agent-access", "admin", "principals"]
                         .into_iter()
-                        .chain(arguments)
+                        .chain(arguments.clone())
                 )
-                .is_err()
+                .is_err(),
+                "accepted {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_path_update_commands_send_only_the_supplied_settings() {
+        let parse = |arguments: &[&str]| {
+            super::Cli::try_parse_from(
+                ["agent-access", "admin", "principals"]
+                    .into_iter()
+                    .chain(arguments.iter().copied()),
+            )
+            .unwrap()
+        };
+        let principals = |cli: super::Cli| match cli.command {
+            super::Command::Admin {
+                command: super::AdminCommand::Principals { command },
+            } => command,
+            other => panic!("unexpected command {other:?}"),
+        };
+        for (arguments, expected) in [
+            (
+                &["--enabled", "false"][..],
+                serde_json::json!({"enabled": false, "expectedVersion": 3}),
+            ),
+            (
+                &["--read-only", "true"][..],
+                serde_json::json!({"readOnly": true, "expectedVersion": 3}),
+            ),
+            (
+                &["--enabled", "true", "--read-only", "false"][..],
+                serde_json::json!({"enabled": true, "readOnly": false, "expectedVersion": 3}),
+            ),
+        ] {
+            let mut command = vec!["identity-bindings", "update", "alice", "binding"];
+            command.extend_from_slice(arguments);
+            command.extend_from_slice(&["--expected-version", "3"]);
+            let super::AdminPrincipalsCommand::IdentityBindings {
+                command:
+                    super::AdminIdentityBindingsCommand::Update {
+                        settings,
+                        expected_version,
+                        ..
+                    },
+            } = principals(parse(&command))
+            else {
+                panic!("not a binding update: {command:?}");
+            };
+            assert_eq!(settings.body("expectedVersion", expected_version), expected);
+
+            let mut command = vec!["identity-token", "update", "alice"];
+            command.extend_from_slice(arguments);
+            command.extend_from_slice(&["--expected-revision", "3"]);
+            let super::AdminPrincipalsCommand::IdentityToken {
+                command:
+                    super::AdminIdentityTokenCommand::Update {
+                        settings,
+                        expected_revision,
+                        ..
+                    },
+            } = principals(parse(&command))
+            else {
+                panic!("not a token update: {command:?}");
+            };
+            let mut expected = expected.clone();
+            let fence = expected
+                .as_object_mut()
+                .unwrap()
+                .remove("expectedVersion")
+                .unwrap();
+            expected["expectedRevision"] = fence;
+            assert_eq!(
+                settings.body("expectedRevision", expected_revision),
+                expected
             );
         }
     }

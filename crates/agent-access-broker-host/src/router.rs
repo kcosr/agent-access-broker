@@ -207,6 +207,7 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             "/v1/admin/principals/{principal}/identity-token",
             get(identity_tokens::inspect)
                 .put(identity_tokens::set)
+                .patch(identity_tokens::patch)
                 .delete(identity_tokens::remove),
         )
         .route(
