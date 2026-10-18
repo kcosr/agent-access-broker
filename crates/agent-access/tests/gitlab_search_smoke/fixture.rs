@@ -3,8 +3,9 @@
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
-    LocalPasswordHasher, LocalPasswordWriteRequest, ManagedStore, ManagedStoreConfig,
-    ManagedStoreOpenMode, PrincipalAccessPatchRequest, PrincipalRole, PrincipalWriteRequest,
+    LocalPasswordHasher, LocalPasswordWriteRequest, ManagedResourceCatalog, ManagedStore,
+    ManagedStoreConfig, ManagedStoreOpenMode, PrincipalAccessPatchRequest, PrincipalRole,
+    PrincipalWriteRequest,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{Method, StatusCode};
@@ -437,6 +438,16 @@ impl Fixture {
             ..BrokerTokensConfig::default()
         })
         .unwrap();
+        // This fixture's policy is TOML-owned, so token issuance must validate
+        // its resource reference against that catalog rather than the empty
+        // managed resource tables. The production Broker uses the same port.
+        let catalog: ManagedResourceCatalog = serde_json::from_value(json!({
+            "resources":[{"id":"api","resourceType":"git_repository",
+                "selector":{"kind":"exact","value":FIRST_PROJECT},
+                "allowedExecutionContexts":["default"],"enabled":true}],
+            "resourceGroups":[]
+        }))
+        .unwrap();
         let issue = |name: &str, restrictions: Option<Value>| {
             let mut scopes = json!({"allowedExecutionContexts":["default"]});
             if let Some(restrictions) = restrictions {
@@ -444,7 +455,7 @@ impl Fixture {
                 scopes["serviceRestrictions"] = json!({"gitlab":restrictions});
             }
             store
-                .issue_broker_token(
+                .issue_broker_token_with_catalog(
                     &hasher,
                     BrokerTokenIssueRequest {
                         principal_id: "alice".into(),
@@ -454,6 +465,7 @@ impl Fixture {
                         expires_at: None,
                         created_by: "test".into(),
                     },
+                    Some(&catalog),
                 )
                 .unwrap()
         };
@@ -548,6 +560,10 @@ impl Fixture {
                 "{}/v1/invoke/gitlab/{action}",
                 self.broker.public_url()
             ))
+            .header(
+                agent_access_provider::REQUEST_ID_HEADER,
+                uuid::Uuid::new_v4().to_string(),
+            )
             .bearer_auth(token)
             .json(&json!({"inputs":inputs}))
             .send()
@@ -577,7 +593,11 @@ impl Fixture {
             .header("Host", "127.0.0.1")
             .header("Origin", "http://127.0.0.1")
             .header("Cookie", &self.cookie)
-            .header("X-Agent-Access-CSRF", &self.csrf);
+            .header("X-Agent-Access-CSRF", &self.csrf)
+            .header(
+                agent_access_provider::REQUEST_ID_HEADER,
+                uuid::Uuid::new_v4().to_string(),
+            );
         if let Some(body) = body {
             request = request.json(&body);
         }

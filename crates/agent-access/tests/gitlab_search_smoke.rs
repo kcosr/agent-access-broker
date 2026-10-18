@@ -498,12 +498,14 @@ async fn confidential_empty_pages_resume_without_losing_hits_and_reject_stale_au
 async fn current_project_identity_and_confirmed_ownership_control_release() {
     let fixture = Fixture::start(Credentials::Service, &ACTIONS).await;
     let explicit = json!({"search":"move-query","project":FIRST_PROJECT,"maxResults":4});
-    let (_, broad) = fixture
+    let (status, broad) = fixture
         .invoke(&fixture.token, "search.issues", explicit.clone())
         .await;
-    let (_, narrow) = fixture
+    assert_eq!(status, StatusCode::OK, "{broad}");
+    let (status, narrow) = fixture
         .invoke(&fixture.narrow_token, "search.issues", explicit.clone())
         .await;
+    assert_eq!(status, StatusCode::OK, "{narrow}");
     let broad_token = confidential_token(&broad["result"]).0;
     let narrow_token = confidential_token(&narrow["result"]).0;
     fixture.state.lock().unwrap().first_path = "engineering/renamed".into();
