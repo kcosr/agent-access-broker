@@ -103,6 +103,13 @@ impl GitlabCredential {
         presented: &Presented,
         replay: Option<T>,
     ) -> Result<T, GitlabBackendError> {
+        self.mark_rejected(presented)?;
+        self.recover_rejected(replay).await
+    }
+
+    /// Mark the exact version immediately when a resource response is 401,
+    /// even if consuming that response subsequently exhausts a body budget.
+    pub(crate) fn mark_rejected(&self, presented: &Presented) -> Result<(), GitlabBackendError> {
         let (Material::Delegated { credential, .. }, Some(version)) =
             (&self.0, presented.version.as_deref())
         else {
@@ -110,7 +117,19 @@ impl GitlabCredential {
         };
         credential
             .mark_rejected(version)
-            .map_err(GitlabBackendError::Credential)?;
+            .map_err(GitlabBackendError::Credential)
+    }
+
+    /// Recover only after the caller has marked a rejection and verified that
+    /// its operation still permits a replay. Search consumes its bounded error
+    /// body between marking and recovery.
+    pub(crate) async fn recover_rejected<T>(
+        &self,
+        replay: Option<T>,
+    ) -> Result<T, GitlabBackendError> {
+        let Material::Delegated { credential, .. } = &self.0 else {
+            return Err(GitlabBackendError::Unauthorized);
+        };
         let Some(replay) = replay else {
             return Err(GitlabBackendError::Credential(ProviderError::deny(
                 ReasonCode::CredentialInvalid,

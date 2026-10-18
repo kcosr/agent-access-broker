@@ -182,8 +182,8 @@ pub(crate) fn authorized_search_scope(
             "Jira search authorization used an invalid scope type",
         ));
     }
-    match &authorization.scope {
-        SearchAuthorizationScope::Finite { values } => {
+    match authorization.scope.exact_projection()? {
+        agent_access_provider::ExactSearchProjection::Finite { values } => {
             let allowed = values.iter().cloned().collect::<BTreeSet<_>>();
             if allowed.is_empty() {
                 return Err(ProviderError::deny(
@@ -193,9 +193,10 @@ pub(crate) fn authorized_search_scope(
             }
             Ok(EffectiveSearchScope::Finite(allowed))
         }
-        SearchAuthorizationScope::AllExcept { excluded_values } => Ok(
+        agent_access_provider::ExactSearchProjection::AllExcept { excluded_values } => Ok(
             EffectiveSearchScope::AllExcept(excluded_values.iter().cloned().collect()),
         ),
+        _ => Err(agent_access_provider::SearchProjectionError.into()),
     }
 }
 

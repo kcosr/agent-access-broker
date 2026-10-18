@@ -1513,11 +1513,54 @@ agent-access --url http://127.0.0.1:8787 gitlab job list team/project --pipeline
 agent-access --url http://127.0.0.1:8787 gitlab job trace team/project 67890 --output job-trace.txt
 ```
 
+#### GitLab repository discovery and native content search
+
+```bash
+agent-access gitlab project search --search dispatch --include-namespaces true --archived false
+agent-access gitlab project search --max-results 20
+agent-access gitlab search issues --search 'credential rotation'
+agent-access gitlab search merge-requests --search 'credential rotation'
+agent-access gitlab search code --search verify_token --project team/project
+agent-access gitlab search commits --search rotation --project team/project
+agent-access gitlab search wiki --search onboarding --project team/project
+agent-access gitlab search comments --search regression --project team/project
+# Requires an operator-configured Zoekt tuple:
+agent-access gitlab search code --search 'verify_.*' --engine zoekt --regex --project team/project
+```
+
+`gitlab project search` discovers upstream repositories within the caller's
+grants; omit `--search` to browse. It maps to `project.search`. The six
+`gitlab search` commands map to `search.issues`, `search.merge_requests`,
+`search.code`, `search.commits`, `search.wiki`, and `search.comments`, and require
+`--search`. They use native full-text search across authorized repositories or
+the optional `--project`. `gitlab issue search PROJECT` and
+`gitlab merge-request search PROJECT` list/filter within one required project
+and retain their existing structured filters.
+
+Content commands accept `--engine basic|advanced|zoekt`. Omit `--engine` to use
+the service's configured default. Inspect the live action schema for configured
+engine/scope support.
+`--project` is required when the selected/default engine has no instance route;
+with basic defaults this includes code, commits, wiki, and comments. `--regex`
+exists only on code and requires Zoekt. Native syntax, index coverage, and
+ranking depend on the engine. No fallback engine or project crawling is used.
+
+All seven commands support `--max-results`, `--page-token`,
+`--output-format json|markdown`, and local `--output` options. Repeat the original
+query, filters, project, engine, regex choice, and page size when resuming.
+`scanStatus=more` and `scan_budget` carry continuations without promising another
+authorized match. An empty resumable page means “No matching authorized items in
+this page; continue the search.” `exhausted` ends the selected stream;
+`upstream_window` means incomplete coverage at a retrieval ceiling. A short page
+does not imply completion. Confidential tokens expire 15 minutes after the
+original search; invalid tokens require a fresh search. Previews and URLs are
+untrusted content and do not grant access to other actions.
+
 See [providers-gitlab-rest.md](providers-gitlab-rest.md) for provider examples,
 canonical `gitlab.<action>` invoke inputs, JSON `send` payloads,
 note/discussion terminology, repository mutation rules, and
 lookup-backed authorization behavior.
-Issue/MR searches, issue/MR `list-comments`, the MR review-context list
+The existing single-project issue/MR searches, issue/MR `list-comments`, the MR review-context list
 commands, `list-draft-notes`, and `list-approval-rules` accept `--page-token`;
 pass the previous response's `nextPageToken`
 and reuse the same action, locators, filters, page size, and `--unidiff` choice;

@@ -1167,9 +1167,9 @@
         </div>
         <div>
           <ul class="list" style="margin-top:0">
-            <li><b>Grant coverage.</b> A single grant must cover every target in a request. Permissions from separate grants are not combined.</li>
+            <li><b>Grant coverage.</b> For ordinary resource-scoped actions, a single grant must cover every target in a request. Native searches combine the winning grant band's clauses, narrowed by the token's resource boundary.</li>
             <li><b>Grant selection.</b> Direct user grants take precedence over group grants. Priority determines selection within that category. If the highest-ranked grants are ambiguous, the request is denied.</li>
-            <li><b>Search scope.</b> JQL and CQL queries are restricted to the caller's permitted scope. Each returned item is then checked for authorization.</li>
+            <li><b>Search scope.</b> Jira and Confluence constrain JQL/CQL queries upstream and check each returned item. GitLab discovery and content search confirm current repository ownership with the selected execution credential and discard unauthorized candidates before results, audit, or continuations.</li>
             <li><b>Grant and resource status.</b> Grants and resources can be enabled or disabled but do not expire. Time-based access restrictions come from token expiration and the validity period of group evidence.</li>
           </ul>
         </div>

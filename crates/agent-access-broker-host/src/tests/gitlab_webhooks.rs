@@ -355,7 +355,7 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
             allowed_upstream_hosts: vec!["https://gitlab.example.com/api/v4/**".to_string()],
             webhooks: agent_access_gitlab::GitlabWebhooksConfig::default(),
             content: agent_access_gitlab::GitlabContentConfig::default(),
-            search: agent_access_provider::SearchLimitsConfig::default(),
+            search: Default::default(),
         });
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],

@@ -52,6 +52,17 @@ All notable changes to this project are documented in this file.
 - The exhaustive `ManagedStoreError` enum exposed through the host's
   `test-support` API gains five `SecretReference*` variants. Downstream tests
   that exhaustively match this enum must handle the new variants.
+- Native provider search authority now uses constructor-built, normalized
+  `SearchAuthorizationScope` clauses (included selectors minus excluded
+  selectors, unioned across clauses). The former scope variants are removed.
+  `ActionDescriptor.search_contained` is replaced by optional `native_search`
+  enforcement, distinguishing upstream-constrained and result-filtered native
+  searches; exact-only query providers use `exact_projection()`. New native-search
+  audit records store `searchAuthorization.scope` as
+  `{clauses:[{included,excluded}]}`; historical records retain their stored JSON.
+  Imported commands retain their separate exact-only wire boundary;
+  their metadata cannot enable native search enforcement. Stored grants and
+  token restrictions are unchanged.
 
 - The native provider contract changes, so existing provider implementations must be
   updated:
@@ -468,6 +479,32 @@ All notable changes to this project are documented in this file.
   stored connections.
 
 ### Added
+
+- Confidential fixed-length continuations use AES-256-GCM with binding-separated
+  HKDF keys and carried absolute expiry. Bounded upstream operations share atomic
+  HTTP attempt and decoded-body byte budgets.
+
+- GitLab repository discovery (`project.search`) and separately grantable native
+  searches for issues, merge requests, code, commits, project wikis, and comments
+  (`search.*`), with typed `gitlab project search` / `gitlab search` commands and
+  shared invoke/send/OpenAPI/MCP schemas. Namespace-aware repository filtering,
+  selected execution credentials, current ownership confirmation, bounded
+  previews, and validated optional locators protect returned content.
+  Discovery accepts GitLab's defaulted keyset links while validating destination,
+  requested filters, ordering, page size, and cursor. Project wiki hits may
+  include their parent group as metadata without granting group authority.
+  Group-only wiki hits are discarded from instance-wide results and fail closed
+  on project-scoped searches. GitLab-specific guidance distinguishes live
+  discovery from `resources_list` registrations and wiki snippets from repository
+  file reads. Project details include optional description, last activity, and
+  star count.
+- Operator-configured GitLab engine/category/scope capabilities and bounded scan
+  work, with explicit incomplete-coverage statuses and confidential continuations
+  that preserve the original 15-minute expiry. Basic code/commit/wiki/comment
+  search requires a project; advanced and Zoekt tuples require explicit setup.
+  Agent guidance follows the service's configured default when `engine` is
+  omitted. Existing single-project `issue.search` and `merge_request.search`
+  retain their structured-list contracts.
 
 - The standard reason `broker_provider_contract_failed` (HTTP 500,
   `decision = error`) identifies a provider outcome that its contract does

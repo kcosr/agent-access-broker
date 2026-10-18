@@ -506,19 +506,26 @@ impl BrokerRuntime {
                 mode_available,
             ));
         }
-        let search_contained = self
+        let native_search = self
             .action_descriptor(service, action)
-            .is_some_and(|descriptor| descriptor.search_contained);
-        let mut clauses = if search_contained {
+            .is_some_and(|descriptor| descriptor.native_search.is_some());
+        let mut clauses = if native_search {
             match self.plan_search_authorization(snapshot, identity, context, service, action) {
                 Ok(search) if mode_available(&search.credential_mode) => self
                     .action_resource_type(service, action)
                     .map(|resource_type| {
-                        vec![EffectiveAccessClause::from_boundary(
-                            search.scope_type.clone(),
-                            resource_type,
-                            super::search_scope_boundary(&search.scope),
-                        )]
+                        search
+                            .scope
+                            .clauses()
+                            .iter()
+                            .map(|clause| {
+                                EffectiveAccessClause::from_boundary(
+                                    search.scope_type.clone(),
+                                    resource_type.clone(),
+                                    search_clause_boundary(clause),
+                                )
+                            })
+                            .collect()
                     })
                     .unwrap_or_default(),
                 _ => Vec::new(),
@@ -720,45 +727,11 @@ fn resource_preview_validation_error(errors: Vec<String>) -> ManagedStoreError {
     ManagedStoreError::PolicyValidationFailed(errors.join("; "))
 }
 
-fn normalize_boundary(mut boundary: ResourceBoundary) -> ResourceBoundary {
-    boundary.included.sort();
-    boundary.included.dedup();
-    boundary.excluded.sort();
-    boundary.excluded.dedup();
-    let included = boundary
-        .included
-        .iter()
-        .enumerate()
-        .filter(|(index, selector)| {
-            !boundary
-                .excluded
-                .iter()
-                .any(|excluded| excluded.contains(selector))
-                && !boundary
-                    .included
-                    .iter()
-                    .enumerate()
-                    .any(|(other, broad)| other != *index && broad.contains(selector))
-        })
-        .map(|(_, selector)| selector.clone())
-        .collect::<Vec<_>>();
-    let excluded = boundary
-        .excluded
-        .iter()
-        .enumerate()
-        .filter(|(index, selector)| {
-            included
-                .iter()
-                .any(|positive| positive.intersection(selector).is_some())
-                && !boundary
-                    .excluded
-                    .iter()
-                    .enumerate()
-                    .any(|(other, broad)| other != *index && broad.contains(selector))
-        })
-        .map(|(_, selector)| selector.clone())
-        .collect();
-    ResourceBoundary { included, excluded }
+fn normalize_boundary(boundary: ResourceBoundary) -> ResourceBoundary {
+    search_clause_boundary(&SearchAuthorizationClause::new(
+        boundary.included,
+        boundary.excluded,
+    ))
 }
 
 fn deduplicate_boundaries(boundaries: Vec<ResourceBoundary>) -> Vec<ResourceBoundary> {
@@ -775,16 +748,12 @@ fn deduplicate_boundaries(boundaries: Vec<ResourceBoundary>) -> Vec<ResourceBoun
 /// C \\ (I \\ E) = (C \\ I) union (C intersect E). Preserve branches:
 /// exclusions on an unrelated grant never become a global deny.
 fn subtract_boundary(left: &ResourceBoundary, right: &ResourceBoundary) -> Vec<ResourceBoundary> {
-    let mut outside = left.clone();
-    outside.excluded.extend(right.included.iter().cloned());
-    let mut parts = vec![outside];
-    if !right.excluded.is_empty() {
-        parts.push(left.intersection(&ResourceBoundary {
-            included: right.excluded.clone(),
-            excluded: Vec::new(),
-        }));
-    }
-    deduplicate_boundaries(parts)
+    let left = SearchAuthorizationClause::new(left.included.clone(), left.excluded.clone());
+    let right = SearchAuthorizationClause::new(right.included.clone(), right.excluded.clone());
+    left.subtract(&right)
+        .iter()
+        .map(search_clause_boundary)
+        .collect()
 }
 
 fn normalize_clause(mut clause: EffectiveAccessClause) -> EffectiveAccessClause {
@@ -928,19 +897,14 @@ mod tests {
 
     #[test]
     fn finite_cofinite_search_algebra_preserves_separate_grants_and_token_exclusions() {
-        let all_except_private = SearchAuthorizationScope::AllExcept {
-            excluded_values: vec!["PRIVATE".into()],
-        };
-        let private_grant = SearchAuthorizationScope::Finite {
-            values: vec!["PRIVATE".into()],
-        };
+        let all_except_private =
+            SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".into()]);
+        let private_grant = SearchAuthorizationScope::from_exact_values(vec!["PRIVATE".into()]);
         assert!(
             all_except_private.union(&private_grant).is_universe(),
             "a separate grant can restore an excluded project"
         );
-        let token = SearchAuthorizationScope::AllExcept {
-            excluded_values: vec!["SECRET".into()],
-        };
+        let token = SearchAuthorizationScope::excluding_exact_values(vec!["SECRET".into()]);
         let restricted = all_except_private.intersection(&token);
         assert!(!restricted.matches("PRIVATE"));
         assert!(!restricted.matches("SECRET"));
@@ -950,7 +914,7 @@ mod tests {
         );
         assert!(restricted.intersection(&private_grant).is_empty());
         assert!(
-            SearchAuthorizationScope::Finite { values: vec![] }
+            SearchAuthorizationScope::from_exact_values(vec![])
                 .intersection(&token)
                 .is_empty()
         );
