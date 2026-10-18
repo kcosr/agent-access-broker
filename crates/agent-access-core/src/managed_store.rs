@@ -831,7 +831,10 @@ impl ManagedStore {
     pub fn policy_validation_baseline(
         &self,
     ) -> Result<(ManagedPolicyRevision, Vec<ManagedPolicyGrantRecord>), ManagedStoreError> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         Ok((policy_revision(&conn)?, policy_grants(&conn, None)?))
     }
 
@@ -1146,13 +1149,77 @@ impl ManagedStore {
             &ManagedResourceCatalog,
         ) -> Result<(), ManagedStoreError>,
     {
+        self.patch_policy_grant_checked(request, |_, _| Ok(scope.clone()), validate_candidate)
+    }
+
+    pub(crate) fn patch_policy_grant_with_management_authority<F>(
+        &self,
+        request: ManagedPolicyGrantPatchRequest,
+        authority: crate::ManagementAuthority,
+        validate_candidate: F,
+    ) -> Result<crate::ManagementMutation<ManagedPolicyMutationResult>, ManagedStoreError>
+    where
+        F: FnMut(
+            &[ManagedPolicyGrantRecord],
+            &ManagedPolicyRevision,
+            &ManagedPolicySubjectCatalog,
+            &ManagedResourceCatalog,
+        ) -> Result<(), ManagedStoreError>,
+    {
+        let previous_version = request.expected_version;
+        let value = self.patch_policy_grant_checked(
+            request,
+            |conn, request| {
+                let actor = authority.check_conn(conn, crate::ManagementOperation::GrantPatch)?;
+                if actor.principal != request.updated_by {
+                    return Err(ManagedStoreError::ManagementDenied);
+                }
+                Ok(actor.policy_write_scope)
+            },
+            validate_candidate,
+        )?;
+        let audit = serde_json::json!({
+            "grantId": value.grant.grant_id,
+            "service": value.grant.service,
+            "changed": true,
+            "previousVersion": previous_version,
+            "version": value.grant.version,
+            "status": value.grant.status,
+        });
+        Ok(crate::ManagementMutation { value, audit })
+    }
+
+    fn patch_policy_grant_checked<F, A>(
+        &self,
+        request: ManagedPolicyGrantPatchRequest,
+        authorize: A,
+        validate_candidate: F,
+    ) -> Result<ManagedPolicyMutationResult, ManagedStoreError>
+    where
+        F: FnMut(
+            &[ManagedPolicyGrantRecord],
+            &ManagedPolicyRevision,
+            &ManagedPolicySubjectCatalog,
+            &ManagedResourceCatalog,
+        ) -> Result<(), ManagedStoreError>,
+        A: FnOnce(
+            &Connection,
+            &ManagedPolicyGrantPatchRequest,
+        ) -> Result<PolicyWriteScope, ManagedStoreError>,
+    {
         validate_policy_grant_patch_request(&request)?;
-        let mut conn = self.connection.lock().unwrap();
-        let tx = conn.transaction().map_err(sql_unavailable)?;
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let scope = authorize(&tx, &request)?;
         let current = policy_grant_by_id(&tx, &request.grant_id)?;
-        ensure_policy_management_scope(scope, &current.service)?;
+        ensure_policy_management_scope(&scope, &current.service)?;
         ensure_policy_management_service_unchanged(
-            scope,
+            &scope,
             &current.service,
             request.service.as_deref(),
         )?;

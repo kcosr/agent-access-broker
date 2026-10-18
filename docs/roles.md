@@ -75,8 +75,10 @@ acquiring write authority after promotion. An unchanged patch or a flag-only
 change does not revoke those tokens. The last active human administrator cannot
 be demoted or disabled. Audit completion records previous and new access,
 removed service assignments, and revoked admin-token IDs. Admission uses current
-authority on each request; a write already admitted before a role change may
-finish.
+authority on each request. The management writes listed under
+[transactional authority checks](security-model.md#local-delegated-administration)
+also recheck authority in their write transaction. Other writes already admitted
+before a role change may finish.
 
 ## Credential classes
 
@@ -90,7 +92,11 @@ routes, the global policy export, manager-assignment listing, or
 `visibility=all` runtime specs; use an authorized `admin` bearer or browser
 session for those administrative reads. Admins may also write policy with a
 `user_manage` bearer.
-`agent_invoke` tokens and forwarded identities cannot manage the broker.
+`agent_invoke` tokens and forwarded invocation identities cannot call management
+routes. With an explicit grant, they can invoke the narrow
+[`broker_management` actions](broker-management.md), subject to the action's
+identity, target and token restrictions. Child tokens issued by `token.create`
+cannot invoke `broker_management`.
 Configured classless operator/recovery identities retain their existing explicit
 configuration boundaries.
 

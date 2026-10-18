@@ -722,3 +722,277 @@ async fn management_write_uncertain_commit_reports_one_unknown_terminal_outcome(
         "unknown"
     );
 }
+
+fn patch_test_grant(id: &str) -> agent_access_core::ManagedPolicyGrantCreateRequest {
+    agent_access_core::ManagedPolicyGrantCreateRequest {
+        grant_id: Some(id.into()),
+        subjects: vec!["user:alice".into()],
+        execution_contexts: vec!["default".into()],
+        service: "fake".into(),
+        actions: vec!["echo".into()],
+        resources: ResourceSelection {
+            resource_ids: vec![resource_id("project", "TEST")],
+            ..Default::default()
+        },
+        credential_mode: "service".into(),
+        priority: None,
+        status: None,
+        description: None,
+        created_by: "admin".into(),
+    }
+}
+
+async fn patch_after_admission(
+    fixture: &AuditFixture,
+    token: &str,
+    body: &str,
+    request_id: &str,
+    change: impl FnOnce(),
+) -> (StatusCode, Value) {
+    let guard = fixture.state.policy_mutation_lock.lock().await;
+    let request = fixture.request(
+        Method::PATCH,
+        token,
+        "/v1/admin/policy/grants/patch-target",
+        Some(body),
+        request_id,
+    );
+    tokio::pin!(request);
+    // The persisted preflight event establishes that admission completed.
+    // Hold the publication fence until the authority change is committed;
+    // the timeout is only a deadlock watchdog, never the ordering signal.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                response = &mut request => panic!("patch escaped the write fence: {response:?}"),
+                _ = tokio::task::yield_now() => {}
+            }
+            if events(fixture, request_id)
+                .iter()
+                .any(|event| event["providerAudit"]["management"]["phase"] == "preflight")
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("patch did not reach admission while queued");
+    change();
+    drop(guard);
+    tokio::time::timeout(Duration::from_secs(10), request)
+        .await
+        .expect("patch did not finish after the write fence was released")
+}
+
+#[tokio::test]
+async fn management_grant_patch_rechecks_token_role_and_service_assignment_before_commit() {
+    for change in [
+        "revoke_token",
+        "remove_role",
+        "remove_assignment",
+        "demote_admin",
+    ] {
+        let fixture = audit_fixture(Backend::Sqlite).await;
+        let snapshot = fixture.state.current();
+        let runtime = &snapshot.runtime;
+        let store = runtime.managed_store().unwrap();
+        let raw_token = if change == "demote_admin" {
+            store
+                .create_principal(PrincipalWriteRequest {
+                    principal_id: "keeper".into(),
+                    kind: "user".into(),
+                    role: PrincipalRole::Admin,
+                    self_service_enabled: None,
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                })
+                .unwrap();
+            &fixture.admin
+        } else {
+            &fixture.bob
+        };
+        let before = runtime
+            .create_managed_policy_grant(patch_test_grant("patch-target"))
+            .unwrap();
+        let original = serde_json::to_value(&before.grant).unwrap();
+        let revision = serde_json::to_value(store.policy_revision().unwrap()).unwrap();
+        let generation = runtime.policy_generation();
+        let body = json!({
+            "expectedVersion": before.grant.version,
+            "subjects": ["user:alice", "user:carol"],
+        })
+        .to_string();
+        let token = store
+            .resolve_broker_token(runtime.broker_token_hasher().unwrap(), raw_token)
+            .unwrap();
+        let (status, response) =
+            patch_after_admission(&fixture, raw_token, &body, change, || match change {
+                "revoke_token" => {
+                    store.revoke_broker_token(&token.token_id, "admin").unwrap();
+                }
+                "remove_role" | "demote_admin" => {
+                    store
+                        .patch_principal_access(PrincipalAccessPatchRequest {
+                            principal_id: if change == "demote_admin" {
+                                "admin"
+                            } else {
+                                "bob"
+                            }
+                            .into(),
+                            role: Some(PrincipalRole::User),
+                            self_service_enabled: None,
+                            actor: "admin".into(),
+                        })
+                        .unwrap();
+                }
+                "remove_assignment" => {
+                    assert!(
+                        store
+                            .delete_service_policy_management_assignment("fake", "bob")
+                            .unwrap()
+                    );
+                }
+                _ => unreachable!(),
+            })
+            .await;
+        assert!(
+            matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN),
+            "{change}: {response}"
+        );
+        assert_eq!(
+            serde_json::to_value(store.policy_grant("patch-target").unwrap()).unwrap(),
+            original,
+            "{change} changed the grant"
+        );
+        assert_eq!(
+            serde_json::to_value(store.policy_revision().unwrap()).unwrap(),
+            revision,
+            "{change} changed the stored revision"
+        );
+        assert_eq!(runtime.policy_generation(), generation);
+        let records = events(&fixture, change);
+        assert_eq!(records.len(), 2, "preflight and one denial: {records:?}");
+        assert_eq!(
+            records[0]["providerAudit"]["management"]["phase"],
+            "preflight"
+        );
+        assert_ne!(
+            records[1]["providerAudit"]["management"]["phase"],
+            "success"
+        );
+        assert_eq!(records[1]["decision"], "deny");
+    }
+}
+
+#[tokio::test]
+async fn management_grant_patch_keeps_live_authority_cas_and_active_snapshot_publication() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let snapshot = fixture.state.current();
+    let runtime = &snapshot.runtime;
+    let store = runtime.managed_store().unwrap();
+    let before = runtime
+        .create_managed_policy_grant(patch_test_grant("patch-target"))
+        .unwrap();
+    let body = json!({
+        "expectedVersion": before.grant.version,
+        "subjects": ["user:alice", "user:carol"],
+    })
+    .to_string();
+    let (status, response) = patch_after_admission(
+        &fixture,
+        &fixture.bob,
+        &body,
+        "patch-live-authority",
+        || {
+            let mut unrelated = patch_test_grant("unrelated-patch-grant");
+            unrelated.resources.resource_ids = vec![resource_id("project", "OPS")];
+            runtime.create_managed_policy_grant(unrelated).unwrap();
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let updated = store.policy_grant("patch-target").unwrap();
+    assert_eq!(updated.subjects, vec!["user:alice", "user:carol"]);
+    assert_eq!(updated.version, before.grant.version + 1);
+    assert_eq!(
+        runtime.policy_generation(),
+        store.policy_revision().unwrap().generation
+    );
+    assert_eq!(response["result"]["grant"]["version"], updated.version);
+    let records = events(&fixture, "patch-live-authority");
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[1]["providerAudit"]["management"]["phase"],
+        "success"
+    );
+
+    let revision = serde_json::to_value(store.policy_revision().unwrap()).unwrap();
+    let (status, response) = fixture
+        .request(
+            Method::PATCH,
+            &fixture.bob,
+            "/v1/admin/policy/grants/patch-target",
+            Some(&body),
+            "patch-stale-version",
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+    assert_eq!(
+        serde_json::to_value(store.policy_grant("patch-target").unwrap()).unwrap(),
+        serde_json::to_value(&updated).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(store.policy_revision().unwrap()).unwrap(),
+        revision
+    );
+
+    // Editing and disabling together validates an inactive candidate after
+    // the active snapshot. Only the active grants may be published.
+    let body = json!({
+        "expectedVersion": updated.version,
+        "subjects": ["user:alice"],
+        "status": "disabled",
+    })
+    .to_string();
+    let (status, response) = fixture
+        .request(
+            Method::PATCH,
+            &fixture.bob,
+            "/v1/admin/policy/grants/patch-target",
+            Some(&body),
+            "patch-disabled-subjects",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(
+        store.policy_grant("patch-target").unwrap().status,
+        "disabled"
+    );
+    let identity = runtime
+        .resolve_identity(&headers(&fixture.alice_agent, "patch-snapshot-discovery"))
+        .unwrap();
+    let execution_context = agent_access_core::ExecutionContext::new("default").unwrap();
+    let discovery = runtime
+        .service_discovery(&identity, &execution_context, "fake")
+        .expect("the unrelated active grant remains visible");
+    assert!(
+        discovery
+            .actions(Some("TEST"), None, None, None)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
+    assert_eq!(
+        discovery
+            .actions(Some("OPS"), None, None, None)
+            .unwrap()
+            .actions,
+        vec!["echo"]
+    );
+    assert_eq!(
+        runtime.policy_generation(),
+        store.policy_revision().unwrap().generation
+    );
+}

@@ -1225,6 +1225,7 @@ fn management_operation(operation: &str) -> Option<agent_access_core::Management
         "tokens.issue" => PersonalTokenIssue,
         super::audit_actions::ADMIN_POLICY_GRANTS_SUBJECTS_ADD => GrantSubjectAdd,
         super::audit_actions::ADMIN_POLICY_GRANTS_SUBJECTS_REMOVE => GrantSubjectRemove,
+        super::audit_actions::ADMIN_POLICY_GRANTS_PATCH => GrantPatch,
         super::audit_actions::ADMIN_CREDENTIALS_PUT => AdminCredentialPut,
         "credentials.put" => PersonalCredentialPut,
         _ => return None,

@@ -3,6 +3,7 @@ use crate::{CreateResourceRequest, GroupWriteRequest, PrincipalRole, PrincipalWr
 use base64::Engine;
 
 mod complete_scopes;
+mod failure_receipts;
 
 type BeforeCommit = Arc<dyn Fn(&BrokerRuntime) + Send + Sync>;
 
@@ -466,6 +467,7 @@ async fn credential_install_requires_original_auth_and_never_replaces_retained_s
     assert_eq!(installed["present"], true);
     assert_eq!(installed["profile"], "gitlab-access-token");
     assert!(installed["version"].is_string());
+    assert!(installed.get("secretReferences").is_none());
     let credential = store
         .resolve_user_credential(
             fixture.runtime.credential_key_ring().unwrap(),
@@ -503,10 +505,118 @@ async fn credential_install_requires_original_auth_and_never_replaces_retained_s
     assert_eq!(view.envelope.result.as_ref().unwrap()["status"], "disabled");
     let public = serde_json::to_string(&view.envelope).unwrap();
     let audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
+    let origin = fixture
+        .runtime
+        .secret_reference_origin(
+            &fixture.identity,
+            &ExecutionContext::new("default").unwrap(),
+            None,
+        )
+        .unwrap();
+    let db = rusqlite::Connection::open(fixture.directory.path().join("store.sqlite")).unwrap();
+    let receipt_id: String = db
+        .query_row(
+            "SELECT receipt_id FROM secret_reference_receipts WHERE service='gitlab' AND action='project.access_token.create'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let installs: Vec<Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| {
+            record["action"] == "credential.install"
+                && record["providerAudit"]["phase"] != "preflight"
+        })
+        .collect();
+    assert_eq!(installs.len(), 3);
+    assert_eq!(
+        installs[1]["providerAudit"]["secretReferences"],
+        json!([{
+            "receiptId": receipt_id,
+            "origin": origin.audit_metadata(),
+            "service": "gitlab",
+            "action": "project.access_token.create",
+            "pointer": "/result/token",
+        }])
+    );
+    for failed in [&installs[0], &installs[2]] {
+        assert!(failed["providerAudit"].get("secretReferences").is_none());
+    }
     for output in [public, audit] {
         assert!(!output.contains(private_token));
         assert!(!output.contains(&reference));
     }
+}
+
+#[tokio::test]
+async fn broker_token_reference_cannot_be_installed_as_a_provider_credential() {
+    let fixture = fixture(false);
+    let minted = invoke(
+        &fixture,
+        "token.create",
+        token_create_input(&fixture, &Uuid::new_v4().to_string()),
+        false,
+    )
+    .await;
+    assert_eq!(minted.status, 200, "{:?}", minted.envelope);
+    let minted = minted.envelope.result.unwrap();
+    let reference = minted["issuedToken"]["secretRef"].as_str().unwrap();
+    let store = fixture.runtime.managed_store().unwrap();
+    let origin = fixture
+        .runtime
+        .secret_reference_origin(
+            &fixture.identity,
+            &ExecutionContext::new("default").unwrap(),
+            None,
+        )
+        .unwrap();
+    let raw = zeroize::Zeroizing::new(
+        store
+            .resolve_secret_reference(
+                fixture.runtime.credential_key_ring().unwrap(),
+                reference,
+                |conn, stored| {
+                    fixture
+                        .runtime
+                        .check_secret_reference_owner_conn(conn, stored, &origin)
+                },
+            )
+            .unwrap(),
+    );
+    assert_eq!(
+        store
+            .resolve_broker_token(fixture.runtime.broker_token_hasher().unwrap(), &raw)
+            .unwrap()
+            .principal_id,
+        "worker"
+    );
+    for _ in 0..2 {
+        let denied = invoke(
+            &fixture,
+            "credential.install",
+            json!({"principalId":"worker","connectionId":"gitlab-main","token":{"secretRef":reference}}),
+            false,
+        )
+        .await;
+        assert_eq!(denied.status, 403, "{:?}", denied.envelope);
+        assert_eq!(
+            denied.envelope.reason_code.as_ref().unwrap().as_str(),
+            "access_management_reference_denied"
+        );
+        assert_eq!(
+            denied.envelope.result.as_ref().unwrap()["executionState"],
+            "not_committed"
+        );
+        assert!(store.list_credentials(Some("worker")).unwrap().is_empty());
+        assert_reference_value(&fixture, reference, &raw);
+        let response = serde_json::to_string(&denied.envelope).unwrap();
+        assert!(!response.contains(reference));
+        assert!(!response.contains(raw.as_str()));
+    }
+    let audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
+    assert!(!audit.contains(reference));
+    assert!(!audit.contains(raw.as_str()));
 }
 #[tokio::test]
 async fn local_token_create_captures_once_and_view_never_redelivers() {
@@ -1034,6 +1144,13 @@ async fn failed_credential_storage_rolls_back_and_does_not_consume_reference() {
             .is_empty()
     );
     assert_reference_value(&fixture, &reference, private_token);
+    let failed_audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
+    let failed_audit: Value = serde_json::from_str(failed_audit.lines().last().unwrap()).unwrap();
+    assert!(
+        failed_audit["providerAudit"]
+            .get("secretReferences")
+            .is_none()
+    );
     db.execute_batch("DROP TRIGGER fault_credential;").unwrap();
     let retry = invoke(&fixture, "credential.install", inputs, false).await;
     assert_eq!(retry.status, 200, "{:?}", retry.envelope);
@@ -2063,7 +2180,11 @@ async fn attested_local_actions_recheck_caller_remap_restore_and_runtime_generat
                 );
                 assert_eq!(
                     response.envelope.result.as_ref().unwrap()["executionState"],
-                    "not_committed"
+                    if change == "runtime_reload" {
+                        "not_dispatched"
+                    } else {
+                        "not_committed"
+                    }
                 );
                 assert!(credentials.is_empty(), "{change} {action}");
                 assert!(tokens.is_empty(), "{change} {action}");
@@ -2071,6 +2192,16 @@ async fn attested_local_actions_recheck_caller_remap_restore_and_runtime_generat
                     .unwrap();
                 let captured:i64=db.query_row("SELECT COUNT(*) FROM secret_reference_material m JOIN secret_reference_receipts r ON r.receipt_id=m.receipt_id WHERE r.action='token.create' AND m.state='captured'",[],|r|r.get(0)).unwrap();
                 assert_eq!(captured, 0, "{change} {action}");
+                if change == "runtime_reload" && action == "token.create" {
+                    let outcome: String = db
+                        .query_row(
+                            "SELECT outcome FROM secret_reference_receipts WHERE action='token.create'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap();
+                    assert_eq!(outcome, "not_dispatched");
+                }
             }
             let audit = fs::read_to_string(fixture.directory.path().join("audit.jsonl")).unwrap();
             assert!(!audit.contains("attested-private-gitlab-value"));

@@ -69,6 +69,9 @@ inactive grants, and cannot remove an active grant's final subject. Grant edits
 use `expectedVersion`; re-read an authorized grant after a version conflict.
 Group and grant selection delegates their live authority: later administrator
 changes to those objects can change the recipient's effective permissions.
+Review a delegation against the combined authority of its selected groups and
+grants, including execution contexts and resource selections, for every selected
+principal ID, including accounts that have not yet been created.
 
 A direct assignment read distinguishes the direct edge from effective membership.
 Repeated group changes report whether they changed the edge. Duplicate or missing
@@ -93,6 +96,12 @@ invocation identity, authentication, trusted caller and execution context must
 still own the reference. The Broker authorizes the complete principal/connection
 tuple before checking or decrypting it, then checks origin validity and installs
 the encrypted credential in the same transaction.
+
+References produced by `broker_management`, including `token.create`, are rejected
+as connection credentials. Their authenticated producer receipt enforces this
+boundary. They remain usable by approved secret-input receivers. Successful
+installation records safe origin, producer, output pointer and receipt metadata
+in `secretReferences` audit evidence, without the bearer or reference handle.
 
 The destination must select the GitLab `gitlab-access-token` bearer-token profile
 for service accounts. The slot must be absent; a disabled existing row also

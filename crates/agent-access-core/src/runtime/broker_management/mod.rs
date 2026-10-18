@@ -7,7 +7,7 @@ use super::secret_reference_identity::SecretReferenceOrigin;
 use super::*;
 use crate::managed_store::management_commands as store;
 use crate::managed_store::{
-    CapturedSecretReference, SecretOutputCapture, SecretOutputReservationBatch,
+    CapturedSecretReference, SecretOutputCapture, SecretOutputReservationBatch, SecretReferenceUse,
 };
 use crate::management::{CommandError, LocalOperationOutcome, ManagementCommand};
 use rusqlite::Connection;
@@ -69,6 +69,12 @@ pub(crate) struct CapturedLocalOutput {
     pub(super) broker_request_id: String,
     pub(super) action: String,
     pub(super) references: Vec<CapturedSecretReference>,
+}
+
+struct ExecutedManagementCommand {
+    value: Value,
+    captured: Option<CapturedLocalOutput>,
+    reference_uses: Vec<SecretReferenceUse>,
 }
 
 pub(crate) fn valid_reference(value: &str) -> bool {
@@ -193,21 +199,26 @@ impl BrokerRuntime {
         admitted: AdmittedManagementCommand,
     ) -> LocalOperationOutcome {
         let write = admitted.command.is_write();
-        if let Some(reservation) = &admitted.reservation {
-            reservation.mark_dispatched();
-        }
-        let result = self.execute_management_inner(&admitted);
+        let mut transaction_started = false;
+        let result = self.execute_management_inner(&admitted, &mut transaction_started);
         match result {
-            Ok((mut value, captured)) => {
+            Ok(ExecutedManagementCommand {
+                mut value,
+                captured,
+                reference_uses,
+            }) => {
                 if write {
                     value["executionState"] = json!("completed");
                     value["retrySafe"] = json!(false);
                 }
-                let audit = if write {
+                let mut audit = if write {
                     json!({"executionState":"completed","retrySafe":false,"command":value})
                 } else {
                     json!({"readOnly":true,"command":value})
                 };
+                if !reference_uses.is_empty() {
+                    audit["secretReferences"] = json!(reference_uses);
+                }
                 LocalOperationOutcome {
                     result: Ok(ProviderResult::new(value).with_audit(audit)),
                     captured,
@@ -216,6 +227,8 @@ impl BrokerRuntime {
             Err(error) => {
                 let state = if matches!(error, CommandError::CommitUnknown) {
                     "unknown"
+                } else if write && !transaction_started {
+                    "not_dispatched"
                 } else if write {
                     "not_committed"
                 } else {
@@ -236,10 +249,12 @@ impl BrokerRuntime {
                 if let (Some(store), Some(batch)) = (&self.managed_store, &admitted.reservation) {
                     let _ = store.finish_secret_reservation(
                         batch,
-                        if state == "unknown" {
-                            crate::managed_store::SecretReservationOutcome::Unknown
-                        } else {
-                            crate::managed_store::SecretReservationOutcome::CaptureFailed
+                        match state {
+                            "unknown" => crate::managed_store::SecretReservationOutcome::Unknown,
+                            "not_dispatched" => {
+                                crate::managed_store::SecretReservationOutcome::NotDispatched
+                            }
+                            _ => crate::managed_store::SecretReservationOutcome::CaptureFailed,
                         },
                         json!({"executionState":state,"retrySafe":false}),
                     );
@@ -252,7 +267,8 @@ impl BrokerRuntime {
     fn execute_management_inner(
         &self,
         admitted: &AdmittedManagementCommand,
-    ) -> Result<(Value, Option<CapturedLocalOutput>), CommandError> {
+        transaction_started: &mut bool,
+    ) -> Result<ExecutedManagementCommand, CommandError> {
         if !Arc::ptr_eq(&self.config, &admitted.runtime) {
             return Err(ManagedStoreError::VersionConflict.into());
         }
@@ -270,12 +286,17 @@ impl BrokerRuntime {
         } else {
             None
         };
-        let (value, policy, references) =
+        let (value, policy, references, reference_uses) =
             store.management_transaction(admitted.command.is_write(), |conn| {
+                *transaction_started = true;
+                if let Some(reservation) = &admitted.reservation {
+                    reservation.mark_dispatched();
+                }
                 self.reauthorize_management_conn(conn, admitted)?;
                 let actor = &admitted.context.identity.principal;
                 let mut policy = None;
                 let mut references = None;
+                let mut reference_uses = Vec::new();
                 let value = match &admitted.command {
                     ManagementCommand::PrincipalCreate(v) => store
                         .create_delegated_principal_conn(
@@ -331,7 +352,7 @@ impl BrokerRuntime {
                             .origin
                             .as_ref()
                             .ok_or(CommandError::ReferenceDenied)?;
-                        store::install_credential(
+                        let (value, usage) = store::install_credential(
                             conn,
                             ring,
                             &v.principal_id,
@@ -341,7 +362,9 @@ impl BrokerRuntime {
                             |conn, stored| {
                                 self.check_secret_reference_owner_conn(conn, stored, origin)
                             },
-                        )?
+                        )?;
+                        reference_uses.push(usage);
+                        value
                     }
                     ManagementCommand::TokenCreate(v) => {
                         let (value, captured) = self.create_local_token_conn(conn, admitted, v)?;
@@ -350,7 +373,7 @@ impl BrokerRuntime {
                     }
                     other => store::basic_operation(conn, other, actor)?,
                 };
-                Ok((value, policy, references))
+                Ok((value, policy, references, reference_uses))
             })?;
         if let Some(next) = policy {
             // Validation and snapshot construction completed before commit.
@@ -371,7 +394,11 @@ impl BrokerRuntime {
                 references,
             }
         });
-        Ok((value, captured))
+        Ok(ExecutedManagementCommand {
+            value,
+            captured,
+            reference_uses,
+        })
     }
 
     fn reauthorize_management_conn(

@@ -15,6 +15,7 @@ pub enum ManagementOperation {
     PersonalTokenIssue,
     GrantSubjectAdd,
     GrantSubjectRemove,
+    GrantPatch,
     AdminCredentialPut,
     PersonalCredentialPut,
 }
@@ -23,7 +24,10 @@ impl ManagementOperation {
         matches!(self, Self::PersonalTokenIssue | Self::PersonalCredentialPut)
     }
     pub(crate) fn policy(self) -> bool {
-        matches!(self, Self::GrantSubjectAdd | Self::GrantSubjectRemove)
+        matches!(
+            self,
+            Self::GrantSubjectAdd | Self::GrantSubjectRemove | Self::GrantPatch
+        )
     }
 }
 
@@ -99,6 +103,44 @@ impl ManagementAuthority {
 }
 
 impl BrokerRuntime {
+    pub fn patch_managed_policy_grant_with_management_authority(
+        &self,
+        request: ManagedPolicyGrantPatchRequest,
+        authority: ManagementAuthority,
+    ) -> Result<crate::ManagementMutation<ManagedPolicyMutationResult>, ManagedStoreError> {
+        authority.check_runtime(self)?;
+        let _guard = self.managed_policy_mutation_guard()?;
+        let store = self.managed_policy_store()?.clone();
+        let baseline = store.policy_validation_baseline()?;
+        if self.policy_generation() > baseline.0.generation {
+            return Err(ManagedStoreError::VersionConflict);
+        }
+        let mut next_snapshot = None;
+        let result = store.patch_policy_grant_with_management_authority(
+            request,
+            authority,
+            |grants, revision, subjects, catalog| {
+                self.validate_managed_policy_candidate_for_store(
+                    grants, revision, subjects, catalog, &baseline,
+                )?;
+                // Finalization validates the active snapshot first. A second
+                // validation may inspect an edited inactive grant; that grant
+                // must never replace the snapshot published after commit.
+                if next_snapshot.is_none() {
+                    next_snapshot = Some(Arc::new(PolicySnapshot::from_managed(
+                        revision.generation,
+                        grants.to_vec(),
+                        catalog.clone(),
+                    )));
+                }
+                Ok(())
+            },
+        )?;
+        self.policy_snapshot
+            .store(next_snapshot.expect("committed grant patch validated its policy snapshot"));
+        Ok(result)
+    }
+
     /// Verify the admitted runtime configuration while the host publication
     /// fence is held. Management intentionally does not pin policy generation.
     pub fn check_management_authority_runtime(

@@ -307,13 +307,14 @@ pub(crate) fn install_credential(
         &Connection,
         &crate::runtime::secret_reference_identity::SecretReferenceOrigin,
     ) -> std::result::Result<(), ManagedStoreError>,
-) -> Result<Value> {
+) -> Result<(Value, SecretReferenceUse)> {
     let occupied:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM credentials WHERE owner_kind='user' AND owner_principal_id=?1 AND service=?2 AND name=?3)",params![principal_id,connection,crate::CONNECTION_CREDENTIAL_NAME],|row|row.get(0)).map_err(sql_unavailable)?;
     if occupied {
         return Err(CommandError::Exists);
     }
-    let (token, _usage) = secret_references::resolve_conn(conn, ring, reference, &authorize)
-        .map_err(|_| CommandError::ReferenceDenied)?;
+    let (token, usage) =
+        secret_references::resolve_credential_reference_conn(conn, ring, reference, &authorize)
+            .map_err(|_| CommandError::ReferenceDenied)?;
     let token = zeroize::Zeroizing::new(token);
     let mut secret = json!({"token":token.as_str()});
     let result = upsert_user_credential_conn(
@@ -332,13 +333,14 @@ pub(crate) fn install_credential(
         CredentialManagementPurpose::Administrative,
     );
     result?;
-    credential_summary(
+    let value = credential_summary(
         conn,
         principal_id,
         connection,
         "gitlab-access-token",
         "bearer_token",
-    )
+    )?;
+    Ok((value, usage))
 }
 pub(crate) fn token_id_absent(conn: &Connection, id: &str) -> Result<()> {
     let exists: bool = conn
@@ -409,7 +411,10 @@ impl ManagedStore {
         request: PrincipalWriteRequest,
         authority: crate::ManagementAuthority,
     ) -> std::result::Result<crate::ManagementMutation<PrincipalRecord>, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -429,7 +434,10 @@ impl ManagedStore {
         actor: &str,
         authority: crate::ManagementAuthority,
     ) -> std::result::Result<crate::ManagementMutation<()>, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -453,7 +461,10 @@ impl ManagedStore {
         authority: crate::ManagementAuthority,
     ) -> std::result::Result<crate::ManagementMutation<LocalGroupRemovalResult>, ManagedStoreError>
     {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -514,7 +525,10 @@ impl ManagedStore {
         authority: crate::ManagementAuthority,
         personal: bool,
     ) -> std::result::Result<crate::ManagementMutation<IssuedBrokerToken>, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -618,7 +632,10 @@ impl ManagedStore {
             &ManagedResourceCatalog,
         ) -> std::result::Result<(), ManagedStoreError>,
     {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;

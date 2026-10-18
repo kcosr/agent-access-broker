@@ -246,7 +246,10 @@ impl ManagedStore {
                 }
             })
             .collect::<Vec<_>>();
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -280,7 +283,10 @@ impl ManagedStore {
         captures: Vec<SecretOutputCapture>,
         safe_metadata: Value,
     ) -> Result<Vec<CapturedSecretReference>, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -415,7 +421,10 @@ impl ManagedStore {
                 SecretReservationOutcome::Unknown => "unknown",
             })
         });
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -433,7 +442,10 @@ impl ManagedStore {
         reference: &str,
         authorize: impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
     ) -> Result<String, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -450,7 +462,10 @@ impl ManagedStore {
         authorize: impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
     ) -> Result<SecretReferenceReceipt, ManagedStoreError> {
         validate_uuid_id(receipt_id, "receiptId")?;
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn.transaction().map_err(sql_unavailable)?;
         let row = receipt_row(&tx, receipt_id)?;
         let origin = decrypt_origin(ring, &row)?;
@@ -515,7 +530,10 @@ impl ManagedStore {
                 "secret references are accepted only in the token field",
             ));
         }
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -523,7 +541,8 @@ impl ManagedStore {
         authorize_write(&tx)?;
         let mut references = Vec::new();
         if let Some(reference) = reference {
-            let (value, usage) = resolve_conn(&tx, ring, &reference, &authorize_origin)?;
+            let (value, usage) =
+                resolve_credential_reference_conn(&tx, ring, &reference, &authorize_origin)?;
             request.secret["token"] = Value::String(value);
             references.push(usage);
         }
@@ -537,7 +556,10 @@ impl ManagedStore {
 
     /// Expiry is enforced on reads even when this maintenance pass has not run.
     pub(crate) fn cleanup_secret_references(&self) -> Result<u64, ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -552,7 +574,10 @@ impl ManagedStore {
         &self,
         cold_start: bool,
     ) -> Result<(), ManagedStoreError> {
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self
+            .connection
+            .lock()
+            .map_err(|_| ManagedStoreError::Unavailable("managed store lock unavailable".into()))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -741,7 +766,24 @@ fn parse_reference_input(
     Ok(reference.into())
 }
 
-pub(super) fn resolve_conn(
+/// Broker-issued secrets authenticate to this Broker, never to an upstream
+/// credential connection. The authenticated receipt identifies that producer;
+/// ordinary declared receivers may still resolve its references.
+pub(super) fn resolve_credential_reference_conn(
+    conn: &Connection,
+    ring: &CredentialKeyRing,
+    reference: &str,
+    authorize: &impl Fn(&Connection, &SecretReferenceOrigin) -> Result<(), ManagedStoreError>,
+) -> Result<(String, SecretReferenceUse), ManagedStoreError> {
+    let (mut value, usage) = resolve_conn(conn, ring, reference, authorize)?;
+    if usage.service == crate::runtime::broker_management::SERVICE_ID {
+        value.zeroize();
+        return Err(ManagedStoreError::SecretReferenceDenied);
+    }
+    Ok((value, usage))
+}
+
+fn resolve_conn(
     conn: &Connection,
     ring: &CredentialKeyRing,
     reference: &str,
@@ -1885,6 +1927,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored["token"], SECRET);
+    }
+
+    #[test]
+    fn broker_producer_references_cannot_be_installed_as_connection_credentials() {
+        let (_temp, store, ring) = fixture();
+        let mut producer = request("alice");
+        producer.service = crate::runtime::broker_management::SERVICE_ID.into();
+        producer.action = "token.create".into();
+        let batch = store
+            .reserve_secret_outputs(&ring, producer, &limits(), |_, _| Ok(()))
+            .unwrap();
+        // Producer provenance is authoritative even if the captured string does
+        // not look like a Broker token.
+        let reference = capture(&store, &ring, &batch);
+        for purpose in [
+            CredentialManagementPurpose::Administrative,
+            CredentialManagementPurpose::Personal,
+        ] {
+            assert!(matches!(
+                store.upsert_user_credential_with_secret_references(
+                    &ring,
+                    credential(&reference.secret_ref, "alice"),
+                    purpose,
+                    |_| Ok(()),
+                    authorize_alice,
+                ),
+                Err(ManagedStoreError::SecretReferenceDenied)
+            ));
+            assert!(store.list_credentials(Some("alice")).unwrap().is_empty());
+        }
+        // Rejection does not consume the reference or prevent a declared
+        // downstream secret receiver from resolving it under normal authority.
+        assert_eq!(
+            store
+                .resolve_secret_reference(&ring, &reference.secret_ref, authorize_alice)
+                .unwrap(),
+            SECRET
+        );
     }
 
     #[test]

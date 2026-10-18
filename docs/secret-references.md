@@ -103,6 +103,10 @@ The CLI never receives the resolved token. A successful import does not consume
 the reference: an authorized administrator can install the same value into more
 than one destination before expiry. Audit records identify the actor, origin,
 destination, and non-capability receipt, without recording the token or reference.
+References produced by `broker_management` authenticate to the Broker and cannot
+be installed as upstream connection credentials through administrator, personal,
+or delegated credential installation. This check uses the authenticated producer
+receipt; approved ordinary action-input receivers may still resolve them.
 
 `--token-output` on typed GitLab issuance commands requires advertised raw mode.
 In reference mode it refuses before issuing. If a configuration reload changes

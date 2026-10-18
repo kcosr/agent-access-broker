@@ -1077,11 +1077,13 @@ pub(crate) async fn admin_policy_grants_patch(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    let scope = policy_write_scope(&context).clone();
-    match state
-        .reloadable
-        .managed_policy_mutation_from_snapshot(context.snapshot.clone(), move |runtime| {
-            runtime.patch_managed_policy_grant_authorized(
+    super::common::management_authorized_write(
+        &state,
+        context,
+        operation,
+        target,
+        move |runtime, authority| {
+            runtime.patch_managed_policy_grant_with_management_authority(
                 ManagedPolicyGrantPatchRequest {
                     grant_id,
                     expected_version,
@@ -1096,16 +1098,14 @@ pub(crate) async fn admin_policy_grants_patch(
                     description: body.description,
                     updated_by: actor,
                 },
-                &scope,
+                authority,
             )
-        })
-        .await
-    {
-        Ok(result) => {
-            management_pre_audited_success_response(&context, operation, target, json!(result))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+        |context, operation, target, result| {
+            super::common::management_success_envelope(context, operation, target, json!(result))
+        },
+    )
+    .await
 }
 
 pub(crate) async fn admin_policy_grants_subject_add(

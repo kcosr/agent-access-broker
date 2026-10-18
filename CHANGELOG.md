@@ -9,8 +9,10 @@ All notable changes to this project are documented in this file.
 - Core-owned delegated Broker administration: complete-tuple service-account,
   group and grant operations, reference-only absent-slot credential installation,
   and bounded child invocation tokens with atomic encrypted output capture.
-- Existing affected management mutations recheck original authority in their
-  transaction and retain completion ownership through disconnect and shutdown.
+- Principal creation, group-member changes, administrator/self-service token
+  issuance, grant-subject changes, grant PATCH, and administrator/personal
+  credential installation recheck original authority in their transaction and
+  retain completion ownership through disconnect and shutdown.
 
 ### Breaking Changes
 
@@ -1200,6 +1202,16 @@ All notable changes to this project are documented in this file.
   neutral tone unless something needs fixing.
 
 ### Fixed
+
+- Delegated credential installation retains safe secret-reference provenance in
+  completion audit. All credential-install paths reject references produced by
+  Broker administration, preventing invocation tokens from becoming upstream
+  connection credentials while preserving approved receiver use.
+- Grant PATCH rechecks current authentication and policy-write authority inside
+  its transaction, including when replacing grant subjects.
+- Delegated writes that fail before starting a transaction report
+  `not_dispatched`; shared management adapters return storage unavailability for
+  a poisoned connection lock.
 
 - GitLab REST resolves the old path or web URL of a renamed, moved or
   transferred project to the project's current identity. GitLab 16.7 and later
