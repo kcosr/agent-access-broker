@@ -644,19 +644,56 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         descriptor.resource_scopes[corrupt.resource_scope.as_deref().unwrap()].resource_type,
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
+    let imported = ImportedCatalog {
+        revision: 1,
+        services: vec![declaring],
+    };
+    let services = BTreeMap::from([(SERVICE.into(), Arc::new(descriptor))]);
+    for (name, command_enforced) in [
+        ("issue.search", true),
+        ("issue.corrupt", true),
+        ("issue.view", false),
+        ("issue.orphan", false),
+    ] {
+        assert_eq!(
+            command_enforced_action(&config, &imported, &services, SERVICE, name),
+            command_enforced,
+            "{name}"
+        );
+    }
     // Without the command adapter the import is unavailable, and every
     // action binds the unresolved type.
     let unlinked_record = record(&modes, actions());
+    let unlinked_config = crate::runtime::tests::base_fake_config();
     let unlinked = crate::runtime::imports::descriptor(
         &unlinked_record,
-        &crate::runtime::tests::base_fake_config(),
+        &unlinked_config,
         &published_types(&unlinked_record),
     );
-    assert!(unlinked.actions.iter().all(|action| {
-        action.native_search.is_none()
-            && unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type
-                == *UNRESOLVED_RESOURCE_TYPE.id()
-    }));
+    let unlinked_imported = ImportedCatalog {
+        revision: 1,
+        services: vec![unlinked_record],
+    };
+    let unlinked_services = BTreeMap::from([(SERVICE.into(), Arc::new(unlinked))]);
+    let unlinked = &unlinked_services[SERVICE];
+    for action in &unlinked.actions {
+        assert!(action.native_search.is_none());
+        assert_eq!(
+            unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type,
+            *UNRESOLVED_RESOURCE_TYPE.id()
+        );
+        assert!(
+            command_enforced_action(
+                &unlinked_config,
+                &unlinked_imported,
+                &unlinked_services,
+                SERVICE,
+                &action.action,
+            ),
+            "{}",
+            action.action
+        );
+    }
     // A credential-free import's actions use service mode.
     let free_record = record(&[], actions());
     let free =
@@ -666,6 +703,44 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         ["service"]
     );
     assert!(!free.credentials.execution_required);
+}
+
+#[tokio::test]
+async fn unreadable_command_authority_retains_mixed_mode_grants_without_admitting_resources() {
+    let mut declared = actions();
+    declared.push(action("issue.corrupt", json!("unreadable")));
+    let mut runtime = publish_retained(
+        declared,
+        ["per_user", "service"]
+            .into_iter()
+            .map(|mode| {
+                grant(
+                    "group:engineering",
+                    "issue.corrupt",
+                    mode,
+                    10,
+                    &["p-ops"],
+                    &[],
+                )
+            })
+            .collect(),
+    )
+    .expect("an unreadable command declaration must preserve retained mixed-mode grants");
+    assert_eq!(
+        runtime.resources_checked_by(SERVICE, "issue.corrupt"),
+        Some(ResourcesCheckedBy::Command)
+    );
+    credentials_present(&mut runtime);
+    let caller = identity(None);
+    assert_eq!(
+        prepare(&runtime, &caller, "issue.corrupt", json!({}))
+            .await
+            .err()
+            .unwrap()
+            .reason_code(),
+        ReasonCode::ServiceActionDenied
+    );
+    assert_eq!(discovered(&runtime, &caller, "issue.corrupt"), None);
 }
 
 #[tokio::test]
