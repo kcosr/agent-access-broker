@@ -832,6 +832,11 @@ impl GitlabProvider {
             .await
             .map_err(gitlab_backend_error)?;
         ensure_same_project(&lookup_project, &response.value)?;
+        ensure_gitlab_description_within_cap(
+            "project",
+            response.value.description.as_deref(),
+            self.config.content.max_body_bytes,
+        )?;
         Ok(gitlab_result(
             "project.view",
             &lookup_project,
@@ -7026,7 +7031,10 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             "file.view",
             "View bounded GitLab repository file metadata and inline content",
             file_view_schema(),
-        ),
+        )
+        .documentation(json!({
+            "content":"Reads files from a project's source repository. Wiki pages are separate and cannot be read through this action. Full wiki-page reading is not currently supported by the Broker."
+        })),
         gitlab_read_action(
             "file.raw.download",
             "Download a bounded GitLab repository file as a raw stream",

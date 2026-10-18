@@ -145,10 +145,11 @@ separately. Egress, TLS, limits and credential sources are in the
 
 ## Repository discovery and content search
 
-`project.search` discovers or browses authorized upstream repositories. The six
-`search.*` actions use native full-text search across the authorized repository
-set or an explicitly selected project. `issue.search` and
-`merge_request.search` list and filter within one required project; their
+`project.search` discovers or browses authorized GitLab projects live, including
+projects covered by namespace grants that are not individually registered in
+`resources_list`. The six `search.*` actions use native full-text search across
+the authorized repository set or an explicitly selected project. `issue.search`
+and `merge_request.search` list and filter within one required project; their
 structured filters and pagination remain separate contracts.
 
 | Action | Searches | Typed command |
@@ -188,8 +189,9 @@ Results use increasing project ID order, not relevance order.
 
 Content search requires `search` with the same byte limit and accepts optional
 `project` (canonical path) and `engine` (`basic`, `advanced`, or `zoekt`, within
-configured choices). Omission selects `default_engine`. The selected engine's
-native syntax, tokenization, and ranking apply; there is no JQL/CQL translation.
+configured choices). Omit `engine` to use the service's configured default
+(`default_engine`). The selected engine's native syntax, tokenization, and
+ranking apply; there is no JQL/CQL translation.
 `search.code` alone accepts `regex`, default `false`, and supplying it requires
 `zoekt`. The typed flag is `--regex`. No action accepts arbitrary upstream
 scopes, group selectors, project arrays, branch/ref choices, or query parameters.
@@ -317,6 +319,11 @@ instance-wide results and fail closed on project-scoped searches. Unknown result
 kinds or ambiguous ownership fail closed. Preview text is capped at 4 KiB of UTF-8 with an explicit
 `previewTruncated` flag; upstream snippets are not a promise of an exact matching
 passage. Treat previews and URLs as untrusted content.
+
+`search.wiki` returns bounded snippets supplied by GitLab, not full wiki pages;
+a snippet may omit the matching passage. Use a returned, validated GitLab URL
+when available to locate the page. `file.view` cannot read wiki pages, and full
+wiki-page reading is not currently supported by the Broker.
 
 Whole-page processing preserves authorized hits without buffering an unreturned
 suffix. Work is bounded by candidate pages, actual requests, aggregate decoded
@@ -1464,6 +1471,12 @@ errors, metric labels, and object identifiers.
 
 ## Merge, repository, and CI action contracts
 
+`project.view` returns project metadata, including optional `description`,
+`lastActivityAt`, and `starCount` when GitLab supplies them. These fields are
+also included in whole-result Markdown. Description is subject to
+`providers.gitlab.content.max_body_bytes`; oversized descriptions fail with
+`upstream_protocol_failed` rather than being truncated.
+
 Merge-request merge accepts `project`, `iid`, mandatory full 40-character
 `sha`, and optional `squash`, `shouldRemoveSourceBranch`,
 `mergeCommitMessage`, and `squashCommitMessage`. The broker preflights the
@@ -1492,8 +1505,10 @@ the current default branch, `main`, `master`, and any caller-supplied
 diagnostic only; GitLab-side protected branch enforcement remains the security
 boundary for upstream merges and direct GitLab access.
 
-Repository file view accepts `project`, `path`, and `ref`. Inline file content
-is returned as `contentBase64` only when it fits
+Repository file view accepts `project`, `path`, and `ref` and reads files from
+the project's source repository. Wiki pages are separate and cannot be read
+through `file.view`; full wiki-page reading is not currently supported by the
+Broker. Inline file content is returned as `contentBase64` only when it fits
 `providers.gitlab.content.max_file_bytes` and the configured upstream JSON
 response cap; larger files should be retrieved with `file.raw.download`.
 `file.raw.download` returns a broker-managed raw stream and does not place file

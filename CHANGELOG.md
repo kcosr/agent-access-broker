@@ -448,13 +448,17 @@ All notable changes to this project are documented in this file.
   requested filters, ordering, page size, and cursor. Project wiki hits may
   include their parent group as metadata without granting group authority.
   Group-only wiki hits are discarded from instance-wide results and fail closed
-  on project-scoped searches.
+  on project-scoped searches. GitLab-specific guidance distinguishes live
+  discovery from `resources_list` registrations and wiki snippets from repository
+  file reads. Project details include optional description, last activity, and
+  star count.
 - Operator-configured GitLab engine/category/scope capabilities and bounded scan
   work, with explicit incomplete-coverage statuses and confidential continuations
   that preserve the original 15-minute expiry. Basic code/commit/wiki/comment
   search requires a project; advanced and Zoekt tuples require explicit setup.
-  Existing single-project `issue.search` and `merge_request.search` retain their
-  structured-list contracts.
+  Agent guidance follows the service's configured default when `engine` is
+  omitted. Existing single-project `issue.search` and `merge_request.search`
+  retain their structured-list contracts.
 
 - The standard reason `broker_provider_contract_failed` (HTTP 500,
   `decision = error`) identifies a provider outcome that its contract does

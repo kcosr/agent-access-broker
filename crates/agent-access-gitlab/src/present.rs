@@ -522,7 +522,9 @@ impl WholeResultRenderer for WholeRenderer {
         let max_body_bytes = *max_body_bytes;
         match *self {
             WholeRenderer::NativeSearch => render_native_search(result, out, budget)?,
-            WholeRenderer::Project => render_gitlab_project_view(result, out, budget)?,
+            WholeRenderer::Project => {
+                render_gitlab_project_view(result, out, max_body_bytes, budget)?
+            }
             WholeRenderer::Issue => render_gitlab_issue_view(result, out, max_body_bytes, budget)?,
             WholeRenderer::IssueList => {
                 render_gitlab_issue_list(result, out, max_body_bytes, budget)?
@@ -591,6 +593,7 @@ impl WholeResultRenderer for WholeRenderer {
 fn render_gitlab_project_view(
     value: &Value,
     out: &mut MarkdownWriter,
+    max_body_bytes: u64,
     budget: &mut PresentationBudget,
 ) -> Result<(), RenderError> {
     let project = as_object(required(as_object(value)?, "project")?)?;
@@ -602,7 +605,16 @@ fn render_gitlab_project_view(
         out.push_heading_text(name)?;
     }
     out.push("\n")?;
-    gitlab_project_fields(project, out)
+    gitlab_project_fields(project, out)?;
+    render_gitlab_body(
+        project,
+        "description",
+        "Description",
+        "## ",
+        out,
+        max_body_bytes,
+        budget,
+    )
 }
 
 fn gitlab_project_fields(
@@ -611,12 +623,14 @@ fn gitlab_project_fields(
 ) -> Result<(), RenderError> {
     let id = optional_display(project, "id")?;
     let archived = optional_display(project, "archived")?;
+    let star_count = optional_display(project, "starCount")?;
     code_fields(
         out,
         &[
             ("Project ID", id.as_deref()),
             ("Path", optional_scalar(project, "pathWithNamespace")?),
             ("Default branch", optional_scalar(project, "defaultBranch")?),
+            ("Last activity", optional_scalar(project, "lastActivityAt")?),
         ],
     )?;
     fields(
@@ -625,6 +639,7 @@ fn gitlab_project_fields(
             ("Name", optional_scalar(project, "name")?),
             ("Visibility", optional_scalar(project, "visibility")?),
             ("Archived", archived.as_deref()),
+            ("Stars", star_count.as_deref()),
         ],
     )?;
     if let Some(url) = optional_scalar(project, "webUrl")? {
@@ -2937,7 +2952,8 @@ mod tests {
             }
             WholeRenderer::Project => json!({"project":{
                 "id":9,"pathWithNamespace":"group/repo","name":"Repo","webUrl":"https://gitlab.test/group/repo",
-                "defaultBranch":"main","visibility":"private","archived":false
+                "defaultBranch":"main","visibility":"private","archived":false,
+                "description":"Project description","lastActivityAt":"2026-08-01T12:00:00Z","starCount":0
             }}),
             WholeRenderer::Issue => json!({"issue":gitlab_issue_fixture()}),
             WholeRenderer::IssueList => json!({
@@ -3100,6 +3116,11 @@ mod tests {
                 "Visibility",
                 "Archived",
                 "URL",
+                "Last activity",
+                "2026-08-01T12:00:00Z",
+                "Stars",
+                "Description",
+                "Project description",
             ],
             WholeRenderer::Issue | WholeRenderer::IssueList => &[
                 "Issue ID",
@@ -3777,6 +3798,40 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
             assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+        }
+    }
+
+    #[test]
+    fn project_details_render_in_markdown_and_remain_optional() {
+        let mut result = gitlab_whole_fixture(WholeRenderer::Project);
+        present_provider_result(
+            "project.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let rendered = result["value"].as_str().unwrap();
+        for field in ["Project description", "2026-08-01T12:00:00Z", "Stars"] {
+            assert!(rendered.contains(field), "missing {field:?}: {rendered}");
+        }
+
+        let mut result = json!({"project":{
+            "id":9,"pathWithNamespace":"group/repo",
+            "description":null,"lastActivityAt":null,"starCount":null
+        }});
+        present_provider_result(
+            "project.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let rendered = result["value"].as_str().unwrap();
+        for label in ["Description", "Last activity", "Stars"] {
+            assert!(!rendered.contains(label), "invented {label:?}: {rendered}");
         }
     }
 

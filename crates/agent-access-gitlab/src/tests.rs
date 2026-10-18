@@ -752,6 +752,9 @@ fn test_project() -> GitlabProject {
         default_branch: None,
         visibility: None,
         archived: None,
+        description: None,
+        last_activity_at: None,
+        star_count: None,
     }
 }
 
@@ -2025,6 +2028,9 @@ fn gitlab_ci_object_ids_and_job_project_revalidation_are_strict() {
         default_branch: Some("main".to_string()),
         visibility: Some("private".to_string()),
         archived: Some(false),
+        description: None,
+        last_activity_at: None,
+        star_count: None,
     };
     assert_eq!(
         gitlab_pipeline_object_id(&project, 321),
@@ -2123,6 +2129,9 @@ fn gitlab_issue_and_merge_request_parsers_expose_agent_metadata() {
         default_branch: None,
         visibility: None,
         archived: None,
+        description: None,
+        last_activity_at: None,
+        star_count: None,
     };
     let issue = issue_from_value(json!({
         "id": 700,
@@ -2942,6 +2951,9 @@ fn note_mutation_validation_accepts_scoped_metadata_gaps_and_rejects_contradicti
         default_branch: None,
         visibility: None,
         archived: None,
+        description: None,
+        last_activity_at: None,
+        star_count: None,
     };
     let issue = GitlabIssue {
         id: Some(700),
@@ -6624,6 +6636,99 @@ fn approval_models_preserve_actor_and_rule_metadata() {
 }
 
 #[test]
+fn project_metadata_decodes_optional_details_without_inventing_values() {
+    let details = json!({
+        "id": 42,
+        "path_with_namespace": "engineering/service",
+        "description": "Project description",
+        "last_activity_at": "2026-10-01T12:00:00Z",
+        "star_count": 0,
+        "unrelated_upstream_field": "not exposed"
+    });
+    let project = project_from_value(details).unwrap();
+    assert_eq!(project.description.as_deref(), Some("Project description"));
+    assert_eq!(
+        project.last_activity_at.as_deref(),
+        Some("2026-10-01T12:00:00Z")
+    );
+    assert_eq!(project.star_count, Some(0));
+    let serialized = serde_json::to_value(project).unwrap();
+    assert_eq!(serialized["description"], "Project description");
+    assert_eq!(serialized["lastActivityAt"], "2026-10-01T12:00:00Z");
+    assert_eq!(serialized["starCount"], 0);
+    assert!(serialized.get("unrelated_upstream_field").is_none());
+
+    for mut optional in [
+        json!({}),
+        json!({
+            "description": null,
+            "last_activity_at": null,
+            "star_count": null
+        }),
+    ] {
+        optional["id"] = json!(42);
+        optional["path_with_namespace"] = json!("engineering/service");
+        let project = project_from_value(optional).unwrap();
+        assert_eq!(project.description, None);
+        assert_eq!(project.last_activity_at, None);
+        assert_eq!(project.star_count, None);
+        let serialized = serde_json::to_value(project).unwrap();
+        assert!(serialized["description"].is_null());
+        assert!(serialized["lastActivityAt"].is_null());
+        assert!(serialized["starCount"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn project_view_exposes_bounded_details_without_adding_them_to_audit() {
+    let server = MockServer::start().await;
+    let description = "Project details é";
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/sip%2Fservice"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42,
+            "path_with_namespace": "sip/service",
+            "description": description,
+            "last_activity_at": "2026-10-01T12:00:00Z",
+            "star_count": 7,
+            "unrelated_upstream_field": "not exposed"
+        })))
+        .expect(4)
+        .mount(&server)
+        .await;
+    let invoke = || test_invocation("project.view", json!({"project": "sip/service"}));
+    let result = allowlisted_server_provider(&server, &["/api/v4/**"], description.len() as u64)
+        .invoke(invoke())
+        .await
+        .unwrap();
+    assert_eq!(result.result["project"]["description"], description);
+    assert_eq!(
+        result.result["project"]["lastActivityAt"],
+        "2026-10-01T12:00:00Z"
+    );
+    assert_eq!(result.result["project"]["starCount"], 7);
+    assert!(
+        result.result["project"]
+            .get("unrelated_upstream_field")
+            .is_none()
+    );
+    let audit = serde_json::to_string(&result.audit).unwrap();
+    assert!(!audit.contains(description));
+    for field in ["description", "lastActivityAt", "starCount"] {
+        assert!(!audit.contains(field));
+    }
+
+    let error = allowlisted_server_provider(&server, &["/api/v4/**"], description.len() as u64 - 1)
+        .invoke(invoke())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert!(error.message.contains("project description exceeded"));
+    assert!(!error.message.contains(description));
+    assert!(error.result.is_none());
+}
+
+#[test]
 fn project_metadata_requires_canonical_repository_identity() {
     for invalid in [
         "",
@@ -6663,6 +6768,9 @@ fn fork_repository_scopes_are_sorted_and_same_project_is_deduplicated() {
         default_branch: None,
         visibility: None,
         archived: None,
+        description: None,
+        last_activity_at: None,
+        star_count: None,
     };
     let source = GitlabProject {
         id: 2,

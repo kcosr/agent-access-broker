@@ -44,14 +44,19 @@ Native integrations pair action permissions with the following resource controls
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
 
 GitLab [repository discovery and content search](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
-can find repositories without a known path, then search issues, merge requests,
-code, commits, project wikis, or comments within the caller's repository grants.
-Each category is separately grantable. Engine and instance-wide availability are
-operator configured; basic code, commit, wiki, and comment search require a
-project. Search pages report bounded progress and incomplete retrieval coverage
-explicitly, and may return no items with a continuation.
+can find authorized repositories live, including namespace-granted projects that
+are not individually registered in `resources_list`, then search issues, merge
+requests, code, commits, project wikis, or comments. Each category is separately
+grantable. Omit `engine` to use the service's configured default. Engine and
+instance-wide availability are operator configured; basic code, commit, wiki,
+and comment search require a project. Search pages report bounded progress and
+incomplete retrieval coverage explicitly, and may return no items with a
+continuation.
 Repository discovery accepts GitLab's defaulted keyset pagination links while
 preserving the requested filters and repository authorization on every page.
+`project.view` includes description, last activity, and star count when supplied
+by GitLab. Wiki search returns snippets; full wiki-page reading is not currently
+supported, and `file.view` reads source-repository files only.
 
 Administrators can import [MCP HTTP servers](docs/imported-services.md),
 [OpenAPI definitions](docs/imported-openapi.md), and operator-approved

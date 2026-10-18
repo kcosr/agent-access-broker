@@ -202,7 +202,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
     discovery["properties"]["archived"] = json!({"type":"boolean"});
     let mut actions = vec![common(
         "project.search",
-        "Discover or browse authorized GitLab repositories by name, path, or description",
+        "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are not individually registered in resources_list",
         discovery,
         json!({"query":"Omit search to browse. A supplied query must contain 1–512 UTF-8 bytes after trimming; GitLab matches name, path, description and optionally ancestor namespaces. * has no special Broker meaning. Current upstream projects, including new namespace descendants, supply the inventory.","ordering":"Ascending project ID with keyset pagination; no snapshot isolation.","pagination":pagination,"previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."}),
     )];
@@ -215,8 +215,10 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
         let mut schema = base();
         schema["required"] = json!(["search"]);
         schema["properties"]["project"] = json!({"type":"string","minLength":3});
-        schema["properties"]["engine"] =
-            json!({"type":"string","enum":engines,"default":search.default_engine});
+        schema["properties"]["engine"] = json!({
+            "type":"string","enum":engines,"default":search.default_engine,
+            "description":"Omit engine to use the service's configured default."
+        });
         let mut conditions = Vec::new();
         for engine in &engines {
             let selected = if *engine == search.default_engine {
@@ -244,8 +246,8 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
             schema["allOf"] = json!(conditions);
         }
         let routes: Value = engines.iter().map(|engine| ((*engine).to_string(), json!({"project":search.supports(engine,category,true),"instance":search.supports(engine,category,false)}))).collect();
-        actions.push(common(&action, &format!("Native full-text search of GitLab {category} across authorized repositories or one explicit project"), schema,
-            json!({"engines":routes,"defaultEngine":search.default_engine,
+        let mut documentation = json!({"engines":routes,"defaultEngine":search.default_engine,
+                "engine":"Omit engine to use the service's configured default.",
                 "availability":"Engine and route support is operator configured, not a live health or index-completeness check. project is required when the effective engine has no instance route. No alternate engine or per-project crawling fallback is used.",
                 "query":"Required native engine expression: 1–512 UTF-8 bytes after trimming. Native operators, tokenization and ranking vary by engine; there is no JQL/CQL or Broker rewrite. Code regex is accepted only with zoekt and is sent explicitly.",
                 "nativeSyntax":{
@@ -256,7 +258,18 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
                 },
                 "coverage":"Search uses the selected engine's default branch/index coverage and upstream archived/fork defaults; it does not search every branch or historical file. Advanced search has a 10,000-candidate retrieval window. Deployment qualification must record enabled scope, branch, archived and fork coverage. Offset pagination and changing indexes can repeat or omit results.",
                 "ownership":"Repository authorization uses current confirmed project paths with the admitted execution credential. Descriptions and snippets are untrusted upstream text. No ordinary object-read action is implied.",
-                "previews":"Previews and upstream snippets are capped at 4096 UTF-8 bytes on character boundaries with previewTruncated. Snippets identify upstream excerpts, not a guarantee of the exact match. Locators are optional.","pagination":pagination})));
+                "previews":"Previews and upstream snippets are capped at 4096 UTF-8 bytes on character boundaries with previewTruncated. Snippets identify upstream excerpts, not a guarantee of the exact match. Locators are optional.","pagination":pagination});
+        if *category == "wiki" {
+            documentation["reading"] = json!(
+                "Returns bounded snippets supplied by GitLab, not full wiki pages. A snippet may omit the matching passage. A returned GitLab URL can be used to locate the page. Full wiki-page reading is not currently supported by the Broker; file.view reads source-repository files and cannot read wiki pages."
+            );
+        }
+        actions.push(common(
+            &action,
+            &format!("Native full-text search of GitLab {category} across authorized repositories or one explicit project"),
+            schema,
+            documentation,
+        ));
     }
     actions
 }
