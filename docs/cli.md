@@ -1878,7 +1878,10 @@ the testing guide for repository test workflows.
 
 Use `gitlab project access-token` for list/view/create/rotate/revoke and
 `gitlab service-account` for list/view/create/delete/member-set and token
-list/create/rotate/revoke. Token create/rotate require `--expires-at`;
+list/create/rotate/revoke. Project access-token creation and service-account
+`member-set` require `--role` with an exact built-in name: `guest`, `planner`,
+`reporter`, `security_manager`, `developer`, or `maintainer`, subject to the
+operator cap. Token create/rotate require `--expires-at`;
 the JSON response contains a temporary reference by default. In explicitly
 configured raw mode, `--token-output PATH` writes the new secret to a new private
 file and keeps it out of stdout; reference mode refuses this option before issuing.

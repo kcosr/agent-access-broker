@@ -1237,7 +1237,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
     } = gitlab;
     let GitlabProvisioningConfig {
         enabled,
-        max_access_level,
+        max_role,
         max_token_lifetime_days,
         allowed_token_scopes,
     } = provisioning;
@@ -1261,7 +1261,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
             "provisioning",
             Fields::default()
                 .put("enabled", *enabled)
-                .int("max_access_level", *max_access_level)
+                .put("max_role", max_role.as_str())
                 .int("max_token_lifetime_days", *max_token_lifetime_days)
                 .put("allowed_token_scopes", strings(allowed_token_scopes))
                 .value(),

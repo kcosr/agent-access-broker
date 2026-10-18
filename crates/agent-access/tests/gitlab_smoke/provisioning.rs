@@ -40,6 +40,18 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(enabled: bool, actions: &[&str]) -> Self {
+        Self::with_max_role(
+            enabled,
+            actions,
+            agent_access_gitlab::GitlabProjectRole::Developer,
+        )
+        .await
+    }
+    async fn with_max_role(
+        enabled: bool,
+        actions: &[&str],
+        max_role: agent_access_gitlab::GitlabProjectRole,
+    ) -> Self {
         let upstream = MockServer::start().await;
         let dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
@@ -50,6 +62,7 @@ impl Fixture {
         let mut document = gitlab_per_user_document();
         let provider = &mut document.provider;
         provider.provisioning.enabled = enabled;
+        provider.provisioning.max_role = max_role;
         provider.api_base_url = format!("{}/api/v4", upstream.uri());
         provider.web_base_url = upstream.uri();
         provider.allowed_upstream_hosts = vec![format!("{}/api/v4/**", upstream.uri())];
@@ -177,8 +190,8 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
             "reviewer",
             "--scopes",
             "api",
-            "--access-level",
-            "30",
+            "--role",
+            "developer",
             "--expires-at",
             &expiry(),
             "--token-output",
@@ -217,8 +230,8 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
             "reviewer",
             "--scopes",
             "api",
-            "--access-level",
-            "30",
+            "--role",
+            "developer",
             "--expires-at",
             &expiry(),
             "--token-output",
@@ -242,8 +255,8 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
                 "reviewer",
                 "--scopes",
                 "api",
-                "--access-level",
-                "30",
+                "--role",
+                "developer",
                 "--expires-at",
                 &expiry(),
                 "--token-output",
@@ -261,14 +274,14 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
     let response = reqwest::Client::new().post(format!("{}/v1/invoke/gitlab/project.access_token.create",fixture.base_url))
         .header("X-Agent-Access-Identity-Token","agent-token")
         .header("X-Agent-Access-Request-Id",uuid::Uuid::new_v4().to_string())
-        .json(&json!({"inputs":{"project":"sip/service","name":"reviewer","scopes":["api"],"accessLevel":30,"expiresAt":expiry()}})).send().await.unwrap();
+        .json(&json!({"inputs":{"project":"sip/service","name":"reviewer","scopes":["api"],"role":"developer","expiresAt":expiry()}})).send().await.unwrap();
     assert_eq!(response.headers()["cache-control"], "no-store");
     assert_eq!(
         response.json::<Value>().await.unwrap()["result"]["issuedToken"],
         ISSUED
     );
     let send_path = fixture.dir.path().join("request.json");
-    std::fs::write(&send_path, json!({"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.access_token.create","inputs":{"project":"sip/service","name":"reviewer","scopes":["api"],"accessLevel":30,"expiresAt":expiry()}}).to_string()).unwrap();
+    std::fs::write(&send_path, json!({"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.access_token.create","inputs":{"project":"sip/service","name":"reviewer","scopes":["api"],"role":"developer","expiresAt":expiry()}}).to_string()).unwrap();
     let send = gitlab_cli(&fixture.base_url)
         .args(["send", "--request-file", send_path.to_str().unwrap()])
         .output()
@@ -409,8 +422,8 @@ async fn provisioning_service_account_create_membership_tokens_rotation_and_revo
             "member-set",
             "sip/service",
             "70",
-            "--access-level",
-            "30",
+            "--role",
+            "developer",
         ])
         .output()
         .unwrap();
@@ -480,11 +493,140 @@ async fn provisioning_service_account_create_membership_tokens_rotation_and_revo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provisioning_every_named_cap_matches_host_acceptance() {
+    use agent_access_gitlab::GitlabProjectRole;
+    let roles = [
+        ("guest", 10, GitlabProjectRole::Guest),
+        ("planner", 15, GitlabProjectRole::Planner),
+        ("reporter", 20, GitlabProjectRole::Reporter),
+        ("security_manager", 25, GitlabProjectRole::SecurityManager),
+        ("developer", 30, GitlabProjectRole::Developer),
+        ("maintainer", 40, GitlabProjectRole::Maintainer),
+    ];
+    for (index, (name, level, cap)) in roles.iter().enumerate() {
+        let fixture = Fixture::with_max_role(true, ACTIONS, *cap).await;
+        let mut issued = token(10);
+        issued["access_level"] = json!(level);
+        Mock::given(method("POST"))
+            .and(path("/api/v4/projects/42/access_tokens"))
+            .and(body_json(json!({"name":"reviewer","scopes":["api"],"access_level":level,"expires_at":expiry()})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(issued))
+            .expect(1)
+            .mount(&fixture.upstream)
+            .await;
+        fixture
+            .mock(
+                "GET",
+                "/api/v4/projects/42/service_accounts/70",
+                account(),
+                200,
+            )
+            .await;
+        fixture
+            .mock(
+                "GET",
+                "/api/v4/projects/42/members/70",
+                json!({"id":70,"access_level":level}),
+                200,
+            )
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v4/projects/42/members/70"))
+            .and(body_json(json!({"access_level":level})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"id":70,"access_level":level})),
+            )
+            .expect(1)
+            .mount(&fixture.upstream)
+            .await;
+        for (action, inputs, result_field) in [
+            (
+                "project.access_token.create",
+                json!({"project":"sip/service","name":"reviewer","scopes":["api"],"role":name,"expiresAt":expiry()}),
+                "accessToken",
+            ),
+            (
+                "service_account.member.set",
+                json!({"project":"sip/service","userId":70,"role":name}),
+                "member",
+            ),
+        ] {
+            let result = fixture.ok(action, inputs.clone()).await;
+            assert_eq!(result["result"][result_field]["accessLevel"], *level);
+            if let Some((above, _, _)) = roles.get(index + 1) {
+                let before = fixture.upstream.received_requests().await.unwrap().len();
+                let mut denied = inputs;
+                denied["role"] = json!(above);
+                let (status, _) = fixture.invoke(action, denied).await;
+                assert!(!status.is_success(), "{name} cap accepted {above}");
+                assert_eq!(
+                    fixture.upstream.received_requests().await.unwrap().len(),
+                    before
+                );
+            }
+        }
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provisioning_named_role_schema_denies_invalid_inputs_before_upstream_lookup() {
+    let fixture = Fixture::new(true, ACTIONS).await;
+    for (action, base) in [
+        (
+            "project.access_token.create",
+            json!({"project":"sip/service","name":"reviewer","scopes":["api"],"role":"developer","expiresAt":expiry()}),
+        ),
+        (
+            "service_account.member.set",
+            json!({"project":"sip/service","userId":70,"role":"developer"}),
+        ),
+    ] {
+        for role in [
+            json!(30),
+            json!("30"),
+            json!("Developer"),
+            json!("developer "),
+            json!("security-manager"),
+            json!("owner"),
+            json!("custom"),
+            json!(null),
+            json!("maintainer"),
+        ] {
+            let mut inputs = base.clone();
+            inputs["role"] = role;
+            let (status, _) = fixture.invoke(action, inputs).await;
+            assert!(!status.is_success());
+        }
+        for field in ["accessLevel", "customRoleId", "member_role_id"] {
+            let mut inputs = base.clone();
+            inputs[field] = json!(30);
+            let (status, _) = fixture.invoke(action, inputs).await;
+            assert!(!status.is_success());
+        }
+        let mut old = base;
+        old.as_object_mut().unwrap().remove("role");
+        old["accessLevel"] = json!(30);
+        let (status, _) = fixture.invoke(action, old).await;
+        assert!(!status.is_success());
+    }
+    assert!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provisioning_limits_project_ownership_and_exact_grants_prevent_upstream_writes() {
     let fixture = Fixture::new(true, ACTIONS).await;
-    let valid = json!({"project":"sip/service","name":"reviewer","scopes":["api"],"accessLevel":30,"expiresAt":expiry()});
+    let valid = json!({"project":"sip/service","name":"reviewer","scopes":["api"],"role":"developer","expiresAt":expiry()});
     for (field, value) in [
-        ("accessLevel", json!(40)),
+        ("role", json!("maintainer")),
         ("scopes", json!(["sudo"])),
         ("scopes", json!(["api", "api"])),
         ("expiresAt", json!("2099-01-01")),
@@ -501,7 +643,7 @@ async fn provisioning_limits_project_ownership_and_exact_grants_prevent_upstream
     // An ID that is not a project-owned service account cannot gain membership or receive a token.
     for action in ["service_account.member.set", "service_account.token.create"] {
         let inputs = if action.ends_with("set") {
-            json!({"project":"sip/service","userId":99,"accessLevel":30})
+            json!({"project":"sip/service","userId":99,"role":"developer"})
         } else {
             json!({"project":"sip/service","userId":99,"name":"reviewer","scopes":["api"],"expiresAt":expiry()})
         };
@@ -590,6 +732,64 @@ async fn provisioning_catalog_openapi_send_and_pagination_bindings() {
             docs[1]["paths"][&path]["post"]["requestBody"]["content"]["application/json"]["schema"]
                 ["properties"]["inputs"]
         );
+        let send_variant = docs[2]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| {
+                variant["properties"]["service"]["const"] == "gitlab"
+                    && variant["properties"]["action"]["const"] == *action
+            })
+            .unwrap();
+        assert_eq!(item["inputSchema"], send_variant["properties"]["inputs"]);
+        if matches!(
+            *action,
+            "project.access_token.create" | "service_account.member.set"
+        ) {
+            assert_eq!(
+                item["inputSchema"]["properties"]["role"]["enum"],
+                json!([
+                    "guest",
+                    "planner",
+                    "reporter",
+                    "security_manager",
+                    "developer"
+                ])
+            );
+            assert!(
+                item["inputSchema"]["properties"]
+                    .get("accessLevel")
+                    .is_none()
+            );
+            let documentation = item["documentation"]["roleSelection"].as_str().unwrap();
+            for expected in [
+                "guest (10)",
+                "planner (15)",
+                "reporter (20)",
+                "security_manager (25)",
+                "developer (30)",
+                "maintainer (40)",
+                "Custom-role names and IDs are unsupported",
+            ] {
+                assert!(documentation.contains(expected), "{action}: {expected}");
+            }
+        } else {
+            assert!(item["documentation"].get("roleSelection").is_none());
+        }
+        if matches!(
+            *action,
+            "project.member.view"
+                | "project.access_token.list"
+                | "project.access_token.view"
+                | "service_account.token.list"
+        ) {
+            assert!(
+                item["documentation"]["accessLevel"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Owner (50)")
+            );
+        }
         let secret =
             action.contains("token") && (action.ends_with("create") || action.ends_with("rotate"));
         if secret {
@@ -660,7 +860,7 @@ async fn provisioning_unknown_mutations_and_malformed_token_responses_never_expo
     fixture
         .mock("POST", "/api/v4/projects/42/access_tokens", bad, 201)
         .await;
-    let inputs = json!({"project":"sip/service","name":"reviewer","scopes":["api"],"accessLevel":30,"expiresAt":expiry()});
+    let inputs = json!({"project":"sip/service","name":"reviewer","scopes":["api"],"role":"developer","expiresAt":expiry()});
     let (status, result) = fixture
         .invoke("project.access_token.create", inputs.clone())
         .await;
@@ -736,6 +936,8 @@ async fn provisioning_rotation_rejects_inactive_overprivileged_and_wrong_owner_t
         ("active", json!(false)),
         ("revoked", json!(true)),
         ("access_level", json!(40)),
+        ("access_level", json!(50)),
+        ("access_level", json!(123)),
         ("scopes", json!(["sudo"])),
         ("id", json!(99)),
     ] {
@@ -763,34 +965,99 @@ async fn provisioning_rotation_rejects_inactive_overprivileged_and_wrong_owner_t
         );
         fixture.stop().await;
     }
-    let fixture = Fixture::new(true, ACTIONS).await;
-    fixture
-        .mock(
-            "GET",
-            "/api/v4/projects/42/service_accounts/70",
-            account(),
-            200,
-        )
-        .await;
-    fixture
-        .mock(
-            "GET",
-            "/api/v4/projects/42/members/70",
-            json!({"id":70,"access_level":40}),
-            200,
-        )
-        .await;
-    let (status, _) = fixture.invoke("service_account.token.create", json!({"project":"sip/service","userId":70,"name":"reviewer","scopes":["api"],"expiresAt":expiry()})).await;
-    assert!(!status.is_success());
-    assert!(
+    for level in [40, 50, 123] {
+        let fixture = Fixture::new(true, ACTIONS).await;
         fixture
-            .upstream
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .all(|r| r.method.as_str() == "GET")
-    );
+            .mock(
+                "GET",
+                "/api/v4/projects/42/service_accounts/70",
+                account(),
+                200,
+            )
+            .await;
+        fixture
+            .mock(
+                "GET",
+                "/api/v4/projects/42/members/70",
+                json!({"id":70,"access_level":level}),
+                200,
+            )
+            .await;
+        for (action, inputs) in [
+            (
+                "service_account.token.create",
+                json!({"project":"sip/service","userId":70,"name":"reviewer","scopes":["api"],"expiresAt":expiry()}),
+            ),
+            (
+                "service_account.token.rotate",
+                json!({"project":"sip/service","userId":70,"tokenId":10,"expiresAt":expiry()}),
+            ),
+        ] {
+            let (status, _) = fixture.invoke(action, inputs).await;
+            assert!(!status.is_success(), "{action}: {level}");
+        }
+        assert!(
+            fixture
+                .upstream
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.method.as_str() == "GET")
+        );
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provisioning_over_cap_token_metadata_and_revocation_remain_available() {
+    let fixture = Fixture::new(true, ACTIONS).await;
+    let mut existing = token(10);
+    existing["access_level"] = json!(50);
+    fixture
+        .mock(
+            "GET",
+            "/api/v4/projects/42/access_tokens/10",
+            existing.clone(),
+            200,
+        )
+        .await;
+    fixture
+        .mock(
+            "GET",
+            "/api/v4/projects/42/access_tokens",
+            json!([existing]),
+            200,
+        )
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v4/projects/42/access_tokens/10"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&fixture.upstream)
+        .await;
+    let view = fixture
+        .ok(
+            "project.access_token.view",
+            json!({"project":"sip/service","tokenId":10}),
+        )
+        .await;
+    assert_eq!(view["result"]["accessToken"]["accessLevel"], 50);
+    assert!(view["result"]["accessToken"].get("role").is_none());
+    let list = fixture
+        .ok(
+            "project.access_token.list",
+            json!({"project":"sip/service"}),
+        )
+        .await;
+    assert_eq!(list["result"]["items"][0]["accessLevel"], 50);
+    fixture
+        .ok(
+            "project.access_token.revoke",
+            json!({"project":"sip/service","tokenId":10}),
+        )
+        .await;
+    fixture.assert_audit_safe(&["project.access_token.revoke"]);
     fixture.stop().await;
 }
 
@@ -824,7 +1091,7 @@ async fn provisioning_member_set_adds_only_a_proven_project_service_account() {
     let result = fixture
         .ok(
             "service_account.member.set",
-            json!({"project":"sip/service","userId":70,"accessLevel":30}),
+            json!({"project":"sip/service","userId":70,"role":"developer"}),
         )
         .await;
     assert_eq!(result["result"]["member"]["userId"], 70);
@@ -878,8 +1145,8 @@ async fn provisioning_token_file_denials_cleanup_but_uncertain_writes_preserve_r
                 "reviewer",
                 "--scopes",
                 "api",
-                "--access-level",
-                "30",
+                "--role",
+                "developer",
                 "--expires-at",
                 if case == "invalid" {
                     "invalid-date"
@@ -1035,8 +1302,8 @@ async fn provisioning_token_file_cleanup_failure_preserves_denial_and_exit_code(
             "reviewer",
             "--scopes",
             "api",
-            "--access-level",
-            "30",
+            "--role",
+            "developer",
             "--expires-at",
             &expiry(),
             "--token-output",
@@ -1172,8 +1439,8 @@ async fn provisioning_token_output_preflight_rejects_references_and_preserves_a_
                 "reviewer",
                 "--scopes",
                 "api",
-                "--access-level",
-                "30",
+                "--role",
+                "developer",
                 "--expires-at",
                 &expiry(),
                 "--token-output",

@@ -1916,6 +1916,44 @@ fn gitlab_webhook_actions_do_not_advertise_content_attribution() {
 }
 
 #[test]
+fn gitlab_descriptor_provisioning_role_documentation_matches_inputs() {
+    let descriptor = gitlab_descriptor(&config());
+    let role_actions =
+        BTreeSet::from(["project.access_token.create", "service_account.member.set"]);
+    for action in &descriptor.actions {
+        let accepts_role = action.input_schema["properties"].get("role").is_some();
+        assert_eq!(accepts_role, role_actions.contains(action.action.as_str()));
+        assert_eq!(
+            action
+                .documentation
+                .as_ref()
+                .and_then(|docs| docs.get("roleSelection"))
+                .is_some(),
+            accepts_role,
+            "{} must describe role inputs only when it accepts them",
+            action.action
+        );
+    }
+    for action in [
+        "project.member.view",
+        "project.access_token.list",
+        "project.access_token.view",
+        "service_account.token.list",
+    ] {
+        assert_eq!(
+            descriptor
+                .action(action)
+                .unwrap()
+                .documentation
+                .as_ref()
+                .unwrap()["accessLevel"],
+            provisioning::ACCESS_LEVEL_DOCUMENTATION,
+            "{action}"
+        );
+    }
+}
+
+#[test]
 fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
     let descriptor = gitlab_descriptor(&config());
     assert_eq!(descriptor.validate(), Ok(()));
@@ -8234,8 +8272,16 @@ async fn execution_follows_an_authorized_path_to_the_project_that_took_it_over()
 }
 
 fn provisioning_provider(server: &MockServer) -> GitlabProvider {
+    provisioning_provider_with_max_role(server, GitlabProjectRole::Developer)
+}
+
+fn provisioning_provider_with_max_role(
+    server: &MockServer,
+    max_role: GitlabProjectRole,
+) -> GitlabProvider {
     let mut config = config();
     config.provisioning.enabled = true;
+    config.provisioning.max_role = max_role;
     config.api_base_url = format!("{}/api/v4", server.uri());
     config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
     GitlabProvider::new(
@@ -8254,6 +8300,296 @@ async fn serve_provisioning_project(server: &MockServer) {
         )
         .mount(server)
         .await;
+}
+
+const PROVISIONING_ROLES: [(&str, u64, GitlabProjectRole); 6] = [
+    ("guest", 10, GitlabProjectRole::Guest),
+    ("planner", 15, GitlabProjectRole::Planner),
+    ("reporter", 20, GitlabProjectRole::Reporter),
+    ("security_manager", 25, GitlabProjectRole::SecurityManager),
+    ("developer", 30, GitlabProjectRole::Developer),
+    ("maintainer", 40, GitlabProjectRole::Maintainer),
+];
+
+#[test]
+fn provisioning_named_roles_filter_schemas_and_bind_configuration() {
+    assert_eq!(
+        GitlabProvisioningConfig::default().max_role,
+        GitlabProjectRole::Developer
+    );
+    let mut fingerprints = BTreeSet::new();
+    for (index, (name, _, max_role)) in PROVISIONING_ROLES.iter().enumerate() {
+        let decoded: GitlabProvisioningConfig =
+            serde_json::from_value(json!({"max_role":name})).unwrap();
+        assert_eq!(decoded.max_role, *max_role);
+        assert_eq!(decoded.max_role.as_str(), *name);
+        assert_eq!(serde_json::to_value(decoded.max_role).unwrap(), *name);
+        let mut config = config();
+        config.provisioning.max_role = *max_role;
+        let descriptor = gitlab_descriptor(&config);
+        assert_eq!(descriptor.validate(), Ok(()));
+        let allowed = json!(
+            PROVISIONING_ROLES[..=index]
+                .iter()
+                .map(|(name, _, _)| *name)
+                .collect::<Vec<_>>()
+        );
+        for action in PROVISIONING_ACTIONS {
+            let schema = &descriptor.action(action).unwrap().input_schema;
+            let sets_role = matches!(
+                *action,
+                "project.access_token.create" | "service_account.member.set"
+            );
+            assert_eq!(schema["properties"].get("role").is_some(), sets_role);
+            assert!(schema["properties"].get("accessLevel").is_none());
+            if sets_role {
+                assert_eq!(schema["properties"]["role"]["type"], "string");
+                assert_eq!(schema["properties"]["role"]["enum"], allowed);
+                assert!(
+                    schema["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("role"))
+                );
+                assert_eq!(schema["additionalProperties"], false);
+                assert!(
+                    schema["properties"]["role"]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&format!("max_role={name}"))
+                );
+            }
+        }
+        fingerprints.insert(gitlab_config_fingerprint(&config));
+    }
+    assert_eq!(fingerprints.len(), PROVISIONING_ROLES.len());
+    for invalid in [
+        json!({"max_access_level":30}),
+        json!({"max_access_level":"developer"}),
+        json!({"max_access_level":30,"max_role":"developer"}),
+        json!({"max_role":30}),
+        json!({"max_role":"30"}),
+        json!({"max_role":"Developer"}),
+        json!({"max_role":"developer "}),
+        json!({"max_role":"security-manager"}),
+        json!({"max_role":"owner"}),
+        json!({"max_role":"custom"}),
+        json!({"max_role":null}),
+        json!({"max_role":{"developer":null}}),
+        json!({"max_role":{"developer":{}}}),
+    ] {
+        assert!(
+            serde_json::from_value::<GitlabProvisioningConfig>(invalid.clone()).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn provisioning_named_cap_changes_invalidate_existing_page_tokens() {
+    let signer = ContinuationSigner::new(None);
+    let request = test_invocation(
+        "project.access_token.list",
+        json!({"project":"sip/service"}),
+    );
+    let project = test_project();
+    let now = Utc::now();
+    let mut config = config();
+    let initial_fingerprint = gitlab_config_fingerprint(&config);
+    let context = GitlabPageTokenContext {
+        request: &request,
+        project: &project,
+        provider_fingerprint: &initial_fingerprint,
+        request_hash: "query-fingerprint",
+        max_results: 20,
+    };
+    let token = encode_gitlab_page_token(&signer, &context, 2, now).unwrap();
+    assert_eq!(
+        decode_gitlab_page_token(&signer, &token, &context, now).unwrap(),
+        2
+    );
+    config.provisioning.max_role = GitlabProjectRole::Reporter;
+    let changed_fingerprint = gitlab_config_fingerprint(&config);
+    let changed_context = GitlabPageTokenContext {
+        provider_fingerprint: &changed_fingerprint,
+        ..context
+    };
+    assert!(decode_gitlab_page_token(&signer, &token, &changed_context, now).is_err());
+}
+
+#[tokio::test]
+async fn provisioning_named_roles_send_only_exact_numeric_upstream_bodies() {
+    let expiry = (Utc::now().date_naive() + ChronoDuration::days(2)).to_string();
+    for (name, level, _) in PROVISIONING_ROLES {
+        for operation in ["project.access_token.create", "member_add", "member_update"] {
+            let server = MockServer::start().await;
+            serve_provisioning_project(&server).await;
+            let member = operation.starts_with("member_");
+            let (action, method_name, route, inputs, body, response) = if member {
+                Mock::given(method("GET"))
+                    .and(path("/api/v4/projects/42/service_accounts/70"))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(
+                            json!({"id":70,"name":"reviewer","username":"reviewer"}),
+                        ),
+                    )
+                    .mount(&server)
+                    .await;
+                let adding = operation == "member_add";
+                Mock::given(method("GET"))
+                    .and(path("/api/v4/projects/42/members/70"))
+                    .respond_with(
+                        ResponseTemplate::new(if adding { 404 } else { 200 })
+                            .set_body_json(json!({"id":70,"access_level":30})),
+                    )
+                    .mount(&server)
+                    .await;
+                (
+                    "service_account.member.set",
+                    if adding { "POST" } else { "PUT" },
+                    if adding {
+                        "/api/v4/projects/42/members"
+                    } else {
+                        "/api/v4/projects/42/members/70"
+                    },
+                    json!({"project":"sip/service","userId":70,"role":name}),
+                    if adding {
+                        json!({"user_id":70,"access_level":level})
+                    } else {
+                        json!({"access_level":level})
+                    },
+                    json!({"id":70,"access_level":level}),
+                )
+            } else {
+                (
+                    operation,
+                    "POST",
+                    "/api/v4/projects/42/access_tokens",
+                    json!({"project":"sip/service","name":"reviewer","scopes":["api"],"role":name,"expiresAt":expiry}),
+                    json!({"name":"reviewer","scopes":["api"],"access_level":level,"expires_at":expiry}),
+                    json!({"id":10,"user_id":70,"name":"reviewer","scopes":["api"],"access_level":level,"expires_at":expiry,"active":true,"revoked":false,"token":"ISSUED-SECRET"}),
+                )
+            };
+            Mock::given(method(method_name))
+                .and(path(route))
+                .and(body_json(body))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result =
+                provisioning_provider_with_max_role(&server, GitlabProjectRole::Maintainer)
+                    .invoke(test_invocation(action, inputs))
+                    .await
+                    .unwrap();
+            let metadata = &result.result[if member { "member" } else { "accessToken" }];
+            assert_eq!(metadata["accessLevel"], level);
+            assert!(metadata.get("role").is_none());
+            assert_eq!(result.result["mutationStatus"], "applied");
+            assert_eq!(result.result["retrySafe"], false);
+        }
+    }
+}
+
+#[tokio::test]
+async fn provisioning_role_validation_rejects_every_invalid_shape_before_lookup() {
+    let server = MockServer::start().await;
+    let provider = provisioning_provider(&server);
+    let expiry = (Utc::now().date_naive() + ChronoDuration::days(2)).to_string();
+    for (action, inputs) in [
+        (
+            "project.access_token.create",
+            json!({"project":"sip/service","name":"reviewer","scopes":["api"],"role":"developer","expiresAt":expiry}),
+        ),
+        (
+            "service_account.member.set",
+            json!({"project":"sip/service","userId":70,"role":"developer"}),
+        ),
+    ] {
+        let mut invalid_inputs = Vec::new();
+        for role in [
+            json!(30),
+            json!("30"),
+            json!("Developer"),
+            json!(" developer"),
+            json!("developer "),
+            json!("security-manager"),
+            json!("owner"),
+            json!("custom"),
+            json!(null),
+            json!(true),
+            json!({}),
+            json!("maintainer"),
+        ] {
+            let mut invalid = inputs.clone();
+            invalid["role"] = role;
+            invalid_inputs.push(invalid);
+        }
+        for field in ["accessLevel", "customRoleId", "member_role_id"] {
+            let mut invalid = inputs.clone();
+            invalid[field] = json!(30);
+            invalid_inputs.push(invalid);
+        }
+        let mut old_input = inputs.clone();
+        old_input.as_object_mut().unwrap().remove("role");
+        invalid_inputs.push(old_input.clone());
+        old_input["accessLevel"] = json!(30);
+        invalid_inputs.push(old_input);
+        for invalid in invalid_inputs {
+            let error = provider
+                .invoke(test_invocation(action, invalid.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.reason_code(),
+                ReasonCode::InputInvalid,
+                "{action}: {invalid}"
+            );
+        }
+    }
+    assert!(received_requests(&server).await.is_empty());
+}
+
+#[tokio::test]
+async fn provisioning_metadata_preserves_owner_and_unfamiliar_numeric_levels() {
+    for level in [50, 123] {
+        let server = MockServer::start().await;
+        serve_provisioning_project(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/members/70"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id":70,"username":"reviewer","name":"reviewer","access_level":level
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/access_tokens/10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id":10,"user_id":70,"name":"reviewer","scopes":["api"],"access_level":level
+            })))
+            .mount(&server)
+            .await;
+        let provider = provisioning_provider(&server);
+        for (action, inputs, field) in [
+            (
+                "project.member.view",
+                json!({"project":"sip/service","userId":70}),
+                "member",
+            ),
+            (
+                "project.access_token.view",
+                json!({"project":"sip/service","tokenId":10}),
+                "accessToken",
+            ),
+        ] {
+            let result = provider
+                .invoke(test_invocation(action, inputs))
+                .await
+                .unwrap();
+            assert_eq!(result.result[field]["accessLevel"], level);
+            assert!(result.result[field].get("role").is_none());
+        }
+    }
 }
 
 #[tokio::test]
@@ -8333,7 +8669,7 @@ async fn provisioning_issuance_keeps_all_four_secrets_in_the_protected_sidecar()
             inputs["name"] = json!("reviewer");
             inputs["scopes"] = json!(["api"]);
             if !account {
-                inputs["accessLevel"] = json!(30);
+                inputs["role"] = json!("developer");
             }
         }
         let result = provisioning_provider(&server)

@@ -873,6 +873,10 @@ and project service-account actions (`service_account.list/view/create/delete`,
 `service_account.member.set`, `service_account.token.list/create/rotate/revoke`)
 require explicit repository grants and operator-enabled provisioning. Inspect
 live schemas for the exact action; names above group suffixes, not literal actions.
+Project access-token creation and service-account membership use `role`
+(`--role` in typed commands): `guest`, `planner`, `reporter`, `security_manager`,
+`developer`, or `maintainer`. The live enum is limited by operator `max_role`;
+custom roles are unsupported. Numeric `accessLevel` is result metadata only.
 Create/rotate require a future `expiresAt` within operator limits and return a
 new credential in `result.issuedToken`: `{secretRef, expiresAt}` in the default
 reference mode, or a string in explicitly configured raw mode. Inspect

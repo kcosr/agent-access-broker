@@ -28,11 +28,86 @@ const TOKEN_SCOPES: &[&str] = &[
     "self_rotate",
 ];
 
+/// Built-in project roles that Broker permits provisioning to assign.
+///
+/// Names are exact, lowercase values; upstream metadata can describe additional
+/// access levels without making those levels assignable through Broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GitlabProjectRole {
+    Guest,
+    Planner,
+    Reporter,
+    SecurityManager,
+    Developer,
+    Maintainer,
+}
+
+impl GitlabProjectRole {
+    const ALL: [Self; 6] = [
+        Self::Guest,
+        Self::Planner,
+        Self::Reporter,
+        Self::SecurityManager,
+        Self::Developer,
+        Self::Maintainer,
+    ];
+
+    /// The canonical role spelling used by configuration and action inputs.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Guest => "guest",
+            Self::Planner => "planner",
+            Self::Reporter => "reporter",
+            Self::SecurityManager => "security_manager",
+            Self::Developer => "developer",
+            Self::Maintainer => "maintainer",
+        }
+    }
+
+    const fn access_level(self) -> u64 {
+        match self {
+            Self::Guest => 10,
+            Self::Planner => 15,
+            Self::Reporter => 20,
+            Self::SecurityManager => 25,
+            Self::Developer => 30,
+            Self::Maintainer => 40,
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|role| role.as_str() == name)
+    }
+}
+
+impl<'de> Deserialize<'de> for GitlabProjectRole {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // A derived enum parser also accepts an externally tagged object such
+        // as {"developer": null}. Configuration permits only a role string.
+        let name = String::deserialize(deserializer)?;
+        Self::from_name(&name).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "expected a built-in GitLab role: {}",
+                Self::ALL.map(Self::as_str).join(", ")
+            ))
+        })
+    }
+}
+
+pub(crate) const ROLE_DOCUMENTATION: &str = "Role inputs use exact built-in names: guest (10), planner (15), reporter (20), security_manager (25), developer (30), and maintainer (40). The role enum contains only choices allowed by operator max_role. Custom-role names and IDs are unsupported. Result accessLevel remains GitLab's numeric base access level, not a complete effective-permissions inventory.";
+
+pub(crate) const ACCESS_LEVEL_DOCUMENTATION: &str = "Result accessLevel reports GitLab's numeric base access level, including Owner (50) or other upstream values above the provisioning cap. It is not a role input or a complete effective-permissions inventory.";
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitlabProvisioningConfig {
     pub enabled: bool,
-    pub max_access_level: u32,
+    pub max_role: GitlabProjectRole,
     pub max_token_lifetime_days: u32,
     pub allowed_token_scopes: Vec<String>,
 }
@@ -40,7 +115,7 @@ impl Default for GitlabProvisioningConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_access_level: 30,
+            max_role: GitlabProjectRole::Developer,
             max_token_lifetime_days: 30,
             allowed_token_scopes: vec!["api".into(), "read_api".into(), "read_repository".into()],
         }
@@ -48,9 +123,6 @@ impl Default for GitlabProvisioningConfig {
 }
 impl GitlabProvisioningConfig {
     pub(crate) fn validate(&self, errors: &mut Vec<String>) {
-        if ![10, 15, 20, 25, 30, 40].contains(&self.max_access_level) {
-            errors.push("providers.gitlab.provisioning.max_access_level must be a supported project role (10, 15, 20, 25, 30, 40)".into());
-        }
         if !(1..=365).contains(&self.max_token_lifetime_days) {
             errors.push(
                 "providers.gitlab.provisioning.max_token_lifetime_days must be between 1 and 365"
@@ -227,11 +299,16 @@ pub(crate) fn provisioning_schema(action: &str, config: &GitlabProviderConfig) -
         operation,
         GitlabProvisioningOperation::ProjectTokenCreate | GitlabProvisioningOperation::MemberUpdate
     ) {
+        let roles: Vec<_> = GitlabProjectRole::ALL
+            .into_iter()
+            .filter(|role| role.access_level() <= config.provisioning.max_role.access_level())
+            .map(GitlabProjectRole::as_str)
+            .collect();
         add(
-            "accessLevel".into(),
-            json!({"type":"integer", "enum":[10,15,20,25,30,40], "maximum":config.provisioning.max_access_level}),
+            "role".into(),
+            json!({"type":"string", "enum":roles, "description":format!("GitLab built-in project role. Limited by operator max_role={}; custom roles are unsupported.", config.provisioning.max_role.as_str())}),
         );
-        required.push("accessLevel");
+        required.push("role");
     }
     if issues_token(action) {
         add(
@@ -418,7 +495,11 @@ fn member_metadata(value: &Value, user_id: u64) -> Result<Value, ProviderError> 
     )
 }
 fn check_role(level: u64, config: &GitlabProvisioningConfig) -> Result<(), ProviderError> {
-    if ![10, 15, 20, 25, 30, 40].contains(&level) || level > u64::from(config.max_access_level) {
+    if !GitlabProjectRole::ALL
+        .iter()
+        .any(|role| role.access_level() == level)
+        || level > config.max_role.access_level()
+    {
         return Err(provisioning_invalid());
     }
     Ok(())
@@ -552,7 +633,10 @@ fn provisioning_result(
     Ok(result)
 }
 
-fn validate_provisioning_inputs(inputs: &Value, schema: &Value) -> Result<(), ProviderError> {
+pub(super) fn validate_provisioning_inputs(
+    inputs: &Value,
+    schema: &Value,
+) -> Result<(), ProviderError> {
     let object = inputs.as_object().ok_or_else(provisioning_invalid)?;
     let properties = schema["properties"]
         .as_object()
@@ -572,6 +656,9 @@ fn validate_provisioning_inputs(inputs: &Value, schema: &Value) -> Result<(), Pr
                 !s.trim().is_empty()
                     && s.chars().count() <= spec["maxLength"].as_u64().unwrap_or(4096) as usize
                     && !s.chars().any(char::is_control)
+                    && spec.get("enum").is_none_or(|items| {
+                        items.as_array().is_some_and(|items| items.contains(value))
+                    })
             }),
             Some("integer") => value.as_u64().is_some_and(|n| {
                 n >= spec["minimum"].as_u64().unwrap_or(0)
@@ -625,7 +712,6 @@ impl GitlabProvider {
             ("name", "name"),
             ("username", "username"),
             ("scopes", "scopes"),
-            ("accessLevel", "access_level"),
             ("expiresAt", "expires_at"),
         ] {
             if let Some(v) = inputs.get(source) {
@@ -644,11 +730,13 @@ impl GitlabProvider {
                 return Err(provisioning_invalid());
             }
         }
-        if let Some(level) = inputs.get("accessLevel") {
-            check_role(
-                level.as_u64().ok_or_else(provisioning_invalid)?,
-                &self.config.provisioning,
-            )?;
+        if let Some(role) = inputs.get("role") {
+            let role = role
+                .as_str()
+                .and_then(GitlabProjectRole::from_name)
+                .ok_or_else(provisioning_invalid)?;
+            check_role(role.access_level(), &self.config.provisioning)?;
+            body["access_level"] = json!(role.access_level());
         }
         if let Some(scopes) = inputs.get("scopes") {
             check_scopes(scopes, &self.config.provisioning)?;
@@ -969,16 +1057,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provisioning_existing_numeric_roles_obey_every_named_cap() {
+        for max_role in GitlabProjectRole::ALL {
+            let config = GitlabProvisioningConfig {
+                max_role,
+                ..Default::default()
+            };
+            for level in [0, 5, 10, 15, 20, 25, 30, 40, 50, 123] {
+                let expected =
+                    [10, 15, 20, 25, 30, 40].contains(&level) && level <= max_role.access_level();
+                assert_eq!(
+                    check_role(level, &config).is_ok(),
+                    expected,
+                    "{max_role:?}: {level}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn provisioning_operator_limits_reject_invalid_configuration() {
         let valid = GitlabProvisioningConfig::default();
         let mut errors = vec![];
         valid.validate(&mut errors);
         assert!(errors.is_empty());
         for invalid in [
-            GitlabProvisioningConfig {
-                max_access_level: 50,
-                ..valid.clone()
-            },
             GitlabProvisioningConfig {
                 max_token_lifetime_days: 0,
                 ..valid.clone()
