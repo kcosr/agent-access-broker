@@ -402,6 +402,7 @@ async fn run_service(
     let (public_listener, gateway_listener) = bind_listeners(listen, gateway_listen).await?;
     // Its first pass resumes the revocations a previous process left pending.
     state.oauth_revocations.start(&state);
+    state.secret_reference_cleanup.start(&state);
 
     let coordinator = ShutdownCoordinator::new();
     let SignalSource { shutdown, reload } = signals;
@@ -609,6 +610,7 @@ async fn drain_lifecycle(
 
     // No revocation pass starts once shutdown has begun.
     state.oauth_revocations.stop();
+    state.secret_reference_cleanup.stop();
     let operation_state = state.clone();
     let operation_budget =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or_default();
@@ -705,6 +707,17 @@ async fn drain_lifecycle(
         .await
     {
         tracing::warn!(event = "oauth_revocation_shutdown_unfinished");
+    }
+    if !state
+        .secret_reference_cleanup
+        .shutdown(
+            remaining_shutdown_time(&coordinator, shutdown_timeout)
+                .unwrap_or_default()
+                .max(SHUTDOWN_DRAIN_FLOOR),
+        )
+        .await
+    {
+        tracing::warn!(event = "secret_reference_cleanup_shutdown_unfinished");
     }
     let remaining =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);

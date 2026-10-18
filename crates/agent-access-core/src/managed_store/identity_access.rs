@@ -57,6 +57,37 @@ impl std::fmt::Debug for AttestedIdentityProof {
 }
 
 impl AttestedIdentityProof {
+    /// A durable projection of this exact admitted proof. It deliberately omits
+    /// the asserted username and identity-token fingerprint; it never looks up
+    /// current mappings or replaces the versions captured at admission.
+    pub(crate) fn secret_reference_pin(
+        &self,
+    ) -> super::secret_reference_identity::AttestedSecretReferencePin {
+        use super::secret_reference_identity::{
+            AttestedSecretReferenceBinding, AttestedSecretReferencePin,
+        };
+        AttestedSecretReferencePin {
+            principal: self.principal_id.clone(),
+            gate_incarnation: self.gate_incarnation.clone(),
+            gate_version: self.gate_version,
+            binding: match &self.kind {
+                AttestedIdentityKind::Username {
+                    binding_id,
+                    binding_version,
+                    ..
+                } => AttestedSecretReferenceBinding::Username {
+                    binding_id: binding_id.clone(),
+                    binding_version: *binding_version,
+                },
+                AttestedIdentityKind::Fingerprint {
+                    inventory_revision, ..
+                } => AttestedSecretReferenceBinding::Fingerprint {
+                    inventory_revision: *inventory_revision,
+                },
+            },
+        }
+    }
+
     pub fn principal_id(&self) -> &str {
         &self.principal_id
     }

@@ -176,8 +176,8 @@ Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
 `helper`); declare one when adding a crate. The boundary check rejects an
 undeclared role and dependency edges that cross the roles, such as any
 production path from core or the host to a backend or import adapter, and any
-use of the host-only items (the SDK's `host::authorize_host_request` and
-`host::token_as_basic`, and core's `gateway_upstream_authorization`) in native,
+use of the host-only items (the SDK's `host::authorize_host_request`,
+`host::token_as_basic`, `host::take_secret_outputs`, and `SecretOutputValue`, and core's `gateway_upstream_authorization`) in native,
 adapter, reference or helper sources. See `docs/testing.md` for the rules.
 
 `api/` holds the checked-in supported public API inventory: the SDK and host
@@ -731,8 +731,9 @@ require a clean, unchanged source revision and neither publishes a release.
 
 GitLab bot provisioning is implemented in `crates/agent-access-gitlab/src/provisioning.rs`;
 its canonical contract is `docs/gitlab-bot-provisioning.md`. Preserve the explicit
-distinction between Broker-held execution credentials and deliberately exported
-new tokens. Only issuance/rotation responses contain `result.issuedToken`; keep
+distinction between Broker-held execution credentials and newly issued transferable
+tokens. The latter use the protected SDK sidecar and global secret output policy;
+reference mode must never fall back to plaintext. Only issuance/rotation responses contain `result.issuedToken`; keep
 metadata reads/audit secret-free and maintain sensitive output markers across
 catalog, OpenAPI, and send schema. Project service-account ownership must be
 proved before membership changes or token management.
@@ -861,3 +862,16 @@ Empty imported drafts may change adapter settings/delivery only before actions
 are accepted. Such changes clear execution/discovery slots transactionally and
 require removal of existing personal credentials first; never carry stored
 authority to a new draft destination.
+
+## Temporary secret references
+
+Keep transferable output declarations separate from generic sensitive markers.
+Reserve encrypted capacity before dispatch; capture completed sidecars before
+formatting outside provider cancellation selection. Preserve safe issuance facts
+and retrySafe=false on capture/delivery failures. Reference inputs are explicit
+payload fields, resolved after resource authorization and validated against their
+literal schema. Never use secret contents to resolve scope. Ordinary ownership
+pins exact originating auth and context; only the existing authorized credential
+sink has the documented cross-auth handoff. Check origin validity and install
+inside one transaction. Include retained ciphertext in key lifecycle checks and
+never revive an old attestation/caller generation after rotation and restoration.

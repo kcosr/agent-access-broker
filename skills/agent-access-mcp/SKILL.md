@@ -342,3 +342,16 @@ address `/inputs/...`, and stdin sources are unavailable. HTTP permits sensitive
 inputs inline, exposing them to the model/client history. Keep broker credentials
 out of provider arguments and respect sensitive output markers when handling
 results.
+
+## Temporary secret outputs
+
+A native tool may advertise `agent-access/secret-outputs` and
+`agent-access/secret-output-mode` in its metadata. Reference mode returns
+`{secretRef, expiresAt}` in each declared output field; explicit raw mode returns
+a string. Treat references as sensitive, store them promptly through an authorized
+credential-management handoff, and never repeat issuance solely because a
+reference expired. Expiry removes only the temporary Broker copy, not the
+upstream token. MCP reconnects preserve references when origin authentication,
+trusted caller, and execution context still match. Only explicitly declared
+payload input fields accept reference objects. Management credential installation
+is outside the MCP tool catalog.

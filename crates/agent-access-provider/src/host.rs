@@ -9,7 +9,8 @@
 //! host-only constructors and scopes are public here, in one documented place,
 //! instead of on the types they produce. A provider only consumes what they
 //! produce; provider tests may implement or call them (`test_support` builds
-//! on them).
+//! on them), except the explicitly host-only authorization and secret-output
+//! extraction ports. The test-support equality inspector covers secret outputs.
 //!
 //! The ports are:
 //!
@@ -46,12 +47,17 @@
 //!   a configured username. Both are host-only: provider, adapter, reference
 //!   and helper crates never use them, and
 //!   `scripts/check-crate-boundaries.mjs` rejects them there.
+//! - **Protected provider outputs**: [`take_secret_outputs`] moves the
+//!   non-serialized sidecar out of a result. Only the host reads its
+//!   [`SecretOutputValue::value`] to capture or deliberately deliver it raw.
 //!
 //! Nothing here resolves secret references, loads keys or TLS files, reads the
 //! process environment or touches a store: those stay inside the host. Nothing
-//! here returns credential material either. The host keeps the plaintext it
-//! decrypts, and the credentials these ports build present it upstream only
-//! as an [`UpstreamAuthorization`](crate::UpstreamAuthorization).
+//! here returns execution credential material either. The host keeps the
+//! plaintext it decrypts, and the credentials these ports build present it
+//! upstream only as an [`UpstreamAuthorization`](crate::UpstreamAuthorization).
+//! Newly issued transferable output secrets use the separate output port;
+//! they never become execution-credential accessors.
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BrokerBodyPartFile, BuildContext,
     ClientProfile, CorrelationContext, CredentialMode, CredentialPlacement, Decision,
@@ -72,7 +78,15 @@ use url::Url;
 pub use crate::contract::{ContractViolation, HookContext};
 pub use crate::correlation::{with_correlation_context, with_provider_context};
 pub use crate::finalization::with_provider_finalization;
+pub use crate::secret::SecretOutputValue;
 pub use crate::signing::service_signing_key;
+
+/// Removes a provider's protected output values for host validation and
+/// delivery. This port is host-only; providers populate the sidecar through
+/// [`crate::ProviderResult::with_secret_output`] and do not extract it.
+pub fn take_secret_outputs(result: &mut crate::ProviderResult) -> Vec<SecretOutputValue> {
+    std::mem::take(&mut result.secret_outputs)
+}
 
 /// Constructs configured upstream HTTP clients for one runtime generation.
 ///
@@ -305,7 +319,6 @@ pub fn bearer_credential(token: String) -> ExecutionCredential {
 ///
 /// Intentionally exhaustive: the host supplies every input, so a new one
 /// fails to compile until the host provides it.
-#[derive(Debug)]
 pub struct AdmittedRequestParts {
     pub service: String,
     pub action: String,
@@ -321,6 +334,24 @@ pub struct AdmittedRequestParts {
     /// Delegated lookup access holds the same lease as delegated
     /// execution material, never a second acquisition.
     pub lookup_access: Option<LookupAccess>,
+}
+
+impl fmt::Debug for AdmittedRequestParts {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdmittedRequestParts")
+            .field("service", &self.service)
+            .field("action", &self.action)
+            .field("execution_context", &self.execution_context)
+            .field("identity", &self.identity)
+            .field("correlation", &self.correlation)
+            .field("credential_mode", &self.credential_mode)
+            .field("authority", &self.authority)
+            .field("inputs", &"[REDACTED]")
+            .field("execution", &self.execution)
+            .field("lookup_access", &self.lookup_access)
+            .finish()
+    }
 }
 
 /// The read-only admitted request that multipart admission receives and the

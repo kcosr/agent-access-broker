@@ -8,6 +8,7 @@ use crate::{
 use serde_json::Value;
 use std::sync::Arc;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 /// The exact authority the host admitted, chosen from the action's validated
 /// contract: an ordinary scoped action never receives empty resource
@@ -145,12 +146,39 @@ impl std::fmt::Debug for AdmittedContext {
 /// The view multipart admission receives: the admitted context, validated
 /// inputs and the selected execution and lookup material. It has neither
 /// consumed body data nor decrypted private resource attributes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AdmittedRequest {
     context: AdmittedContext,
     inputs: Value,
     execution: ExecutionAccess,
     lookup_access: Option<LookupAccess>,
+}
+
+impl std::fmt::Debug for AdmittedRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdmittedRequest")
+            .field("context", &self.context)
+            .field("inputs", &"[REDACTED]")
+            .field("execution", &self.execution)
+            .field("lookup_access", &self.lookup_access)
+            .finish()
+    }
+}
+
+impl Drop for AdmittedRequest {
+    fn drop(&mut self) {
+        zeroize_input_strings(&mut self.inputs);
+    }
+}
+
+fn zeroize_input_strings(value: &mut Value) {
+    match value {
+        Value::String(value) => value.zeroize(),
+        Value::Array(values) => values.iter_mut().for_each(zeroize_input_strings),
+        Value::Object(values) => values.values_mut().for_each(zeroize_input_strings),
+        _ => {}
+    }
 }
 
 /// One admitted invocation: the admitted request plus what the host staged
@@ -323,6 +351,23 @@ mod tests {
     use crate::test_support::{InvocationBuilder, bearer_credential, delegated_binding_id};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn admitted_inputs_are_debug_redacted_and_owned_strings_are_zeroized() {
+        let secret = "synthetic-resolved-reference-value";
+        let invocation = InvocationBuilder::new("svc", "act")
+            .inputs(json!({"nested": [{"token": secret}]}))
+            .build();
+        assert!(!format!("{invocation:?}").contains(secret));
+        assert!(!format!("{:?}", invocation.admitted()).contains(secret));
+        assert_eq!(invocation.inputs()["nested"][0]["token"], secret);
+        let cloned = invocation.clone();
+        drop(invocation);
+        assert_eq!(cloned.inputs()["nested"][0]["token"], secret);
+        let mut inputs = json!({"nested": [{"token": secret}], "number": 4});
+        zeroize_input_strings(&mut inputs);
+        assert_eq!(inputs, json!({"nested": [{"token": ""}], "number": 4}));
+    }
 
     fn scopes() -> ResourceScopes {
         BTreeMap::from([("project".to_string(), vec!["ENG".to_string()])])

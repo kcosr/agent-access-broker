@@ -171,6 +171,21 @@ impl<'a> core::marker::Unpin for agent_access_provider::host::ScopeRequestParts<
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::ScopeRequestParts<'a>
+pub struct agent_access_provider::host::SecretOutputValue
+impl agent_access_provider::host::SecretOutputValue
+pub fn agent_access_provider::host::SecretOutputValue::pointer(&self) -> &str
+pub fn agent_access_provider::host::SecretOutputValue::value(&self) -> &str
+impl core::clone::Clone for agent_access_provider::host::SecretOutputValue
+pub fn agent_access_provider::host::SecretOutputValue::clone(&self) -> agent_access_provider::host::SecretOutputValue
+impl core::fmt::Debug for agent_access_provider::host::SecretOutputValue
+pub fn agent_access_provider::host::SecretOutputValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::host::SecretOutputValue
+impl core::marker::Send for agent_access_provider::host::SecretOutputValue
+impl core::marker::Sync for agent_access_provider::host::SecretOutputValue
+impl core::marker::Unpin for agent_access_provider::host::SecretOutputValue
+impl core::marker::UnsafeUnpin for agent_access_provider::host::SecretOutputValue
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::SecretOutputValue
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::SecretOutputValue
 pub struct agent_access_provider::host::TransportClient
 impl agent_access_provider::host::TransportClient
 pub fn agent_access_provider::host::TransportClient::into_parts(self) -> (reqwest::async_impl::client::Client, agent_access_provider::EgressRoute)
@@ -221,6 +236,7 @@ pub fn agent_access_provider::host::scope_request(agent_access_provider::host::S
 pub fn agent_access_provider::host::service_signing_key(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>, &str) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
 pub fn agent_access_provider::host::spooled_body_file(std::path::PathBuf, u64, alloc::string::String) -> agent_access_provider::BrokerBodyPartFile
 pub fn agent_access_provider::host::spooled_body_part(alloc::string::String, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, std::path::PathBuf, u64, alloc::string::String) -> agent_access_provider::BrokerBodyPart
+pub fn agent_access_provider::host::take_secret_outputs(&mut agent_access_provider::ProviderResult) -> alloc::vec::Vec<agent_access_provider::host::SecretOutputValue>
 pub fn agent_access_provider::host::token_as_basic(impl core::convert::Into<alloc::string::String>) -> agent_access_provider::CredentialPlacement
 pub async fn agent_access_provider::host::with_correlation_context<F>(agent_access_provider::CorrelationContext, F) -> <F as core::future::future::Future>::Output where F: core::future::future::Future
 pub async fn agent_access_provider::host::with_hook_context<F: core::future::future::Future>(agent_access_provider::host::HookContext, F) -> <F as core::future::future::Future>::Output
@@ -1473,6 +1489,11 @@ pub agent_access_provider::ReasonCode::ResourceNotFound
 pub agent_access_provider::ReasonCode::ResponseFormatUnsupported
 pub agent_access_provider::ReasonCode::RightMissing
 pub agent_access_provider::ReasonCode::ScopeUnresolved
+pub agent_access_provider::ReasonCode::SecretCaptureFailed
+pub agent_access_provider::ReasonCode::SecretReferenceCapacity
+pub agent_access_provider::ReasonCode::SecretReferenceDenied
+pub agent_access_provider::ReasonCode::SecretReferenceExpired
+pub agent_access_provider::ReasonCode::SecretReferenceNotFound
 pub agent_access_provider::ReasonCode::SelfServiceDisabled
 pub agent_access_provider::ReasonCode::ServiceActionDenied
 pub agent_access_provider::ReasonCode::UpstreamConnectionFailed
@@ -1625,6 +1646,35 @@ impl core::marker::Unpin for agent_access_provider::ScopedMcpNameSource
 impl core::marker::UnsafeUnpin for agent_access_provider::ScopedMcpNameSource
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopedMcpNameSource
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopedMcpNameSource
+#[non_exhaustive] pub enum agent_access_provider::SecretContractError
+pub agent_access_provider::SecretContractError::InvalidBounds
+pub agent_access_provider::SecretContractError::InvalidInputSchema
+pub agent_access_provider::SecretContractError::InvalidInputValue
+pub agent_access_provider::SecretContractError::InvalidPointer
+pub agent_access_provider::SecretContractError::MissingSensitiveInput
+pub agent_access_provider::SecretContractError::MissingSensitiveOutput
+pub agent_access_provider::SecretContractError::OverlappingPointers
+pub agent_access_provider::SecretContractError::UnsupportedIo
+pub agent_access_provider::SecretContractError::UnsupportedPresentation
+impl core::clone::Clone for agent_access_provider::SecretContractError
+pub fn agent_access_provider::SecretContractError::clone(&self) -> agent_access_provider::SecretContractError
+impl core::cmp::Eq for agent_access_provider::SecretContractError
+impl core::cmp::PartialEq for agent_access_provider::SecretContractError
+pub fn agent_access_provider::SecretContractError::eq(&self, &agent_access_provider::SecretContractError) -> bool
+impl core::error::Error for agent_access_provider::SecretContractError
+impl core::fmt::Debug for agent_access_provider::SecretContractError
+pub fn agent_access_provider::SecretContractError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::SecretContractError
+pub fn agent_access_provider::SecretContractError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::SecretContractError
+impl core::marker::StructuralPartialEq for agent_access_provider::SecretContractError
+impl core::marker::Freeze for agent_access_provider::SecretContractError
+impl core::marker::Send for agent_access_provider::SecretContractError
+impl core::marker::Sync for agent_access_provider::SecretContractError
+impl core::marker::Unpin for agent_access_provider::SecretContractError
+impl core::marker::UnsafeUnpin for agent_access_provider::SecretContractError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SecretContractError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SecretContractError
 #[non_exhaustive] pub enum agent_access_provider::ServiceSurface
 pub agent_access_provider::ServiceSurface::Gateway
 pub agent_access_provider::ServiceSurface::Gateway::broker_hosts: alloc::vec::Vec<alloc::string::String>
@@ -1781,6 +1831,8 @@ pub agent_access_provider::ActionDescriptor::requires_resource_attributes: bool
 pub agent_access_provider::ActionDescriptor::requires_stable_signing_key: bool
 pub agent_access_provider::ActionDescriptor::resource_scope: core::option::Option<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::scoped_mcp_name_source: agent_access_provider::ScopedMcpNameSource
+pub agent_access_provider::ActionDescriptor::secret_inputs: alloc::vec::Vec<agent_access_provider::SecretInputDescriptor>
+pub agent_access_provider::ActionDescriptor::secret_outputs: alloc::vec::Vec<agent_access_provider::SecretOutputDescriptor>
 pub agent_access_provider::ActionDescriptor::sensitive_output_pointers: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::token_only: bool
 pub agent_access_provider::ActionDescriptor::upstream_resource_ownership: core::option::Option<agent_access_provider::UpstreamResourceOwnership>
@@ -1797,13 +1849,17 @@ pub fn agent_access_provider::ActionDescriptor::presentation(self, core::option:
 pub fn agent_access_provider::ActionDescriptor::raw_download(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::raw_scoped_mcp_name(&self) -> core::option::Option<&str>
 pub fn agent_access_provider::ActionDescriptor::read_only(self) -> Self
+pub fn agent_access_provider::ActionDescriptor::reference_input_schema(&self) -> core::result::Result<serde_json::value::Value, agent_access_provider::SecretContractError>
 pub fn agent_access_provider::ActionDescriptor::required_scope_types(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::requires_stable_signing_key(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::resource_attributes(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::scope(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::ActionDescriptor::secret_input(self, agent_access_provider::SecretInputDescriptor) -> Self
+pub fn agent_access_provider::ActionDescriptor::secret_output(self, agent_access_provider::SecretOutputDescriptor) -> Self
 pub fn agent_access_provider::ActionDescriptor::sensitive_output(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::token_only(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::upstream_resource_ownership(self, agent_access_provider::UpstreamResourceOwnership) -> Self
+pub fn agent_access_provider::ActionDescriptor::validate_literal_secret_inputs(&self, &serde_json::value::Value) -> core::result::Result<(), agent_access_provider::SecretContractError>
 impl core::clone::Clone for agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::clone(&self) -> agent_access_provider::ActionDescriptor
 impl core::cmp::PartialEq for agent_access_provider::ActionDescriptor
@@ -1870,6 +1926,8 @@ impl core::clone::Clone for agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::AdmittedRequest::clone(&self) -> agent_access_provider::AdmittedRequest
 impl core::fmt::Debug for agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::AdmittedRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for agent_access_provider::AdmittedRequest
+pub fn agent_access_provider::AdmittedRequest::drop(&mut self)
 impl core::marker::Freeze for agent_access_provider::AdmittedRequest
 impl core::marker::Send for agent_access_provider::AdmittedRequest
 impl core::marker::Sync for agent_access_provider::AdmittedRequest
@@ -3175,15 +3233,15 @@ impl agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::new(serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderResult::with_audit(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderResult::with_object_ids(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::ProviderResult::with_secret_output(self, impl core::convert::Into<alloc::string::String>, alloc::string::String) -> Self
 pub fn agent_access_provider::ProviderResult::with_stream(self, agent_access_provider::ProviderResultStream) -> Self
 pub fn agent_access_provider::ProviderResult::with_upstream(self, core::option::Option<u16>, core::option::Option<u64>) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::clone(&self) -> agent_access_provider::ProviderResult
 impl core::cmp::PartialEq for agent_access_provider::ProviderResult
-pub fn agent_access_provider::ProviderResult::eq(&self, &agent_access_provider::ProviderResult) -> bool
+pub fn agent_access_provider::ProviderResult::eq(&self, &Self) -> bool
 impl core::fmt::Debug for agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for agent_access_provider::ProviderResult
 impl serde_core::ser::Serialize for agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ProviderResult
@@ -3555,10 +3613,10 @@ pub fn agent_access_provider::ScopeRequest<'a>::identity(&self) -> &'a agent_acc
 pub fn agent_access_provider::ScopeRequest<'a>::inputs(&self) -> &'a serde_json::value::Value
 pub fn agent_access_provider::ScopeRequest<'a>::lookup_access(&self) -> core::option::Option<&'a agent_access_provider::LookupAccess>
 pub fn agent_access_provider::ScopeRequest<'a>::service(&self) -> &'a str
+impl core::fmt::Debug for agent_access_provider::ScopeRequest<'_>
+pub fn agent_access_provider::ScopeRequest<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::clone::Clone for agent_access_provider::ScopeRequest<'a>
 pub fn agent_access_provider::ScopeRequest<'a>::clone(&self) -> agent_access_provider::ScopeRequest<'a>
-impl<'a> core::fmt::Debug for agent_access_provider::ScopeRequest<'a>
-pub fn agent_access_provider::ScopeRequest<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Freeze for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Send for agent_access_provider::ScopeRequest<'a>
@@ -3726,6 +3784,55 @@ impl core::marker::Unpin for agent_access_provider::SearchProjectionError
 impl core::marker::UnsafeUnpin for agent_access_provider::SearchProjectionError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SearchProjectionError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SearchProjectionError
+pub struct agent_access_provider::SecretInputDescriptor
+impl agent_access_provider::SecretInputDescriptor
+pub fn agent_access_provider::SecretInputDescriptor::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::SecretInputDescriptor::pointer(&self) -> &str
+impl core::clone::Clone for agent_access_provider::SecretInputDescriptor
+pub fn agent_access_provider::SecretInputDescriptor::clone(&self) -> agent_access_provider::SecretInputDescriptor
+impl core::cmp::Eq for agent_access_provider::SecretInputDescriptor
+impl core::cmp::PartialEq for agent_access_provider::SecretInputDescriptor
+pub fn agent_access_provider::SecretInputDescriptor::eq(&self, &agent_access_provider::SecretInputDescriptor) -> bool
+impl core::fmt::Debug for agent_access_provider::SecretInputDescriptor
+pub fn agent_access_provider::SecretInputDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::SecretInputDescriptor
+impl serde_core::ser::Serialize for agent_access_provider::SecretInputDescriptor
+pub fn agent_access_provider::SecretInputDescriptor::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::SecretInputDescriptor
+pub fn agent_access_provider::SecretInputDescriptor::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::SecretInputDescriptor
+impl core::marker::Send for agent_access_provider::SecretInputDescriptor
+impl core::marker::Sync for agent_access_provider::SecretInputDescriptor
+impl core::marker::Unpin for agent_access_provider::SecretInputDescriptor
+impl core::marker::UnsafeUnpin for agent_access_provider::SecretInputDescriptor
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SecretInputDescriptor
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SecretInputDescriptor
+pub struct agent_access_provider::SecretOutputDescriptor
+impl agent_access_provider::SecretOutputDescriptor
+pub const fn agent_access_provider::SecretOutputDescriptor::is_required(&self) -> bool
+pub const fn agent_access_provider::SecretOutputDescriptor::max_bytes(&self) -> u64
+pub fn agent_access_provider::SecretOutputDescriptor::new(impl core::convert::Into<alloc::string::String>, u64) -> Self
+pub fn agent_access_provider::SecretOutputDescriptor::optional(self) -> Self
+pub fn agent_access_provider::SecretOutputDescriptor::pointer(&self) -> &str
+impl core::clone::Clone for agent_access_provider::SecretOutputDescriptor
+pub fn agent_access_provider::SecretOutputDescriptor::clone(&self) -> agent_access_provider::SecretOutputDescriptor
+impl core::cmp::Eq for agent_access_provider::SecretOutputDescriptor
+impl core::cmp::PartialEq for agent_access_provider::SecretOutputDescriptor
+pub fn agent_access_provider::SecretOutputDescriptor::eq(&self, &agent_access_provider::SecretOutputDescriptor) -> bool
+impl core::fmt::Debug for agent_access_provider::SecretOutputDescriptor
+pub fn agent_access_provider::SecretOutputDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::SecretOutputDescriptor
+impl serde_core::ser::Serialize for agent_access_provider::SecretOutputDescriptor
+pub fn agent_access_provider::SecretOutputDescriptor::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::SecretOutputDescriptor
+pub fn agent_access_provider::SecretOutputDescriptor::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::SecretOutputDescriptor
+impl core::marker::Send for agent_access_provider::SecretOutputDescriptor
+impl core::marker::Sync for agent_access_provider::SecretOutputDescriptor
+impl core::marker::Unpin for agent_access_provider::SecretOutputDescriptor
+impl core::marker::UnsafeUnpin for agent_access_provider::SecretOutputDescriptor
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SecretOutputDescriptor
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SecretOutputDescriptor
 #[non_exhaustive] pub struct agent_access_provider::ServiceCapabilities
 pub agent_access_provider::ServiceCapabilities::actions: alloc::vec::Vec<agent_access_provider::ActionCapabilities>
 pub agent_access_provider::ServiceCapabilities::broker_hosts: alloc::vec::Vec<alloc::string::String>
@@ -4284,6 +4391,7 @@ enum agent_access_provider::RefreshReplay: exhaustive
 enum agent_access_provider::ResourceSelector: non-exhaustive
 enum agent_access_provider::RevocationOutcome: non-exhaustive
 enum agent_access_provider::ScopedMcpNameSource: non-exhaustive
+enum agent_access_provider::SecretContractError: non-exhaustive
 enum agent_access_provider::ServiceSurface: non-exhaustive
 enum agent_access_provider::StateDisposition: exhaustive
 enum agent_access_provider::StaticCredentialKind: non-exhaustive
@@ -4360,7 +4468,7 @@ struct agent_access_provider::ProviderInvocation: named fields, private fields
 struct agent_access_provider::ProviderLimits: named fields, non-exhaustive
 struct agent_access_provider::ProviderReason: tuple fields, private fields
 struct agent_access_provider::ProviderReasonDefinition: named fields, private fields, non-exhaustive
-struct agent_access_provider::ProviderResult: named fields, non-exhaustive
+struct agent_access_provider::ProviderResult: named fields, private fields, non-exhaustive
 struct agent_access_provider::ProviderResultStream: named fields, non-exhaustive
 struct agent_access_provider::ProviderState: tuple fields, private fields
 struct agent_access_provider::ProviderStreamError: named fields, non-exhaustive
@@ -4383,6 +4491,8 @@ struct agent_access_provider::SearchAuthorizationClause: named fields, private f
 struct agent_access_provider::SearchAuthorizationScope: named fields, private fields
 struct agent_access_provider::SearchLimitsConfig: named fields
 struct agent_access_provider::SearchProjectionError: unit
+struct agent_access_provider::SecretInputDescriptor: named fields, private fields
+struct agent_access_provider::SecretOutputDescriptor: named fields, private fields
 struct agent_access_provider::ServiceCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ServiceCredentialKinds: named fields, non-exhaustive
 struct agent_access_provider::ServiceDescriptor: named fields, non-exhaustive
@@ -4406,6 +4516,7 @@ struct agent_access_provider::host::AdmittedRequestParts: named fields
 struct agent_access_provider::host::ClientTransportSpec: named fields, private fields
 struct agent_access_provider::host::HookContext: named fields, private fields
 struct agent_access_provider::host::ScopeRequestParts: named fields
+struct agent_access_provider::host::SecretOutputValue: named fields, private fields
 struct agent_access_provider::host::TransportClient: named fields, private fields
 struct agent_access_provider::host::UpstreamClientFactoryError: tuple fields, private fields
 struct agent_access_provider::presentation::ActionPresentation: named fields, private fields, non-exhaustive

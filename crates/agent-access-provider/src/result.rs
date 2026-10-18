@@ -12,6 +12,10 @@ use thiserror::Error;
 /// A successful outcome: its JSON result or a streamed body, with optional
 /// audit data and upstream facts.
 ///
+/// Equality compares the public fields and the ordered secret-output pointers,
+/// never the protected secret values. Providers can compare synthetic secret
+/// values only with the feature-gated `test_support::secret_outputs_match`.
+///
 /// The public fields are the data the host reads. Build a result with
 /// [`Self::new`] and the `with_*` methods:
 ///
@@ -26,10 +30,14 @@ use thiserror::Error;
 /// assert!(result.stream.is_none());
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderResult {
     pub result: Value,
+    /// Secret values travel separately from ordinary result JSON. Only the
+    /// host extraction port reads them; serde never reads or writes them.
+    #[serde(skip)]
+    pub(crate) secret_outputs: Vec<crate::secret::SecretOutputValue>,
     #[serde(skip)]
     pub stream: Option<ProviderResultStream>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,8 +46,34 @@ pub struct ProviderResult {
     pub upstream_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_duration_ms: Option<u64>,
+    /// Safe, non-secret object locators, such as upstream IDs, for audit and
+    /// recovery. Never include credentials, secret values or secret references.
+    ///
+    /// Temporary-secret outcome receipts inspect at most 32 object fields and
+    /// retain only string, number or boolean values. Keys are limited to 64
+    /// UTF-8 bytes and string values to 256; neither may contain control
+    /// characters. Unsupported fields are omitted. If the retained object
+    /// exceeds 4 KiB of serialized JSON, the entire `objectIds` block is omitted
+    /// without failing secret capture. Callers must not rely on receipts
+    /// retaining every locator or arbitrary metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object_ids: Option<Value>,
+}
+
+impl PartialEq for ProviderResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.result == other.result
+            && self.stream == other.stream
+            && self.audit == other.audit
+            && self.upstream_status == other.upstream_status
+            && self.upstream_duration_ms == other.upstream_duration_ms
+            && self.object_ids == other.object_ids
+            && self
+                .secret_outputs
+                .iter()
+                .map(|output| output.pointer())
+                .eq(other.secret_outputs.iter().map(|output| output.pointer()))
+    }
 }
 
 impl ProviderResult {
@@ -48,6 +82,7 @@ impl ProviderResult {
     pub fn new(result: Value) -> Self {
         Self {
             result,
+            secret_outputs: Vec::new(),
             stream: None,
             audit: None,
             upstream_status: None,
@@ -62,6 +97,17 @@ impl ProviderResult {
         self
     }
 
+    /// Supplies one declared transferable secret, at an envelope-relative
+    /// `/result/...` pointer. Keep that property absent from ordinary result
+    /// JSON; the host inserts its configured raw value or protected reference.
+    /// The host rejects undeclared, duplicate, missing required or oversized
+    /// values. The owned string is zeroized when this sidecar is dropped.
+    pub fn with_secret_output(mut self, pointer: impl Into<String>, value: String) -> Self {
+        self.secret_outputs
+            .push(crate::secret::SecretOutputValue::new(pointer.into(), value));
+        self
+    }
+
     pub fn with_audit(mut self, audit: Value) -> Self {
         self.audit = Some(audit);
         self
@@ -73,6 +119,8 @@ impl ProviderResult {
         self
     }
 
+    /// Supplies safe, non-secret locators subject to the receipt-retention
+    /// contract documented on [`Self::object_ids`].
     pub fn with_object_ids(mut self, object_ids: Value) -> Self {
         self.object_ids = Some(object_ids);
         self

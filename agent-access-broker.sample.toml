@@ -8,6 +8,11 @@
 # That template uses required identity, managed broker tokens, deny-by-default
 # policy, and dedicated broker-owned state directories.
 
+# This anonymous development sample has no encrypted managed store. Choose raw
+# delivery explicitly. Managed deployments default to reference delivery.
+[secret_outputs]
+mode = "raw"
+
 [deployment]
 environment = "development"
 # node_id names this broker in audit records (nodeId) and state-lock metadata.

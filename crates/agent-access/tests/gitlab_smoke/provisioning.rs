@@ -5,6 +5,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ISSUED: &str = "new-bot-credential-secret-sentinel";
 const ACTIONS: &[&str] = &[
+    "project.member.view",
     "project.access_token.list",
     "project.access_token.view",
     "project.access_token.create",
@@ -63,6 +64,8 @@ impl Fixture {
             ))
             .mount(&upstream)
             .await;
+        // These regressions exercise deliberately exported tokens and private
+        // local file delivery. Reference-mode workflows use managed fixtures.
         let broker = start_registered_broker(&document).await;
         let base_url = broker.public_url();
         Self {
@@ -911,7 +914,13 @@ async fn provisioning_token_file_denials_cleanup_but_uncertain_writes_preserve_r
                     .all(|r| r.method.as_str() == "GET")
             );
         }
-        fixture.assert_audit_safe(&["project.access_token.create"]);
+        // Missing authority is now refused by token-output's catalog preflight;
+        // it never reaches invoke or produces an invocation audit record.
+        fixture.assert_audit_safe(if case == "policy" {
+            &[]
+        } else {
+            &["project.access_token.create"]
+        });
         fixture.stop().await;
     }
 }
@@ -1046,5 +1055,155 @@ async fn provisioning_token_file_cleanup_failure_preserves_denial_and_exit_code(
     assert!(!warning.contains(ISSUED));
     assert_eq!(std::fs::metadata(&output_path).unwrap().len(), 0);
     fixture.assert_audit_safe(&["project.access_token.create"]);
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provisioning_project_member_cli_lookup_is_separately_authorized_and_project_scoped() {
+    let fixture = Fixture::new(true, &["project.member.view"]).await;
+    fixture
+        .mock(
+            "GET",
+            "/api/v4/projects/42/members/70",
+            json!({
+                "id":70,"username":"project_42_bot_example","name":"reviewer","access_level":30,
+                "email":"private@example.test","token":ISSUED,
+            }),
+            200,
+        )
+        .await;
+    let output = gitlab_cli(&fixture.base_url)
+        .args(["gitlab", "project", "member", "view", "sip/service", "70"])
+        .output()
+        .unwrap();
+    assert_success("project member username lookup", &output);
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["action"], "project.member.view");
+    assert_eq!(
+        response["result"],
+        json!({"member":{
+            "id":70,"username":"project_42_bot_example","name":"reviewer","accessLevel":30,
+        }})
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(ISSUED));
+    let denied = gitlab_cli(&fixture.base_url)
+        .args(["gitlab", "project", "member", "view", "fork/service", "70"])
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    let calls = fixture.upstream.received_requests().await.unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|r| r.url.path() == "/api/v4/projects/42/members/70")
+            .count(),
+        1
+    );
+    assert!(calls.iter().all(|r| r.method == "GET"));
+    assert!(
+        !calls
+            .iter()
+            .any(|r| r.url.path().starts_with("/api/v4/users/"))
+    );
+    fixture.assert_audit_safe(&["project.member.view"]);
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provisioning_token_output_preflight_rejects_references_and_preserves_a_changed_mode_result()
+ {
+    let fixture = Fixture::new(true, &["project.access_token.create"]).await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/v1/spec/catalog", fixture.base_url))
+        .header("X-Agent-Access-Request-Id", "gitlab-token-output-catalog")
+        .header("X-Agent-Access-Identity-Token", "agent-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let catalog = response.json::<Value>().await.unwrap();
+    for (mode, invoke_count) in [("reference", 0), ("raw", 1)] {
+        // The mock Broker models a catalog/result policy change. No GitLab
+        // write occurs; the real CLI must preserve the returned safe outcome.
+        let broker = MockServer::start().await;
+        let mut projected = catalog.clone();
+        let action = projected["services"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|service| service["service"] == "gitlab")
+            .unwrap()["actions"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|action| action["action"] == "project.access_token.create")
+            .unwrap();
+        action["secretOutputMode"] = json!(mode);
+        Mock::given(method("GET"))
+            .and(path("/v1/spec/catalog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(projected))
+            .expect(1)
+            .mount(&broker)
+            .await;
+        let reference =
+            json!({"secretRef":"synthetic-secret-reference","expiresAt":"2099-01-01T00:00:00Z"});
+        let outcome = json!({
+            "agentRequestId":"test-reference-delivery", "brokerRequestId":"test-reference-delivery",
+            "service":"gitlab", "action":"project.access_token.create", "decision":"allow",
+            "resourceScopes":{"repository":["sip/service"]}, "reasonCode":null, "reason":null, "error":null,
+            "result":{"accessToken":{"id":10,"userId":70},"issuedToken":reference,
+                "mutationStatus":"applied","retrySafe":false},
+        });
+        Mock::given(method("POST"))
+            .and(path("/v1/invoke/gitlab/project.access_token.create"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(outcome))
+            .expect(invoke_count)
+            .mount(&broker)
+            .await;
+        let path = fixture.dir.path().join(format!("{mode}.token"));
+        let output = gitlab_cli(&broker.uri())
+            .args([
+                "gitlab",
+                "project",
+                "access-token",
+                "create",
+                "sip/service",
+                "--name",
+                "reviewer",
+                "--scopes",
+                "api",
+                "--access-level",
+                "30",
+                "--expires-at",
+                &expiry(),
+                "--token-output",
+                path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!path.exists(), "{mode}");
+        let message = String::from_utf8_lossy(&output.stderr);
+        if mode == "reference" {
+            assert!(!output.status.success());
+            assert!(message.contains("requires Broker raw secret delivery mode"));
+        } else {
+            assert_success("changed policy retains issuance reference", &output);
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(value["result"]["issuedToken"], reference);
+            assert_eq!(value["result"]["accessToken"]["id"], 10);
+            assert_eq!(value["result"]["mutationStatus"], "applied");
+            assert_eq!(value["result"]["retrySafe"], false);
+            assert!(message.contains("do not repeat issuance"));
+        }
+        broker.verify().await;
+    }
+    assert!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     fixture.stop().await;
 }

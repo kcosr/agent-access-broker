@@ -98,6 +98,11 @@ pub enum ReasonCode {
     CredentialExpired,
     CredentialEncryptFailed,
     CredentialDecryptFailed,
+    SecretReferenceNotFound,
+    SecretReferenceExpired,
+    SecretReferenceDenied,
+    SecretReferenceCapacity,
+    SecretCaptureFailed,
     ManagedStoreUnavailable,
     ManagedStoreMigrationRequired,
     EncryptionKeyMissing,
@@ -228,6 +233,11 @@ impl ReasonCode {
             Self::CredentialExpired => "credential_expired",
             Self::CredentialEncryptFailed => "credential_encrypt_failed",
             Self::CredentialDecryptFailed => "credential_decrypt_failed",
+            Self::SecretReferenceNotFound => "secret_reference_not_found",
+            Self::SecretReferenceExpired => "secret_reference_expired",
+            Self::SecretReferenceDenied => "secret_reference_denied",
+            Self::SecretReferenceCapacity => "secret_reference_capacity",
+            Self::SecretCaptureFailed => "secret_capture_failed",
             Self::ManagedStoreUnavailable => "managed_store_unavailable",
             Self::ManagedStoreMigrationRequired => "managed_store_migration_required",
             Self::EncryptionKeyMissing => "encryption_key_missing",
@@ -327,6 +337,7 @@ impl ReasonCode {
             | Self::ResourceNotFound
             | Self::ResourceGroupNotFound
             | Self::CredentialNotFound
+            | Self::SecretReferenceNotFound
             | Self::ExternalGroupBindingNotFound
             | Self::GatewayHostUnmatched
             | Self::GatewayRuleNotFound
@@ -357,6 +368,8 @@ impl ReasonCode {
             | Self::CredentialNotProvisioned
             | Self::CredentialInvalid
             | Self::CredentialExpired
+            | Self::SecretReferenceExpired
+            | Self::SecretReferenceDenied
             | Self::GitRefDenied
             | Self::GitCapabilityDenied => 403,
             Self::LocalPasswordNotEnabled
@@ -380,7 +393,10 @@ impl ReasonCode {
             | Self::ResponseFormatUnsupported
             | Self::AttachmentMediaTypeDenied
             | Self::GatewayContentTypeDenied => 415,
-            Self::RateLimited | Self::ConcurrencyLimited | Self::UpstreamRateLimited => 429,
+            Self::RateLimited
+            | Self::ConcurrencyLimited
+            | Self::UpstreamRateLimited
+            | Self::SecretReferenceCapacity => 429,
             Self::UpstreamUnauthorized | Self::UpstreamForbidden | Self::UpstreamFailed => 424,
             Self::UpstreamConnectionFailed
             | Self::UpstreamProtocolFailed
@@ -392,6 +408,7 @@ impl ReasonCode {
             Self::CredentialEncryptFailed
             | Self::IdentityUnavailable
             | Self::CredentialDecryptFailed
+            | Self::SecretCaptureFailed
             | Self::CursorSigningUnavailable
             | Self::ManagedStoreUnavailable
             | Self::ManagedStoreMigrationRequired
@@ -474,6 +491,11 @@ impl ReasonCode {
             Self::CredentialExpired,
             Self::CredentialEncryptFailed,
             Self::CredentialDecryptFailed,
+            Self::SecretReferenceNotFound,
+            Self::SecretReferenceExpired,
+            Self::SecretReferenceDenied,
+            Self::SecretReferenceCapacity,
+            Self::SecretCaptureFailed,
             Self::ManagedStoreUnavailable,
             Self::ManagedStoreMigrationRequired,
             Self::EncryptionKeyMissing,

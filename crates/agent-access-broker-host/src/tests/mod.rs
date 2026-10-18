@@ -16314,6 +16314,10 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
     )
     .unwrap();
     BrokerConfig {
+        secret_outputs: agent_access_core::SecretOutputsConfig {
+            mode: agent_access_core::SecretOutputMode::Raw,
+            ..Default::default()
+        },
         imports: Default::default(),
         command_imports: Default::default(),
         oauth: Default::default(),

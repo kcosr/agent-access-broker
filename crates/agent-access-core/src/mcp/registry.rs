@@ -251,7 +251,7 @@ impl ToolRegistry {
                         service.service, action.action
                     ));
                 }
-                let definition = json!({
+                let mut definition = json!({
                     "name": name,
                     "description": description,
                     "inputSchema": input_schema(action, mode),
@@ -261,6 +261,17 @@ impl ToolRegistry {
                         "agent-access/sensitive-output-pointers": action.sensitive_output_pointers
                     }
                 });
+                if !action.secret_outputs.is_empty() {
+                    definition["_meta"]["agent-access/secret-outputs"] =
+                        json!(action.secret_outputs);
+                }
+                if !action.secret_input_pointers.is_empty() {
+                    definition["_meta"]["agent-access/secret-input-pointers"] =
+                        json!(action.secret_input_pointers);
+                }
+                if let Some(mode) = action.secret_output_mode {
+                    definition["_meta"]["agent-access/secret-output-mode"] = json!(mode);
+                }
                 let target = ToolTarget::Action {
                     service: service.service.clone(),
                     action: action.action.clone(),
@@ -449,7 +460,9 @@ pub fn evaluate_scoped_mcp_readiness(
     descriptor: &agent_access_provider::ServiceDescriptor,
     max_bytes: usize,
 ) -> ScopedMcpReadiness {
-    let Some(service) = crate::api_service_spec(descriptor, false) else {
+    let Some(service) =
+        crate::api_service_spec(descriptor, false, crate::SecretOutputMode::Reference)
+    else {
         return ScopedMcpReadiness::unavailable();
     };
     let mut result = ScopedMcpReadiness {
@@ -498,9 +511,9 @@ mod tests {
     }
     fn catalog(descriptor: &ServiceDescriptor, ready: bool) -> ApiCatalog {
         let mut catalog = crate::empty_catalog(json!({}));
-        catalog
-            .services
-            .push(crate::api_service_spec(descriptor, ready).unwrap());
+        catalog.services.push(
+            crate::api_service_spec(descriptor, ready, crate::SecretOutputMode::Reference).unwrap(),
+        );
         catalog
     }
 

@@ -220,6 +220,11 @@ Deploy matching broker, CLI, and portal versions, and follow the
 [upgrade and rollback procedure](docs/operator-guide.md#upgrade-and-rollback)
 and [changelog](CHANGELOG.md) when changing a deployment.
 
+Newly issued GitLab tokens can stay encrypted in the Broker while an agent
+receives a [temporary reference](docs/secret-references.md). Authorized credential
+management can install that reference into a connection without exposing the
+token. Operators can explicitly select raw delivery for scripting workflows.
+
 ## Documentation reference
 
 | Reference | Contents |

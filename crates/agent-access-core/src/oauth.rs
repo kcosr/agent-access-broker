@@ -723,7 +723,13 @@ impl OAuthManager {
         })
     }
     pub fn activate(&self) -> Result<(), OAuthError> {
-        self.inner.store.oauth_reconcile(
+        self.activate_with(|_| Ok(()))
+    }
+    pub(crate) fn activate_with<T>(
+        &self,
+        activate_other_authority: impl FnOnce(&rusqlite::Connection) -> Result<T, OAuthError>,
+    ) -> Result<T, OAuthError> {
+        let result = self.inner.store.oauth_reconcile(
             &self.inner.ring,
             &self
                 .inner
@@ -740,15 +746,16 @@ impl OAuthManager {
                     )
                 })
                 .collect(),
+            activate_other_authority,
         )?;
         self.inner.active.store(true, Ordering::Release);
-        Ok(())
+        Ok(result)
     }
     pub fn deactivate(&self) {
         self.inner.active.store(false, Ordering::Release);
     }
     pub fn disable_all(store: &ManagedStore) -> Result<(), OAuthError> {
-        store.oauth_disable_all()
+        store.oauth_disable_all(|_| Ok(()))
     }
     pub fn config(&self) -> &OAuthConfig {
         &self.inner.config

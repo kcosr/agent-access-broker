@@ -1122,36 +1122,34 @@ impl ReloadableState {
                         )
                         .await;
                 }
-                if let Err(error) = new_snapshot.runtime.activate_oauth() {
-                    self.shutdown_candidate_audit(&new_snapshot, self.reload_timeout)
-                        .await;
-                    let failure = ReloadFailure::new(
-                        AdminDecision::Error,
-                        ReasonCode::ConfigAdmissionFailed,
-                        vec![format!("OAuth state reconciliation failed: {error}")],
-                        Some(candidate_hash),
-                    );
-                    return self
-                        .reload_failure_response(
-                            ReloadFailureContext {
-                                active: active.clone(),
-                                trigger,
-                                attempted_at: &attempted_at,
-                                started,
-                                agent_request_id: &agent_request_id,
-                                broker_request_id: &broker_request_id,
-                                source: &source,
-                                identity: identity.as_ref(),
-                            },
-                            failure,
-                        )
-                        .await;
-                }
-                active.runtime.deactivate_oauth();
-                active
-                    .runtime
-                    .retire_superseded_import_dispatch(&new_snapshot.runtime);
-                let new_snapshot = self.publish_snapshot(new_snapshot);
+                let new_snapshot = match self.publish_reload_snapshot(new_snapshot.clone()) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        self.shutdown_candidate_audit(&new_snapshot, self.reload_timeout)
+                            .await;
+                        let failure = ReloadFailure::new(
+                            AdminDecision::Error,
+                            ReasonCode::ConfigAdmissionFailed,
+                            vec![format!("runtime authority activation failed: {error}")],
+                            Some(candidate_hash),
+                        );
+                        return self
+                            .reload_failure_response(
+                                ReloadFailureContext {
+                                    active: active.clone(),
+                                    trigger,
+                                    attempted_at: &attempted_at,
+                                    started,
+                                    agent_request_id: &agent_request_id,
+                                    broker_request_id: &broker_request_id,
+                                    source: &source,
+                                    identity: identity.as_ref(),
+                                },
+                                failure,
+                            )
+                            .await;
+                    }
+                };
                 new_snapshot.runtime.warn_aggregate_mcp_names();
                 self.active_lock_set
                     .store(Arc::clone(&new_snapshot.state_locks));

@@ -1966,9 +1966,19 @@ fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
         ])
     );
     for action in PROVISIONING_ACTIONS {
-        assert!(descriptor.action(action).is_some(), "{action}");
+        let descriptor = descriptor.action(action).unwrap();
         assert_eq!(sensitive.contains(action), issues_token(action), "{action}");
+        if issues_token(action) {
+            assert_eq!(descriptor.secret_outputs.len(), 1, "{action}");
+            let output = &descriptor.secret_outputs[0];
+            assert_eq!(output.pointer(), "/result/issuedToken");
+            assert_eq!(output.max_bytes(), 8192);
+            assert!(output.is_required());
+        } else {
+            assert!(descriptor.secret_outputs.is_empty(), "{action}");
+        }
     }
+    assert!(descriptor.action("project.member.view").unwrap().read_only);
     // Issuing and rotating tokens needs a token upstream; no other action
     // is token-only.
     let token_only = descriptor
@@ -8221,4 +8231,290 @@ async fn execution_follows_an_authorized_path_to_the_project_that_took_it_over()
             "GET /api/v4/projects/99/issues/5"
         ]
     );
+}
+
+fn provisioning_provider(server: &MockServer) -> GitlabProvider {
+    let mut config = config();
+    config.provisioning.enabled = true;
+    config.api_base_url = format!("{}/api/v4", server.uri());
+    config.allowed_upstream_hosts = vec![format!("{}/api/v4/**", server.uri())];
+    GitlabProvider::new(
+        config,
+        &agent_access_provider::test_support::TestHost::default().context(),
+    )
+    .unwrap()
+}
+
+async fn serve_provisioning_project(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/sip%2Fservice"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id":42,"path_with_namespace":"sip/service"})),
+        )
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn provisioning_issuance_keeps_all_four_secrets_in_the_protected_sidecar() {
+    let expiry = (Utc::now().date_naive() + ChronoDuration::days(2)).to_string();
+    for action in [
+        "project.access_token.create",
+        "project.access_token.rotate",
+        "service_account.token.create",
+        "service_account.token.rotate",
+    ] {
+        let server = MockServer::start().await;
+        serve_provisioning_project(&server).await;
+        let account = action.starts_with("service_account.");
+        let rotate = action.ends_with(".rotate");
+        let previous = json!({"id":10,"user_id":70,"name":"reviewer","scopes":["api"],
+            "expires_at":expiry,"access_level":30,"active":true,"revoked":false});
+        if account {
+            Mock::given(method("GET"))
+                .and(path("/api/v4/projects/42/service_accounts/70"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"id":70,"name":"reviewer","username":"reviewer"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v4/projects/42/members/70"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"id":70,"access_level":30})),
+                )
+                .mount(&server)
+                .await;
+        }
+        if rotate {
+            let (route, body) = if account {
+                (
+                    "/api/v4/projects/42/service_accounts/70/personal_access_tokens",
+                    json!([previous]),
+                )
+            } else {
+                ("/api/v4/projects/42/access_tokens/10", previous)
+            };
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        let mut issued = json!({"id":11,"user_id":70,"name":"reviewer","scopes":["api"],
+            "expires_at":expiry,"active":true,"revoked":false,"token":"NEWLY-ISSUED-SECRET",
+            "unexpected":{"token":"UNEXPECTED-SECRET"}});
+        if !account {
+            issued["access_level"] = json!(30);
+        }
+        let route = match (account, rotate) {
+            (false, false) => "/api/v4/projects/42/access_tokens",
+            (false, true) => "/api/v4/projects/42/access_tokens/10/rotate",
+            (true, false) => "/api/v4/projects/42/service_accounts/70/personal_access_tokens",
+            (true, true) => {
+                "/api/v4/projects/42/service_accounts/70/personal_access_tokens/10/rotate"
+            }
+        };
+        Mock::given(method("POST"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(201).set_body_json(issued))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut inputs = json!({"project":"sip/service","expiresAt":expiry});
+        if account {
+            inputs["userId"] = json!(70);
+        }
+        if rotate {
+            inputs["tokenId"] = json!(10);
+        } else {
+            inputs["name"] = json!("reviewer");
+            inputs["scopes"] = json!(["api"]);
+            if !account {
+                inputs["accessLevel"] = json!(30);
+            }
+        }
+        let result = provisioning_provider(&server)
+            .invoke(test_invocation(action, inputs))
+            .await
+            .unwrap();
+        assert!(result.result.get("issuedToken").is_none(), "{action}");
+        assert_eq!(result.result["mutationStatus"], "applied");
+        assert_eq!(result.result["retrySafe"], false);
+        assert_eq!(result.result["accessToken"]["userId"], 70);
+        assert_eq!(result.object_ids.as_ref().unwrap()["tokenId"], 11);
+        if rotate {
+            assert_eq!(result.object_ids.as_ref().unwrap()["previousTokenId"], 10);
+        }
+        assert!(!serde_json::to_string(&result).unwrap().contains("SECRET"));
+        assert!(!format!("{result:?}").contains("SECRET"));
+        assert!(
+            agent_access_provider::test_support::secret_outputs_match(
+                &result,
+                &[("/result/issuedToken", "NEWLY-ISSUED-SECRET")],
+            ),
+            "{action}"
+        );
+        // Issuance never silently performs a username read or a second write.
+        let requests = received_requests(&server).await;
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            1
+        );
+        assert!(!requests.iter().any(|r| r.starts_with("GET /api/v4/users")));
+        if !account {
+            assert!(!requests.iter().any(|r| r.contains("/members/")));
+        }
+    }
+}
+
+#[tokio::test]
+async fn provisioning_metadata_reads_never_return_the_upstream_token() {
+    let server = MockServer::start().await;
+    serve_provisioning_project(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/42/access_tokens/10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":10,"user_id":70,"name":"reviewer","scopes":["api"],"token":"MUST-NOT-RETURN"
+        })))
+        .mount(&server)
+        .await;
+    let result = provisioning_provider(&server)
+        .invoke(test_invocation(
+            "project.access_token.view",
+            json!({"project":"sip/service","tokenId":10}),
+        ))
+        .await
+        .unwrap();
+    assert!(agent_access_provider::test_support::secret_outputs_match(
+        &result,
+        &[]
+    ));
+    assert!(
+        !serde_json::to_string(&result)
+            .unwrap()
+            .contains("MUST-NOT-RETURN")
+    );
+    assert!(result.result.get("issuedToken").is_none());
+}
+
+#[tokio::test]
+async fn project_member_view_returns_only_direct_project_member_metadata() {
+    let server = MockServer::start().await;
+    serve_provisioning_project(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/42/members/70"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":70,"username":"project_42_bot_example","name":"reviewer","access_level":30,
+            "email":"private@example.test","token":"MUST-NOT-RETURN","group_saml_identity":{"extern_uid":"private"}
+        })))
+        .expect(1).mount(&server).await;
+    let result = provisioning_provider(&server)
+        .invoke(test_invocation(
+            "project.member.view",
+            json!({"project":"sip/service","userId":70}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.result,
+        json!({"member":{"id":70,"username":"project_42_bot_example","name":"reviewer","accessLevel":30}})
+    );
+    assert_eq!(result.object_ids, Some(json!({"userId":70})));
+    assert!(agent_access_provider::test_support::secret_outputs_match(
+        &result,
+        &[]
+    ));
+    assert!(!serde_json::to_string(&result).unwrap().contains("private"));
+    assert_eq!(
+        received_requests(&server).await,
+        [
+            "GET /api/v4/projects/sip%2Fservice",
+            "GET /api/v4/projects/sip%2Fservice",
+            "GET /api/v4/projects/42/members/70",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn project_member_view_rejects_mismatched_members_and_never_falls_back_to_users_or_issuance()
+{
+    for (status, body, reason) in [
+        (
+            404,
+            json!({"message":"private-user"}),
+            ReasonCode::ScopeUnresolved,
+        ),
+        (
+            403,
+            json!({"message":"private-user"}),
+            ReasonCode::UpstreamForbidden,
+        ),
+        (
+            200,
+            json!({"id":71,"username":"wrong","name":"wrong","access_level":30}),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            200,
+            json!({"id":70,"username":"","name":"wrong","access_level":30}),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+        (
+            200,
+            json!({"id":70,"username":{"token":"private-user"},"name":"wrong","access_level":30}),
+            ReasonCode::UpstreamProtocolFailed,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        serve_provisioning_project(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/members/70"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = provisioning_provider(&server)
+            .invoke(test_invocation(
+                "project.member.view",
+                json!({"project":"sip/service","userId":70}),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), reason);
+        assert!(!error.message.contains("private-user"));
+        assert!(error.result.is_none());
+        let requests = received_requests(&server).await;
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.starts_with("GET /api/v4/projects/"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn project_member_view_requires_bounded_inputs_and_enabled_provisioning_before_lookup() {
+    let server = MockServer::start().await;
+    let inputs = json!({"project":"sip/service","userId":70});
+    let denied = provider_for_server(&server)
+        .invoke(test_invocation("project.member.view", inputs.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.reason_code(), ReasonCode::ServiceActionDenied);
+    for invalid in [
+        json!({"project":"sip/service"}),
+        json!({"project":"sip/service","userId":0}),
+        json!({"project":"sip/service","userId":70,"url":"https://other.example.test/users/70"}),
+    ] {
+        let error = provisioning_provider(&server)
+            .invoke(test_invocation("project.member.view", invalid))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    }
+    assert!(received_requests(&server).await.is_empty());
 }

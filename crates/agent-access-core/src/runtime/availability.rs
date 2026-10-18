@@ -166,6 +166,12 @@ impl BrokerRuntime {
         let mut unknown = false;
         let actions = std::mem::take(&mut descriptor.actions);
         for action in actions {
+            if !action.secret_outputs.is_empty()
+                && self.config.secret_outputs.mode == crate::SecretOutputMode::Reference
+                && !self.can_hold_secret_references(identity)
+            {
+                continue;
+            }
             let scoped = action.resource_scope.is_some();
             let unscoped_modes = if scoped {
                 Vec::new()

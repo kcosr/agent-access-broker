@@ -162,7 +162,7 @@ test("provider-side crates must not use host-only credential attachment or prese
     "agent-access-broker-host": [{ path: "crates/agent-access-broker-host/src/handlers/gateway.rs", text: "authorize_host_request(builder, &auth)\n" }],
   };
   const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => sources[pkg.name] ?? []);
-  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic", "gateway_upstream_authorization"]);
+  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic", "gateway_upstream_authorization", "take_secret_outputs", "SecretOutputValue"]);
   assert.deepEqual(errors, [
     "agent-access-conformance (reference) must not use host-only authorize_host_request; found at crates/agent-access-conformance/tests/it.rs:1",
     "agent-access-conformance (reference) must not use host-only token_as_basic; found at crates/agent-access-conformance/tests/it.rs:2",
@@ -202,4 +202,31 @@ test("only workspace members with fenced roles are scanned", () => {
     return [];
   });
   assert.deepEqual(read, ["agent-access-conformance", "agent-access-content", "agent-access-jira", "agent-access-mcp-upstream"]);
+});
+
+test("protected secret output extraction remains host-only including provider tests", () => {
+  const sources = {
+    "agent-access-jira": [
+      { path: "crates/agent-access-jira/src/backend.rs", text: "use agent_access_provider::host::take_secret_outputs as extract;\nlet output = extract(&mut result);\n" },
+      { path: "crates/agent-access-jira/src/tests.rs", text: "#[cfg(test)]\nfn test_output() { let values = host::take_secret_outputs(&mut result); }\n" },
+    ],
+    "agent-access-conformance": [{ path: "crates/agent-access-conformance/tests/it.rs", text: "use agent_access_provider::host::SecretOutputValue as Protected;\n" }],
+    "agent-access-mcp-upstream": [{ path: "crates/agent-access-mcp-upstream/src/lib.rs", text: "let values = agent_access_provider::host::take_secret_outputs(&mut result);\n" }],
+    "agent-access-content": [{ path: "crates/agent-access-content/src/lib.rs", text: "fn read(value: &host::SecretOutputValue) { value.value(); }\n" }],
+    "agent-access-core": [{ path: "crates/agent-access-core/src/runtime.rs", text: "let values = host::take_secret_outputs(&mut result);\nlet value: &host::SecretOutputValue = &values[0];\n" }],
+    "agent-access-broker-host": [{ path: "crates/agent-access-broker-host/src/lib.rs", text: "use agent_access_provider::host::SecretOutputValue;\n" }],
+  };
+  assert.deepEqual(hostOnlyUseViolations(metadata(baseRoles), (pkg) => sources[pkg.name] ?? []), [
+    "agent-access-conformance (reference) must not use host-only SecretOutputValue; found at crates/agent-access-conformance/tests/it.rs:1",
+    "agent-access-content (helper) must not use host-only SecretOutputValue; found at crates/agent-access-content/src/lib.rs:1",
+    "agent-access-jira (native) must not use host-only take_secret_outputs; found at crates/agent-access-jira/src/backend.rs:1",
+    "agent-access-jira (native) must not use host-only take_secret_outputs; found at crates/agent-access-jira/src/tests.rs:2",
+    "agent-access-mcp-upstream (adapter) must not use host-only take_secret_outputs; found at crates/agent-access-mcp-upstream/src/lib.rs:1",
+  ]);
+});
+
+test("feature-gated secret output equality inspector does not grant plaintext access", () => {
+  const sources = [{ path: "crates/agent-access-jira/src/tests.rs", text:
+    "use agent_access_provider::test_support::secret_outputs_match;\nassert!(secret_outputs_match(&result, &[(\"/result/token\", \"synthetic\")]));\n// take_secret_outputs_like and SecretOutputValueLike are other names\n" }];
+  assert.deepEqual(hostOnlyUseViolations(metadata(baseRoles), (pkg) => pkg.name === "agent-access-jira" ? sources : []), []);
 });
