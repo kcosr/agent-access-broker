@@ -251,7 +251,7 @@ async fn invoke(runtime: &BrokerRuntime, token: &str, id: &str) -> (StatusCode, 
 pub(super) async fn import_broker(config: &BrokerConfig) -> TestBroker {
     TestBroker::start_with(
         TestBroker::config_builder(config)
-            .reload_timeout(Duration::from_secs(5))
+            .reload_timeout(TestBroker::RELOAD_TIMEOUT)
             .shutdown_timeout(Duration::from_secs(5)),
     )
     .await

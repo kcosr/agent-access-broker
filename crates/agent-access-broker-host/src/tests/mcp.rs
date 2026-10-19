@@ -85,7 +85,7 @@ impl Fixture {
         configure(&mut config);
         let broker = TestBroker::start_with(customize(
             TestBroker::config_builder(&config)
-                .reload_timeout(Duration::from_secs(5))
+                .reload_timeout(TestBroker::RELOAD_TIMEOUT)
                 .shutdown_timeout(Duration::from_secs(5)),
         ))
         .await;

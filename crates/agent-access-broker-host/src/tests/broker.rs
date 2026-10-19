@@ -65,6 +65,13 @@ pub(crate) struct TestBroker {
 }
 
 impl TestBroker {
+    /// The reload budget of test brokers whose tests check what a reload
+    /// publishes, not how long it takes. Candidate admission does real
+    /// filesystem and worker-thread work, which a contended host slows far
+    /// beyond its usual fraction of a second; this is the most
+    /// `--reload-timeout-ms` accepts.
+    pub(crate) const RELOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
     /// An isolated broker application serving the configuration file at
     /// `path`, which the test owns.
     pub(crate) fn builder_at(path: impl Into<std::path::PathBuf>) -> IsolatedBroker {
