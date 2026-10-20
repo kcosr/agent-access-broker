@@ -89,6 +89,7 @@ struct ContextInner {
     correlation: CorrelationContext,
     credential_mode: CredentialMode,
     authority: InvocationAuthority,
+    universal_reach: bool,
 }
 
 impl AdmittedContext {
@@ -119,6 +120,20 @@ impl AdmittedContext {
 
     pub fn authority(&self) -> &InvocationAuthority {
         &self.0.authority
+    }
+
+    /// Whether the host proved that this same action admits every canonical
+    /// resource of its scope type under the selected credential mode, execution
+    /// context, caller ceiling and admitted policy generation. False unless the
+    /// action explicitly opts in.
+    ///
+    /// This grants no additional authority. A provider may use it only to
+    /// disclose metadata about other resources already carried in the same
+    /// upstream result. It must not use it to fetch those resources, acquire
+    /// credentials or widen confinement. [`InvocationAuthority::Resources`]
+    /// continues to describe the exact admitted source resources.
+    pub fn universal_reach(&self) -> bool {
+        self.0.universal_reach
     }
 
     /// The admitted resources; any other authority fails closed.
@@ -199,6 +214,12 @@ macro_rules! admitted_accessors {
 
         pub fn authority(&self) -> &InvocationAuthority {
             self.context().authority()
+        }
+
+        /// The host's same-response disclosure proof; grants no additional
+        /// execution authority. See [`AdmittedContext::universal_reach`].
+        pub fn universal_reach(&self) -> bool {
+            self.context().universal_reach()
         }
 
         /// The admitted resources; any other authority fails closed.
@@ -295,6 +316,7 @@ impl ProviderInvocation {
 }
 
 impl AdmittedContext {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         service: String,
         action: String,
@@ -303,6 +325,7 @@ impl AdmittedContext {
         correlation: CorrelationContext,
         credential_mode: CredentialMode,
         authority: InvocationAuthority,
+        universal_reach: bool,
     ) -> Self {
         Self(Arc::new(ContextInner {
             service,
@@ -312,6 +335,7 @@ impl AdmittedContext {
             correlation,
             credential_mode,
             authority,
+            universal_reach,
         }))
     }
 }
@@ -367,6 +391,28 @@ mod tests {
             error.internal_diagnostic_code,
             Some("provider_authority_not_resources")
         );
+    }
+
+    #[test]
+    fn universal_reach_defaults_false_and_preserves_exact_authority_across_clones() {
+        let ordinary = InvocationBuilder::new("svc", "act")
+            .resources(scopes())
+            .build();
+        assert!(!ordinary.universal_reach());
+        assert!(!ordinary.admitted().universal_reach());
+        assert!(!ordinary.context().universal_reach());
+
+        let builder = InvocationBuilder::from(ordinary).universal_reach(true);
+        let admitted = builder.admitted();
+        assert!(admitted.universal_reach());
+        let invocation = builder.build();
+        let copy = InvocationBuilder::from(invocation.clone()).build();
+        for value in [invocation, copy] {
+            assert!(value.universal_reach());
+            assert!(value.context().clone().universal_reach());
+            assert_eq!(value.resource_scopes(), Ok(&scopes()));
+            assert!(value.search_authorization().is_err());
+        }
     }
 
     #[test]

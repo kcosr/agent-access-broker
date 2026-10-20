@@ -77,6 +77,11 @@ actions and exposes typed wrappers for supported services.
   candidates before any release. Imports always declare no native search mode;
   command enforcement is core-owned and preserves its exact-only wire format
   and per-grant credential modes.
+- Universal-reach hints are opt-in, disclosure-only metadata for ordinary
+  scoped native reads. Prove complete same-mode coverage from the admitted
+  snapshot after precedence, ceilings and token restrictions; never widen
+  source authority or make linked-resource requests from that hint. Jira uses
+  it only for embedded links in `issue.view`; absence is distinct from `[]`.
 - Backend invocation context comes from the host-authorized execution context,
   never a tool input. Seal resumable provider cursors with the SDK continuation
   envelope, bound to that context and current principal/resource/query settings

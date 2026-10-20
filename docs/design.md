@@ -606,6 +606,27 @@ every such change. JSON and multipart-upload action responses support local
 file/metadata destinations, including mutations. Dedicated raw downloads retain
 their streaming contract.
 
+Scoped native read actions can separately opt into reporting universal reach.
+The host accepts this only for ordinary resource authorization, without native
+search, imported/command enforcement or private resource attributes. After
+source admission and execution credential resolution, it derives ordinary
+effective clauses from the admission's policy snapshot, ceilings and token
+restrictions, retains only the selected mode's winning reach, and proves that
+the union of their single-target reach covers the universal selector. It
+preserves competing modes and grant-local exclusions; enumerating registered
+projects or finding one broad grant is insufficient.
+
+The resulting immutable `universal_reach()` hint permits the provider to disclose
+metadata about other resources embedded in the same upstream response. It
+does not change the exact admitted source scopes or authorize additional
+requests or credential acquisition. Jira uses this only for `issue.view`
+embedded links. The proof depends on project being that action's sole
+target-dependent admission input: adding issue-level, issue-type or
+attribute-bound authority requires revisiting the contract. It does not prove
+current target identity, upstream visibility or successful lookup on a later
+direct view. The hint defaults to false and is not projected into client
+catalogs, OpenAPI or send schemas.
+
 The grant picker separates Read-only and Write-capable actions, with independent
 All/None controls for search matches. Grant listings derive a Write-capable
 checkmark from their explicit action selections. Unreviewed actions are treated
@@ -953,6 +974,8 @@ sequenceDiagram
    actions never receive empty resource authority and action-only actions never
    receive resources. A provider asking for an authority its action was not
    admitted with fails closed with a `broker_provider_contract_failed` error.
+   An eligible opted-in native read also receives the host's immutable
+   same-mode universal-reach hint; its ordinary resource authority is unchanged.
    Multipart admission sees this context with the inputs and selected
    credentials, but no body data or decrypted private attributes.
 13. **Provider invoke**, then **finalize/audit**. The final invocation is built

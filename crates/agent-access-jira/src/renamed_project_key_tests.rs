@@ -113,6 +113,19 @@ impl JiraBackend for RenamedJira {
         ok(self.resolve("issue", issue_key)?)
     }
 
+    async fn issue_view(
+        &self,
+        issue_key: &str,
+        credential: &AtlassianCredential,
+        _include_issue_links: bool,
+    ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
+        let response = self.issue(issue_key, credential).await?;
+        ok(JiraIssueView {
+            issue: response.value,
+            issue_links: None,
+        })
+    }
+
     async fn search(
         &self,
         request: JiraSearchRequest,

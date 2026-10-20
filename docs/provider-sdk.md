@@ -258,6 +258,7 @@ its builder methods:
 | `.credential_modes(["service", "per_user"])` | The grant modes that may select its credentials. |
 | `.token_only()` | That the upstream accepts only a static (token) credential for the action, never delegated (OAuth) access. See [token-only actions](#token-only-actions). |
 | `.read_only()` | A reviewed read. Actions default to `read_only = false`; never infer it from a name. |
+| `.reports_universal_reach()` | Ask the host whether this scoped native read has effective access to every resource in its selected credential mode; see [universal reach](#universal-reach). |
 | `.lookup(LookupRequirement::ScopeResolution)` | That scope resolution needs a host-selected lookup credential before policy. `LookupRequirement::Execution` asks for one only at execution. |
 | `.native_search(NativeSearchEnforcement::UpstreamConstrained)` or `.native_search(NativeSearchEnforcement::ResultFiltered)` | Reviewed native search with a complete host-admitted boundary and the declared query/result enforcement. |
 | `.raw_download()`, `.multipart_upload(plan)` | Streamed response bodies, or admitted file uploads. |
@@ -496,6 +497,7 @@ only view of the operation:
 | `correlation()` | Request identifiers for upstream correlation headers. |
 | `credential_mode()` | `CredentialMode::Service` or `CredentialMode::PerUser`. |
 | `authority()`, `resource_scopes()`, `search_authorization()` | The exact admitted authority. |
+| `universal_reach()` | Whether an opted-in read has universal same-mode resource coverage for disclosing metadata already carried in the same upstream response. |
 | `inputs()` | Inputs validated against the action's schema. |
 | `execution()`, `lookup_access()` | The selected execution material and any [lookup access](#lookup-access). |
 | `body_parts()`, `resource_attributes()`, `state()` | Staged body parts, the admitted resource's private attributes and provider state. |
@@ -593,6 +595,47 @@ protocol's exact resources/any-except projection and preserves per-grant modes.
 
 Act on the admitted resources, not on raw inputs. When an input names the
 resource, check that it equals the admitted value before you use it.
+
+### Universal reach
+
+An ordinary scoped native read may opt into
+`ActionDescriptor::reports_universal_reach()`. The host then computes
+`universal_reach()` after selecting the source operation's policy and execution
+credential, using that admission's policy snapshot, caller, execution context
+and token caveats. The value is immutable on `AdmittedContext`,
+`AdmittedRequest` and `ProviderInvocation`, and is `false` without the opt-in.
+
+`true` means the same action's effective reach covers every canonical resource
+of its scope type in the already-selected credential mode. The host combines
+ordinary effective clauses, retaining grant-local exclusions, per-target
+precedence, competing credential modes and token resource restrictions, and
+proves coverage of the universal selector. Merely covering all currently
+registered resources is insufficient. Several positive grants can jointly
+cover every resource; a winning different-mode grant can leave a gap even if
+the caller can read that resource in its other mode.
+
+This value permits disclosure of metadata about other resources already
+carried in the same upstream response. It grants no additional authority:
+`InvocationAuthority::Resources` remains the source operation's exact scopes.
+Providers must not use the value to make requests for other resources, acquire
+credentials, widen the source scopes, or infer that a later direct read will
+succeed. Upstream permissions and separate lookup visibility still apply.
+Jira uses it to request embedded `issuelinks` in the source issue read; it does
+not resolve or fetch linked issues.
+
+The host rejects this opt-in for unscoped actions, writes, native searches,
+resource-attribute-bound actions and imported or command-enforced actions.
+The proof depends on the resource scope being the action's only
+target-dependent authorization input. Revisit it before adding issue-level,
+issue-type or other target-specific authorization.
+The hint is not a catalog, OpenAPI, send-schema or tool-input field.
+
+Host constructors supply `host::AdmittedRequestParts.universal_reach`;
+they must pass `false` unless the host established the proof above. This
+required field follows that struct's intentionally exhaustive construction
+contract. Provider tests use `InvocationBuilder::universal_reach(bool)`,
+whose default is `false`; test opt-in behavior through real host admission as
+well as through synthetic invocations.
 
 ### Static credentials
 

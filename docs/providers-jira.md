@@ -558,6 +558,8 @@ may be recorded.
 lookup use only `fields=project`; after authorization, the execution credential
 performs the full read with
 `fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description`.
+It adds `issuelinks` to that same execution request only when the
+[issue-link coverage condition](#issue-links) holds.
 
 Successful results include issue id/key/project, generated `webUrl`, summary,
 status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
@@ -573,6 +575,66 @@ read-path check does not apply the broker's write-time ADF node allowlist, so
 ordinary existing Jira descriptions with nodes the broker would not let agents
 write can still be viewed. Audit records for `issue.view` do not include
 description content.
+
+### Issue links
+
+`issue.view` includes `issueLinks` only when the caller's effective access to
+that action covers every possible Jira project in the selected credential
+mode, including projects not registered in Broker. This proof includes the
+execution context, identity ceilings, token restrictions, grant precedence and
+grant-local exclusions. Several same-mode grants can together provide full
+coverage. A project restriction, an unrestored exclusion, or a winning grant
+in another credential mode that leaves a gap disables link output for the
+whole view, including links within otherwise readable projects. A `search`
+grant does not satisfy this condition.
+
+When eligible, Broker requests the source issue's embedded `issuelinks` with
+the execution credential. It makes no additional requests for linked issues.
+Each returned link contains exactly these fields:
+
+```json
+{
+  "key": "CHANGE-42",
+  "type": "Blocks",
+  "direction": "outward",
+  "relationship": "blocks",
+  "summary": "Prepare deployment",
+  "issueType": "Task"
+}
+```
+
+`type` is the relationship type name. `direction` is `inward` or `outward`
+relative to the source issue, and `relationship` is Jira's label for that
+direction. Read it as `<viewed issue> <relationship> <key>`: outward `blocks`
+means the viewed issue blocks the linked issue; inward `is blocked by` means
+the viewed issue is blocked by the linked issue. Markdown makes the subject
+explicit, for example `This issue blocks CHANGE-42`.
+`summary` and `issueType` are nullable when Jira omits those linked issue
+details. Broker reads the canonical
+`fields.issuetype` spelling and does not accept alternate field aliases.
+Linked status, priority, assignee, description, IDs, API URLs and other embedded
+fields are not returned.
+
+An absent `issueLinks` field means links were withheld or Jira did not supply
+the requested field; **absence never means no links**. An explicit `[]` means
+Jira returned an empty list. A present list preserves every returned entry,
+its order and multiplicity. Markdown shows an **Issue links** section only
+when the field is present, and prints `None.` for an empty list.
+
+These are the embedded details Jira returned to the execution credential.
+Broker does not independently confirm each linked issue's current project or
+key, or promise that Jira returned every relationship. A later `issue.view`
+on a linked key performs its own authorization, lookup and credential selection
+and can fail, including when the lookup credential has narrower visibility.
+Do not infer a target's current project from its embedded key.
+
+Malformed required link fields or incorrectly typed supplied metadata fail the
+view with a sanitized `upstream_protocol_failed`; entries are not silently
+dropped. Existing response-size, presentation and operation-time limits apply.
+There is no separate link-count cap or truncation. Link audit metadata records
+only `issueLinks.status` (`withheld`, `not-returned`, or `disclosed`), plus
+`count` when disclosed, without linked identities or summaries. Search and
+mutation readbacks do not request or return `issueLinks`.
 
 ## `issue.create`
 
@@ -595,7 +657,8 @@ The provider sends `POST /rest/api/3/issue` with only
 key. Before full readback, the broker validates that the created key is a valid
 Jira issue key whose project prefix matches the authorized requested project.
 It then reads the issue back with the execution credential and returns
-`operation: "issue.create"` plus the same bounded issue shape as `issue.view`.
+`operation: "issue.create"` plus the bounded issue fields of `issue.view`,
+without `issueLinks`.
 An invalid created key is `upstream_protocol_failed`. A valid key in another
 project, for example when Jira resolves a
 [previous project key](#renamed-project-keys) and creates the issue under the
@@ -714,8 +777,8 @@ issue id, key, and project. Invalid readback key/project shapes fail with
 `upstream_protocol_failed`; mismatched issue or project readback fails with
 `scope_unresolved`.
 
-Successful results include `operation: "issue.update"`, the same bounded issue
-shape as `issue.view`, stable `changedFields` order (`summary`, then
+Successful results include `operation: "issue.update"`, the bounded issue
+fields of `issue.view` without `issueLinks`, stable `changedFields` order (`summary`, then
 `description`), and `notifyUsers` as `true`, `false`, or `null` when omitted.
 Readback description content is returned in `result.issue.description` when Jira
 returns it. Audit includes issue id/key, project, changed field names, booleans
@@ -1120,9 +1183,8 @@ Backend search issues a GET to `search/jql` with `jql`, `maxResults`,
 `fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels`,
 and, on a continuation, Jira's `nextPageToken` recovered from the caller's
 broker continuation. Search results include the same lightweight
-issue metadata as `issue.view`, but are intentionally body-free and never
-include issue `description`; callers should use `issue.view` on a specific
-result when they need the body.
+issue metadata as `issue.view`, but omit both `description` and `issueLinks`;
+callers should use `issue.view` on a specific result when they need the body.
 `maxResults` defaults to `providers.jira.search.max_results` (default `50`),
 rejects `0`, and is clamped to `providers.jira.search.max_results`. The response
 is bounded by `limits.max_upstream_response_bytes`.

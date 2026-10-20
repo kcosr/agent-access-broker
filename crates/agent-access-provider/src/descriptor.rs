@@ -88,6 +88,9 @@ pub struct ActionDescriptor {
     /// The broker computes the search boundary from policy and hands it to
     /// the native provider, which enforces it according to its declared mode.
     pub native_search: Option<NativeSearchEnforcement>,
+    /// Ask the host to report universal same-mode reach for this ordinary
+    /// scoped read; see [`Self::reports_universal_reach`].
+    pub reports_universal_reach: bool,
     pub upstream_resource_ownership: Option<UpstreamResourceOwnership>,
     pub io: ActionIo,
     /// JSON pointers into sensitive response values, including deliberate secret
@@ -265,6 +268,7 @@ impl ActionDescriptor {
             token_only: false,
             lookup: LookupRequirement::None,
             native_search: None,
+            reports_universal_reach: false,
             upstream_resource_ownership: None,
             io: ActionIo::Json,
             sensitive_output_pointers: Vec::new(),
@@ -327,6 +331,21 @@ impl ActionDescriptor {
 
     pub fn native_search(mut self, enforcement: NativeSearchEnforcement) -> Self {
         self.native_search = Some(enforcement);
+        self
+    }
+
+    /// Request [`crate::AdmittedContext::universal_reach`] for this action.
+    ///
+    /// Only native ordinary scoped read actions without private resource
+    /// attributes may opt in. The host proves that this same action admits
+    /// every canonical resource under the operation's selected credential
+    /// mode, context, caller ceiling and policy generation. This permits only
+    /// disclosure of other-resource metadata already carried in the same
+    /// upstream result: it never authorizes additional requests, credential
+    /// acquisition or wider confinement. Exact resource authority is unchanged.
+    /// This declaration is not a public catalog capability or an input option.
+    pub fn reports_universal_reach(mut self) -> Self {
+        self.reports_universal_reach = true;
         self
     }
 
@@ -630,6 +649,20 @@ impl ServiceDescriptor {
                     "{service}.{name} declares native search without a resource scope"
                 ));
             }
+            if action.reports_universal_reach
+                && (!action.read_only
+                    || action.resource_scope.is_none()
+                    || action.native_search.is_some()
+                    || action.requires_resource_attributes
+                    || !matches!(
+                        action.scoped_mcp_name_source,
+                        ScopedMcpNameSource::CanonicalAction
+                    ))
+            {
+                errors.push(format!(
+                    "{service}.{name} universal reach requires a native ordinary scoped read without private resource attributes"
+                ));
+            }
             if action.credential_modes.is_empty() {
                 errors.push(format!("{service}.{name} declares no credential modes"));
             }
@@ -914,6 +947,41 @@ mod tests {
         let marked = action("item.token").token_only();
         assert!(marked.token_only);
         assert_eq!(errors(vec![marked]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn universal_reach_is_native_scoped_read_only_and_not_a_catalog_capability() {
+        let ordinary = action("item.view").read_only();
+        assert!(!ordinary.reports_universal_reach);
+        let marked = ordinary.clone().reports_universal_reach();
+        assert!(marked.reports_universal_reach);
+        assert!(errors(vec![marked.clone()]).is_empty());
+        assert_eq!(ordinary.capabilities(), marked.capabilities());
+
+        let mut unscoped = marked.clone();
+        unscoped.resource_scope = None;
+        let mut write = marked.clone();
+        write.read_only = false;
+        let mut imported = marked.clone();
+        imported.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
+            name: Some("upstream-view".into()),
+        };
+        for invalid in [
+            unscoped,
+            write,
+            imported,
+            marked.clone().resource_attributes(),
+            marked
+                .clone()
+                .native_search(NativeSearchEnforcement::UpstreamConstrained),
+            marked.native_search(NativeSearchEnforcement::ResultFiltered),
+        ] {
+            assert!(
+                errors(vec![invalid])
+                    .iter()
+                    .any(|error| error.contains("universal reach requires")),
+            );
+        }
     }
 
     #[test]

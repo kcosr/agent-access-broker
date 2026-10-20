@@ -241,7 +241,12 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .reports_universal_reach()
+        .documentation(json!({
+            "issueLinks": "Included only when effective issue.view authority in the selected credential mode covers every Jira project and Jira returns the requested field. Each entry contains key, type (link type name), direction (inward/outward), relationship (directional label), summary and issueType. Read the relationship as <viewed issue> <relationship> <key>, such as PROJ-1 blocks CM-42 or PROJ-1 is blocked by CM-42. Optional summary and issueType are null when unavailable. Order and multiplicity match Jira's embedded list; keys and linked content are not independently resolved. No extra Jira requests are made.",
+            "omission": "Missing issueLinks means links were withheld or Jira did not return the field, not that no links exist. Only an explicit empty Jira list becomes []. Any gap in universal same-mode authority withholds all links. A listed link does not guarantee a later issue.view succeeds, including when lookup and execution credentials differ."
+        })),
         jira_action(
             "issue.create",
             "Create a Jira issue in an authorized project with bounded summary and optional explicitly formatted content",
@@ -1134,10 +1139,10 @@ impl JiraProvider {
         let metadata = metadata_response.value;
         let response = self
             .backend
-            .issue(&metadata.key, credential)
+            .issue_view(&metadata.key, credential, request.universal_reach())
             .await
             .map_err(jira_backend_error)?;
-        let issue = response.value;
+        let issue = response.value.issue;
         if issue.id != metadata.id || issue.key != metadata.key || issue.project != metadata.project
         {
             return Err(ProviderError::deny(
@@ -1152,7 +1157,16 @@ impl JiraProvider {
             ));
         }
         validate_returned_issue_description(&issue, &self.config)?;
-        let result = issue_view_result(&issue, &self.config);
+        let mut result = issue_view_result(&issue, &self.config);
+        let links_audit = if !request.universal_reach() {
+            json!({"status": "withheld"})
+        } else if let Some(links) = response.value.issue_links {
+            let count = links.len();
+            result["issueLinks"] = json!(links);
+            json!({"status": "disclosed", "count": count})
+        } else {
+            json!({"status": "not-returned"})
+        };
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
             .with_audit(json!({
@@ -1162,6 +1176,7 @@ impl JiraProvider {
                 "project": issue.project,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
+                "issueLinks": links_audit,
             }))
             .with_upstream(
                 Some(response.status),
