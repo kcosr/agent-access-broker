@@ -2912,9 +2912,10 @@ impl ManagedStore {
     }
 
     /// Records a trusted sign-in whose group claim was incomplete: advances
-    /// the subject's flow watermark and, when that flow is not superseded,
-    /// raises the login method's renewal `observation_iat` to the ID token's
-    /// raw `issued_at`. It changes no evidence and no renewal token.
+    /// the subject's flow watermark and raises the login method's renewal
+    /// `observation_iat` to the ID token's raw `issued_at`. Flow order need
+    /// not match Microsoft's issuance order, so a superseded flow's trusted
+    /// observation raises it too. It changes no evidence and no renewal token.
     pub fn record_trusted_incomplete_oidc_callback(
         &self,
         external_subject: &str,
@@ -2933,14 +2934,12 @@ impl ManagedStore {
         require_oidc_provider_generation(&tx, provider_generation)?;
         let advanced =
             advance_oidc_subject_watermark_tx(&tx, external_subject, flow_sequence, &observed_at)?;
-        if advanced && let Some(method) = oidc_login_method_for_subject(&tx, external_subject)? {
-            oidc_membership_renewal::raise_observation(
-                &tx,
-                &method.login_method_id,
-                issued_at,
-                &observed_at,
-            )?;
-        }
+        oidc_membership_renewal::raise_observation_for_subject(
+            &tx,
+            external_subject,
+            issued_at,
+            &observed_at,
+        )?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(advanced)
     }
@@ -2976,6 +2975,16 @@ impl ManagedStore {
             request.flow_sequence,
             &callback_now,
         )? {
+            // A superseded flow issues no session and records no evidence
+            // or token, but its validated ID token is still a trusted
+            // observation: flow order need not match Microsoft's issuance
+            // order.
+            oidc_membership_renewal::raise_observation_for_subject(
+                &tx,
+                &request.external_subject,
+                request.issued_at,
+                &callback_now,
+            )?;
             tx.commit().map_err(sql_unavailable)?;
             return Ok(OidcCompletionOutcome::Superseded);
         }

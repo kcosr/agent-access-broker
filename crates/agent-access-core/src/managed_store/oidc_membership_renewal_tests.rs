@@ -1137,8 +1137,9 @@ fn evidence_ordering_uses_raw_iat_only_while_a_renewal_row_exists() {
 
 /// A trusted incomplete sign-in raises only an existing row's watermark and
 /// changes no evidence or token; once Microsoft reported an incomplete claim,
-/// only a newer complete claim replaces the evidence. Superseded and denied
-/// sign-ins never touch the row.
+/// only a newer complete claim replaces the evidence. Superseded flows,
+/// complete or incomplete, still raise the watermark of their trusted
+/// observation but write nothing else; denied sign-ins never touch the row.
 #[test]
 fn incomplete_observations_raise_only_an_existing_row_and_denials_never_touch_it() {
     let fixture = fixture(true);
@@ -1196,21 +1197,62 @@ fn incomplete_observations_raise_only_an_existing_row_and_denials_never_touch_it
     );
     assert_eq!(fixture.groups("alice"), ["team-b"]);
 
-    // Superseded flows, complete or incomplete, write nothing.
+    // Superseded flows, complete or incomplete, raise the watermark to their
+    // trusted `iat` and write nothing else: no session, token or evidence.
     let current = fixture.renewal(&method).unwrap();
+    let sessions = |store: &ManagedStore| -> i64 {
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM browser_sessions", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    let session_count = sessions(&fixture.store);
     assert!(!fixture.incomplete(1, USER, 100));
+    let raised = fixture.renewal(&method).unwrap();
+    assert_eq!(raised.observation_iat, fixture.now + 100);
+    assert_eq!(
+        OidcMembershipRenewalRecord {
+            observation_iat: current.observation_iat,
+            updated_at: current.updated_at.clone(),
+            ..raised.clone()
+        },
+        current
+    );
     assert_eq!(
         fixture.sign_in_at(
             1,
             USER,
             "alice",
             &[GROUP_A],
-            100,
+            110,
             issued(&fixture.ring, "stale")
         ),
         OidcCompletionOutcome::Superseded
     );
-    assert_eq!(fixture.renewal(&method).unwrap(), current);
+    let raised = fixture.renewal(&method).unwrap();
+    assert_eq!(raised.observation_iat, fixture.now + 110);
+    assert_eq!(
+        OidcMembershipRenewalRecord {
+            observation_iat: current.observation_iat,
+            updated_at: current.updated_at.clone(),
+            ..raised.clone()
+        },
+        current
+    );
+    assert_eq!(sessions(&fixture.store), session_count);
+    assert_eq!(fixture.groups("alice"), ["team-b"]);
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-3"
+    );
+    // A lower superseded observation leaves the watermark.
+    assert!(!fixture.incomplete(1, USER, 50));
+    assert_eq!(fixture.renewal(&method).unwrap(), raised);
+    let current = raised;
     // A denied sign-in writes nothing either.
     sql(
         &fixture.store,
@@ -1226,6 +1268,105 @@ fn incomplete_observations_raise_only_an_existing_row_and_denials_never_touch_it
     assert_eq!(
         fixture.material(&method).unwrap().refresh_token(),
         "refresh-3"
+    );
+}
+
+/// Flow creation order need not match Microsoft's issuance order. A trusted
+/// observation from a superseded flow, incomplete or complete, still raises
+/// the watermark, so a later flow whose token predates it keeps the stored
+/// evidence (and still issues its session and records its token).
+#[test]
+fn superseded_trusted_observations_still_order_later_flows() {
+    let fixture = fixture(true);
+    // Flow 2 commits its token issued at -30.
+    let second = succeeded(fixture.sign_in_at(
+        2,
+        USER,
+        "alice",
+        &[GROUP_A],
+        -30,
+        issued(&fixture.ring, "refresh-2"),
+    ));
+    let method = second.login_method.login_method_id.clone();
+    assert_eq!(fixture.groups("alice"), ["team-a"]);
+    // Flow 1's delayed incomplete callback carries a token issued at -10.
+    assert!(!fixture.incomplete(1, USER, -10));
+    assert_eq!(
+        fixture.renewal(&method).unwrap().observation_iat,
+        fixture.now - 10
+    );
+    // Flow 3's token, issued at -20, predates that incomplete observation.
+    let third = succeeded(fixture.sign_in_at(
+        3,
+        USER,
+        "alice",
+        &[GROUP_B],
+        -20,
+        issued(&fixture.ring, "refresh-3"),
+    ));
+    assert_eq!(third.membership_evidence, OidcMembershipEvidence::KeptNewer);
+    assert_eq!(third.membership.groups, ["team-a"]);
+    assert_eq!(fixture.groups("alice"), ["team-a"]);
+    assert!(
+        fixture
+            .store
+            .resolve_browser_session(&hasher(), &third.session.token)
+            .is_ok()
+    );
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-3"
+    );
+    assert_eq!(
+        fixture.renewal(&method).unwrap().observation_iat,
+        fixture.now - 10
+    );
+
+    // The same holds for a superseded complete callback: flow 5 commits at
+    // 0, delayed flow 4 (issued at +20) is superseded, and flow 6 (issued at
+    // +10) keeps flow 5's evidence.
+    let fifth = succeeded(fixture.sign_in_at(
+        5,
+        USER,
+        "alice",
+        &[GROUP_B],
+        0,
+        issued(&fixture.ring, "refresh-5"),
+    ));
+    assert_eq!(fifth.membership_evidence, OidcMembershipEvidence::Replaced);
+    assert_eq!(fixture.groups("alice"), ["team-b"]);
+    assert_eq!(
+        fixture.sign_in_at(
+            4,
+            USER,
+            "alice",
+            &[GROUP_A],
+            20,
+            issued(&fixture.ring, "refresh-4")
+        ),
+        OidcCompletionOutcome::Superseded
+    );
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-5"
+    );
+    assert_eq!(
+        fixture.renewal(&method).unwrap().observation_iat,
+        fixture.now + 20
+    );
+    let sixth = succeeded(fixture.sign_in_at(
+        6,
+        USER,
+        "alice",
+        &[GROUP_A],
+        10,
+        issued(&fixture.ring, "refresh-6"),
+    ));
+    assert_eq!(sixth.membership_evidence, OidcMembershipEvidence::KeptNewer);
+    assert_eq!(fixture.groups("alice"), ["team-b"]);
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-6"
     );
 }
 

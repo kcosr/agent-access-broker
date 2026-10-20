@@ -766,6 +766,27 @@ pub(super) fn raise_observation(
     Ok(())
 }
 
+/// Raises the `observation_iat` of the row of `external_subject`'s
+/// Microsoft login method to `issued_at` if that is higher. A subject
+/// without a method or a method without a row is unchanged.
+pub(super) fn raise_observation_for_subject(
+    conn: &Connection,
+    external_subject: &str,
+    issued_at: i64,
+    now: &str,
+) -> Result<(), ManagedStoreError> {
+    conn.execute(
+        "UPDATE oidc_membership_renewals SET observation_iat = ?2, updated_at = ?3
+         WHERE observation_iat < ?2 AND login_method_id IN (
+           SELECT login_method_id FROM principal_login_methods
+           WHERE method = 'oidc' AND external_provider = 'microsoft' AND external_subject = ?1
+         )",
+        params![external_subject, issued_at, now],
+    )
+    .map_err(sql_unavailable)?;
+    Ok(())
+}
+
 /// Records a sign-in with membership renewal enabled for `method`, inside
 /// the sign-in's transaction: a new token version holding the returned token
 /// in state `active`, or `ended` with `not_issued` when none was returned.
