@@ -49,6 +49,15 @@ impl JiraBackend for MovingJira {
         Err(self.sent("issue"))
     }
 
+    async fn issue_view(
+        &self,
+        _issue_key: &str,
+        _credential: &AtlassianCredential,
+        _include_issue_links: bool,
+    ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
+        Err(self.sent("issue_view"))
+    }
+
     async fn update_issue(
         &self,
         _issue_key: &str,

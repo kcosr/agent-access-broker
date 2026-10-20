@@ -241,6 +241,36 @@ fn render_issue(
     if let Some(url) = optional_scalar(object, "webUrl")? {
         field_url(out, "URL", url)?;
     }
+    if include_description && let Some(links) = object.get("issueLinks") {
+        let links = array(links)?;
+        budget.charge_work(links.len())?;
+        out.push("\n## Issue links\n\n")?;
+        if links.is_empty() {
+            out.push("None.\n")?;
+        }
+        for link in links {
+            let link = as_object(link)?;
+            budget.charge_work(link.len())?;
+            out.push("- This issue ")?;
+            out.push_escaped(required_scalar(link, "relationship")?)?;
+            out.push(" ")?;
+            out.push_code(required_scalar(link, "key")?)?;
+            out.push(" (type: ")?;
+            out.push_escaped(required_scalar(link, "type")?)?;
+            out.push("; direction: ")?;
+            out.push_escaped(required_scalar(link, "direction")?)?;
+            if let Some(issue_type) = optional_scalar(link, "issueType")? {
+                out.push("; issue type: ")?;
+                out.push_escaped(issue_type)?;
+            }
+            out.push(")")?;
+            if let Some(summary) = optional_scalar(link, "summary")? {
+                out.push(" — ")?;
+                out.push_escaped(summary)?;
+            }
+            out.push("\n")?;
+        }
+    }
     if include_description
         && let Some(description) = object.get("description").filter(|value| !value.is_null())
     {

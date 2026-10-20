@@ -6,11 +6,11 @@ use agent_access_jira::{
     JiraBackend, JiraBackendError, JiraBackendResponse, JiraComment, JiraCommentAddRequest,
     JiraCommentListRequest, JiraCommentPage, JiraCommentPropertyKeys, JiraCommentSummary,
     JiraCommentUpdateRequest, JiraCreatedIssue, JiraIssue, JiraIssueAttachmentList,
-    JiraIssueCreateRequest, JiraIssueLink, JiraIssueLinkCreateRequest, JiraIssueLinkType,
-    JiraIssueLinks, JiraIssueParent, JiraIssueParentReadback, JiraIssueParentSetRequest,
-    JiraIssueType, JiraIssueTypeListRequest, JiraIssueTypePage, JiraIssueUpdateRequest,
-    JiraPrioritySummary, JiraProvider, JiraProviderConfig, JiraSearchPage, JiraSearchRequest,
-    JiraUserSummary,
+    JiraIssueCreateRequest, JiraIssueLink, JiraIssueLinkCreateRequest, JiraIssueLinkDirection,
+    JiraIssueLinkType, JiraIssueLinks, JiraIssueParent, JiraIssueParentReadback,
+    JiraIssueParentSetRequest, JiraIssueType, JiraIssueTypeListRequest, JiraIssueTypePage,
+    JiraIssueUpdateRequest, JiraIssueView, JiraIssueViewLink, JiraPrioritySummary, JiraProvider,
+    JiraProviderConfig, JiraSearchPage, JiraSearchRequest, JiraUserSummary,
 };
 use agent_access_provider::test_support::basic_credential;
 use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, SearchLimitsConfig};
@@ -602,6 +602,322 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
     assert!(audit.contains("\"objectIds\""));
     assert!(!audit.contains("visible summary"));
 
+    stop(broker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jira_issue_links_require_universal_token_authority_and_preserve_absence() {
+    use agent_access_core::{
+        BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
+        ManagedResourceCatalog, ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode,
+        PrincipalRole, PrincipalWriteRequest,
+    };
+    use serde_json::json;
+
+    let backend = Arc::new(StubJiraBackend {
+        issues: BTreeMap::from([(
+            "PROJ-1".to_string(),
+            JiraIssue {
+                id: "10001".to_string(),
+                key: "PROJ-1".to_string(),
+                project: "PROJ".to_string(),
+                summary: Some("Source issue".to_string()),
+                status: None,
+                issue_type: Some("Task".to_string()),
+                description: None,
+                created: None,
+                updated: None,
+                creator: None,
+                reporter: None,
+                assignee: None,
+                priority: None,
+                labels: None,
+            },
+        )]),
+        issue_view_links: Mutex::new(Some(vec![
+            JiraIssueViewLink {
+                key: "CM-42".to_string(),
+                link_type: "Blocks".to_string(),
+                direction: JiraIssueLinkDirection::Outward,
+                relationship: "blocks".to_string(),
+                summary: Some("Linked release title".to_string()),
+                issue_type: Some("Change".to_string()),
+            },
+            JiraIssueViewLink {
+                key: "OPS-7".to_string(),
+                link_type: "Blocks".to_string(),
+                direction: JiraIssueLinkDirection::Inward,
+                relationship: "is blocked by".to_string(),
+                summary: None,
+                issue_type: None,
+            },
+        ])),
+        ..StubJiraBackend::default()
+    });
+    let application = IsolatedBroker::new(
+        agent_access_broker::composition().unwrap(),
+        agent_access_broker::build_identity(),
+    )
+    .unwrap();
+    let directory = application.directory().clone();
+    let key = directory
+        .secret_file(
+            "broker-key",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([37_u8; 32]),
+        )
+        .unwrap();
+    let store_path = directory.join("tokens.sqlite");
+    let store = ManagedStore::open(
+        &ManagedStoreConfig {
+            kind: "sqlite".to_string(),
+            path: store_path.display().to_string(),
+            auto_migrate: true,
+            require_registered_principal_for_invocation: false,
+        },
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
+    store
+        .create_principal(PrincipalWriteRequest {
+            role: PrincipalRole::User,
+            self_service_enabled: None,
+            principal_id: "agent-one".to_string(),
+            kind: "user".to_string(),
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "test".to_string(),
+        })
+        .unwrap();
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", key.display()),
+        ..Default::default()
+    })
+    .unwrap();
+    // Token restrictions reference this fixture's TOML-owned catalog, which
+    // is not mirrored into the managed store used for token storage.
+    let catalog: ManagedResourceCatalog = serde_json::from_value(json!({
+        "resources": [{
+            "id": "project-proj",
+            "resourceType": JIRA_PROJECT_RESOURCE.id().as_str(),
+            "selector": {"kind": "exact", "value": "PROJ"},
+            "allowedExecutionContexts": ["default"],
+            "enabled": true
+        }],
+        "resourceGroups": []
+    }))
+    .unwrap();
+    let issue_token = |name: &str, restriction: serde_json::Value| {
+        store
+            .issue_broker_token_with_catalog(
+                &hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: "agent-one".to_string(),
+                    name: name.to_string(),
+                    token_class: BrokerTokenClass::AgentInvoke,
+                    scopes: json!({
+                        "allowedExecutionContexts": ["default"],
+                        "allowedServices": ["jira"],
+                        "serviceRestrictions": {"jira": restriction}
+                    }),
+                    expires_at: None,
+                    created_by: "test".to_string(),
+                },
+                Some(&catalog),
+            )
+            .unwrap()
+            .token
+    };
+    let unrestricted_token = issue_token("all-projects", json!({"actions": ["issue.view"]}));
+    let scoped_token = issue_token(
+        "one-project",
+        json!({
+            "actions": ["issue.view"],
+            "resources": {"resourceIds": ["project-proj"]}
+        }),
+    );
+    drop(store);
+    // Keep the existing positive PROJ grant as well as the all-projects grant.
+    // Universal access is effective coverage, not a single grant shape.
+    let base_document = jira_document(&directory, JiraAccess::AnonymousService)
+        .replace(
+            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"",
+            "[identity]\nmode = \"required\"\nauthority = \"managed\"",
+        )
+        .replace("group:anonymous", "user:agent-one")
+        .replace(
+            "credential_mode = \"service\"",
+            "credential_mode = \"service\"\nexecution_contexts = [\"default\"]",
+        );
+    let document = format!(
+        r#"{base}
+[[identity.sources]]
+name = "broker"
+type = "broker_tokens"
+header = "Authorization"
+scheme = "Bearer"
+
+[execution_context]
+allowed_values = ["default"]
+default_context = "default"
+
+[managed_store]
+type = "sqlite"
+path = {store}
+auto_migrate = true
+
+[broker_tokens]
+hash_key_ref = {hash_key}
+
+[credential_encryption]
+active_key = "test"
+[[credential_encryption.keys]]
+id = "test"
+provider = "file"
+path = {key}
+
+[[policy.grants]]
+subjects = ["user:agent-one"]
+service = "jira"
+actions = ["issue.view"]
+resources = {{ resource_ids = ["all-projects"] }}
+credential_mode = "service"
+execution_contexts = ["default"]
+"#,
+        base = base_document,
+        store = toml_string(store_path.display()),
+        hash_key = toml_string(format!("file:{}", key.display())),
+        key = toml_string(key.display()),
+    );
+    let broker = application
+        .config_document(document)
+        .provider_fixture(
+            "jira",
+            ProviderFixture::instance(jira_service(
+                jira_provider_config(2),
+                Default::default(),
+                backend.clone(),
+            )),
+        )
+        .start()
+        .await
+        .unwrap();
+    let base_url = broker.public_url();
+    let run = |token: &str, format: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+            .args([
+                "--url",
+                &base_url,
+                "--token-value",
+                token,
+                "--identity-header",
+                "Authorization",
+                "--identity-scheme",
+                "Bearer",
+                "jira",
+                "issue",
+                "view",
+                "PROJ-1",
+                "--output-format",
+                format,
+            ])
+            .output()
+            .unwrap();
+        assert_success("Jira linked issue view", &output);
+        output.stdout
+    };
+    let mut cursor = 0;
+    let result: serde_json::Value =
+        serde_json::from_slice(&run(&unrestricted_token, "json")).unwrap();
+    assert_eq!(
+        result["result"]["issueLinks"],
+        json!([
+            {"key": "CM-42", "type": "Blocks", "direction": "outward",
+             "relationship": "blocks", "summary": "Linked release title", "issueType": "Change"},
+            {"key": "OPS-7", "type": "Blocks", "direction": "inward",
+             "relationship": "is blocked by", "summary": null, "issueType": null}
+        ])
+    );
+    assert_new_backend_operations(
+        &backend,
+        &mut cursor,
+        &["issue_metadata", "issue_metadata", "issue"],
+    );
+    let markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
+    assert!(markdown.contains("## Issue links"));
+    for text in [
+        "CM-42",
+        "Linked release title",
+        "Change",
+        "OPS-7",
+        "is blocked by",
+    ] {
+        assert!(markdown.contains(text), "{markdown}");
+    }
+    assert_new_backend_operations(
+        &backend,
+        &mut cursor,
+        &["issue_metadata", "issue_metadata", "issue"],
+    );
+    let scoped: serde_json::Value = serde_json::from_slice(&run(&scoped_token, "json")).unwrap();
+    assert!(scoped["result"].get("issueLinks").is_none(), "{scoped}");
+    assert_eq!(scoped["result"]["summary"], "Source issue");
+    let scoped_markdown = String::from_utf8(run(&scoped_token, "markdown")).unwrap();
+    assert!(!scoped_markdown.contains("## Issue links"));
+    for text in ["CM-42", "OPS-7", "Linked release title", "is blocked by"] {
+        assert!(!scoped_markdown.contains(text), "{scoped_markdown}");
+    }
+    assert_new_backend_operations(
+        &backend,
+        &mut cursor,
+        &[
+            "issue_metadata",
+            "issue_metadata",
+            "issue",
+            "issue_metadata",
+            "issue_metadata",
+            "issue",
+        ],
+    );
+
+    *backend.issue_view_links.lock().unwrap() = Some(vec![]);
+    let empty: serde_json::Value =
+        serde_json::from_slice(&run(&unrestricted_token, "json")).unwrap();
+    assert_eq!(empty["result"]["issueLinks"], json!([]));
+    let empty_markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
+    assert!(empty_markdown.contains("## Issue links\n\nNone."));
+    *backend.issue_view_links.lock().unwrap() = None;
+    let absent: serde_json::Value =
+        serde_json::from_slice(&run(&unrestricted_token, "json")).unwrap();
+    assert!(absent["result"].get("issueLinks").is_none(), "{absent}");
+    let absent_markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
+    assert!(!absent_markdown.contains("## Issue links"));
+    assert_eq!(
+        *backend.issue_view_requests.lock().unwrap(),
+        vec![true, true, false, false, true, true, true, true]
+    );
+    assert_new_backend_operations(
+        &backend,
+        &mut cursor,
+        &[
+            "issue_metadata",
+            "issue_metadata",
+            "issue",
+            "issue_metadata",
+            "issue_metadata",
+            "issue",
+            "issue_metadata",
+            "issue_metadata",
+            "issue",
+            "issue_metadata",
+            "issue_metadata",
+            "issue",
+        ],
+    );
+    let audit = broker.audit().unwrap().text();
+    for hidden in ["Linked release title", "CM-42", "OPS-7"] {
+        assert!(!audit.contains(hidden), "{audit}");
+    }
     stop(broker).await;
 }
 
@@ -3058,6 +3374,8 @@ fn cli_download_short_body_exits_5_and_preserves_existing_output_file_against_st
 struct StubJiraBackend {
     issue_type_requests: Mutex<Vec<(String, JiraIssueTypeListRequest)>>,
     issues: BTreeMap<String, JiraIssue>,
+    issue_view_requests: Mutex<Vec<bool>>,
+    issue_view_links: Mutex<Option<Vec<JiraIssueViewLink>>>,
     created_issue: Mutex<Option<JiraCreatedIssue>>,
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
@@ -3192,6 +3510,31 @@ impl JiraBackend for StubJiraBackend {
                 .ok_or(JiraBackendError::NotFound)?,
             status: 200,
             duration_ms: 3,
+        })
+    }
+
+    async fn issue_view(
+        &self,
+        issue_key: &str,
+        credential: &agent_access_jira::AtlassianCredential,
+        include_issue_links: bool,
+    ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
+        self.issue_view_requests
+            .lock()
+            .unwrap()
+            .push(include_issue_links);
+        let response = self.issue(issue_key, credential).await?;
+        Ok(JiraBackendResponse {
+            value: JiraIssueView {
+                issue: response.value,
+                issue_links: if include_issue_links {
+                    self.issue_view_links.lock().unwrap().clone()
+                } else {
+                    None
+                },
+            },
+            status: response.status,
+            duration_ms: response.duration_ms,
         })
     }
 

@@ -216,6 +216,18 @@ and provider access.
 
 ## Jira
 
+`jira.issue.view` can include `issueLinks` only when effective access covers
+all projects in the selected credential mode. Each entry has `key`, `type`
+(relationship type), `direction`, `relationship` (directional label), and nullable
+`summary` and `issueType`. Read the relationship as
+`<viewed issue> <relationship> <key>`: outward `blocks` means the viewed issue
+blocks the linked issue; inward `is blocked by` means the viewed issue is blocked
+by the linked issue. Missing `issueLinks` means withheld or not supplied,
+never "no links"; `[]` means Jira returned an empty list. Entries preserve Jira's
+order and embedded keys, which may be stale. A separate view of a linked key
+performs its own authorization and lookup and can fail. Search and mutation
+readbacks do not include links. Do not broaden token permissions to obtain them.
+
 Before issue creation, discover the project's available issue types using
 `POST /v1/invoke/jira/issue_type.list` with
 `{"inputs":{"project":"PROJ"}}`. The read-only result lists names, plain-text descriptions,

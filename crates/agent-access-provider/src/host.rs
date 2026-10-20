@@ -304,7 +304,9 @@ pub fn bearer_credential(token: String) -> ExecutionCredential {
 /// validated inputs and the execution and lookup material it selected.
 ///
 /// Intentionally exhaustive: the host supplies every input, so a new one
-/// fails to compile until the host provides it.
+/// fails to compile until the host provides it. The `universal_reach` field
+/// intentionally requires every constructor to supply the host's proof;
+/// constructors that do not compute it must pass false.
 #[derive(Debug)]
 pub struct AdmittedRequestParts {
     pub service: String,
@@ -316,6 +318,9 @@ pub struct AdmittedRequestParts {
     /// Built from the action's validated contract, never from provider
     /// output alone.
     pub authority: InvocationAuthority,
+    /// Host-computed disclosure proof, false unless the action opts in.
+    /// Does not expand `authority`; see [`AdmittedContext::universal_reach`].
+    pub universal_reach: bool,
     pub inputs: Value,
     pub execution: ExecutionAccess,
     /// Delegated lookup access holds the same lease as delegated
@@ -334,6 +339,7 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
         correlation,
         credential_mode,
         authority,
+        universal_reach,
         inputs,
         execution,
         lookup_access,
@@ -347,6 +353,7 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
             correlation,
             credential_mode,
             authority,
+            universal_reach,
         ),
         inputs,
         execution,

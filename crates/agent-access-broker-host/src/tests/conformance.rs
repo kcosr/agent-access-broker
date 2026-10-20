@@ -110,17 +110,24 @@ struct Conformance {
 }
 
 async fn conformance() -> Conformance {
+    conformance_with_universal_reach(false).await
+}
+
+async fn conformance_with_universal_reach(universal: bool) -> Conformance {
     let dir = tempfile::tempdir().unwrap();
     create_private_dir(dir.path());
     std::fs::write(dir.path().join("upstream-token"), UPSTREAM_TOKEN).unwrap();
     std::fs::write(dir.path().join("identity-token"), IDENTITY_TOKEN).unwrap();
     let server = MockServer::start().await;
-    let config = parse_broker_config_raw(
+    let mut config = parse_broker_config_raw(
         "conformance.toml",
         &broker_toml(&server.uri(), dir.path()),
         &registry(),
     )
     .unwrap();
+    if universal {
+        config.policy.resources[0].selector = agent_access_provider::ResourceSelector::All;
+    }
     validate_broker_config(&config).unwrap();
     let broker = TestBroker::start_config(&config).await;
     let app = broker.app();
@@ -129,6 +136,50 @@ async fn conformance() -> Conformance {
         _broker: broker,
         server,
         app,
+    }
+}
+
+#[tokio::test]
+async fn conformance_universal_reach_discloses_only_embedded_metadata_after_real_admission() {
+    for universal in [false, true] {
+        let fixture = conformance_with_universal_reach(universal).await;
+        Mock::given(method("GET"))
+            .and(path("/items/shelf-one/item-one"))
+            .and(header_is(
+                "authorization",
+                format!("Bearer {UPSTREAM_TOKEN}").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "title": "Source title", "body": "Source body",
+                "relatedTitle": "Other resource title"
+            })))
+            .expect(1)
+            .mount(&fixture.server)
+            .await;
+        let response = fixture
+            .invoke(
+                "item.view",
+                json!({"inputs":{"item":"shelf-one/item-one"}}),
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        assert_eq!(
+            response["resourceScopes"],
+            json!({"item":["shelf-one/item-one"]})
+        );
+        assert_eq!(response["result"]["item"]["path"], "shelf-one/item-one");
+        if universal {
+            assert_eq!(
+                response["result"]["item"]["relatedTitle"],
+                "Other resource title"
+            );
+        } else {
+            assert!(response["result"]["item"].get("relatedTitle").is_none());
+            assert!(!response.to_string().contains("Other resource title"));
+        }
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
     }
 }
 

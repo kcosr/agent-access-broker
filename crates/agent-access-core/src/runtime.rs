@@ -40,6 +40,8 @@ mod resource_attribute_tests;
 mod resource_coverage_tests;
 #[cfg(test)]
 mod search_authority_tests;
+#[cfg(test)]
+mod universal_reach_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use audit_sqlite::override_query_limits as override_audit_query_limits;
 pub use audit_sqlite::{AuditVerifyCheck, AuditVerifyReport, verify_sqlite_audit_database};
@@ -5226,6 +5228,17 @@ impl BrokerRuntime {
         } else {
             None
         };
+        // Use the very snapshot and ceiling that admitted the source, after
+        // execution and lookup access have been selected successfully.
+        let universal_reach = self.admitted_universal_reach(
+            &policy_snapshot,
+            &identity,
+            &execution_context,
+            &service,
+            &action_descriptor,
+            token_caveats.as_ref(),
+            &policy.credential_mode,
+        );
         let admitted = agent_access_provider::host::admitted_request(
             agent_access_provider::host::AdmittedRequestParts {
                 service: service.clone(),
@@ -5238,6 +5251,7 @@ impl BrokerRuntime {
                 correlation: correlation.clone(),
                 credential_mode,
                 authority,
+                universal_reach,
                 inputs: request.inputs,
                 execution: credentials,
                 lookup_access,

@@ -259,6 +259,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     let mut actions = vec![
         action("item.view", "View an item and its text body", &locator)
             .read_only()
+            .reports_universal_reach()
             .presentation(Some(ITEM_PRESENTATION)),
         action("item.download", "Download an item's content", &locator)
             .read_only()
@@ -663,11 +664,27 @@ impl ConformanceProvider {
             .await
             .map_err(upstream_error)?;
         let status = response.status().as_u16();
-        let (title, body) = self
+        let (title, body, related_title) = self
             .read_json(response, |value| {
                 let text = |name: &str| value.get(name).and_then(Value::as_str).map(str::to_owned);
+                // Exercise the host's proof with metadata in this very
+                // response. No other item is fetched or added to authority.
+                let related_title = if request.universal_reach() {
+                    match value.get("relatedTitle") {
+                        None => None,
+                        Some(Value::String(title)) => Some(title.clone()),
+                        Some(_) => {
+                            return Err(ProviderError::error(
+                                ReasonCode::UpstreamProtocolFailed,
+                                "conformance related title is malformed",
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
                 match (text("title"), text("body")) {
-                    (Some(title), Some(body)) => Ok((title, body)),
+                    (Some(title), Some(body)) => Ok((title, body, related_title)),
                     _ => Err(ProviderError::error(
                         ReasonCode::UpstreamProtocolFailed,
                         "conformance item is malformed",
@@ -675,13 +692,11 @@ impl ConformanceProvider {
                 }
             })
             .await?;
-        Ok(Self::result(
-            "item.view",
-            item,
-            json!({"item": {"path": item, "title": title, "body": body}}),
-            status,
-            started,
-        ))
+        let mut result = json!({"item": {"path": item, "title": title, "body": body}});
+        if let Some(related_title) = related_title {
+            result["item"]["relatedTitle"] = json!(related_title);
+        }
+        Ok(Self::result("item.view", item, result, status, started))
     }
 
     async fn download(
@@ -1353,6 +1368,10 @@ mod tests {
         let ping = descriptor.action("endpoint.ping").unwrap();
         assert!(ping.requires_resource_attributes && !ping.read_only);
         let action = |name: &str| descriptor.action(name).unwrap();
+        assert!(action("item.view").reports_universal_reach);
+        for name in ["item.download", "item.upload", "endpoint.ping"] {
+            assert!(!action(name).reports_universal_reach);
+        }
         let view = response_capabilities(action("item.view").presentation.as_ref());
         assert!(view.supports_markdown_response() && view.supports_read_content());
         assert!(matches!(

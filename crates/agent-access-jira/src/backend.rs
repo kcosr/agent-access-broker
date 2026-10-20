@@ -37,6 +37,13 @@ pub trait JiraBackend: Send + Sync {
         credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<JiraIssue>, JiraBackendError>;
 
+    async fn issue_view(
+        &self,
+        issue_key: &str,
+        credential: &AtlassianCredential,
+        include_issue_links: bool,
+    ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError>;
+
     async fn issue_types(
         &self,
         _project: &str,
@@ -268,6 +275,34 @@ pub struct JiraIssue {
     pub assignee: Option<JiraUserSummary>,
     pub priority: Option<JiraPrioritySummary>,
     pub labels: Option<Vec<String>>,
+}
+
+/// View-only data. Links are absent when not requested or not returned by Jira.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JiraIssueView {
+    pub issue: JiraIssue,
+    pub issue_links: Option<Vec<JiraIssueViewLink>>,
+}
+
+/// Allowlisted metadata from a linked issue in the source issue's response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssueViewLink {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub link_type: String,
+    pub direction: JiraIssueLinkDirection,
+    pub relationship: String,
+    pub summary: Option<String>,
+    pub issue_type: Option<String>,
+}
+
+/// The linked issue's side of the relationship relative to the viewed issue.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum JiraIssueLinkDirection {
+    Inward,
+    Outward,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1018,6 +1053,55 @@ impl JiraBackend for HttpJiraBackend {
         let value = jira_response_value(response, self.limits.max_upstream_response_bytes).await?;
         Ok(JiraBackendResponse {
             value: issue_from_value(value)?,
+            status,
+            duration_ms: elapsed_ms(started),
+        })
+    }
+
+    async fn issue_view(
+        &self,
+        issue_key: &str,
+        credential: &AtlassianCredential,
+        include_issue_links: bool,
+    ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
+        if !include_issue_links {
+            let response = self.issue(issue_key, credential).await?;
+            return Ok(JiraBackendResponse {
+                value: JiraIssueView {
+                    issue: response.value,
+                    issue_links: None,
+                },
+                status: response.status,
+                duration_ms: response.duration_ms,
+            });
+        }
+        let mut url = self
+            .api_base(credential)?
+            .join(&format!("issue/{issue_key}"))
+            .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
+        url.query_pairs_mut().append_pair(
+            "fields",
+            "project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description,issuelinks",
+        );
+        let started = Instant::now();
+        let client = self.request_client(credential)?;
+        let response = send_jira_request(
+            client,
+            credential,
+            client
+                .request(Method::GET, url.clone())
+                .header("Accept", "application/json"),
+            UpstreamCall::new("issue.get"),
+        )
+        .await?;
+        let status = response.status().as_u16();
+        let value = jira_response_value(response, self.limits.max_upstream_response_bytes).await?;
+        let issue_links = viewed_issue_links_from_value(&value)?;
+        Ok(JiraBackendResponse {
+            value: JiraIssueView {
+                issue: issue_from_value(value)?,
+                issue_links,
+            },
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -2265,6 +2349,102 @@ pub(crate) fn elapsed_ms(started: Instant) -> u64 {
 
 pub(crate) fn issue_from_value(value: Value) -> Result<JiraIssue, JiraBackendError> {
     issue_from_value_with_description(value, true)
+}
+
+pub(crate) fn viewed_issue_links_from_value(
+    value: &Value,
+) -> Result<Option<Vec<JiraIssueViewLink>>, JiraBackendError> {
+    let Some(links) = value
+        .get("fields")
+        .and_then(|fields| fields.get("issuelinks"))
+    else {
+        return Ok(None);
+    };
+    let links = links
+        .as_array()
+        .ok_or_else(|| JiraBackendError::Protocol("issue links must be an array".to_string()))?;
+    links
+        .iter()
+        .map(|link| {
+            let (linked_issue, direction, label_field) =
+                match (link.get("inwardIssue"), link.get("outwardIssue")) {
+                    (Some(issue), None) => (issue, JiraIssueLinkDirection::Inward, "inward"),
+                    (None, Some(issue)) => (issue, JiraIssueLinkDirection::Outward, "outward"),
+                    _ => {
+                        return Err(JiraBackendError::Protocol(
+                            "issue link must include exactly one linked issue".to_string(),
+                        ));
+                    }
+                };
+            let key = linked_issue
+                .get("key")
+                .and_then(Value::as_str)
+                .filter(|key| is_issue_key(key))
+                .ok_or_else(|| {
+                    JiraBackendError::Protocol(
+                        "issue link must include a valid issue key".to_string(),
+                    )
+                })?;
+            let link_type = link
+                .get("type")
+                .ok_or_else(|| JiraBackendError::Protocol("issue link type missing".to_string()))?;
+            let name = link_type
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| {
+                    JiraBackendError::Protocol("issue link type name missing".to_string())
+                })?;
+            let relationship = link_type
+                .get(label_field)
+                .and_then(Value::as_str)
+                .filter(|label| !label.trim().is_empty())
+                .ok_or_else(|| {
+                    JiraBackendError::Protocol("issue link relationship label missing".to_string())
+                })?;
+            let fields = match linked_issue.get("fields") {
+                None | Some(Value::Null) => None,
+                Some(Value::Object(fields)) => Some(fields),
+                Some(_) => {
+                    return Err(JiraBackendError::Protocol(
+                        "linked issue fields must be an object".to_string(),
+                    ));
+                }
+            };
+            let summary = match fields.and_then(|fields| fields.get("summary")) {
+                None | Some(Value::Null) => None,
+                Some(Value::String(summary)) => Some(summary.clone()),
+                Some(_) => {
+                    return Err(JiraBackendError::Protocol(
+                        "linked issue summary must be a string".to_string(),
+                    ));
+                }
+            };
+            let issue_type = match fields.and_then(|fields| fields.get("issuetype")) {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            JiraBackendError::Protocol(
+                                "linked issue type must include a string name".to_string(),
+                            )
+                        })?
+                        .to_string(),
+                ),
+            };
+            Ok(JiraIssueViewLink {
+                key: key.to_string(),
+                link_type: name.to_string(),
+                direction,
+                relationship: relationship.to_string(),
+                summary,
+                issue_type,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 pub(crate) fn issue_summary_from_value(value: Value) -> Result<JiraIssue, JiraBackendError> {

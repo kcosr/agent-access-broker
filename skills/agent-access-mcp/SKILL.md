@@ -179,6 +179,20 @@ or page fields, preserve required query settings, and stop when continuation
 ends or the user's requested scope is met. Never invent cursors or substitute
 raw offsets. A saved response still represents only the requested page or slice.
 
+## Jira issue links
+
+`jira.issue.view` can include `issueLinks` only when effective access covers
+all projects in the selected credential mode. Each entry has `key`, `type`
+(relationship type), `direction`, `relationship` (directional label), and nullable
+`summary` and `issueType`. Read the relationship as
+`<viewed issue> <relationship> <key>`: outward `blocks` means the viewed issue
+blocks the linked issue; inward `is blocked by` means the viewed issue is blocked
+by the linked issue. Missing `issueLinks` means withheld or not supplied,
+never "no links"; `[]` means Jira returned an empty list. Entries preserve Jira's
+order and embedded keys, which may be stale. A separate view of a linked key
+performs its own authorization and lookup and can fail. Search and mutation
+readbacks do not include links. Do not broaden token permissions to obtain them.
+
 ## GitLab repository discovery and content search
 
 Use `project.search` to discover authorized GitLab projects live, including

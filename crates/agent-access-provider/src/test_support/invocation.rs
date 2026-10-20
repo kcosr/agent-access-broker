@@ -20,6 +20,7 @@ pub struct InvocationBuilder {
     correlation: CorrelationContext,
     credential_mode: CredentialMode,
     authority: InvocationAuthority,
+    universal_reach: bool,
     execution: ExecutionAccess,
     lookup_access: Option<LookupAccess>,
     body_parts: Vec<BrokerBodyPart>,
@@ -38,6 +39,7 @@ impl InvocationBuilder {
             correlation: CorrelationContext::for_tests(),
             credential_mode: CredentialMode::Service,
             authority: InvocationAuthority::ActionOnly,
+            universal_reach: false,
             execution: ExecutionAccess::None,
             lookup_access: None,
             body_parts: Vec::new(),
@@ -113,6 +115,13 @@ impl InvocationBuilder {
         self
     }
 
+    /// Supply the host's same-response disclosure proof for a provider test.
+    /// Defaults to false; does not change exact resource authority.
+    pub fn universal_reach(mut self, universal_reach: bool) -> Self {
+        self.universal_reach = universal_reach;
+        self
+    }
+
     /// Static execution credential, replacing any delegated credential:
     /// static and delegated material never coexist.
     pub fn credential(mut self, credential: ExecutionCredential) -> Self {
@@ -184,6 +193,7 @@ impl InvocationBuilder {
             correlation: self.correlation.clone(),
             credential_mode: self.credential_mode,
             authority: self.authority.clone(),
+            universal_reach: self.universal_reach,
             inputs: self.inputs.clone(),
             execution: self.execution.clone(),
             lookup_access: self.lookup_access.clone(),
@@ -214,6 +224,7 @@ impl From<ProviderInvocation> for InvocationBuilder {
             correlation: context.correlation().clone(),
             credential_mode: context.credential_mode(),
             authority: context.authority().clone(),
+            universal_reach: context.universal_reach(),
             execution: invocation.execution().clone(),
             lookup_access: invocation.lookup_access().cloned(),
             body_parts: invocation.body_parts().to_vec(),

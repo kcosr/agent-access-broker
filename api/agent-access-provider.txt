@@ -102,6 +102,7 @@ pub agent_access_provider::host::AdmittedRequestParts::identity: agent_access_pr
 pub agent_access_provider::host::AdmittedRequestParts::inputs: serde_json::value::Value
 pub agent_access_provider::host::AdmittedRequestParts::lookup_access: core::option::Option<agent_access_provider::LookupAccess>
 pub agent_access_provider::host::AdmittedRequestParts::service: alloc::string::String
+pub agent_access_provider::host::AdmittedRequestParts::universal_reach: bool
 impl core::fmt::Debug for agent_access_provider::host::AdmittedRequestParts
 pub fn agent_access_provider::host::AdmittedRequestParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::host::AdmittedRequestParts
@@ -1777,6 +1778,7 @@ pub agent_access_provider::ActionDescriptor::lookup: agent_access_provider::Look
 pub agent_access_provider::ActionDescriptor::native_search: core::option::Option<agent_access_provider::NativeSearchEnforcement>
 pub agent_access_provider::ActionDescriptor::presentation: core::option::Option<agent_access_provider::presentation::ActionPresentation>
 pub agent_access_provider::ActionDescriptor::read_only: bool
+pub agent_access_provider::ActionDescriptor::reports_universal_reach: bool
 pub agent_access_provider::ActionDescriptor::requires_resource_attributes: bool
 pub agent_access_provider::ActionDescriptor::requires_stable_signing_key: bool
 pub agent_access_provider::ActionDescriptor::resource_scope: core::option::Option<alloc::string::String>
@@ -1797,6 +1799,7 @@ pub fn agent_access_provider::ActionDescriptor::presentation(self, core::option:
 pub fn agent_access_provider::ActionDescriptor::raw_download(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::raw_scoped_mcp_name(&self) -> core::option::Option<&str>
 pub fn agent_access_provider::ActionDescriptor::read_only(self) -> Self
+pub fn agent_access_provider::ActionDescriptor::reports_universal_reach(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::required_scope_types(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::requires_stable_signing_key(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::resource_attributes(self) -> Self
@@ -1840,6 +1843,7 @@ pub fn agent_access_provider::AdmittedContext::identity(&self) -> &agent_access_
 pub fn agent_access_provider::AdmittedContext::resource_scopes(&self) -> core::result::Result<&agent_access_provider::ResourceScopes, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedContext::search_authorization(&self) -> core::result::Result<&agent_access_provider::SearchAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedContext::service(&self) -> &str
+pub fn agent_access_provider::AdmittedContext::universal_reach(&self) -> bool
 impl core::clone::Clone for agent_access_provider::AdmittedContext
 pub fn agent_access_provider::AdmittedContext::clone(&self) -> agent_access_provider::AdmittedContext
 impl core::fmt::Debug for agent_access_provider::AdmittedContext
@@ -1866,6 +1870,7 @@ pub fn agent_access_provider::AdmittedRequest::lookup_access(&self) -> core::opt
 pub fn agent_access_provider::AdmittedRequest::resource_scopes(&self) -> core::result::Result<&agent_access_provider::ResourceScopes, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedRequest::search_authorization(&self) -> core::result::Result<&agent_access_provider::SearchAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedRequest::service(&self) -> &str
+pub fn agent_access_provider::AdmittedRequest::universal_reach(&self) -> bool
 impl core::clone::Clone for agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::AdmittedRequest::clone(&self) -> agent_access_provider::AdmittedRequest
 impl core::fmt::Debug for agent_access_provider::AdmittedRequest
@@ -3057,6 +3062,7 @@ pub fn agent_access_provider::ProviderInvocation::resource_scopes(&self) -> core
 pub fn agent_access_provider::ProviderInvocation::search_authorization(&self) -> core::result::Result<&agent_access_provider::SearchAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::ProviderInvocation::service(&self) -> &str
 pub fn agent_access_provider::ProviderInvocation::state(&self) -> core::option::Option<&agent_access_provider::ProviderState>
+pub fn agent_access_provider::ProviderInvocation::universal_reach(&self) -> bool
 impl core::clone::Clone for agent_access_provider::ProviderInvocation
 pub fn agent_access_provider::ProviderInvocation::clone(&self) -> agent_access_provider::ProviderInvocation
 impl core::fmt::Debug for agent_access_provider::ProviderInvocation

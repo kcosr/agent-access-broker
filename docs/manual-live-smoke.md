@@ -450,6 +450,45 @@ oversized returned issue description or comment body must fail with the fixed
 sanitized `upstream_protocol_failed`/502 response and no partial output. Do
 not lower a shared live broker's limit solely for this check.
 
+### Jira embedded-link checks
+
+Use prearranged, explicitly authorized fixture issues for these read checks.
+The fixtures should contain inward and outward links, a target whose project
+was moved or renamed, and targets restricted by Browse permission or issue
+security. Preparing or changing those fixtures is a separate administrator
+task; the checks below require no mutations.
+
+Read the source through `jira issue view` in JSON and Markdown with an
+unrestricted agent token whose effective `issue.view` coverage is universal
+in its selected mode, then with a project-restricted token that can read the
+same source. Confirm:
+
+- The universal caller receives only `key`, `type`, `direction`,
+  `relationship`, `summary` and `issueType` for each embedded link, in Jira's
+  order. The restricted caller receives no `issueLinks` field or Markdown
+  section, including for links in the source project.
+- Compare the result with the source issue's Jira REST response under the
+  same execution account. Record Jira's handling of Browse and issue-security
+  restrictions, and whether moved or renamed targets retain an older embedded
+  key. Broker does not independently confirm linked targets.
+- Check the canonical `fields.issuetype` spelling and absent/null summary or
+  issue type values. An explicit empty upstream array produces `[]` and a
+  Markdown `None.` section. If an existing fixture has linking disabled or
+  its Linked Issues field hidden, record whether Jira omits the field; an
+  omitted field must remain absent in Broker output.
+- A separate view of a linked key performs ordinary current lookup and
+  authorization. Record any difference caused by a narrower lookup account;
+  link presence is not a promise that this direct view succeeds.
+- Repeat for service-token and delegated OAuth access where those modes are
+  part of the deployment. Inspect audit for link disclosure status and only
+  disclosed counts, with no linked keys, titles or other content.
+
+Preserve sanitized observations and mark unavailable fixture cases as untested.
+Offline synthetic tests do not validate Jira's tenant-specific embedded
+visibility behavior.
+
+### Jira mutation checks
+
 Update a description from Markdown:
 
 ```bash

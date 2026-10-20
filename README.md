@@ -45,6 +45,11 @@ Native integrations pair action permissions with the following resource controls
 | [Git HTTP gateway](docs/git-http-gateway.md) | Git fetch and push | Repositories and namespaces |
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
 
+Jira issue views can include [linked issue titles, types and relationships](docs/providers-jira.md#issue-links)
+when effective `issue.view` access covers every project in the selected credential
+mode. Project restrictions or gaps in that coverage omit the entire links field;
+absence does not mean an issue has no links.
+
 GitLab [repository discovery and content search](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
 can find authorized repositories live, including namespace-granted projects that
 are not individually registered in `resources_list`, then search issues, merge

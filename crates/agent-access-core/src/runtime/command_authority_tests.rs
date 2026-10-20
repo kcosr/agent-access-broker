@@ -604,6 +604,32 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     let descriptor =
         crate::runtime::imports::descriptor(&declaring, &config, &published_types(&declaring));
     descriptor.validate().unwrap();
+    for action in &descriptor.actions {
+        assert!(!action.reports_universal_reach);
+        assert!(matches!(
+            action.scoped_mcp_name_source,
+            ScopedMcpNameSource::Imported { .. }
+        ));
+    }
+    // Both Broker-enforced and command-enforced import descriptors refuse
+    // a forged native opt-in, rather than exposing a disclosure proof.
+    for name in ["issue.view", "issue.search"] {
+        let mut forged = descriptor.clone();
+        let action = forged
+            .actions
+            .iter_mut()
+            .find(|action| action.action == name)
+            .unwrap();
+        action.read_only = true;
+        action.reports_universal_reach = true;
+        assert!(
+            forged
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("universal reach requires"))
+        );
+    }
     let view = descriptor.action("issue.view").unwrap();
     assert_eq!(view.resource_scope.as_deref(), Some("project"));
     assert!(
@@ -679,6 +705,7 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     let unlinked = &unlinked_services[SERVICE];
     for action in &unlinked.actions {
         assert!(action.native_search.is_none());
+        assert!(!action.reports_universal_reach);
         assert_eq!(
             unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type,
             *UNRESOLVED_RESOURCE_TYPE.id()

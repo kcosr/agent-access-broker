@@ -410,7 +410,12 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   issue-type ID into issue creation. It also covers renamed project keys:
   previous-key issue keys and browser URLs resolve to the current issue when
   the current project is granted, and deny without content on every issue
-  path when only the previous key is.
+  path when only the previous key is. Embedded issue links exercise real
+  Broker token admission: unrestricted same-mode coverage includes links in
+  JSON/Markdown, a project-restricted token omits them, and upstream absent
+  versus empty lists stay distinct without linked-issue requests. This uses a
+  stub Jira backend; live upstream permissions and embedded field behavior
+  require the [manual link checks](manual-live-smoke.md#jira-embedded-link-checks).
 - `confluence_smoke.rs`
 - `gitlab_smoke.rs`
 - `gitlab_search_smoke.rs` drives repository discovery and all six native

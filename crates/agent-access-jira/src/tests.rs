@@ -26,6 +26,9 @@ mod moved_issue_tests;
 #[path = "search_continuation_tests.rs"]
 mod search_continuation_tests;
 
+#[path = "issue_view_links_tests.rs"]
+mod issue_view_links_tests;
+
 #[test]
 fn parses_issue_keys_and_rejects_lowercase_or_zero_numbers() {
     assert!(is_issue_key("PROJ-1"));
@@ -413,6 +416,8 @@ struct StubJiraBackend {
     issue_link_types: Mutex<Vec<JiraIssueLinkType>>,
     created_issue_links: Mutex<Vec<JiraIssueLinkCreateRequest>>,
     issue_link_readbacks: Mutex<BTreeMap<String, JiraIssueLinks>>,
+    issue_view_links: Mutex<Option<Vec<JiraIssueViewLink>>>,
+    issue_view_link_requests: Mutex<Vec<bool>>,
     issue_links_error: Mutex<Option<JiraBackendError>>,
     search_page: Mutex<Option<JiraSearchPage>>,
     last_search: Mutex<Option<JiraSearchRequest>>,
@@ -544,6 +549,29 @@ impl JiraBackend for StubJiraBackend {
                 .ok_or(JiraBackendError::NotFound)?,
             status: 200,
             duration_ms: 7,
+        })
+    }
+
+    async fn issue_view(
+        &self,
+        issue_key: &str,
+        credential: &AtlassianCredential,
+        include_issue_links: bool,
+    ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
+        self.issue_view_link_requests
+            .lock()
+            .unwrap()
+            .push(include_issue_links);
+        let response = self.issue(issue_key, credential).await?;
+        Ok(JiraBackendResponse {
+            value: JiraIssueView {
+                issue: response.value,
+                issue_links: include_issue_links
+                    .then(|| self.issue_view_links.lock().unwrap().clone())
+                    .flatten(),
+            },
+            status: response.status,
+            duration_ms: response.duration_ms,
         })
     }
 

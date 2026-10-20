@@ -126,6 +126,49 @@ pub(super) fn boundaries_cover(parts: &[ResourceBoundary], selector: &ResourceSe
 }
 
 impl BrokerRuntime {
+    /// A disclosure proof for metadata already in the source response, never
+    /// authority to widen execution. Every singleton target must select the
+    /// admitted mode under ordinary resource-sensitive policy precedence.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn admitted_universal_reach(
+        &self,
+        snapshot: &PolicySnapshot,
+        identity: &IdentityContext,
+        context: &ExecutionContext,
+        service: &str,
+        action: &ActionDescriptor,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
+        selected_mode: &str,
+    ) -> bool {
+        if !action.reports_universal_reach
+            || !action.read_only
+            || action.resource_scope.is_none()
+            || action.native_search.is_some()
+            || action.requires_resource_attributes
+            || !matches!(
+                action.scoped_mcp_name_source,
+                ScopedMcpNameSource::CanonicalAction
+            )
+            || self.command_enforced(service, &action.action)
+        {
+            return false;
+        }
+        let reachable = self
+            .effective_resource_clauses_for_modes(
+                snapshot,
+                identity,
+                context,
+                service,
+                &action.action,
+                token,
+                |mode| mode == selected_mode,
+            )
+            .iter()
+            .flat_map(EffectiveAccessClause::single_target_reach)
+            .collect::<Vec<_>>();
+        boundaries_cover(&reachable, &ResourceSelector::All)
+    }
+
     /// Catalog management views are filtered by the caller's delegated service authority.
     /// A mixed group is projected to visible resource IDs, never leaking foreign IDs.
     pub fn policy_resource_catalog_for_scope(

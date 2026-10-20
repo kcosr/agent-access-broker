@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- The provider SDK's exhaustive `host::AdmittedRequestParts` gains the required
+  `universal_reach: bool` field. Hosts must supply the result of the opted-in
+  action's same-mode universal resource-coverage proof, or `false`. This is a
+  disclosure hint for metadata in the same upstream response, not additional
+  authority; `InvocationAuthority` remains unchanged.
+
 - Native provider search authority now uses constructor-built, normalized
   `SearchAuthorizationScope` clauses (included selectors minus excluded
   selectors, unioned across clauses). The former scope variants are removed.
@@ -437,6 +443,19 @@ All notable changes to this project are documented in this file.
   `--enabled false` in place of `disable`.
 
 ### Added
+
+- Jira `issue.view` can return embedded linked issue keys, summaries, issue
+  types, relationship types, directions and labels when effective access to
+  that action covers every project in the selected credential mode. The
+  optional `issueLinks` field and Markdown section preserve upstream order and
+  distinguish an explicit empty list from omitted data. Scoped callers omit
+  the entire field; search and mutation readbacks are unchanged. No linked
+  issue requests are made.
+- Native scoped read actions can opt into
+  `ActionDescriptor::reports_universal_reach()` and inspect the host-computed
+  `universal_reach()` value on their admitted context or invocation. Coverage
+  preserves ordinary per-resource grant precedence, exclusions and token
+  restrictions. Test invocation builders default the value to `false`.
 
 - Confidential fixed-length continuations use AES-256-GCM with binding-separated
   HKDF keys and carried absolute expiry. Bounded upstream operations share atomic
