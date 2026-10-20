@@ -96,6 +96,7 @@ mod principal_access;
 mod resource_management;
 mod security_snapshot;
 mod service_limits;
+mod state_lock_lifetime;
 mod trusted_user_mcp;
 
 fn resource_id(scope: &str, value: &str) -> String {

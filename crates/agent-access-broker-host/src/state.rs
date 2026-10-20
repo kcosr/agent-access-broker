@@ -858,13 +858,20 @@ impl ReloadableState {
                 return Err(ManagedStoreError::VersionConflict);
             }
             let runtime = snapshot.runtime.clone();
-            tokio::task::spawn_blocking(move || operation(runtime))
-                .await
-                .map_err(|error| {
-                    ManagedStoreError::Unavailable(format!(
-                        "managed policy mutation task failed: {error}"
-                    ))
-                })?
+            // The write holds the snapshot's state locks until it returns: a
+            // Tokio shutdown can drop this owner while the blocking write
+            // still runs, and no other process may take the store meanwhile.
+            let state_locks = Arc::clone(&snapshot.state_locks);
+            tokio::task::spawn_blocking(move || {
+                let _state_locks = state_locks;
+                operation(runtime)
+            })
+            .await
+            .map_err(|error| {
+                ManagedStoreError::Unavailable(format!(
+                    "managed policy mutation task failed: {error}"
+                ))
+            })?
         })
         .await
         .map_err(|error| {
