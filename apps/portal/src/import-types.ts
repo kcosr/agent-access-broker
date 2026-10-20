@@ -139,6 +139,10 @@ export type ImportChangeBlocked = {
   affectedGrants: Array<{ id: string; reasonCode: string; reason: string }>;
   resources: Array<{ type: string; id: string }>;
 };
+/** An action's effects class: read-only identity access reaches only reads. */
+export type ImportClassification = "read" | "write";
+/** How an acceptance reclassifies one selected action: `from` is its current accepted class, or null for an action the acceptance adds. */
+export type ImportClassificationChange = { action: string; from: ImportClassification | null; to: ImportClassification };
 /** What an acceptance did to stored resources and types. */
 export type ImportResourceTypeEffects = {
   deletedAttributeValues: Array<{ resourceId: string; attributes: string[] }>;
@@ -191,6 +195,8 @@ export type ImportRecordResult = {
   /** Acceptances that deleted attribute values or dropped resource types. */
   resourceTypeEffects?: ImportResourceTypeEffects;
 };
+/** An acceptance's result, with how it reclassified its selected actions (empty when nothing changed). */
+export type ImportAcceptResult = ImportRecordResult & { classificationChanges: ImportClassificationChange[] };
 export type ImportPreviewResult = ImportRecordResult & {
   scopedMcpWarnings: ImportScopedMcpWarning[];
   preview: ImportPreview | null;

@@ -4,11 +4,12 @@ import { AdminButton } from "../../components/admin-access";
 // Reviewing a discovery preview: choose tools, operations or command actions
 // to accept, name them, classify their effects, choose the Broker type IDs of
 // a command's new resource types, and confirm changes that affect existing
-// grants.
+// grants, with the read/write classification changes they make.
 import { Fragment, useId, useState } from "react";
 import { ApiError } from "../../api";
 import type {
   ImportActionDefinition,
+  ImportClassificationChange,
   ImportPreviewResult,
   ImportResourceTypeChange,
   ImportResourceTypeDeclaration,
@@ -16,7 +17,7 @@ import type {
   ImportScopedMcpIssueCode,
   ImportScopedMcpWarning
 } from "../../import-types";
-import { affectedImportGrants, importItemNoun, importReviewRows, importSelectionError, type ImportReviewRow } from "../../lib/imports";
+import { affectedImportGrants, importClassificationChanges, importItemNoun, importReviewRows, importSelectionError, type ImportReviewRow } from "../../lib/imports";
 import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
 import {
   COMMAND_CHECK_CAVEAT,
@@ -186,6 +187,25 @@ export function ImportErrorAlert({ error }: { error: unknown }) {
         </>
       ) : null}
     </div>
+  );
+}
+
+/** The read/write classification changes an acceptance makes; actions changed to read join read-only identity access. */
+function ClassificationChanges({ changes }: { changes: ImportClassificationChange[] }) {
+  if (!changes.length) return null;
+  const reads = changes.filter((change) => change.to === "read").map((change) => change.action);
+  return (
+    <>
+      <p>Classification changes:</p>
+      <ul className="pt-catalog-error-list" aria-label="Classification changes">
+        {changes.map((change) => (
+          <li key={change.action} className="pt-catalog-break">
+            <span className="wb-mono">{change.action}</span> {change.from ? `changes from ${change.from} to ${change.to}` : `is added as a ${change.to}`}
+          </li>
+        ))}
+      </ul>
+      {reads.length ? <p className="pt-catalog-break">Read-only identity access will include: {reads.join(", ")}.</p> : null}
+    </>
   );
 }
 
@@ -362,6 +382,8 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   const [rows, setRows] = useState(() => importReviewRows(data));
   const [typeIds, setTypeIds] = useState<ResourceTypeIdChoices>(() => new Map());
   const [confirmed, setConfirmed] = useState(false);
+  // The broker's classification changes when it refused these selections for confirmation; authoritative until they change.
+  const [refusal, setRefusal] = useState<ImportClassificationChange[] | null>(null);
   const [search, setSearch] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -382,20 +404,26 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
       ? `Resolve the blocked resource type ${plural(blockedTypes.length, "change")} first.`
       : null;
   const affected = affectedImportGrants(data, rows);
+  const classificationChanges = refusal ?? importClassificationChanges(rows);
+  const confirmationRequired = affected.length > 0 || refusal !== null;
   const query = search.trim().toLowerCase();
   const matches = (row: ImportReviewRow) =>
     !query ||
     `${row.action} ${row.tool.definition.description} ${row.change} ${JSON.stringify(row.tool.definition.source)} ${JSON.stringify(openApiOperation(row.tool.definition))} ${command ? resourceCheckText(commandResourceCheck(row.tool.definition), types) : ""}`
       .toLowerCase()
       .includes(query);
-  const update = (key: string, change: Partial<ImportReviewRow>) => {
+  const edited = () => {
     setConfirmed(false);
+    setRefusal(null);
+  };
+  const update = (key: string, change: Partial<ImportReviewRow>) => {
+    edited();
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   };
   const selectedCount = rows.filter((row) => row.selected && row.selectable).length;
   const retained = rows.filter((row) => !row.selectable && matches(row));
   const commandChecked = command && rows.some((row) => commandResourceCheck(row.tool.definition).by === "command");
-  const blocked = Boolean(invalid || typeProblem) || (affected.length > 0 && !confirmed);
+  const blocked = Boolean(invalid || typeProblem) || (confirmationRequired && !confirmed);
 
   async function accept() {
     if (!writable || blocked) return;
@@ -405,7 +433,10 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
       await onAccept(rows, confirmed, typeIds);
       onClose();
     } catch (failure) {
-      setError(failure);
+      if (failure instanceof ApiError && failure.classificationChanges) {
+        setRefusal(failure.classificationChanges);
+        setConfirmed(false);
+      } else setError(failure);
       setPending(false);
     }
   }
@@ -478,7 +509,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
                     aria-label={`Select ${selected ? "all" : "none"} matching ${label.toLowerCase()} ${items}`}
                     disabled={pending || !group.some((row) => row.selected !== selected)}
                     onClick={() => {
-                      setConfirmed(false);
+                      edited();
                       setRows((current) => current.map((row) => (group.some((match) => match.key === row.key) ? { ...row, selected } : row)));
                     }}
                   >
@@ -510,9 +541,11 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
           ))}
         </section>
       ) : null}
-      {affected.length ? (
+      {confirmationRequired ? (
         <Banner tone="warning" slim title="Existing grants to review">
-          <p className="pt-catalog-break">Existing grants to review: {affected.join(", ")}</p>
+          {affected.length ? <p className="pt-catalog-break">Existing grants to review: {affected.join(", ")}</p> : null}
+          {refusal ? <p role="alert">The broker found existing grants that these changes affect. Review the changes and confirm to accept them.</p> : null}
+          <ClassificationChanges changes={classificationChanges} />
           <Checkbox
             label="I reviewed the affected grants and approve these action changes."
             checked={confirmed}

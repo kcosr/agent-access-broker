@@ -77,6 +77,7 @@ mod gitlab_uploads;
 mod gitlab_webhooks;
 mod gmail;
 mod identity_management;
+mod identity_path_controls;
 mod imports_foundation;
 mod imports_mcp;
 mod imports_publication;
@@ -19337,6 +19338,7 @@ mod imports_command_contract;
 mod imports_command_dispatch;
 mod imports_command_types;
 mod imports_management;
+mod imports_reclassification;
 
 // Real descriptors in discovery fixtures need locally usable credential material.
 fn synthetic_credential_ref() -> String {

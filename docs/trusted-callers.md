@@ -84,7 +84,9 @@ exact. Numeric-looking names remain names. Broker does not trim, case-fold,
 percent-decode, normalize Unicode, split commas, or look up OS users, emails or
 principal IDs. The configured namespace and exact name must have an enabled
 [managed binding](managed-identity.md#username-bindings) to an active human with
-unpaused identity access. Username access does not require an identity token.
+unpaused identity access. Username access does not require an identity token. A
+read-only binding limits the connection to actions classified as reads; see
+[access path controls](managed-identity.md#access-path-controls).
 
 Presence of `X-Agent-Access-User` selects username authentication before ordinary
 token authentication. Duplicate, empty, malformed, comma-combined or overlong
@@ -126,6 +128,9 @@ A fingerprint requires `allow_forwarded_identity = true`. It has exactly the for
 `sha256:` plus 64 lowercase hexadecimal digits. Forbidden or malformed forwarding
 fails even beside a valid principal token. An explicit principal credential
 remains authoritative; an invalid one never falls back to the fingerprint.
+The fingerprint must belong to the enabled identity token of an active human with
+unpaused identity access; a disabled token is an unknown fingerprint. A read-only
+identity token limits fingerprint access to actions classified as reads.
 Fingerprint identity grants invocation access only. Git also requires its gateway
 `allow_forwarded_identity = true` to accept token-free fingerprint identity;
 all gateways enforce supplied caller authentication regardless of that opt-in.
@@ -145,7 +150,9 @@ identity-source and browser CSRF header configuration.
 Caller ID is recorded separately from principal identity source. Username identity
 uses source name/kind `trusted_user`, header `x-agent-access-user`, scheme
 `asserted`, class `agent_invoke`, and no token ID. Successful access records include
-the namespace and opaque binding ID. Ordinary tokens retain their token provenance.
+the namespace and opaque binding ID. Username and fingerprint identity sources
+record `readOnlyAccess`, the admitted path's read-only setting. Ordinary tokens
+retain their token provenance and omit it.
 Caller trust does not confer client-address trust; `network.trusted_proxies` is
 independent. Logs and denial bodies do not expose caller secrets, fingerprints,
 raw failed usernames or private session proofs.
@@ -192,9 +199,15 @@ result. The reserved combinations are:
 | `request.admit` | `identity_unavailable`, `audit_unavailable` | 503 | `error` | Yes |
 
 Username denials deliberately conceal whether the binding, human or pause gate
-caused rejection. Fingerprint failures retain their existing 401 `identity_invalid`
-behavior; principal-disabled behavior retains its existing tuple. Mandatory audit
-failure may supersede the original denial.
+caused rejection; a disabled binding is denied like an unknown name. Fingerprint
+failures, including a disabled identity token, retain their existing 401
+`identity_invalid` behavior; principal-disabled behavior retains its existing
+tuple. Mandatory audit failure may supersede the original denial.
+
+A write refused on a [read-only path](managed-identity.md#read-only-paths) is not
+one of these tuples. It is the requested service's 403 `service_action_denied`
+with reason `identity access is read-only`, refused before credential or provider
+work.
 
 Before MCP protocol dispatch, username failures use this JSON envelope at the
 outer HTTP status, `Cache-Control: no-store`, and a 401 Bearer challenge with realm

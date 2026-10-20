@@ -18,19 +18,30 @@ test("identity mutations retain exact names, CSRF and current versions on canoni
   vi.stubGlobal("fetch", fetch);
   const session = { authenticated: true, role: "admin" as const, csrfHeader: "x-csrf-token", csrfToken: "fixture-csrf" };
   await brokerApi.adminSetIdentityAccess(session, "user/1", { paused: true, expectedVersion: 7 });
-  await brokerApi.adminCreateIdentityBinding(session, "user/1", { namespace: "managed_linux", username: "Alice+01@example.test" });
-  await brokerApi.adminSetIdentityBinding(session, "user/1", "binding/1", { enabled: false, expectedVersion: 3 });
-  await brokerApi.adminDeleteIdentityBinding(session, "user/1", "binding/1", 4);
+  await brokerApi.adminCreateIdentityBinding(session, "user/1", { namespace: "managed_linux", username: "Alice+01@example.test", readOnly: true });
+  await brokerApi.adminUpdateIdentityBinding(session, "user/1", "binding/1", { enabled: false, expectedVersion: 3 });
+  await brokerApi.adminUpdateIdentityBinding(session, "user/1", "binding/1", { readOnly: true, expectedVersion: 4 });
+  await brokerApi.adminDeleteIdentityBinding(session, "user/1", "binding/1", 5);
+  await brokerApi.adminUpdateIdentityToken(session, "user/1", { enabled: false, expectedRevision: 2 });
+  await brokerApi.adminUpdateIdentityToken(session, "user/1", { readOnly: true, expectedRevision: 3 });
   expect(fetch.mock.calls.map(([url, init]) => [url, init.method, init.body && JSON.parse(init.body)])).toEqual([
     ["/v1/admin/principals/user%2F1/identity-access", "PATCH", { paused: true, expectedVersion: 7 }],
-    ["/v1/admin/principals/user%2F1/identity-bindings", "POST", { namespace: "managed_linux", username: "Alice+01@example.test" }],
+    ["/v1/admin/principals/user%2F1/identity-bindings", "POST", { namespace: "managed_linux", username: "Alice+01@example.test", readOnly: true }],
     ["/v1/admin/principals/user%2F1/identity-bindings/binding%2F1", "PATCH", { enabled: false, expectedVersion: 3 }],
-    ["/v1/admin/principals/user%2F1/identity-bindings/binding%2F1?expectedVersion=4", "DELETE", undefined]
+    ["/v1/admin/principals/user%2F1/identity-bindings/binding%2F1", "PATCH", { readOnly: true, expectedVersion: 4 }],
+    ["/v1/admin/principals/user%2F1/identity-bindings/binding%2F1?expectedVersion=5", "DELETE", undefined],
+    ["/v1/admin/principals/user%2F1/identity-token", "PATCH", { enabled: false, expectedRevision: 2 }],
+    ["/v1/admin/principals/user%2F1/identity-token", "PATCH", { readOnly: true, expectedRevision: 3 }]
   ]);
   for (const [, init] of fetch.mock.calls) {
     expect(new Headers(init.headers).get("x-csrf-token")).toBe("fixture-csrf");
     expect(init.credentials).toBe("same-origin");
   }
+});
+
+test("a stale identity-token revision surfaces as a version conflict", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "identity_version_conflict", error: { message: "identity token revision changed" } }), { status: 409 })));
+  await expect(brokerApi.adminUpdateIdentityToken({ authenticated: true, role: "admin" }, "alice", { enabled: false, expectedRevision: 1 })).rejects.toMatchObject({ status: 409, reasonCode: "identity_version_conflict" });
 });
 
 test("identity gate and bindings are isolated by viewer, principal and inventory cache", () => {

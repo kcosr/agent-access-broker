@@ -3,6 +3,7 @@ mod identity_access;
 mod identity_tokens;
 pub use identity_access::{
     AttestedIdentityProof, IdentityAccessRecord, ResolvedAttestedIdentity, UsernameBindingRecord,
+    UsernameBindingUpdate,
 };
 mod principal_access;
 pub use principal_access::*;
@@ -46,7 +47,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use hmac::{Hmac, Mac};
-pub use identity_tokens::IdentityTokenMetadata;
+pub use identity_tokens::{IdentityTokenMetadata, IdentityTokenSettingsUpdate};
 pub use principal_service_limits::{
     PrincipalServiceLimitRecord, PrincipalServiceLimitWriteRequest,
 };
@@ -68,7 +69,9 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_OAUTH_REVOCATIONS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION;
+const MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION: &str =
+    "029_identity_access_path_controls";
 const MANAGED_STORE_OAUTH_REVOCATIONS_VERSION: &str = "028_oauth_revocations";
 const MANAGED_STORE_COMMAND_IMPORTS_VERSION: &str = "027_command_imports";
 const MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION: &str = "026_trusted_user_identity";
@@ -228,6 +231,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/oauth_revocations.sql"),
         seed: None,
         structural_validation: imported_store::validate_oauth_revocations_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION,
+        checksum: "cdac3e415f35e6ade68ebbadfe8cae3c05a2702e88204b374f0f3f3d1adfb63e",
+        sql: include_str!("managed_store/identity_access_path_controls.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_identity_access_path_controls_structure,
     },
 ];
 
@@ -697,6 +707,7 @@ impl ManagedStore {
         self.check_schema_ready()?;
         let conn = self.connection.lock().unwrap();
         identity_access::check_integrity(&conn)?;
+        identity_access::check_identity_token_rows(&conn)?;
         check_secret_material_ready(&conn, key_ring)?;
         identity_tokens::check_ready(&conn, key_ring)?;
         oauth::check_ready(&conn, key_ring)?;
@@ -9744,8 +9755,12 @@ mod tests {
         assert_eq!(rows[11].0, MANAGED_STORE_PRINCIPAL_ACCESS_VERSION);
         assert_eq!(rows[12].0, MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION);
         assert_eq!(rows[13].0, MANAGED_STORE_COMMAND_IMPORTS_VERSION);
-        assert_eq!(rows[14].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(rows[14].0, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION);
+        assert_eq!(rows[15].0, MANAGED_STORE_SCHEMA_VERSION);
+        assert_eq!(
+            rows[15].0,
+            MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION
+        );
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

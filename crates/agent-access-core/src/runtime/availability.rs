@@ -146,7 +146,7 @@ impl BrokerRuntime {
                     identity,
                     context,
                     snapshot,
-                    token.as_ref().map(|t| &t.caveats),
+                    token.as_ref(),
                 )
             })
             .collect()
@@ -158,7 +158,7 @@ impl BrokerRuntime {
         identity: &IdentityContext,
         context: &ExecutionContext,
         snapshot: &PolicySnapshot,
-        token: Option<&AgentInvokeTokenCaveats>,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
     ) -> AvailableService {
         let mut checks = BTreeMap::new();
         let mut clauses = BTreeMap::new();

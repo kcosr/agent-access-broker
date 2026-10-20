@@ -3,7 +3,7 @@ vi.mock("../src/app/session", () => ({ useSession: () => ({ session: { authentic
 import { describe, expect, test } from "vitest";
 import type { ImportActionDefinition, ImportPreviewResult } from "../src/import-types";
 import type { PolicyCatalogResult, PolicyGrantRecord } from "../src/types";
-import { affectedImportGrants, importReviewRows, importSelectionError, importSourceKey, selectedImportActions } from "../src/lib/imports";
+import { affectedImportGrants, importClassificationChanges, importReviewRows, importSelectionError, importSourceKey, selectedImportActions } from "../src/lib/imports";
 import { policyGrantBody, policyGrantDraft } from "../src/lib/helpers";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -101,6 +101,51 @@ describe("import review", () => {
     const restored = importReviewRows(data);
     restored[0].selected = true;
     expect(affectedImportGrants(data, restored)).toEqual(["grant1"]);
+  });
+  test("classification changes compare selections with accepted definitions, never with hints", () => {
+    const data = fixture();
+    let rows = importReviewRows(data);
+    // The accepted read is unchanged; the upstream read-only hint on "new" is not a classification.
+    expect(importClassificationChanges(rows)).toEqual([]);
+    rows[1].selected = true;
+    rows[1].action = " query.metrics ";
+    expect(importClassificationChanges(rows)).toEqual([{ action: "query.metrics", from: null, to: "write" }]);
+    rows[1].readOnly = true;
+    rows[0].readOnly = false;
+    expect(importClassificationChanges(rows)).toEqual([
+      { action: "query.metrics", from: null, to: "read" },
+      { action: "read", from: "read", to: "write" }
+    ]);
+    // Unselected and unsupported rows are not reclassified.
+    rows[0].selected = false;
+    rows[2].selected = true;
+    expect(importClassificationChanges(rows)).toEqual([{ action: "query.metrics", from: null, to: "read" }]);
+    // Disabled and quarantined accepted definitions keep their class.
+    data.service.actions[0].status = "disabled";
+    data.service.actions[0].definition.readOnly = false;
+    rows = importReviewRows(data);
+    rows[0].selected = true;
+    rows[0].readOnly = true;
+    expect(importClassificationChanges(rows)).toEqual([{ action: "read", from: "write", to: "read" }]);
+    rows[0].readOnly = false;
+    expect(importClassificationChanges(rows)).toEqual([]);
+  });
+  test("a source whose identity is retired is reclassified as an added action", () => {
+    const data = fixture();
+    data.service.actions[0].status = "retired";
+    data.preview!.manifest.tools[0].definition.action = "read.new";
+    const rows = importReviewRows(data);
+    expect(importClassificationChanges(rows)).toEqual([]);
+    rows[0].selected = true;
+    rows[0].readOnly = true;
+    expect(importClassificationChanges(rows)).toEqual([{ action: "read.new", from: null, to: "read" }]);
+  });
+  test("classification changes are ordered by action as the broker reports them", () => {
+    const data = fixture();
+    data.preview!.manifest.tools = ["b.item", "a_item", "a.item", "a-item"].map((action) => ({ definition: tool(action), unsupportedReason: null, readOnlyHint: null }));
+    const rows = importReviewRows(data).filter((row) => row.selectable);
+    for (const row of rows) row.selected = true;
+    expect(importClassificationChanges(rows).map((change) => change.action)).toEqual(["a-item", "a.item", "a_item", "b.item"]);
   });
   test("scoped name warnings remain provisional and do not disable aggregate acceptance", () => {
     const data = fixture();

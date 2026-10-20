@@ -3,6 +3,7 @@ use super::*;
 use agent_access_core::{
     BrokerTokensConfig, CredentialKeyRing, ManagedStore, ManagedStoreConfig, PrincipalRole,
     TrustedCallerConfig, TrustedCallerContextMode, TrustedCallerCredentialTransport,
+    UsernameBindingUpdate,
 };
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderMap;
@@ -163,7 +164,7 @@ async fn fixture_with(
                     })
                     .unwrap();
                 store
-                    .create_username_binding(principal, "linux", principal, "fixture")
+                    .create_username_binding(principal, "linux", principal, false, "fixture")
                     .unwrap();
             }
         },
@@ -257,7 +258,7 @@ fn mapping_aba(store: &ManagedStore) {
         .delete_username_binding("alice", &binding.binding_id, binding.version)
         .unwrap();
     store
-        .create_username_binding("alice", "linux", "alice", "fixture")
+        .create_username_binding("alice", "linux", "alice", false, "fixture")
         .unwrap();
 }
 fn binding_enabled_aba(store: &ManagedStore) {
@@ -266,20 +267,26 @@ fn binding_enabled_aba(store: &ManagedStore) {
         .unwrap()
         .pop()
         .unwrap();
-    let disabled = store
-        .set_username_binding_enabled(
+    let (_, disabled) = store
+        .update_username_binding(
             "alice",
             &binding.binding_id,
-            false,
+            UsernameBindingUpdate {
+                enabled: Some(false),
+                read_only: None,
+            },
             binding.version,
             "fixture",
         )
         .unwrap();
     store
-        .set_username_binding_enabled(
+        .update_username_binding(
             "alice",
             &binding.binding_id,
-            true,
+            UsernameBindingUpdate {
+                enabled: Some(true),
+                read_only: None,
+            },
             disabled.version,
             "fixture",
         )
@@ -407,7 +414,7 @@ async fn trusted_user_body_intake_cannot_rebind_to_replacement_human() {
         .delete_username_binding("alice", &binding.binding_id, binding.version)
         .unwrap();
     store
-        .create_username_binding("bob", "linux", "alice", "fixture")
+        .create_username_binding("bob", "linux", "alice", false, "fixture")
         .unwrap();
     release_tx.send(()).unwrap();
     assert_assertion_denied(pending.await.unwrap()).await;
@@ -579,6 +586,8 @@ async fn trusted_user_unchanged_caller_reload_preserves_session_but_loaded_secre
 
 #[tokio::test]
 async fn trusted_user_unavailable_cleanup_retains_unconfirmed_sessions() {
+    use futures_util::FutureExt;
+
     let (fixture, _, _) = fixture(1).await;
     let session = initialize(&fixture, false).await;
     let path = fixture
@@ -597,6 +606,12 @@ async fn trusted_user_unavailable_cleanup_retains_unconfirmed_sessions() {
             "ALTER TABLE principal_identity_access RENAME TO unavailable_identity_access",
         )
         .unwrap();
+    // Discard any stored completion: that pass may have read the table first.
+    let _ = fixture
+        .state
+        .mcp_cleanup_completed
+        .notified()
+        .now_or_never();
     assert_eq!(
         fixture
             .send(user_request(false, None, init()))
@@ -846,7 +861,7 @@ async fn trusted_user_service_scoped_sessions_keep_original_tool_names_and_view_
 async fn trusted_user_aliases_share_principal_capacity_without_sharing_session_owners() {
     let (fixture, store, _) = fixture(1).await;
     store
-        .create_username_binding("alice", "linux", "alias", "fixture")
+        .create_username_binding("alice", "linux", "alias", false, "fixture")
         .unwrap();
     let session = initialize(&fixture, false).await;
     let mut alias_init = user_request(false, None, init());
@@ -884,7 +899,7 @@ async fn trusted_user_remapped_human_reclaims_stale_global_capacity_immediately(
         .delete_username_binding("alice", &binding.binding_id, binding.version)
         .unwrap();
     store
-        .create_username_binding("bob", "linux", "alice", "fixture")
+        .create_username_binding("bob", "linux", "alice", false, "fixture")
         .unwrap();
     // The stale Alice session occupied the only global slot. Bob must not wait
     // for background expiry merely because the old binding names another human.
@@ -1110,7 +1125,10 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
 
 #[tokio::test]
 async fn trusted_user_prune_timeout_retains_worker_capacity_and_background_expiry_progresses() {
-    let (fixture, _, _) = fixture(2).await;
+    // Background cleanup starts paused. A background sweep would otherwise
+    // take the first barrier if it reached it before the request below, and
+    // a reap from before the session existed would report an empty store.
+    let (fixture, _, _) = fixture_with(2, IsolatedBroker::pause_mcp_cleanup).await;
     reload(&fixture, |config| {
         config.mcp.protocol_timeout_ms = 250;
         config.mcp.max_control_requests = 3;
@@ -1131,6 +1149,13 @@ async fn trusted_user_prune_timeout_retains_worker_capacity_and_background_expir
     tokio::time::timeout(Duration::from_secs(5), first.reached.notified())
         .await
         .unwrap();
+    // Only the request's store worker can hold the first barrier. Resume
+    // background cleanup: every session count it reports from now on is taken
+    // after the session was created.
+    fixture
+        .state
+        .mcp_cleanup_paused
+        .store(false, Ordering::SeqCst);
     let response = tokio::time::timeout(Duration::from_secs(2), pending)
         .await
         .unwrap()
@@ -1173,8 +1198,9 @@ async fn trusted_user_prune_timeout_retains_worker_capacity_and_background_expir
         // Neither another request nor the background sweep starts another blocked worker.
         assert!(fixture.state.mcp_prune_barrier.lock().unwrap().is_some());
     }
-    // Observe expiry performed by the background loop itself while the first
-    // store worker remains blocked. No incoming request drives this reaping.
+    // Observe expiry through the background loop's own reports while the
+    // first store worker remains blocked; no request is made meanwhile. Each
+    // report postdates the session, so an empty store means it has gone.
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             fixture.state.mcp_reap_completed.notified().await;
@@ -1199,7 +1225,9 @@ async fn trusted_user_prune_timeout_retains_worker_capacity_and_background_expir
             json!({"jsonrpc":"2.0","id":104,"method":"ping"}),
         ))
         .await;
-    assert_eq!(old.status(), StatusCode::NOT_FOUND);
+    let status = old.status();
+    let body = rpc_body(old).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     initialize(&fixture, false).await;
 }
 

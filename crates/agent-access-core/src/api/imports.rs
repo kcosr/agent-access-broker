@@ -77,7 +77,7 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
         &format!("{DETAIL}/accept"),
         "admin.imports.accept",
         accept,
-        service_result(),
+        accept_result(),
         vec![],
     ));
     for (path, operation) in [
@@ -386,6 +386,25 @@ fn service_result() -> Value {
         "resourceTypeEffects":resource_type_effects()
     }})
 }
+/// How an acceptance reclassified its selected actions, against their
+/// current accepted definitions: each one whose `readOnly` changed, and each
+/// one it added, with `from` null. Unchanged and unselected actions are
+/// omitted. A confirmation refusal reports the same list in its target.
+fn classification_changes() -> Value {
+    json!({"type":"array","maxItems":crate::imports::IMPORT_MAX_TOOLS,"items":{"type":"object","additionalProperties":false,
+    "required":["action","from","to"],"properties":{
+        "action":action_name(),"from":{"enum":[null,"read","write"]},"to":{"enum":["read","write"]}
+    }}})
+}
+fn accept_result() -> Value {
+    let mut result = service_result();
+    result["properties"]["classificationChanges"] = classification_changes();
+    result["required"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("classificationChanges"));
+    result
+}
 fn discovery_manifest() -> Value {
     let tool = json!({"type":"object","additionalProperties":false,
     "required":["definition","unsupportedReason","readOnlyHint"],"properties":{
@@ -597,6 +616,56 @@ mod tests {
         let mut wrong_identity = definition;
         wrong_identity["service"] = json!("Invalid ID");
         assert!(!validator.is_valid(&wrong_identity));
+    }
+
+    #[test]
+    fn acceptance_reports_classification_changes_and_other_mutations_do_not() {
+        let routes = route_specs();
+        let result = |operation: &str| {
+            routes
+                .iter()
+                .find(|route| route.operation == operation)
+                .unwrap()
+                .result_schema
+                .clone()
+                .unwrap()
+        };
+        let accepted = result("admin.imports.accept");
+        assert!(
+            accepted["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("classificationChanges"))
+        );
+        for operation in [
+            "admin.imports.update",
+            "admin.imports.status",
+            "admin.imports.preview",
+        ] {
+            assert!(
+                result(operation)["properties"]
+                    .get("classificationChanges")
+                    .is_none(),
+                "{operation}"
+            );
+        }
+        let validator = jsonschema::validator_for(&classification_changes()).unwrap();
+        let mut changes = json!([
+            {"action":"issue.create","from":null,"to":"write"},
+            {"action":"issue.view","from":"write","to":"read"}
+        ]);
+        assert!(validator.is_valid(&changes));
+        changes[1]["from"] = json!("unknown");
+        assert!(!validator.is_valid(&changes));
+        changes[1]["from"] = json!("read");
+        changes[1]["to"] = json!(null);
+        assert!(!validator.is_valid(&changes));
+        changes[1]["to"] = json!("write");
+        changes[1]["readOnly"] = json!(false);
+        assert!(!validator.is_valid(&changes));
+        changes[1].as_object_mut().unwrap().remove("readOnly");
+        changes[1].as_object_mut().unwrap().remove("from");
+        assert!(!validator.is_valid(&changes));
     }
 
     #[test]

@@ -8,7 +8,37 @@ use agent_access_core::{
 
 const GATE: &str = "/v1/admin/principals/alice/identity-access";
 const BINDINGS: &str = "/v1/admin/principals/alice/identity-bindings";
+const TOKEN: &str = "/v1/admin/principals/alice/identity-token";
 const CREATE: &str = r#"{"namespace":"Managed.Linux","username":"Alice+team@example.test"}"#;
+const TOKEN_PATCH: &str = "admin.principals.identity_token.patch";
+const BINDING_PATCH: &str = "admin.principals.identity_bindings.patch";
+
+/// A path's `(enabled, readOnly, fence)` as a response or audit reports it.
+fn path_settings(value: &Value, fence: &str) -> (bool, bool, i64) {
+    (
+        value["enabled"].as_bool().unwrap(),
+        value["readOnly"].as_bool().unwrap(),
+        value[fence].as_i64().unwrap(),
+    )
+}
+
+/// The management records of `operation` in `phase`, in append order.
+fn phase_records(fixture: &AuditFixture, operation: &str, phase: &str) -> Vec<Value> {
+    fixture
+        .records()
+        .into_iter()
+        .filter(|record| {
+            record["action"] == operation && record["providerAudit"]["management"]["phase"] == phase
+        })
+        .collect()
+}
+
+fn targets(records: &[Value]) -> Vec<Value> {
+    records
+        .iter()
+        .map(|record| record["providerAudit"]["management"]["target"].clone())
+        .collect()
+}
 
 async fn fixture() -> AuditFixture {
     audit_fixture_with(Backend::Sqlite, |config, _| {
@@ -318,6 +348,15 @@ async fn identity_management_admin_read_allows_auditors_and_rejects_invalid_writ
         assert!(!body.to_string().contains("synthetic-caller-secret"));
         assert!(!body.to_string().contains("credentialRef"));
     }
+    let (_, binding) = admin(&fixture, Method::POST, BINDINGS, Some(CREATE)).await;
+    let binding = format!(
+        "{BINDINGS}/{}",
+        binding["result"]["bindingId"].as_str().unwrap()
+    );
+    let (status, inventory) = fixture
+        .request(Method::GET, &token, TOKEN, None, "auditor-token-read")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
     for (method, path, body) in [
         (
             Method::PATCH,
@@ -325,6 +364,16 @@ async fn identity_management_admin_read_allows_auditors_and_rejects_invalid_writ
             r#"{"paused":true,"expectedVersion":1}"#,
         ),
         (Method::POST, BINDINGS, CREATE),
+        (
+            Method::PATCH,
+            binding.as_str(),
+            r#"{"readOnly":true,"expectedVersion":1}"#,
+        ),
+        (
+            Method::PATCH,
+            TOKEN,
+            r#"{"readOnly":true,"expectedRevision":1}"#,
+        ),
     ] {
         for (token, reason) in [
             (&token, "management_denied"),
@@ -374,11 +423,7 @@ async fn identity_management_admin_read_allows_auditors_and_rejects_invalid_writ
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
-    let (_, created) = admin(&fixture, Method::POST, BINDINGS, Some(CREATE)).await;
-    let path = format!(
-        "{BINDINGS}/{}",
-        created["result"]["bindingId"].as_str().unwrap()
-    );
+    let path = binding;
     for query in [
         "",
         "?expectedVersion=0",
@@ -391,6 +436,16 @@ async fn identity_management_admin_read_allows_auditors_and_rejects_invalid_writ
     }
     let (_, listed) = admin(&fixture, Method::GET, BINDINGS, None).await;
     assert_eq!(listed["result"]["bindings"].as_array().unwrap().len(), 1);
+    // Neither refused PATCH changed a setting.
+    assert_eq!(
+        path_settings(&listed["result"]["bindings"][0], "version"),
+        (true, false, 1)
+    );
+    let (_, inventory) = admin(&fixture, Method::GET, TOKEN, None).await;
+    assert_eq!(
+        path_settings(&inventory["result"], "revision"),
+        (true, false, 1)
+    );
 }
 
 #[tokio::test]
@@ -419,6 +474,25 @@ async fn identity_management_audit_preflight_failure_prevents_mutation() {
         .unwrap();
     assert!(!gate.paused);
     assert_eq!(gate.version, 1);
+    let (status, failed) = admin(
+        &fixture,
+        Method::PATCH,
+        TOKEN,
+        Some(r#"{"readOnly":true,"expectedRevision":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{failed}");
+    assert_eq!(failed["reasonCode"], "audit_unavailable");
+    let inventory = fixture
+        .state
+        .current()
+        .runtime
+        .managed_store()
+        .unwrap()
+        .identity_token_metadata("alice")
+        .unwrap();
+    assert!(!inventory.read_only);
+    assert_eq!(inventory.revision, 1);
     blocker.execute_batch("ROLLBACK").unwrap();
 }
 
@@ -438,13 +512,32 @@ async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in
             actor: "admin".into(),
         })
         .unwrap();
-    for (csrf, expected) in [
-        (None, StatusCode::FORBIDDEN),
-        (Some(fixture.csrf.as_str()), StatusCode::OK),
-    ] {
+    let inventory = || {
+        fixture
+            .state
+            .current()
+            .runtime
+            .managed_store()
+            .unwrap()
+            .identity_token_metadata("alice")
+            .unwrap()
+    };
+    let revision = inventory().revision;
+    let token_body = json!({"readOnly":true,"expectedRevision":revision}).to_string();
+    for ((uri, body), (csrf, expected)) in [
+        (GATE, r#"{"paused":true,"expectedVersion":1}"#.to_owned()),
+        (TOKEN, token_body),
+    ]
+    .into_iter()
+    .flat_map(|route| {
+        [
+            (route.clone(), (None, StatusCode::FORBIDDEN)),
+            (route, (Some(fixture.csrf.as_str()), StatusCode::OK)),
+        ]
+    }) {
         let mut request = Request::builder()
             .method(Method::PATCH)
-            .uri(GATE)
+            .uri(uri)
             .extension(ConnectInfo(
                 "127.0.0.1:43100".parse::<SocketAddr>().unwrap(),
             ))
@@ -459,20 +552,19 @@ async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in
         let response = fixture
             .app
             .clone()
-            .oneshot(
-                request
-                    .body(Body::from(r#"{"paused":true,"expectedVersion":1}"#))
-                    .unwrap(),
-            )
+            .oneshot(request.body(Body::from(body)).unwrap())
             .await
             .unwrap();
         let status = response.status();
         let body = response_json(response).await;
-        assert_eq!(status, expected, "{body}");
+        assert_eq!(status, expected, "{uri}: {body}");
         if csrf.is_none() {
             assert_eq!(body["reasonCode"], "csrf_invalid");
         }
     }
+    let inventory = inventory();
+    assert!(inventory.read_only);
+    assert_eq!(inventory.revision, revision + 1);
     let (status, session) = super::management_read_audit::cookie_get(
         fixture.app.clone(),
         fixture.cookie,
@@ -533,4 +625,334 @@ async fn identity_management_committed_write_keeps_success_when_completion_audit
             .unwrap()
             .paused
     );
+}
+
+#[tokio::test]
+async fn identity_management_binding_settings_patch_is_partial_and_audits_transaction_state() {
+    let fixture = fixture().await;
+    let (status, created) = admin(
+        &fixture,
+        Method::POST,
+        BINDINGS,
+        Some(
+            r#"{"namespace":"Managed.Linux","username":"Alice+team@example.test","readOnly":true}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(
+        path_settings(&created["result"], "version"),
+        (true, true, 1)
+    );
+    let binding = created["result"]["bindingId"].as_str().unwrap().to_owned();
+    let path = format!("{BINDINGS}/{binding}");
+    for (body, expected) in [
+        (
+            r#"{"readOnly":false,"expectedVersion":1}"#,
+            (true, false, 2),
+        ),
+        (
+            r#"{"enabled":false,"expectedVersion":2}"#,
+            (false, false, 3),
+        ),
+        (
+            r#"{"enabled":true,"readOnly":true,"expectedVersion":3}"#,
+            (true, true, 4),
+        ),
+        // Repeating current values writes nothing and keeps the version.
+        (
+            r#"{"enabled":true,"readOnly":true,"expectedVersion":4}"#,
+            (true, true, 4),
+        ),
+        (r#"{"readOnly":true,"expectedVersion":4}"#, (true, true, 4)),
+    ] {
+        let (status, patched) = admin(&fixture, Method::PATCH, &path, Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{body}: {patched}");
+        let result = &patched["result"];
+        assert_eq!(path_settings(result, "version"), expected, "{body}");
+        assert_eq!(result["bindingId"], binding.as_str());
+        assert_eq!(result["username"], "Alice+team@example.test");
+        assert_eq!(result["namespaceAvailable"], true);
+        assert_eq!(result["updatedBy"], "admin");
+    }
+    let (_, listed) = admin(&fixture, Method::GET, BINDINGS, None).await;
+    assert_eq!(
+        path_settings(&listed["result"]["bindings"][0], "version"),
+        (true, true, 4)
+    );
+    // An omitted readOnly creates a full-access binding.
+    let (status, second) = admin(
+        &fixture,
+        Method::POST,
+        BINDINGS,
+        Some(r#"{"namespace":"Managed.Linux","username":"second"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(
+        path_settings(&second["result"], "version"),
+        (true, false, 1)
+    );
+    let (status, _) = admin(
+        &fixture,
+        Method::DELETE,
+        &format!("{path}?expectedVersion=4"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let settings = |enabled, read_only, version| json!({"enabled": enabled, "readOnly": read_only, "version": version});
+    let preflights = targets(&phase_records(&fixture, BINDING_PATCH, "preflight"));
+    assert_eq!(preflights.len(), 5);
+    assert!(
+        preflights
+            .iter()
+            .all(|target| *target == json!({"principal":"alice","bindingId":binding}))
+    );
+    let completed = targets(&phase_records(&fixture, BINDING_PATCH, "success"));
+    let transitions = [
+        ((true, true, 1), (true, false, 2)),
+        ((true, false, 2), (false, false, 3)),
+        ((false, false, 3), (true, true, 4)),
+        ((true, true, 4), (true, true, 4)),
+        ((true, true, 4), (true, true, 4)),
+    ];
+    assert_eq!(completed.len(), transitions.len());
+    for (target, (before, after)) in completed.iter().zip(transitions) {
+        assert_eq!(
+            *target,
+            json!({"principal":"alice","bindingId":binding,"namespace":"Managed.Linux",
+                "before":settings(before.0, before.1, before.2),
+                "after":settings(after.0, after.1, after.2)})
+        );
+    }
+    let created = targets(&phase_records(
+        &fixture,
+        "admin.principals.identity_bindings.create",
+        "success",
+    ));
+    assert_eq!(created[0]["before"], Value::Null);
+    assert_eq!(created[0]["after"], settings(true, true, 1));
+    assert_eq!(created[1]["after"], settings(true, false, 1));
+    let deleted = targets(&phase_records(
+        &fixture,
+        "admin.principals.identity_bindings.delete",
+        "success",
+    ));
+    assert_eq!(deleted[0]["before"], settings(true, true, 4));
+    assert_eq!(deleted[0]["after"], Value::Null);
+    let audits = serde_json::to_string(&fixture.records()).unwrap();
+    assert!(!audits.contains("Alice+team@example.test"));
+}
+
+#[tokio::test]
+async fn identity_management_settings_patches_reject_invalid_and_stale_requests() {
+    let fixture = fixture().await;
+    let (_, created) = admin(&fixture, Method::POST, BINDINGS, Some(CREATE)).await;
+    let binding = format!(
+        "{BINDINGS}/{}",
+        created["result"]["bindingId"].as_str().unwrap()
+    );
+    for (path, fence, other) in [
+        (binding.as_str(), "expectedVersion", "expectedRevision"),
+        (TOKEN, "expectedRevision", "expectedVersion"),
+    ] {
+        for body in [
+            String::new(),
+            "{}".to_owned(),
+            "[true,1]".to_owned(),
+            format!(r#"{{"{fence}":1}}"#),
+            format!(r#"{{"enabled":null,"{fence}":1}}"#),
+            format!(r#"{{"readOnly":null,"{fence}":1}}"#),
+            format!(r#"{{"readOnly":"true","{fence}":1}}"#),
+            r#"{"enabled":true}"#.to_owned(),
+            format!(r#"{{"enabled":true,"{fence}":0}}"#),
+            format!(r#"{{"readOnly":true,"{fence}":-1}}"#),
+            format!(r#"{{"enabled":true,"{other}":1}}"#),
+            format!(r#"{{"enabled":true,"{fence}":1,"username":"replacement"}}"#),
+            format!(r#"{{"readOnly":true,"readOnly":false,"{fence}":1}}"#),
+        ] {
+            let (status, error) = admin(&fixture, Method::PATCH, path, Some(&body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {body}: {error}");
+            assert_eq!(error["reasonCode"], "input_invalid", "{path} {body}");
+        }
+        let (status, stale) = admin(
+            &fixture,
+            Method::PATCH,
+            path,
+            Some(&format!(r#"{{"readOnly":true,"{fence}":2}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{path}: {stale}");
+        assert_eq!(stale["reasonCode"], "identity_version_conflict");
+    }
+    // Unknown principals and non-human principals are refused.
+    let (status, missing) = admin(
+        &fixture,
+        Method::PATCH,
+        "/v1/admin/principals/unknown/identity-token",
+        Some(r#"{"readOnly":true,"expectedRevision":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(missing["reasonCode"], "principal_not_found");
+    let (status, created) = admin(
+        &fixture,
+        Method::POST,
+        "/v1/admin/principals",
+        Some(r#"{"principalId":"robot","kind":"service_account"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let (status, refused) = admin(
+        &fixture,
+        Method::PATCH,
+        "/v1/admin/principals/robot/identity-token",
+        Some(r#"{"enabled":false,"expectedRevision":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["reasonCode"], "input_invalid");
+    // Nothing changed: no completion was audited and both fences stand.
+    for operation in [BINDING_PATCH, TOKEN_PATCH] {
+        assert!(phase_records(&fixture, operation, "success").is_empty());
+    }
+    let (_, listed) = admin(&fixture, Method::GET, BINDINGS, None).await;
+    assert_eq!(
+        path_settings(&listed["result"]["bindings"][0], "version"),
+        (true, false, 1)
+    );
+    let (_, inventory) = admin(&fixture, Method::GET, TOKEN, None).await;
+    assert_eq!(
+        path_settings(&inventory["result"], "revision"),
+        (true, false, 1)
+    );
+}
+
+#[tokio::test]
+async fn identity_management_token_settings_patch_keeps_the_secret_lifecycle_independent() {
+    let fixture = fixture().await;
+    let (status, inventory) = admin(&fixture, Method::GET, TOKEN, None).await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+    assert_eq!(inventory["result"]["configured"], false);
+    assert_eq!(
+        path_settings(&inventory["result"], "revision"),
+        (true, false, 1)
+    );
+    // Settings apply to the not-configured row before any secret exists.
+    for (body, expected) in [
+        (r#"{"readOnly":true,"expectedRevision":1}"#, (true, true, 2)),
+        (r#"{"readOnly":true,"expectedRevision":2}"#, (true, true, 2)),
+        (
+            r#"{"enabled":false,"expectedRevision":2}"#,
+            (false, true, 3),
+        ),
+    ] {
+        let (status, patched) = admin(&fixture, Method::PATCH, TOKEN, Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{body}: {patched}");
+        assert_eq!(path_settings(&patched["result"], "revision"), expected);
+        assert_eq!(patched["result"]["configured"], false);
+        assert_eq!(patched["result"]["principalId"], "alice");
+        assert!(patched["result"].get("token").is_none());
+        assert!(patched["result"].get("fingerprint").is_none());
+    }
+    // Generating, replacing and removing the secret keep both settings.
+    let (status, generated) =
+        admin(&fixture, Method::POST, &format!("{TOKEN}/generate"), None).await;
+    assert_eq!(status, StatusCode::OK, "{generated}");
+    assert_eq!(generated["result"]["configured"], true);
+    assert_eq!(
+        path_settings(&generated["result"], "revision"),
+        (false, true, 4)
+    );
+    let (status, patched) = admin(
+        &fixture,
+        Method::PATCH,
+        TOKEN,
+        Some(r#"{"enabled":true,"readOnly":false,"expectedRevision":4}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(patched["result"]["configured"], true);
+    assert_eq!(
+        path_settings(&patched["result"], "revision"),
+        (true, false, 5)
+    );
+    let secret = "00000000-0000-4000-8000-00000000c0de";
+    let (status, set) = admin(
+        &fixture,
+        Method::PUT,
+        TOKEN,
+        Some(&json!({"token": secret}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(path_settings(&set["result"], "revision"), (true, false, 6));
+    let (status, revealed) = admin(&fixture, Method::POST, &format!("{TOKEN}/reveal"), None).await;
+    assert_eq!(status, StatusCode::OK, "{revealed}");
+    assert_eq!(revealed["result"]["token"], secret);
+    let (status, _) = admin(
+        &fixture,
+        Method::PATCH,
+        TOKEN,
+        Some(r#"{"readOnly":true,"expectedRevision":6}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // A settings change never touches the secret.
+    let (_, revealed) = admin(&fixture, Method::POST, &format!("{TOKEN}/reveal"), None).await;
+    assert_eq!(revealed["result"]["token"], secret);
+    let (status, removed) = admin(&fixture, Method::DELETE, TOKEN, None).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["result"]["configured"], false);
+    assert_eq!(
+        path_settings(&removed["result"], "revision"),
+        (true, true, 8)
+    );
+
+    let settings = |enabled, read_only, revision| json!({"enabled": enabled, "readOnly": read_only, "revision": revision});
+    let preflights = targets(&phase_records(&fixture, TOKEN_PATCH, "preflight"));
+    assert_eq!(preflights.len(), 5);
+    assert!(
+        preflights
+            .iter()
+            .all(|target| *target == json!({"principal":"alice"}))
+    );
+    let completed = targets(&phase_records(&fixture, TOKEN_PATCH, "success"));
+    let transitions = [
+        ((true, false, 1), (true, true, 2)),
+        ((true, true, 2), (true, true, 2)),
+        ((true, true, 2), (false, true, 3)),
+        ((false, true, 4), (true, false, 5)),
+        ((true, false, 6), (true, true, 7)),
+    ];
+    assert_eq!(completed.len(), transitions.len());
+    for (target, (before, after)) in completed.iter().zip(transitions) {
+        assert_eq!(
+            *target,
+            json!({"principal":"alice",
+                "before":settings(before.0, before.1, before.2),
+                "after":settings(after.0, after.1, after.2)})
+        );
+    }
+    for (operation, configured, after) in [
+        ("generate", true, (false, true, 4)),
+        ("set", true, (true, false, 6)),
+        ("remove", false, (true, true, 8)),
+    ] {
+        let completed = targets(&phase_records(
+            &fixture,
+            &format!("admin.principals.identity_token.{operation}"),
+            "success",
+        ));
+        assert_eq!(completed.len(), 1, "{operation}");
+        assert_eq!(
+            completed[0]["after"],
+            json!({"configured": configured, "enabled": after.0, "readOnly": after.1, "revision": after.2}),
+            "{operation}"
+        );
+    }
+    let audits = serde_json::to_string(&fixture.records()).unwrap();
+    assert!(!audits.contains(secret));
 }

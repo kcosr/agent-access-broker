@@ -37,7 +37,9 @@ In **Admin > Catalog > Import service**, a base administrator:
    is selected and discovery is refreshed.
 4. Reviews operations and explicitly assigns read-only or write-capable status,
    accepts the selection, provisions the execution credential and enables the
-   service. Existing action/context grants control access.
+   service. Existing action/context grants control access. Operations stay
+   write-capable until reviewed as read-only, and the classification also limits
+   [read-only identity paths](imported-services.md#classification-and-read-only-identity-access).
 
 Shared execution credentials and personal tokens use the existing service and
 per-user modes. A missing personal token never falls back to the shared token or

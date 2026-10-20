@@ -1102,15 +1102,49 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(identityInput).toHaveAttribute("type", "password");
 
     const identityAccess = page.getByRole("region", { name: "Identity access", exact: true });
+    const accessPaths = identityAccess.getByRole("table", { name: "Access paths", exact: true });
+    // The identity token is the first access path. Its settings change without touching the secret.
+    const tokenPath = accessPaths.getByRole("row").nth(1);
+    await expect(tokenPath).toHaveAccessibleName(/^Identity token/);
+    await expect(tokenPath.getByRole("button")).toHaveCount(0);
+    const tokenEnabled = tokenPath.getByRole("switch", { name: "Identity token enabled", exact: true });
+    const tokenReadOnly = tokenPath.getByRole("switch", { name: "Identity token read-only", exact: true });
+    await expect(tokenEnabled).toBeChecked();
+    await expect(tokenReadOnly).not.toBeChecked();
+    await tokenReadOnly.click();
+    await expect(tokenReadOnly).toBeChecked();
+    await tokenEnabled.click();
+    await expect(tokenEnabled).not.toBeChecked();
+    const tokenMetadataPath = `/v1/admin/principals/${principalId}/identity-token`;
+    expect(await browserManagementRequest(page, tokenMetadataPath)).toMatchObject({ configured: true, enabled: false, readOnly: true });
+    await expect(page.getByRole("region", { name: "Identity token", exact: true })).toContainText("This identity token is disabled in Access paths.");
+    // A disabled token keeps its secret.
+    await page.getByRole("button", { name: "Reveal identity token", exact: true }).click();
+    await expect(identityInput).toHaveValue(generatedIdentity);
+    await page.getByRole("button", { name: "Hide identity token", exact: true }).click();
+    await tokenEnabled.click();
+    await expect(tokenEnabled).toBeChecked();
+
     await identityAccess.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
     await identityAccess.getByLabel("Exact username", { exact: true }).fill("Alice+Portal");
+    await identityAccess.getByRole("checkbox", { name: "Read-only", exact: true }).check();
     await identityAccess.getByRole("button", { name: "Add username binding", exact: true }).click();
-    const bindingRow = identityAccess.getByRole("table", { name: "Username bindings", exact: true }).getByRole("row").filter({ hasText: "Alice+Portal" });
-    await expect(bindingRow).toContainText("Enabled");
-    await bindingRow.getByRole("button", { name: "Disable binding managed_linux/Alice+Portal", exact: true }).click();
-    await expect(bindingRow).toContainText("Disabled");
-    await bindingRow.getByRole("button", { name: "Enable binding managed_linux/Alice+Portal", exact: true }).click();
-    await expect(bindingRow).toContainText("Enabled");
+    const bindingRow = accessPaths.getByRole("row", { name: /^managed_linux\/Alice\+Portal/ });
+    const bindingEnabled = bindingRow.getByRole("switch", { name: "Binding managed_linux/Alice+Portal enabled", exact: true });
+    const bindingReadOnly = bindingRow.getByRole("switch", { name: "Binding managed_linux/Alice+Portal read-only", exact: true });
+    await expect(bindingEnabled).toBeChecked();
+    await expect(bindingReadOnly).toBeChecked();
+    await expect(identityAccess.getByRole("checkbox", { name: "Read-only", exact: true })).not.toBeChecked();
+    await bindingEnabled.click();
+    await expect(bindingEnabled).not.toBeChecked();
+    await bindingEnabled.click();
+    await expect(bindingEnabled).toBeChecked();
+    await bindingReadOnly.click();
+    await expect(bindingReadOnly).not.toBeChecked();
+    const bindingsPath = `/v1/admin/principals/${principalId}/identity-bindings`;
+    expect((await browserManagementRequest<{ bindings: unknown[] }>(page, bindingsPath)).bindings).toEqual([
+      expect.objectContaining({ namespace: "managed_linux", username: "Alice+Portal", enabled: true, readOnly: false, version: 4 })
+    ]);
     await page.getByRole("button", { name: "Pause identity access", exact: true }).click();
     await expect(page.getByRole("button", { name: "Resume identity access", exact: true })).toBeVisible();
     const importedIdentity = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -1126,7 +1160,11 @@ test("local browser login supports administration, self-service credentials, tok
     await page.reload();
     await expect(identityInput).toHaveValue("");
     await expect(page.getByRole("button", { name: "Reveal identity token", exact: true })).toBeDisabled();
-    await expect(bindingRow).toContainText("Enabled");
+    await expect(tokenPath).toContainText("Not configured");
+    // Secret changes keep the token's settings.
+    await expect(tokenReadOnly).toBeChecked();
+    await expect(tokenEnabled).toBeChecked();
+    await expect(bindingEnabled).toBeChecked();
     await expect(page.getByRole("button", { name: "Resume identity access", exact: true })).toBeVisible();
     // The gate remains usable with no fingerprint inventory and does not remove username bindings.
     await page.getByRole("button", { name: "Resume identity access", exact: true }).click();
@@ -1136,12 +1174,16 @@ test("local browser login supports administration, self-service credentials, tok
     await confirmDialog(page, "Generate a new identity token?", "Generate token");
     await page.reload();
     await expect(page.getByRole("button", { name: "Resume identity access", exact: true })).toBeVisible();
-    await expect(bindingRow).toContainText("Enabled");
+    await expect(bindingEnabled).toBeChecked();
+    expect(await browserManagementRequest(page, tokenMetadataPath)).toMatchObject({ configured: true, enabled: true, readOnly: true });
+    await tokenReadOnly.click();
+    await expect(tokenReadOnly).not.toBeChecked();
     await page.getByRole("button", { name: "Resume identity access", exact: true }).click();
     await expect(page.getByRole("button", { name: "Pause identity access", exact: true })).toBeVisible();
     await bindingRow.getByRole("button", { name: "Delete binding managed_linux/Alice+Portal", exact: true }).click();
     await confirmDialog(page, "Delete username binding?", "Delete binding");
     await expect(identityAccess.getByText("No username bindings.", { exact: true })).toBeVisible();
+    await expect(accessPaths.getByRole("row")).toHaveCount(2);
 
     // Managed-store service limit overrides start at the configured default and can be set and reset.
     const tabs = page.getByRole("navigation", { name: "User sections", exact: true });

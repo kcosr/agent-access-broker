@@ -728,7 +728,7 @@ async fn change(
                                 runtime.with_imported_catalog(catalog.clone(), providers)
                             })?;
                         let response = record_result(&mutation.value, &mutation.catalog, &service);
-                        Ok((mutation.value, (response, None)))
+                        Ok((mutation.value, Ok((response, None))))
                     }
                     Change::SecretPut(purpose) => {
                         let service = service.ok_or_else(|| invalid("service is required"))?;
@@ -766,7 +766,7 @@ async fn change(
                             },
                         )?;
                         let response = record_result(&mutation.value, &mutation.catalog, &service);
-                        Ok((mutation.value, (response, None)))
+                        Ok((mutation.value, Ok((response, None))))
                     }
                     Change::SecretDelete(purpose) => {
                         let service = service.ok_or_else(|| invalid("service is required"))?;
@@ -788,7 +788,7 @@ async fn change(
                             runtime.with_imported_catalog(catalog.clone(), providers)
                         })?;
                         let response = record_result(&mutation.value, &mutation.catalog, &service);
-                        Ok((mutation.value, (response, None)))
+                        Ok((mutation.value, Ok((response, None))))
                     }
                     kind => {
                         let service = service.ok_or_else(|| invalid("service is required"))?;
@@ -797,7 +797,7 @@ async fn change(
                             .service(&service)
                             .cloned()
                             .ok_or_else(|| invalid("imported service was not found"))?;
-                        let request = prepare_update(
+                        let (request, classification_changes) = match prepare_update(
                             &runtime,
                             store,
                             &record,
@@ -805,7 +805,14 @@ async fn change(
                             &config_revision,
                             body,
                             kind,
-                        )?;
+                        )? {
+                            Prepared::Update(request, changes) => (*request, changes),
+                            // A refusal publishes nothing: the unchanged
+                            // runtime keeps its import catalog.
+                            Prepared::ConfirmationRequired(changes) => {
+                                return Ok((runtime, Err(changes)));
+                            }
+                        };
                         let mut candidate = record.clone();
                         candidate.definition = request.definition.clone();
                         candidate.status = request.status;
@@ -837,19 +844,22 @@ async fn change(
                         if !effects.is_empty() {
                             response["resourceTypeEffects"] = json!(effects);
                         }
+                        if let Some(changes) = classification_changes {
+                            response["classificationChanges"] = json!(changes);
+                        }
                         let completion = super::import_types::acceptance_audit(
                             &service,
                             record.accepted_metadata.as_ref(),
                             accepted_metadata.as_ref(),
                             &effects,
                         );
-                        Ok((mutation.value, (response, completion)))
+                        Ok((mutation.value, Ok((response, completion))))
                     }
                 }
             })
             .await;
         match result {
-            Ok((result, completion)) => {
+            Ok(Ok((result, completion))) => {
                 // A committed acceptance keeps its success response if the
                 // supplemental completion audit is unavailable.
                 if let Some(completion) = completion {
@@ -861,6 +871,17 @@ async fn change(
                     .await;
                 }
                 management_pre_audited_success_response(&context, operation, target, result)
+            }
+            Ok(Err(changes)) => {
+                let mut target = target.unwrap_or_else(|| json!({}));
+                target["classificationChanges"] = json!(changes);
+                management_store_error_response(
+                    &context,
+                    operation,
+                    Some(target),
+                    invalid(ACCEPT_CONFIRMATION_REQUIRED),
+                )
+                .await
             }
             Err(error) => management_store_error_response(&context, operation, target, error).await,
         }
@@ -943,6 +964,46 @@ fn require_enabled_credentials(
     Ok(())
 }
 
+/// An imported action's classification, as its accepted `readOnly` sets it.
+/// Read-only identity paths reach only reads.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Classification {
+    Read,
+    Write,
+}
+impl Classification {
+    fn of(read_only: bool) -> Self {
+        if read_only { Self::Read } else { Self::Write }
+    }
+}
+
+/// How an acceptance reclassifies one selected action: `from` is the
+/// classification of its current accepted definition, or `None` for an
+/// action the acceptance adds.
+#[derive(Serialize)]
+struct ClassificationChange {
+    action: String,
+    from: Option<Classification>,
+    to: Classification,
+}
+
+/// What a service update, status change or acceptance prepared.
+enum Prepared {
+    /// The update to commit, with an acceptance's classification changes.
+    Update(
+        Box<ImportedServiceUpdateRequest>,
+        Option<Vec<ClassificationChange>>,
+    ),
+    /// An acceptance changing actions that retained grants name, sent
+    /// without `confirmAffectedGrants`. Its refusal reports the
+    /// classification changes it would have made.
+    ConfirmationRequired(Vec<ClassificationChange>),
+}
+
+const ACCEPT_CONFIRMATION_REQUIRED: &str =
+    "accepted changes affect existing grants; confirmAffectedGrants is required";
+
 fn prepare_update(
     runtime: &BrokerRuntime,
     store: &ManagedStore,
@@ -951,7 +1012,7 @@ fn prepare_update(
     config_revision: &str,
     body: Bytes,
     change: Change,
-) -> Result<ImportedServiceUpdateRequest, ManagedStoreError> {
+) -> Result<Prepared, ManagedStoreError> {
     let service = &record.definition.service;
     match change {
         Change::Update => {
@@ -975,7 +1036,7 @@ fn prepare_update(
             }
             let mut request = mutation_request(record, body.versions, actor);
             request.definition = body.definition;
-            Ok(request)
+            Ok(Prepared::Update(Box::new(request), None))
         }
         Change::Status => {
             let body: StatusBody = parse(body)?;
@@ -1003,7 +1064,7 @@ fn prepare_update(
             }
             let mut request = mutation_request(record, body.versions, actor);
             request.status = status;
-            Ok(request)
+            Ok(Prepared::Update(Box::new(request), None))
         }
         Change::ActionStatus(action) => {
             let body: StatusBody = parse(body)?;
@@ -1051,7 +1112,7 @@ fn prepare_update(
                 .find(|a| a.definition.action == action)
                 .expect("checked action")
                 .status = status;
-            Ok(request)
+            Ok(Prepared::Update(Box::new(request), None))
         }
         Change::Accept => {
             let body: AcceptBody = parse(body)?;
@@ -1100,6 +1161,8 @@ fn prepare_update(
             let mut sources = BTreeSet::new();
             let mut names = BTreeSet::new();
             let mut changed = BTreeSet::new();
+            // Judged against the current accepted state, never upstream hints.
+            let mut classification_changes = Vec::new();
             let adapter = runtime
                 .config()
                 .providers
@@ -1151,6 +1214,14 @@ fn prepare_update(
                     {
                         changed.insert(definition.action.clone());
                     }
+                    // Enabled, disabled and quarantined definitions alike.
+                    if old.definition.read_only != definition.read_only {
+                        classification_changes.push(ClassificationChange {
+                            action: definition.action.clone(),
+                            from: Some(Classification::of(old.definition.read_only)),
+                            to: Classification::of(definition.read_only),
+                        });
+                    }
                     let action = request
                         .actions
                         .iter_mut()
@@ -1166,18 +1237,22 @@ fn prepare_update(
                     {
                         return Err(invalid("action name already belongs to another source"));
                     }
+                    classification_changes.push(ClassificationChange {
+                        action: definition.action.clone(),
+                        from: None,
+                        to: Classification::of(definition.read_only),
+                    });
                     request.actions.push(ImportedActionWrite {
                         definition,
                         status: ImportedActionStatus::Enabled,
                     });
                 }
             }
+            classification_changes.sort_by(|a, b| a.action.cmp(&b.action));
             if !body.confirm_affected_grants
                 && !affected_grants(store, service, Some(&changed))?.is_empty()
             {
-                return Err(invalid(
-                    "accepted changes affect existing grants; confirmAffectedGrants is required",
-                ));
+                return Ok(Prepared::ConfirmationRequired(classification_changes));
             }
             if request.status == ImportedServiceStatus::Draft {
                 request.status = ImportedServiceStatus::Disabled;
@@ -1188,7 +1263,10 @@ fn prepare_update(
                 credential_versions: preview.credential_versions,
                 accepted_metadata,
             });
-            Ok(request)
+            Ok(Prepared::Update(
+                Box::new(request),
+                Some(classification_changes),
+            ))
         }
         _ => unreachable!("separate import mutation branch"),
     }

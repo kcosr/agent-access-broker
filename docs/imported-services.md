@@ -75,7 +75,9 @@ credential rewrap. See [database operations](database.md).
 4. Select tools and review their proposed action names and Read-only / Write-capable
    classification. Names are generated deterministically and may be edited before
    acceptance; accepted names remain stable. Upstream read-only hints are suggestions,
-   not authority. Unconfirmed actions are write-capable.
+   not authority. Unconfirmed actions are write-capable, so
+   [read-only identity paths](#classification-and-read-only-identity-access)
+   cannot use them.
    Choose short canonical action IDs: the aggregate MCP name combines the service
    and action IDs with underscores and must fit 128 characters. Acceptance rejects
    new names that collide after punctuation replacement, match a fixed Broker
@@ -105,7 +107,8 @@ discovery uses the upstream summary, operation ID, or HTTP method and path.
 Editing a label does not change that description. Agents receive the description
 and input schema; the display label is management UI metadata. Labels
 and Read-only / Write-capable classifications can be revised through a fresh discovery
-review; changing classifications affecting existing grants requires confirmation.
+review; changing classifications affecting existing grants requires
+[confirmation](#classification-and-read-only-identity-access).
 
 Descriptions and display labels are metadata. Schema or execution-annotation changes
 are behavioral changes. Disable is reversible. Retirement reserves the service/action
@@ -136,6 +139,46 @@ Mutations carry both the expected service version and catalog revision. A stale
 request fails with a version conflict. Refresh the record and review again. A preview
 also expires after configuration changes or selected discovery-credential rotation.
 A canceled HTTP response waiter does not abandon a committed catalog publication.
+
+### Classification and read-only identity access
+
+The Read-only / Write-capable classification is the administrator's reviewed
+statement of an action's upstream effect. It selects grant actions, and it is the
+ceiling of [read-only identity paths](managed-identity.md#read-only-paths): a
+read-only username binding or identity token can list and call only actions
+classified as Read-only, within the person's grants. Unreviewed actions are
+Write-capable and stay hidden from those paths.
+
+A request is judged on the runtime snapshot it was admitted with, so a
+reclassification applies to requests admitted after acceptance publishes it. A
+request already in flight for a changed action can still be refused by the
+existing import fences: at grant selection (for command imports, "policy denied
+command action") or before dispatch ("imported service changed or is
+unavailable; repeat discovery").
+
+Acceptance confirms and reports these changes:
+
+- **Confirmation.** An accept request needs `confirmAffectedGrants: true` when an
+  existing grant references a changed action, including one whose Read-only
+  selection changed. Every managed grant of the service that is not deleted
+  counts, disabled ones included, once however many subjects it has. Preview,
+  acceptance and refusal read the same grants.
+- **Classification changes.** The accept result always includes
+  `classificationChanges`, a list of `{action, from, to}` where `from` is
+  `"read"`, `"write"` or `null` (a newly accepted action) and `to` is `"read"` or
+  `"write"`. It lists each selected action whose current non-retired accepted
+  definition (enabled, disabled or quarantined) has the other classification, and
+  each newly accepted action; an acceptance that reclassifies nothing returns an
+  empty list. Unchanged, unselected and retired actions are omitted. Broker
+  computes it from the validated selections and the accepted state, never from
+  upstream hints. A refusal for a missing `confirmAffectedGrants` keeps its
+  message and `input_invalid` code and carries the same list in its `target`.
+  Saved-preview reads, settings updates and status changes do not report it;
+  settings updates cannot change classification.
+- **Portal review.** The import-review confirmation lists the same changes,
+  computed from the pending selections, and states that read-only identity access
+  will include any action changed to Read-only. The server's refusal remains
+  authoritative.
 
 ## Limits and admission
 
@@ -287,7 +330,9 @@ and `resourceTypeChanges`, the decision for each resource type the command
 adds, changes, restores or removes; see
 [Imported resource types](#imported-resource-types). Discovery and preview
 results add `resourceTypeChanges` with the stored resources each decision
-currently depends on. List, inspect, and saved-preview reads permit
+currently depends on. Accept results add `classificationChanges`; see
+[classification review](#classification-and-read-only-identity-access). List,
+inspect, and saved-preview reads permit
 administrators and auditors. Discovery and all changes require administrator
 write authority and normal browser CSRF protection. They are not agent-facing MCP tools. Service-policy
 managers may manage grants for approved actions but cannot import tools or change

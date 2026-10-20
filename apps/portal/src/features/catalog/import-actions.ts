@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { brokerApi } from "../../api";
 import type {
+  ImportAcceptResult,
   ImportActionStatus,
   ImportDefinition,
   ImportPreviewResult,
@@ -91,7 +92,7 @@ export function useImportActions() {
     }
 
     /** Accepts the selected actions; a command preview also takes the chosen Broker type IDs of its new resource types. */
-    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ResourceTypeIdChoices): Promise<ImportRecordResult> {
+    function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ResourceTypeIdChoices): Promise<ImportAcceptResult> {
       const preview = data.preview;
       if (!preview) return Promise.reject(new Error("This preview has expired. Run discovery again."));
       const selections = selectedImportActions(rows);

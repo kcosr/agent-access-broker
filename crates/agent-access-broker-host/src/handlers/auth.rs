@@ -1016,6 +1016,7 @@ fn cookie_identity_from_session(
         groups,
         Some(policy_groups),
         Some(IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "browser-session".to_string(),

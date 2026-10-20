@@ -417,7 +417,7 @@ report.
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
 | `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |
 | `credential_not_provisioned` | The service's credential connection offers no personal credential for your account type, or the service has none; or the action accepts only a token and your connection uses OAuth. Ask the administrator |
-| `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions |
+| `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions. Reason `identity access is read-only` means your managed workspace connection allows only reads; ask an administrator if it needs to write |
 | `execution_context_denied` | Use the correct ingress and a token/grant authorized for that context; token selection cannot attest context |
 | `broker_token_paused` | Resume only if the secret remains trusted; otherwise replace and revoke it |
 | `rate_limited` | A Broker limit rejected the request; wait its reported retry interval before trying again |

@@ -1,8 +1,9 @@
 # Agent Access Broker security model
 
 For trusted username authentication on HTTP MCP, registered fingerprint identity
-on existing invocation surfaces, explicit managed bindings and shared
-identity-access pause, see [managed identity](managed-identity.md). Named callers
+on existing invocation surfaces, explicit managed bindings, shared
+identity-access pause and per-path Enabled and Read-only controls, see
+[managed identity](managed-identity.md). Named callers
 authenticate attesters; Broker resolves humans and applies current permissions.
 Issued Broker tokens retain their independent authorization boundaries.
 
@@ -420,15 +421,29 @@ its private credential and `X-Agent-Access-User`; an end user who can choose the
 assertion sent with a hidden credential could impersonate another bound user.
 Only an explicit exact namespace/name binding selects a human. Username mode is
 selected before ordinary authentication, so a conflicting or invalid assertion
-cannot fall back to even a valid administrator token. Missing mappings and paused
-or inactive humans share a generic denial. Identity-access pause controls both
-username and fingerprint methods, separately from issued tokens and browser login.
+cannot fall back to even a valid administrator token. Missing mappings, disabled
+bindings and paused or inactive humans share a generic denial. Identity-access
+pause controls both username and fingerprint methods, separately from issued
+tokens and browser login.
 
-MCP proofs pin the original human and binding through body intake and final
-admission. Identity changes committed before the final check deny; already admitted
-work may complete. Monotonic versions and fresh incarnations prevent restored
-values from resurrecting stale sessions. Protected Connection nominations and
-trailers cannot supply authority; MCP rejects all request trailers before dispatch.
+Each username binding and each human's identity token can also be disabled or
+made [read-only](managed-identity.md#read-only-paths). A disabled identity token
+is indistinguishable from an unknown fingerprint. Read-only is a ceiling on the
+path, not the person: one rule, applied before grant selection on every
+discovery, invocation and Git surface, permits only actions the current runtime
+catalog classifies as reads, and refuses writes before credential lookup, OAuth
+leasing or provider dispatch. It removes no grant, so it cannot let a
+lower-precedence grant win. The ceiling is only as accurate as classification:
+actions are writes unless a backend or a reviewed import selection classifies
+them as reads, and a reclassification applies to requests admitted after it is
+published. Issued Broker tokens and browser sign-in keep the person's full grants.
+
+MCP proofs pin the original human, binding or identity-token revision, and the
+path's read-only setting through body intake and final admission. Identity
+changes committed before the final check deny; already admitted work may
+complete. Monotonic versions and fresh incarnations prevent restored values from
+resurrecting stale sessions. Protected Connection nominations and trailers
+cannot supply authority; MCP rejects all request trailers before dispatch.
 Neither caller credentials, fingerprints, failed usernames nor private proof
 material belong in traces or error messages.
 
@@ -1086,7 +1101,9 @@ audit checks. They authorize whole actions, without broker resource scopes. A
 generic search or API tool can therefore reach everything allowed by its selected
 upstream credential. Use a resource-aware provider when folder, project, namespace
 or query restrictions are required. Read-only classification is an administrator
-reviewed assertion; upstream tool annotations are suggestions.
+reviewed assertion; upstream tool annotations are suggestions. It determines what
+read-only identity paths can call, so a mislabelled write gives them write
+effect; acceptance that reclassifies a granted action requires confirmation.
 
 Only base administrators manage imports, under the operator's exact destination
 allowlist. Accepted mappings and schemas are stored locally. Complete manual

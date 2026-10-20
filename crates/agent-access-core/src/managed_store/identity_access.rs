@@ -20,11 +20,19 @@ pub struct UsernameBindingRecord {
     pub namespace: String,
     pub username: String,
     pub enabled: bool,
+    pub read_only: bool,
     pub version: i64,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
     pub updated_by: String,
+}
+
+/// A change to a username binding's settings; absent fields keep their value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsernameBindingUpdate {
+    pub enabled: Option<bool>,
+    pub read_only: Option<bool>,
 }
 
 /// Private authentication evidence, never an API DTO or a reusable credential.
@@ -33,6 +41,9 @@ pub struct AttestedIdentityProof {
     principal_id: String,
     gate_incarnation: String,
     gate_version: i64,
+    /// The admitted path's read-only setting. Its version or revision already
+    /// fences changes; the value makes the admitted snapshot explicit.
+    read_only: bool,
     kind: AttestedIdentityKind,
 }
 
@@ -79,6 +90,11 @@ impl AttestedIdentityProof {
         matches!(self.kind, AttestedIdentityKind::Username { .. })
     }
 
+    /// Whether the admitted path is limited to actions classified as reads.
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
     pub fn matches_username(&self, namespace: &str, username: &str) -> bool {
         matches!(&self.kind, AttestedIdentityKind::Username {
             namespace: expected_namespace, username: expected_username, ..
@@ -98,10 +114,11 @@ impl AttestedIdentityProof {
             bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
             bytes.extend_from_slice(value);
         }
-        let mut bytes = b"agent-access/attested-identity/v1".to_vec();
+        let mut bytes = b"agent-access/attested-identity/v2".to_vec();
         field(&mut bytes, self.principal_id.as_bytes());
         field(&mut bytes, self.gate_incarnation.as_bytes());
         bytes.extend_from_slice(&self.gate_version.to_be_bytes());
+        bytes.push(u8::from(self.read_only));
         match &self.kind {
             AttestedIdentityKind::Username {
                 namespace,
@@ -133,6 +150,13 @@ pub struct ResolvedAttestedIdentity {
     pub principal: PrincipalRecord,
     pub policy_groups: Vec<String>,
     pub proof: AttestedIdentityProof,
+}
+
+impl ResolvedAttestedIdentity {
+    /// Whether the resolved path is limited to actions classified as reads.
+    pub fn read_only(&self) -> bool {
+        self.proof.read_only()
+    }
 }
 
 impl ManagedStore {
@@ -191,8 +215,8 @@ impl ManagedStore {
         let records = {
             let mut statement = tx
                 .prepare(
-                    "SELECT binding_id, principal_id, namespace, username, enabled, version,
-                     created_at, created_by, updated_at, updated_by
+                    "SELECT binding_id, principal_id, namespace, username, enabled, read_only,
+                     version, created_at, created_by, updated_at, updated_by
                      FROM principal_username_bindings WHERE principal_id=?1
                      ORDER BY namespace, username, binding_id",
                 )
@@ -213,6 +237,7 @@ impl ManagedStore {
         principal: &str,
         namespace: &str,
         username: &str,
+        read_only: bool,
         created_by: &str,
     ) -> Result<UsernameBindingRecord, ManagedStoreError> {
         validate_principal_id(principal)?;
@@ -238,10 +263,12 @@ impl ManagedStore {
         let now = normalized_now_string();
         tx.execute(
             "INSERT INTO principal_username_bindings
-             (binding_id, principal_id, namespace, username, enabled, version,
+             (binding_id, principal_id, namespace, username, enabled, read_only, version,
               created_at, created_by, updated_at, updated_by)
-             VALUES (?1, ?2, ?3, ?4, 1, 1, ?5, ?6, ?5, ?6)",
-            params![binding_id, principal, namespace, username, now, created_by],
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, 1, ?6, ?7, ?6, ?7)",
+            params![
+                binding_id, principal, namespace, username, read_only, now, created_by
+            ],
         )
         .map_err(sql_unavailable)?;
         let record = username_binding_conn(&tx, principal, &binding_id)?;
@@ -249,37 +276,53 @@ impl ManagedStore {
         Ok(record)
     }
 
-    pub fn set_username_binding_enabled(
+    /// Applies the requested settings with one version increment, or writes
+    /// nothing when they already hold. Returns the binding before and after,
+    /// read in the transaction.
+    pub fn update_username_binding(
         &self,
         principal: &str,
         binding_id: &str,
-        enabled: bool,
+        update: UsernameBindingUpdate,
         expected_version: i64,
         updated_by: &str,
-    ) -> Result<UsernameBindingRecord, ManagedStoreError> {
+    ) -> Result<(UsernameBindingRecord, UsernameBindingRecord), ManagedStoreError> {
         validate_principal_id(principal)?;
         validate_canonical_uuid(binding_id, "identity binding ID")?;
         validate_actor(updated_by)?;
         validate_expected_version(expected_version)?;
+        if update.enabled.is_none() && update.read_only.is_none() {
+            return Err(input_invalid(
+                "identity binding update requires enabled or readOnly",
+            ));
+        }
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
         require_human(&tx, principal)?;
         identity_access_conn(&tx, principal)?;
-        let previous = username_binding_conn(&tx, principal, binding_id)?;
-        require_version(previous.version, expected_version)?;
-        if previous.enabled != enabled {
+        let before = username_binding_conn(&tx, principal, binding_id)?;
+        require_version(before.version, expected_version)?;
+        let enabled = update.enabled.unwrap_or(before.enabled);
+        let read_only = update.read_only.unwrap_or(before.read_only);
+        if (enabled, read_only) != (before.enabled, before.read_only) {
             tx.execute(
-                "UPDATE principal_username_bindings SET enabled=?2, version=version+1,
-                 updated_at=?3, updated_by=?4 WHERE binding_id=?1",
-                params![binding_id, enabled, normalized_now_string(), updated_by],
+                "UPDATE principal_username_bindings SET enabled=?2, read_only=?3,
+                 version=version+1, updated_at=?4, updated_by=?5 WHERE binding_id=?1",
+                params![
+                    binding_id,
+                    enabled,
+                    read_only,
+                    normalized_now_string(),
+                    updated_by
+                ],
             )
             .map_err(sql_unavailable)?;
         }
-        let record = username_binding_conn(&tx, principal, binding_id)?;
+        let after = username_binding_conn(&tx, principal, binding_id)?;
         tx.commit().map_err(sql_unavailable)?;
-        Ok(record)
+        Ok((before, after))
     }
 
     pub fn delete_username_binding(
@@ -484,11 +527,12 @@ fn binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsernameBinding
         namespace: row.get(2)?,
         username: row.get(3)?,
         enabled: row.get(4)?,
-        version: row.get(5)?,
-        created_at: row.get(6)?,
-        created_by: row.get(7)?,
-        updated_at: row.get(8)?,
-        updated_by: row.get(9)?,
+        read_only: row.get(5)?,
+        version: row.get(6)?,
+        created_at: row.get(7)?,
+        created_by: row.get(8)?,
+        updated_at: row.get(9)?,
+        updated_by: row.get(10)?,
     })
 }
 
@@ -498,7 +542,7 @@ fn username_binding_conn(
     binding_id: &str,
 ) -> Result<UsernameBindingRecord, ManagedStoreError> {
     conn.query_row(
-        "SELECT binding_id, principal_id, namespace, username, enabled, version,
+        "SELECT binding_id, principal_id, namespace, username, enabled, read_only, version,
          created_at, created_by, updated_at, updated_by
          FROM principal_username_bindings WHERE binding_id=?1 AND principal_id=?2",
         params![binding_id, principal],
@@ -538,7 +582,7 @@ fn resolve_username_conn(
 ) -> Result<(PrincipalRecord, AttestedIdentityProof), ManagedStoreError> {
     let binding = conn
         .query_row(
-            "SELECT binding_id, principal_id, namespace, username, enabled, version,
+            "SELECT binding_id, principal_id, namespace, username, enabled, read_only, version,
              created_at, created_by, updated_at, updated_by
              FROM principal_username_bindings WHERE namespace=?1 AND username=?2",
             params![namespace, username],
@@ -555,6 +599,7 @@ fn resolve_username_conn(
         principal_id: binding.principal_id,
         gate_incarnation: gate.incarnation,
         gate_version: gate.version,
+        read_only: binding.read_only,
         kind: AttestedIdentityKind::Username {
             namespace: binding.namespace,
             username: binding.username,
@@ -569,20 +614,26 @@ fn resolve_fingerprint_conn(
     conn: &Connection,
     fingerprint: &str,
 ) -> Result<(PrincipalRecord, AttestedIdentityProof), ManagedStoreError> {
-    let (principal_id, inventory_revision): (String, i64) = conn
+    let (principal_id, inventory_revision, enabled, read_only): (String, i64, bool, bool) = conn
         .query_row(
-            "SELECT principal_id, revision FROM principal_identity_tokens WHERE fingerprint=?1",
+            "SELECT principal_id, revision, enabled, read_only
+             FROM principal_identity_tokens WHERE fingerprint=?1",
             [fingerprint],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
         .map_err(sql_unavailable)?
         .ok_or(ManagedStoreError::AttestedIdentityDenied)?;
+    // A disabled token keeps its secret but resolves like an unknown fingerprint.
+    if !enabled {
+        return Err(ManagedStoreError::AttestedIdentityDenied);
+    }
     let (principal, gate) = eligible_human(conn, &principal_id)?;
     let proof = AttestedIdentityProof {
         principal_id,
         gate_incarnation: gate.incarnation,
         gate_version: gate.version,
+        read_only,
         kind: AttestedIdentityKind::Fingerprint {
             fingerprint: fingerprint.to_owned(),
             inventory_revision,
@@ -640,6 +691,26 @@ pub(super) fn validate_structure(conn: &Connection) -> Result<(), ManagedStoreEr
     check_policy_revision_ready(conn)
 }
 
+/// The identity-token row invariant of `029_identity_access_path_controls`:
+/// exactly one row for every human (rows for non-humans fail
+/// [`check_integrity`]). It applies only from that version, so the historical
+/// validators, which run before its backfill, keep using [`check_integrity`]
+/// alone.
+pub(super) fn check_identity_token_rows(conn: &Connection) -> Result<(), ManagedStoreError> {
+    let missing: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM principals p LEFT JOIN principal_identity_tokens t
+               ON t.principal_id=p.principal_id WHERE p.kind='user' AND t.principal_id IS NULL)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_unavailable)?;
+    if missing {
+        return Err(identity_tokens::missing_row());
+    }
+    Ok(())
+}
+
 pub(super) fn check_integrity(conn: &Connection) -> Result<(), ManagedStoreError> {
     let invalid: bool = conn
         .query_row(
@@ -677,4 +748,46 @@ pub(super) fn check_integrity(conn: &Connection) -> Result<(), ManagedStoreError
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proof(read_only: bool, kind: AttestedIdentityKind) -> AttestedIdentityProof {
+        AttestedIdentityProof {
+            principal_id: "alice".into(),
+            gate_incarnation: "incarnation".into(),
+            gate_version: 1,
+            read_only,
+            kind,
+        }
+    }
+
+    #[test]
+    fn read_only_takes_part_in_proof_equality_and_session_binding() {
+        for kind in [
+            AttestedIdentityKind::Username {
+                namespace: "linux".into(),
+                username: "alice".into(),
+                binding_id: Uuid::new_v4().to_string(),
+                binding_version: 1,
+            },
+            AttestedIdentityKind::Fingerprint {
+                fingerprint: "sha256:00".into(),
+                inventory_revision: 1,
+            },
+        ] {
+            let full = proof(false, kind.clone());
+            let read_only = proof(true, kind);
+            assert!(!full.read_only() && read_only.read_only());
+            assert_ne!(full, read_only);
+            assert_ne!(full.session_binding(), read_only.session_binding());
+            assert!(
+                read_only
+                    .session_binding()
+                    .starts_with(b"agent-access/attested-identity/v2")
+            );
+        }
+    }
 }

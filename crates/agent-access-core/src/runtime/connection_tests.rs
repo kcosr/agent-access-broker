@@ -416,7 +416,7 @@ fn managed_matrix() -> (
         store.add_group(principal, "agents", "admin").unwrap();
     }
     store
-        .create_username_binding("alice", "linux", "Alice", "admin")
+        .create_username_binding("alice", "linux", "Alice", false, "admin")
         .unwrap();
     drop(store);
 

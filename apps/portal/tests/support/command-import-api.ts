@@ -3,7 +3,7 @@
 // writes, plus the catalog reads the Catalog pages make. Each discovery and
 // acceptance moves the import to the next queued state; requests are recorded.
 import type { Page } from "@playwright/test";
-import type { ImportChangeBlocked, ImportDefinition, ImportPreviewResult, ImportResourceTypeEffects } from "../../src/import-types";
+import type { ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportPreviewResult, ImportResourceTypeEffects } from "../../src/import-types";
 import type { ResourceRecord, ResourceTypeMetadata, Session } from "../../src/types";
 import { RESOURCE_TYPES } from "../../unit/resource-types.fixture";
 import { COMMAND_RESOURCE_TYPES, commandDraft, commandImportList, commandPolicyService } from "../../unit/command-import.fixture";
@@ -20,6 +20,11 @@ export type CommandImportApi = {
   acceptances: Array<{ result: ImportPreviewResult; effects?: ImportResourceTypeEffects; resourceTypes?: ResourceTypeMetadata[] }>;
   /** A refusal the next acceptance answers with instead, as `target` lists. */
   acceptBlocked: Partial<ImportChangeBlocked> | null;
+  /**
+   * The classification changes an acceptance without `confirmAffectedGrants`
+   * is refused with, as the Broker refuses changes that affect existing grants.
+   */
+  acceptConfirmation: ImportClassificationChange[] | null;
   commandImports: string[];
   /** The command import's entries of `GET /v1/resource-types`. */
   resourceTypes: ResourceTypeMetadata[];
@@ -54,14 +59,14 @@ function recordResult(data: ImportPreviewResult) {
 }
 
 export async function mockCommandImportApi(page: Page, current: ImportPreviewResult | null = null): Promise<CommandImportApi> {
-  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], createdResources: [], created: [], accepted: [], credentials: [], errors: [] };
+  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, acceptConfirmation: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], createdResources: [], created: [], accepted: [], credentials: [], errors: [] };
   page.on("pageerror", (error) => api.errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     const method = request.method();
     const service = /^\/v1\/admin\/imports\/ticketing(?:\/(.*))?$/.exec(pathname);
-    const fail = (message: string, blocked: Partial<ImportChangeBlocked>) =>
+    const fail = (message: string, blocked: Partial<ImportChangeBlocked> | { classificationChanges: ImportClassificationChange[] }) =>
       route.fulfill({ status: 400, json: { ok: false, decision: "deny", reasonCode: "input_invalid", requestId: "fixture", brokerRequestId: "fixture", operation: "imports", principal: "admin", target: { service: "ticketing", ...blocked }, error: { message } } });
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = ADMIN_SESSION;
@@ -82,7 +87,12 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
         api.current = api.discoveries.shift() ?? api.current;
         result = api.current;
       } else if (tail === "accept") {
-        api.accepted.push(request.postDataJSON() as Record<string, unknown>);
+        const body = request.postDataJSON() as Record<string, unknown>;
+        api.accepted.push(body);
+        if (api.acceptConfirmation && body.confirmAffectedGrants !== true) {
+          await fail("accepted changes affect existing grants; confirmAffectedGrants is required", { classificationChanges: api.acceptConfirmation });
+          return;
+        }
         if (api.acceptBlocked) {
           await fail("input is invalid: the import change is blocked", api.acceptBlocked);
           return;

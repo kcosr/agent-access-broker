@@ -321,6 +321,7 @@ mod tests {
             )])),
         };
         identity.source = Some(IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "test-agent".into(),

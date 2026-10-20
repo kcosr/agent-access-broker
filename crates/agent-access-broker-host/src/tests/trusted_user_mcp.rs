@@ -170,7 +170,7 @@ async fn fixture_start(
         ("bob", "other_authority", "alice"),
     ] {
         store
-            .create_username_binding(principal, namespace, username, "fixture")
+            .create_username_binding(principal, namespace, username, false, "fixture")
             .unwrap();
     }
     // Identity assertions must not require the separate fingerprint inventory.

@@ -464,6 +464,28 @@ test("records open in a URL-addressable drawer with summary, request timeline, a
   await expect(page.getByText("This is not a broker request ID.", { exact: true })).toBeVisible();
 });
 
+test("attested identity records show whether their access path was read-only", async ({ page }) => {
+  await fixture(page, { resourceRecords: [
+    record("read-only", "jira", "issue.view", undefined, { identitySource: { name: "trusted_user", type: "trusted_user", tokenClass: "agent_invoke", namespace: "managed_linux", readOnlyAccess: true } }),
+    record("full", "jira", "search", undefined, { identitySource: { name: "forwarded_identity", type: "forwarded_identity", tokenClass: "agent_invoke", readOnlyAccess: false } }),
+    record("token", "jira", "issue.comment", undefined, { identitySource: { name: "managed", type: "broker_token", tokenClass: "agent_invoke", tokenId: TOKEN_ID } })
+  ] });
+  const accessPath = (drawer: Locator) => drawer.getByText("Access path", { exact: true });
+  await rowLinks(page).filter({ hasText: "issue.view on jira" }).click();
+  let drawer = page.getByRole("complementary", { name: "Allowed: issue.view on jira" });
+  await expect(drawer).toContainText("trusted_user · trusted_user · agent_invoke");
+  await expect(accessPath(drawer)).toBeVisible();
+  await expect(drawer).toContainText(/Access path\s*Read-only/);
+  await rowLinks(page).filter({ hasText: "search on jira" }).click();
+  drawer = page.getByRole("complementary", { name: "Allowed: search on jira" });
+  await expect(drawer).toContainText(/Access path\s*Full access/);
+  // Issued Broker tokens carry no access-path setting.
+  await rowLinks(page).filter({ hasText: "issue.comment on jira" }).click();
+  drawer = page.getByRole("complementary", { name: "Allowed: issue.comment on jira" });
+  await expect(drawer).toContainText("managed · broker_token · agent_invoke");
+  await expect(accessPath(drawer)).toHaveCount(0);
+});
+
 test("j/k move the cursor, Enter opens, the drawer follows, and Escape returns focus to the row", async ({ page }) => {
   await fixture(page);
   await expect(rowLinks(page)).toHaveCount(3);

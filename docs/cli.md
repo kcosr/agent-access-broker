@@ -78,7 +78,9 @@ client output handling; no filesystem path is added to the broker request.
 
 Provider response file output supports JSON and multipart-upload actions from
 the fresh catalog. `readOnly` classifies upstream effects and does not gate file
-output. Discovery failure prevents dispatch when catalog validation is required.
+output. It also limits a [read-only identity path](managed-identity.md#read-only-paths)
+to actions classified as reads. Discovery failure prevents dispatch when catalog
+validation is required.
 
 If a JSON or multipart-upload operation succeeds but saving its response fails,
 the client reports `operationStatus: "succeeded"` and `output.status: "failed"`,
@@ -147,7 +149,8 @@ Every command below targets the broker over HTTP except `config validate`,
 
 ### `auth`
 
-- `auth status` — `GET /v1/me`. Prints the identity summary as pretty JSON.
+- `auth status` — `GET /v1/me`. Prints the identity summary as pretty JSON,
+  including `readOnlyAccess` behind fingerprint-aware ingress.
 - `auth token status` — locally inspects the configured `identity.token_file`
   and effective token source without printing token material. A leading `~` in
   the configured token file is shown after expansion to the current user's home
@@ -664,20 +667,29 @@ Managed human identity has three command groups:
 | `admin principals identity-access inspect` | `PRINCIPAL` |
 | `admin principals identity-access pause` / `resume` | `PRINCIPAL --expected-version N` |
 | `admin principals identity-bindings list` | `PRINCIPAL` |
-| `admin principals identity-bindings create` | `PRINCIPAL --namespace NAME --username NAME` |
-| `admin principals identity-bindings enable` / `disable` / `delete` | `PRINCIPAL BINDING_ID --expected-version N` |
+| `admin principals identity-bindings create` | `PRINCIPAL --namespace NAME --username NAME [--read-only]` |
+| `admin principals identity-bindings update` | `PRINCIPAL BINDING_ID [--enabled BOOL] [--read-only BOOL] --expected-version N` |
+| `admin principals identity-bindings delete` | `PRINCIPAL BINDING_ID --expected-version N` |
 | `admin principals identity-token inspect` / `reveal` / `generate` / `remove` | `PRINCIPAL` |
 | `admin principals identity-token set` | `PRINCIPAL` and exactly one of `--identity-token-file PATH` or `--identity-token-stdin` |
+| `admin principals identity-token update` | `PRINCIPAL [--enabled BOOL] [--read-only BOOL] --expected-revision N` |
 
 Identity-access pause gates trusted username and fingerprint invocation together;
 it does not pause issued Broker tokens or browser login. Bindings are exact
-namespace/name mappings to humans. Read the current version before a mutation;
-a conflict requires refreshing state. Disabling a binding reserves its name;
-renaming or moving it requires delete/create. Inventory changes preserve bindings
-and the shared pause. Import bytes are exact, so files must not end with a newline;
-only `reveal` returns the stored secret. All commands use an administration
-credential. Inspect/list permit auditors; reveal and changes require the
-administrator role. See [managed identity](managed-identity.md) for lifecycle.
+namespace/name mappings to humans. Each binding and the identity token has its
+own Enabled and Read-only settings; the two `update` commands require at least
+one of `--enabled` and `--read-only`, each taking `true` or `false`, while
+`identity-bindings create --read-only` is a flag without a value. A read-only
+path can use only actions classified as reads. Read the current version or
+revision before a mutation; a conflict requires refreshing state. Disabling a
+binding reserves its name; renaming or moving it requires delete/create.
+Disabling the identity token keeps its secret. Inventory changes preserve
+bindings, the shared pause and the identity token's settings. Import bytes are
+exact, so files must not end with a newline; only `reveal` returns the stored
+secret. All commands use an administration credential. Inspect/list permit
+auditors; reveal and changes require the administrator role. See
+[managed identity](managed-identity.md) for lifecycle and
+[access path controls](managed-identity.md#access-path-controls).
 
 
 Administrative management of principals, rights, tokens, credentials, and

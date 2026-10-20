@@ -2236,11 +2236,13 @@ values, exact actions, and the issued-credential boundary.
 ### Trusted managed identity
 
 Configuring `managed_store` requires `credential_encryption`, even under TOML
-identity authority. Every human has an identity-access gate; new humans also
-receive encrypted UUID v4 identity-token inventory during manual, bootstrap and
-OIDC creation when encryption is configured. Service accounts receive neither.
-Login never recreates removed inventory. Username access is independent of
-whether inventory exists.
+identity authority. Every human has an identity-access gate and one
+identity-token record; new humans also receive encrypted UUID v4 identity-token
+inventory in that record during manual, bootstrap and OIDC creation when
+encryption is configured. Service accounts receive neither. Login never recreates
+removed inventory. Username access is independent of whether inventory exists.
+Per-path Enabled and Read-only settings are managed-store data, not
+configuration; see [access path controls](managed-identity.md#access-path-controls).
 
 ```toml
 [identity.trusted_callers.managed_client]

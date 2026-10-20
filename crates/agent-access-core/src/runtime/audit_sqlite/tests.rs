@@ -1096,6 +1096,7 @@ async fn derived_columns_follow_the_record() {
         "bodySha256": "shouldnotbeindexed",
     }));
     record.identity_source = Some(super::super::IdentitySourceAudit {
+        read_only_access: None,
         namespace: None,
         binding_id: None,
         name: "broker".to_string(),

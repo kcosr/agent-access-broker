@@ -515,6 +515,140 @@ async fn deleted_grants_do_not_block_restoration_or_appear_in_import_preview() {
     assert_eq!(preview["result"]["affectedGrantsByAction"], json!({}));
 }
 
+/// Under managed policy authority every managed grant that is not deleted is
+/// retained, a disabled one too, and listed once however many subjects it
+/// has. Preview, discovery and acceptance read that one inventory.
+#[tokio::test]
+async fn import_confirmation_counts_disabled_managed_grants_once() {
+    let fixture = fixture();
+    let token = admin_token(&fixture);
+    for grant in fixture
+        .runtime
+        .managed_store()
+        .unwrap()
+        .policy_grants()
+        .unwrap()
+    {
+        fixture
+            .runtime
+            .delete_managed_policy_grant(ManagedPolicyGrantStatusRequest {
+                grant_id: grant.grant_id,
+                expected_version: grant.version,
+                updated_by: "admin".into(),
+            })
+            .unwrap();
+    }
+    fixture
+        .runtime
+        .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
+            grant_id: Some("inspect-pair".into()),
+            subjects: vec!["user:alice".into(), "user:bob".into()],
+            execution_contexts: vec!["default".into()],
+            service: "observability".into(),
+            actions: vec!["inspect".into()],
+            resources: ResourceSelection::default(),
+            credential_mode: "service".into(),
+            priority: None,
+            status: Some("disabled".into()),
+            description: None,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let inventory = |result: &Value| {
+        (
+            result["affectedGrants"].clone(),
+            result["affectedGrantsByAction"].clone(),
+        )
+    };
+    let expected = (
+        json!(["inspect-pair"]),
+        json!({"inspect": ["inspect-pair"]}),
+    );
+    let (status, preview) = request(
+        &app,
+        &token,
+        Method::GET,
+        "/v1/admin/imports/observability/preview",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(inventory(&preview["result"]), expected);
+    let current = detail(&app, &token, "observability").await;
+    let (status, discovered) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/observability/discover",
+        Some(versions(&current)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{discovered}");
+    let discovered = &discovered["result"];
+    assert_eq!(inventory(discovered), expected);
+
+    // Reclassifying the action needs confirmation for the disabled grant.
+    let mut accept = versions(discovered);
+    accept["manifestHash"] = discovered["preview"]["manifestHash"].clone();
+    accept["selections"] = json!([selection(discovered, false)]);
+    let (status, refused) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/observability/accept",
+        Some(accept.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("confirmAffectedGrants is required"),
+        "{refused}"
+    );
+    accept["confirmAffectedGrants"] = json!(true);
+    let (status, accepted) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/observability/accept",
+        Some(accept),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(
+        accepted["result"]["service"]["actions"][0]["definition"]["readOnly"],
+        false
+    );
+
+    // So does restoring the action.
+    let mut disable = versions(&accepted["result"]);
+    disable["status"] = json!("disabled");
+    let (status, disabled) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/observability/actions/inspect/status",
+        Some(disable),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let mut enable = versions(&disabled["result"]);
+    enable["status"] = json!("enabled");
+    let (status, refused) = request(
+        &app,
+        &token,
+        Method::POST,
+        "/v1/admin/imports/observability/actions/inspect/status",
+        Some(enable),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+}
+
 #[tokio::test]
 async fn discovery_reports_adapter_outcomes_and_host_preparation_failures_apart() {
     let fixture = fixture();

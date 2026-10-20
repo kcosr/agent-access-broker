@@ -470,6 +470,7 @@ fn identity(token_scopes: Option<Value>) -> IdentityContext {
         policy_groups: vec!["engineering".into(), "support".into()],
         authenticated: true,
         source: token_scopes.map(|scopes| IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "broker".into(),

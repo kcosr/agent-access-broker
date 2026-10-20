@@ -61,7 +61,9 @@ pub(crate) struct PrincipalAccessBody {
     self_service_enabled: Option<bool>,
 }
 
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+/// Reads an optional field that, when present, must hold a value: an
+/// explicit `null` is invalid rather than an omitted field.
+pub(super) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,

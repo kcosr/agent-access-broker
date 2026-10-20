@@ -4,6 +4,8 @@ use agent_access_provider::test_support::{basic_credential, bearer_credential};
 mod connection;
 #[path = "credential_discovery_tests.rs"]
 mod credential_discovery;
+#[path = "identity_path_controls_tests.rs"]
+mod identity_path_controls;
 #[path = "trusted_user_tests.rs"]
 mod trusted_user;
 use crate::{
@@ -134,6 +136,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
         policy_groups: vec![],
         authenticated: true,
         source: Some(IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "broker".to_string(),
@@ -9025,6 +9028,7 @@ fn shell_token_identity(scopes: Value) -> IdentityContext {
         policy_groups: vec!["agents".to_string()],
         authenticated: true,
         source: Some(IdentitySourceAudit {
+            read_only_access: None,
             namespace: None,
             binding_id: None,
             name: "broker".to_string(),

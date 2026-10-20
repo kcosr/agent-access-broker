@@ -548,37 +548,9 @@ pub fn openapi_from_catalog(
                     }),
                 ),
             ]);
-            if route
-                .operation
-                .starts_with("admin.principals.identity_access.")
-                || route
-                    .operation
-                    .starts_with("admin.principals.identity_bindings.")
-            {
+            if let Some(errors) = identity_management_error_responses(&route.operation) {
                 let responses = operation.get_mut("responses").expect("route responses");
-                for (status, description) in [
-                    (
-                        "400",
-                        "Invalid fields, username or configured namespace; input_invalid.",
-                    ),
-                    ("401", "Management authentication required."),
-                    (
-                        "403",
-                        "Administrator mutation or admin/auditor metadata access denied; browser writes require CSRF.",
-                    ),
-                    (
-                        "404",
-                        "Unknown principal or binding owned by another principal; principal_not_found or identity_binding_not_found.",
-                    ),
-                    (
-                        "409",
-                        "Stale expectedVersion (identity_version_conflict) or reserved namespace/username (identity_binding_conflict). Reload state before a new mutation.",
-                    ),
-                    (
-                        "503",
-                        "Managed storage or mandatory audit preflight is unavailable.",
-                    ),
-                ] {
+                for (status, description) in errors {
                     responses[status] = json!({"description":description,"content":{"application/json":{"schema":envelope_schema(ResponseKind::ManagementEnvelope)}}});
                 }
             }
@@ -2145,6 +2117,15 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             ExitPolicy::ManagementOk,
             vec!["/body/token".to_string()],
         ),
+        body_route(
+            "PATCH",
+            "/v1/admin/principals/{principal}/identity-token",
+            "admin.principals.identity_token.patch",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+            Vec::new(),
+        ),
         no_body_route(
             "DELETE",
             "/v1/admin/principals/{principal}/identity-token",
@@ -2322,14 +2303,20 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         "POST",
         "/v1/admin/principals/{principal}/identity-bindings",
         json!({"type":"object", "additionalProperties":false, "required":["namespace","username"],
-            "properties":{"namespace":identity_namespace_schema(), "username":identity_username_schema()}}),
+            "properties":{"namespace":identity_namespace_schema(), "username":identity_username_schema(),
+                "readOnly":{"type":"boolean","default":false,"description":identity_read_only_description()}}}),
     );
     set_request_body_schema(
         &mut routes,
         "PATCH",
         "/v1/admin/principals/{principal}/identity-bindings/{binding}",
-        json!({"type":"object", "additionalProperties":false, "required":["enabled","expectedVersion"],
-            "properties":{"enabled":{"type":"boolean"}, "expectedVersion":{"type":"integer","minimum":1}}}),
+        identity_path_settings_body_schema("expectedVersion"),
+    );
+    set_request_body_schema(
+        &mut routes,
+        "PATCH",
+        "/v1/admin/principals/{principal}/identity-token",
+        identity_path_settings_body_schema("expectedRevision"),
     );
     add_required_integer_query_params(
         &mut routes,
@@ -2361,11 +2348,14 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             }
             "admin.principals.identity_token.inspect"
             | "admin.principals.identity_token.set"
+            | "admin.principals.identity_token.patch"
             | "admin.principals.identity_token.generate"
             | "admin.principals.identity_token.remove" => Some(json!({
-                "type":"object", "additionalProperties":false, "required":["principalId","configured"],
+                "type":"object", "additionalProperties":false,
+                "required":["principalId","configured","enabled","readOnly","revision","updatedAt"],
                 "properties":{"principalId":{"type":"string"}, "configured":{"type":"boolean"},
-                    "revision":{"type":["integer","null"],"minimum":1}, "updatedAt":{"type":["string","null"],"format":"date-time"}}
+                    "enabled":{"type":"boolean"}, "readOnly":{"type":"boolean"},
+                    "revision":{"type":"integer","minimum":1}, "updatedAt":{"type":"string","format":"date-time"}}
             })),
             _ => route.result_schema.take(),
         };
@@ -2437,6 +2427,58 @@ fn identity_username_schema() -> Value {
         "description":"Exact, case-sensitive username. No trimming, normalization, account lookup or enrollment is implied."})
 }
 
+/// The documented failures of the trusted-identity administration routes
+/// that change or read access-path settings.
+fn identity_management_error_responses(
+    operation: &str,
+) -> Option<[(&'static str, &'static str); 6]> {
+    let (input, not_found, conflict) = if operation == "admin.principals.identity_token.patch" {
+        (
+            "Invalid or missing fields, or a principal that is not a managed human; input_invalid.",
+            "Unknown principal; principal_not_found.",
+            "Stale expectedRevision (identity_version_conflict). Reload the metadata before a new mutation.",
+        )
+    } else if operation.starts_with("admin.principals.identity_access.")
+        || operation.starts_with("admin.principals.identity_bindings.")
+    {
+        (
+            "Invalid fields, username or configured namespace; input_invalid.",
+            "Unknown principal or binding owned by another principal; principal_not_found or identity_binding_not_found.",
+            "Stale expectedVersion (identity_version_conflict) or reserved namespace/username (identity_binding_conflict). Reload state before a new mutation.",
+        )
+    } else {
+        return None;
+    };
+    Some([
+        ("400", input),
+        ("401", "Management authentication required."),
+        (
+            "403",
+            "Administrator mutation or admin/auditor metadata access denied; browser writes require CSRF.",
+        ),
+        ("404", not_found),
+        ("409", conflict),
+        (
+            "503",
+            "Managed storage or mandatory audit preflight is unavailable.",
+        ),
+    ])
+}
+
+fn identity_read_only_description() -> &'static str {
+    "Limits this access path to actions currently classified as reads; grants still decide which actions the person has."
+}
+
+/// A partial change to one access path's Enabled and Read-only settings,
+/// fenced by `version_field`. At least one setting is required.
+fn identity_path_settings_body_schema(version_field: &str) -> Value {
+    json!({"type":"object", "additionalProperties":false, "required":[version_field],
+        "anyOf":[{"required":["enabled"]}, {"required":["readOnly"]}],
+        "properties":{"enabled":{"type":"boolean"},
+            "readOnly":{"type":"boolean","description":identity_read_only_description()},
+            version_field:{"type":"integer","minimum":1}}})
+}
+
 fn identity_access_schema() -> Value {
     json!({"type":"object", "additionalProperties":false,
         "required":["principalId","incarnation","paused","version","updatedAt","updatedBy"],
@@ -2447,9 +2489,10 @@ fn identity_access_schema() -> Value {
 
 fn identity_binding_schema() -> Value {
     json!({"type":"object", "additionalProperties":false,
-        "required":["bindingId","principalId","namespace","username","enabled","version","createdAt","createdBy","updatedAt","updatedBy","namespaceAvailable"],
+        "required":["bindingId","principalId","namespace","username","enabled","readOnly","version","createdAt","createdBy","updatedAt","updatedBy","namespaceAvailable"],
         "properties":{"bindingId":{"type":"string","format":"uuid"}, "principalId":{"type":"string"},
             "namespace":identity_namespace_schema(), "username":identity_username_schema(), "enabled":{"type":"boolean"},
+            "readOnly":{"type":"boolean"},
             "version":{"type":"integer","minimum":1}, "createdAt":{"type":"string","format":"date-time"}, "createdBy":{"type":"string"},
             "updatedAt":{"type":"string","format":"date-time"}, "updatedBy":{"type":"string"}, "namespaceAvailable":{"type":"boolean"}}})
 }
@@ -3606,22 +3649,72 @@ mod managed_identity_contract_tests {
                 .find(|route| route.operation == operation)
                 .unwrap()
         };
-        for (operation, field) in [
-            ("admin.principals.identity_access.patch", "paused"),
-            ("admin.principals.identity_bindings.patch", "enabled"),
+        let gate = route("admin.principals.identity_access.patch");
+        assert_eq!(gate.access, RouteAccess::AdminWrite);
+        let validator =
+            jsonschema::validator_for(gate.request_body_schema.as_ref().unwrap()).unwrap();
+        assert!(validator.is_valid(&json!({"paused":true,"expectedVersion":1})));
+        assert!(!validator.is_valid(&json!({"paused":true})));
+        assert!(!validator.is_valid(&json!({"paused":true,"expectedVersion":0})));
+        assert!(
+            !validator
+                .is_valid(&json!({"paused":true,"expectedVersion":1,"username":"replacement"}))
+        );
+        // Both access-path settings routes take partial Enabled/Read-only
+        // changes fenced by their own version field.
+        for (operation, fence, other) in [
+            (
+                "admin.principals.identity_bindings.patch",
+                "expectedVersion",
+                "expectedRevision",
+            ),
+            (
+                "admin.principals.identity_token.patch",
+                "expectedRevision",
+                "expectedVersion",
+            ),
         ] {
             let route = route(operation);
+            assert_eq!(route.method, "PATCH");
             assert_eq!(route.access, RouteAccess::AdminWrite);
+            assert_eq!(route.response_kind, ResponseKind::ManagementEnvelope);
             let validator =
                 jsonschema::validator_for(route.request_body_schema.as_ref().unwrap()).unwrap();
-            assert!(validator.is_valid(&json!({field:true,"expectedVersion":1})));
-            assert!(!validator.is_valid(&json!({field:true})));
-            assert!(!validator.is_valid(&json!({field:true,"expectedVersion":0})));
-            assert!(
-                !validator
-                    .is_valid(&json!({field:true,"expectedVersion":1,"username":"replacement"}))
-            );
+            for body in [
+                json!({"enabled":false, fence:1}),
+                json!({"readOnly":true, fence:1}),
+                json!({"enabled":true,"readOnly":false, fence:7}),
+            ] {
+                assert!(validator.is_valid(&body), "{operation}: {body}");
+            }
+            for body in [
+                json!({fence:1}),
+                json!({"enabled":true}),
+                json!({"readOnly":true, fence:0}),
+                json!({"enabled":null, fence:1}),
+                json!({"readOnly":"true", fence:1}),
+                json!({"enabled":true, other:1}),
+                json!({"enabled":true, fence:1, "paused":true}),
+                json!([true, 1]),
+            ] {
+                assert!(!validator.is_valid(&body), "{operation}: {body}");
+            }
+            let result = route.result_schema.as_ref().unwrap();
+            for field in ["enabled", "readOnly"] {
+                assert!(
+                    result["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!(field)),
+                    "{operation}: {field}"
+                );
+                assert_eq!(result["properties"][field]["type"], "boolean");
+            }
         }
+        assert_eq!(
+            route("admin.principals.identity_token.patch").result_schema,
+            route("admin.principals.identity_token.inspect").result_schema
+        );
         let create = route("admin.principals.identity_bindings.create");
         let validator =
             jsonschema::validator_for(create.request_body_schema.as_ref().unwrap()).unwrap();
@@ -3629,6 +3722,20 @@ mod managed_identity_contract_tests {
             validator.is_valid(
                 &json!({"namespace":"Managed.Linux","username":"Alice+team@example.test"})
             )
+        );
+        for read_only in [true, false] {
+            assert!(validator.is_valid(
+                &json!({"namespace":"Managed.Linux","username":"alice","readOnly":read_only})
+            ));
+        }
+        for read_only in [json!(null), json!("true"), json!(1)] {
+            assert!(!validator.is_valid(
+                &json!({"namespace":"Managed.Linux","username":"alice","readOnly":read_only})
+            ));
+        }
+        assert_eq!(
+            create.request_body_schema.as_ref().unwrap()["properties"]["readOnly"]["default"],
+            false
         );
         for username in ["", " alice", "alice,bob", "alice/bob", "alîce"] {
             assert!(!validator.is_valid(&json!({"namespace":"managed_linux","username":username})));
@@ -3651,7 +3758,18 @@ mod managed_identity_contract_tests {
             .as_ref()
             .unwrap();
         assert!(inventory["properties"].get("paused").is_none());
-        assert!(inventory["properties"].get("revision").is_some());
+        assert_eq!(
+            inventory["required"],
+            json!([
+                "principalId",
+                "configured",
+                "enabled",
+                "readOnly",
+                "revision",
+                "updatedAt"
+            ])
+        );
+        assert_eq!(inventory["properties"]["revision"]["type"], "integer");
         assert!(
             routes
                 .iter()
@@ -3668,6 +3786,25 @@ mod managed_identity_contract_tests {
                 .get("namespaceAvailable")
                 .is_some()
         );
+        for operation in [
+            "admin.principals.identity_bindings.create",
+            "admin.principals.identity_bindings.patch",
+        ] {
+            let binding = route(operation).result_schema.as_ref().unwrap();
+            assert!(
+                binding["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("readOnly"))
+            );
+            assert_eq!(binding["properties"]["readOnly"]["type"], "boolean");
+        }
+        assert!(
+            listed["properties"]["bindings"]["items"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("readOnly"))
+        );
     }
 
     #[test]
@@ -3677,7 +3814,7 @@ mod managed_identity_contract_tests {
             .iter()
             .filter(|r| r.operation.starts_with("admin.principals.identity_token."))
             .collect();
-        assert_eq!(inventory.len(), 5);
+        assert_eq!(inventory.len(), 6);
         for route in &inventory {
             assert_eq!(
                 route.access,
@@ -3708,5 +3845,77 @@ mod managed_identity_contract_tests {
             send["x-agent-access-sensitive-output-pointers"],
             json!(["/result/token"])
         );
+        let patch = inventory
+            .iter()
+            .find(|r| r.operation.ends_with(".patch"))
+            .unwrap();
+        assert_eq!(patch.method, "PATCH");
+        assert!(patch.sensitive_request_pointers.is_empty());
+        assert!(patch.sensitive_response_pointers.is_empty());
+    }
+
+    #[test]
+    fn identity_path_settings_project_into_openapi_and_send_schema() {
+        let mut catalog = empty_catalog(json!({}));
+        catalog.routes = principal_group_admin_routes();
+        let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
+        let token = &openapi["paths"]["/v1/admin/principals/{principal}/identity-token"];
+        for method in ["get", "put", "patch", "delete"] {
+            assert!(token.get(method).is_some(), "{method}");
+        }
+        let patch = &token["patch"];
+        assert_eq!(
+            patch["operationId"],
+            "admin.principals.identity_token.patch"
+        );
+        let body = &patch["requestBody"]["content"]["application/json"]["schema"];
+        assert_eq!(body["required"], json!(["expectedRevision"]));
+        assert_eq!(
+            body["anyOf"],
+            json!([{"required":["enabled"]}, {"required":["readOnly"]}])
+        );
+        let result = &patch["responses"]["200"]["content"]["application/json"]["schema"];
+        assert!(result.to_string().contains("readOnly"), "{result}");
+        let conflict = patch["responses"]["409"]["description"].as_str().unwrap();
+        assert!(conflict.contains("expectedRevision"), "{conflict}");
+        assert!(conflict.contains("identity_version_conflict"), "{conflict}");
+        assert!(!conflict.contains("binding"), "{conflict}");
+        for status in ["400", "401", "403", "404", "503"] {
+            assert!(patch["responses"].get(status).is_some(), "{status}");
+        }
+        // The other inventory routes keep their existing documentation.
+        assert!(token["put"]["responses"].get("409").is_none());
+        let binding = &openapi["paths"]["/v1/admin/principals/{principal}/identity-bindings/{binding}"]
+            ["patch"];
+        let body = &binding["requestBody"]["content"]["application/json"]["schema"];
+        assert_eq!(body["required"], json!(["expectedVersion"]));
+        assert!(body["properties"].get("readOnly").is_some());
+        let conflict = binding["responses"]["409"]["description"].as_str().unwrap();
+        assert!(conflict.contains("expectedVersion"), "{conflict}");
+
+        let send = send_schema_from_catalog(&catalog);
+        let variants = send["oneOf"].as_array().unwrap();
+        for (route, fence) in [
+            (
+                "/v1/admin/principals/{principal}/identity-token",
+                "expectedRevision",
+            ),
+            (
+                "/v1/admin/principals/{principal}/identity-bindings/{binding}",
+                "expectedVersion",
+            ),
+        ] {
+            let variant = variants
+                .iter()
+                .find(|variant| {
+                    variant["properties"]["route"]["const"] == route
+                        && variant["properties"]["method"]["const"] == "PATCH"
+                })
+                .unwrap_or_else(|| panic!("no PATCH send variant for {route}"));
+            let body = &variant["properties"]["body"];
+            assert_eq!(body["required"], json!([fence]), "{variant}");
+            assert_eq!(body["properties"]["readOnly"]["type"], "boolean");
+            assert_eq!(body["properties"]["enabled"]["type"], "boolean");
+        }
     }
 }

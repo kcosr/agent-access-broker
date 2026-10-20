@@ -159,6 +159,7 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
             identity
               ? { label: "Identity source", value: `${identity.name} · ${identity.type}${identity.tokenClass ? ` · ${identity.tokenClass}` : ""}` }
               : null,
+            typeof identity?.readOnlyAccess === "boolean" ? { label: "Access path", value: identity.readOnlyAccess ? "Read-only" : "Full access" } : null,
             token.id
               ? {
                   label: "Token",

@@ -1,6 +1,7 @@
-import type { ImportActionStatus, ImportChangeBlocked, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
+import type { ImportAcceptResult, ImportActionStatus, ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
 import type { CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
+  IdentityPathSettings,
   IdentityTokenMetadata,
   PrincipalIdentityAccess,
   PrincipalIdentityBindingsResponse,
@@ -60,7 +61,7 @@ type ManagementEnvelope<T> = {
   brokerRequestId: string;
   operation: string;
   principal: string;
-  target?: { conflict?: unknown } & ImportChangeBlocked;
+  target?: { conflict?: unknown; classificationChanges?: ImportClassificationChange[] } & ImportChangeBlocked;
   result?: T;
   error?: { message: string };
 };
@@ -91,8 +92,10 @@ export class ApiError extends Error {
   readonly conflict?: unknown;
   /** What a refused import change would leave invalid. */
   readonly blocked?: ImportChangeBlocked;
+  /** An import acceptance refused until its effect on existing grants is confirmed: the broker's classification changes for the submitted selections. */
+  readonly classificationChanges?: ImportClassificationChange[];
 
-  constructor(message: string, status: number, reasonCode?: string, requestId?: string, brokerRequestId?: string, conflict?: unknown, blocked?: ImportChangeBlocked) {
+  constructor(message: string, status: number, reasonCode?: string, requestId?: string, brokerRequestId?: string, conflict?: unknown, blocked?: ImportChangeBlocked, classificationChanges?: ImportClassificationChange[]) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -101,6 +104,7 @@ export class ApiError extends Error {
     this.brokerRequestId = brokerRequestId;
     this.conflict = conflict;
     this.blocked = blocked;
+    this.classificationChanges = classificationChanges;
   }
 }
 
@@ -194,7 +198,8 @@ async function managementRequest<T>(path: string, init: RequestInit = {}, sessio
       envelope?.requestId,
       envelope?.brokerRequestId,
       envelope?.target?.conflict,
-      importChangeBlocked(envelope?.target)
+      importChangeBlocked(envelope?.target),
+      Array.isArray(envelope?.target?.classificationChanges) ? envelope.target.classificationChanges : undefined
     );
   }
   return envelope.result;
@@ -250,7 +255,7 @@ export const brokerApi = {
   updateImport: (session: Session, service: string, body: ImportVersions & { definition: ImportDefinition; confirmAffectedGrants: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}`, { method: "PATCH", body: JSON.stringify(body) }, session),
   importPreview: (session: Session, service: string) => managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/preview`, {}, session),
   discoverImport: (session: Session, service: string, versions: ImportVersions) => managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/discover`, { method: "POST", body: JSON.stringify(versions) }, session),
-  acceptImport: (session: Session, service: string, body: ImportVersions & { manifestHash: string; selections: ImportSelection[]; confirmAffectedGrants: boolean; resourceTypeIds?: ImportResourceTypeIds }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/accept`, { method: "POST", body: JSON.stringify(body) }, session),
+  acceptImport: (session: Session, service: string, body: ImportVersions & { manifestHash: string; selections: ImportSelection[]; confirmAffectedGrants: boolean; resourceTypeIds?: ImportResourceTypeIds }) => managementRequest<ImportAcceptResult>(`/v1/admin/imports/${enc(service)}/accept`, { method: "POST", body: JSON.stringify(body) }, session),
   setImportStatus: (session: Session, service: string, body: ImportVersions & { status: Exclude<ImportServiceStatus, "draft">; confirm: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/status`, { method: "POST", body: JSON.stringify(body) }, session),
   setImportActionStatus: (session: Session, service: string, action: string, body: ImportVersions & { status: Exclude<ImportActionStatus, "quarantined">; confirm: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/actions/${enc(action)}/status`, { method: "POST", body: JSON.stringify(body) }, session),
   writeImportToken: (session: Session, service: string, purpose: ImportPurpose, body: ImportVersions & { token: string; username?: string }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/credentials/${purpose}`, { method: "PUT", body: JSON.stringify(body) }, session),
@@ -443,9 +448,11 @@ export const brokerApi = {
     managementRequest<PrincipalIdentityAccess>(`/v1/admin/principals/${enc(principalId)}/identity-access`, { method: "PATCH", body: JSON.stringify(body) }, session),
   adminIdentityBindings: (session: Session, principalId: string) =>
     managementRequest<PrincipalIdentityBindingsResponse>(`/v1/admin/principals/${enc(principalId)}/identity-bindings`, { cache: "no-store" }, session),
-  adminCreateIdentityBinding: (session: Session, principalId: string, body: { namespace: string; username: string }) =>
+  adminUpdateIdentityToken: (session: Session, principalId: string, body: IdentityPathSettings & { expectedRevision: number }) =>
+    managementRequest<IdentityTokenMetadata>(`/v1/admin/principals/${enc(principalId)}/identity-token`, { method: "PATCH", body: JSON.stringify(body) }, session),
+  adminCreateIdentityBinding: (session: Session, principalId: string, body: { namespace: string; username: string; readOnly: boolean }) =>
     managementRequest<PrincipalUsernameBinding>(`/v1/admin/principals/${enc(principalId)}/identity-bindings`, { method: "POST", body: JSON.stringify(body) }, session),
-  adminSetIdentityBinding: (session: Session, principalId: string, bindingId: string, body: { enabled: boolean; expectedVersion: number }) =>
+  adminUpdateIdentityBinding: (session: Session, principalId: string, bindingId: string, body: IdentityPathSettings & { expectedVersion: number }) =>
     managementRequest<PrincipalUsernameBinding>(`/v1/admin/principals/${enc(principalId)}/identity-bindings/${enc(bindingId)}`, { method: "PATCH", body: JSON.stringify(body) }, session),
   adminDeleteIdentityBinding: (session: Session, principalId: string, bindingId: string, expectedVersion: number) =>
     managementRequest<{ deleted: true }>(`/v1/admin/principals/${enc(principalId)}/identity-bindings/${enc(bindingId)}?expectedVersion=${expectedVersion}`, { method: "DELETE" }, session),

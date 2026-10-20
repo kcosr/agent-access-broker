@@ -8,7 +8,7 @@ import { brokerApi } from "../../api";
 import type { IdentityTokenMetadata } from "../../types";
 import { errorMessage } from "../../lib/helpers";
 import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
-import { Badge, ErrorState, Input, SettingsRow, SettingsSection, SkeletonBlock, useToast } from "../../workbench";
+import { Badge, ErrorState, Input, SettingsRow, SettingsSection, SkeletonBlock, Time, useToast } from "../../workbench";
 import { FormError } from "../../components/form";
 import { useModal } from "../../app/modal";
 import { useSession } from "../../app/session";
@@ -69,28 +69,31 @@ export function IdentityTokenSection({ principalId }: { principalId: string }) {
       title: action === "remove" ? "Remove identity token?" : action === "generate" ? "Generate a new identity token?" : "Save this identity token?",
       body:
         action === "remove"
-          ? "Fingerprint access stops until an administrator sets a token again. Username bindings, the shared identity pause, and issued Broker tokens remain unchanged."
-          : "Update clients that present this identity token to use the matching value. Username bindings and the shared identity pause remain unchanged.",
+          ? "Fingerprint access stops until an administrator sets a token again. The token’s Enabled and Read-only settings, username bindings, the shared identity pause, and issued Broker tokens remain unchanged."
+          : "Update clients that present this identity token to use the matching value. The token’s Enabled and Read-only settings, username bindings, and the shared identity pause remain unchanged.",
       confirmLabel: action === "remove" ? "Remove token" : action === "generate" ? "Generate token" : "Save token",
       tone: action === "remove" ? "danger" : "primary",
       onConfirm: () => change(action)
     });
 
   const status = metadata ? (metadata.configured ? "Configured" : "Not configured") : null;
+  // Its Enabled and Read-only settings are the identity token row of Access paths above.
+  const disabledNote = metadata && !metadata.enabled ? <p className="pt-prose">This identity token is disabled in Access paths. Fingerprint access is denied while the secret is kept.</p> : null;
   if (query.isError) return <SettingsSection title="Identity token"><ErrorState title="Couldn’t load identity token" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} /></SettingsSection>;
   if (!canWriteAdmin(session)) return <SettingsSection title="Identity token" description="Workspace identity metadata. Secret values require Administrator access." actions={status ? <Badge>{status}</Badge> : null}>
-    {metadata ? <p className="pt-prose">{metadata.configured ? "Configured" : "Not configured"}{metadata.updatedAt ? ` · Updated ${metadata.updatedAt}` : ""}</p> : <SkeletonBlock lines={2} />}
+    {metadata ? <><p className="pt-prose">{status} · Updated <Time value={metadata.updatedAt} format="datetime" /></p>{disabledNote}</> : <SkeletonBlock lines={2} />}
   </SettingsSection>;
   return (
     <SettingsSection
       title="Identity token"
-      description="Administrator-managed token for trusted fingerprint access. Username bindings work independently. Use Identity access above to pause both methods. Issued Broker tokens are managed on the Tokens tab."
+      description="Administrator-managed secret for trusted fingerprint access. Its Enabled and Read-only settings are in Access paths above and are kept when the secret changes. Issued Broker tokens are managed on the Tokens tab."
       actions={status ? <Badge tone={!metadata?.configured ? "neutral" : "success"}>{status}</Badge> : null}
     >
       {isPending || !metadata ? (
         <SkeletonBlock lines={3} />
       ) : (
         <>
+          {disabledNote}
           <SettingsRow label="Current token" help={metadata.configured ? "Reveal or copy it; the value is never cached." : "No token is set."}>
             <Input mono readOnly type={revealed ? "text" : "password"} value={revealed ?? (metadata.configured ? "••••••••••••••••" : "")} autoComplete="off" aria-label="Current identity token" />
             <AdminIconButton

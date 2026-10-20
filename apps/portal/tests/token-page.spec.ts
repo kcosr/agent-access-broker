@@ -90,7 +90,7 @@ async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnab
     } else if (/\/v1\/admin\/principals\/[^/]+$/.test(pathname)) result = owner(pathname.split("/").at(-1)!, model.principalStatus);
     else if (pathname === "/v1/admin/principals") result = [owner("target", model.principalStatus), owner("other"), owner("viewer")];
     else if (pathname.endsWith("/login-methods")) result = [];
-    else if (pathname.endsWith("/identity-token")) result = { principalId: "viewer", configured: false, revision: null };
+    else if (pathname.endsWith("/identity-token")) result = { principalId: "viewer", configured: false, enabled: true, readOnly: false, revision: 1, updatedAt: stamp.createdAt };
     else if (pathname.endsWith("/identity-access")) result = { principalId: "viewer", incarnation: "fixture", paused: false, version: 1, ...stamp };
     else if (pathname.endsWith("/identity-bindings")) result = { bindings: [], configuredNamespaces: [] };
     else if (pathname === "/v1/admin/policy/catalog") result = { services: [], subjects: { users: [], groups: [], anonymous: false }, resources: [], resourceGroups: [], executionContexts: { allowedValues: ["internal", "external"], defaultContext: "internal" } };

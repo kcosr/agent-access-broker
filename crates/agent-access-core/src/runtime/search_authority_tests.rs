@@ -199,6 +199,7 @@ fn caveats(resources: ResourceSelection) -> AgentInvokeTokenCaveats {
 fn token(caveats: &AgentInvokeTokenCaveats) -> IdentityContext {
     let mut identity = IdentityContext::anonymous();
     identity.source = Some(IdentitySourceAudit {
+        read_only_access: None,
         namespace: None,
         binding_id: None,
         name: "namespace-search-token".into(),
@@ -226,13 +227,18 @@ fn effective(
     runtime: &BrokerRuntime,
     token: Option<&AgentInvokeTokenCaveats>,
 ) -> Vec<EffectiveAccessClause> {
+    let token = token.map(|caveats| ParsedAgentInvokeTokenCaveats {
+        token_id: None,
+        caveats: caveats.clone(),
+        read_only_access: false,
+    });
     runtime.effective_resource_clauses_for_modes(
         &runtime.policy_snapshot(),
         &IdentityContext::anonymous(),
         &context(),
         SERVICE,
         ACTION,
-        token,
+        token.as_ref(),
         |_| true,
     )
 }
