@@ -3526,18 +3526,7 @@ fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
 fn accepts_confluence_gateway_with_bearer_connection_per_user_credentials() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
-    config
-        .providers
-        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push(
-            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
-                .to_string(),
-        );
-    let credential = config.credentials.service.get_mut("confluence").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
+    use_atlassian_gateway_for_confluence(&mut config);
     use_connection(
         &mut config,
         "confluence",
@@ -3546,6 +3535,82 @@ fn accepts_confluence_gateway_with_bearer_connection_per_user_credentials() {
     );
 
     validate_broker_config(&config).unwrap();
+}
+
+/// The shared lookup credential reaches the site by its kind like any
+/// static token, so the gateway requires a bearer lookup credential too, and
+/// a bearer one requires the gateway; it is never execution material.
+#[test]
+fn atlassian_gateway_holds_the_lookup_credential_to_its_route() {
+    for service in ["jira", "confluence"] {
+        let gateway_basic_lookup = format!(
+            "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but credentials.lookup.{service} does not resolve to a bearer_token credential"
+        );
+        let mut config = sample_broker();
+        route_both_atlassian_products_through_the_gateway(&mut config);
+        validate_broker_config(&config).unwrap();
+
+        // A basic lookup credential beside the gateway.
+        let lookup = config.credentials.lookup.get_mut(service).unwrap();
+        lookup.kind = "basic_api_token".to_string();
+        lookup.username_ref = Some(format!("env:{}_LOOKUP_USERNAME", service.to_uppercase()));
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_eq!(
+            errors,
+            std::slice::from_ref(&gateway_basic_lookup),
+            "{service}"
+        );
+
+        // The same beside OAuth-only per-user access.
+        config.credentials.service.remove(service);
+        use_connection(
+            &mut config,
+            service,
+            ConnectionConfig {
+                display_name: None,
+                token_profile: None,
+                oauth: Some(ConnectionOAuthConfig {
+                    registration: "atlassian".to_string(),
+                    profile: "default".to_string(),
+                }),
+            },
+            &[service],
+        );
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(&errors, &gateway_basic_lookup);
+
+        // A bearer lookup credential is not an execution credential.
+        let mut config = sample_broker();
+        route_both_atlassian_products_through_the_gateway(&mut config);
+        config.credentials.service.remove(service);
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            &format!(
+                "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured"
+            ),
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("credentials.lookup")),
+            "{errors:?}"
+        );
+
+        // A bearer lookup credential without the gateway.
+        let mut config = sample_broker();
+        let lookup = config.credentials.lookup.get_mut(service).unwrap();
+        lookup.kind = "bearer_token".to_string();
+        lookup.username_ref = None;
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_eq!(
+            errors,
+            [format!(
+                "credentials.lookup.{service}.type bearer_token requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
+            )],
+            "{service}"
+        );
+    }
 }
 
 #[test]
@@ -5620,8 +5685,21 @@ fn enable_test_managed_store(config: &mut BrokerConfig) {
     });
 }
 
-/// Routes the sample Jira service through the Atlassian gateway with a static
-/// bearer service credential.
+/// Makes the sample's static `service` credential and shared lookup
+/// credential bearer tokens, as the Atlassian gateway requires of both.
+fn use_bearer_service_and_lookup_credentials(config: &mut BrokerConfig, service: &str) {
+    for credentials in [
+        &mut config.credentials.service,
+        &mut config.credentials.lookup,
+    ] {
+        let credential = credentials.get_mut(service).unwrap();
+        credential.kind = "bearer_token".to_string();
+        credential.username_ref = None;
+    }
+}
+
+/// Routes the sample Jira service through the Atlassian gateway with static
+/// bearer service and lookup credentials.
 fn use_atlassian_gateway_for_jira(config: &mut BrokerConfig) {
     config
         .providers
@@ -5632,15 +5710,12 @@ fn use_atlassian_gateway_for_jira(config: &mut BrokerConfig) {
             "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**"
                 .to_string(),
         );
-    let credential = config.credentials.service.get_mut("jira").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
+    use_bearer_service_and_lookup_credentials(config, "jira");
 }
 
-/// Routes the sample Jira and Confluence services through the Atlassian
-/// gateway with static bearer service credentials.
-fn route_both_atlassian_products_through_the_gateway(config: &mut BrokerConfig) {
-    use_atlassian_gateway_for_jira(config);
+/// Routes the sample Confluence service through the Atlassian gateway with
+/// static bearer service and lookup credentials.
+fn use_atlassian_gateway_for_confluence(config: &mut BrokerConfig) {
     config
         .providers
         .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
@@ -5650,9 +5725,14 @@ fn route_both_atlassian_products_through_the_gateway(config: &mut BrokerConfig) 
             "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
                 .to_string(),
         );
-    let credential = config.credentials.service.get_mut("confluence").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
+    use_bearer_service_and_lookup_credentials(config, "confluence");
+}
+
+/// Routes the sample Jira and Confluence services through the Atlassian
+/// gateway with static bearer service and lookup credentials.
+fn route_both_atlassian_products_through_the_gateway(config: &mut BrokerConfig) {
+    use_atlassian_gateway_for_jira(config);
+    use_atlassian_gateway_for_confluence(config);
 }
 
 fn jira_per_user_credential(path: &str) -> CredentialConfig {

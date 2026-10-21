@@ -380,11 +380,13 @@ read_only = true
 # requires the gateway on both providers (cloud_id set and api.atlassian.com
 # in allowed_upstream_hosts), and a connection with oauth uses
 # atlassian-bearer-token or no token_profile: atlassian-api-token beside
-# oauth is rejected. Create an OAuth 2.0 integration in the Atlassian
-# developer console with this callback URL and the Jira, Confluence and User
-# Identity APIs, and enable sharing. The target is the site's cloud ID, the
-# providers' cloud_id. Requires managed identity/store/encryption, browser
-# auth and management. See docs/oauth.md#atlassian.
+# oauth is rejected. Through the gateway, [credentials.service.*] and
+# [credentials.lookup.*] for Jira and Confluence are bearer_token too.
+# Create an OAuth 2.0 integration in the Atlassian developer console with
+# this callback URL and the Jira, Confluence and User Identity APIs, and
+# enable sharing. The target is the site's cloud ID, the providers' cloud_id.
+# Requires managed identity/store/encryption, browser auth and management.
+# See docs/oauth.md#atlassian.
 # [oauth.registrations.atlassian]
 # adapter = "atlassian"
 # base_url = "https://auth.atlassian.com"

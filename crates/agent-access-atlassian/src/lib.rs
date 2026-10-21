@@ -42,7 +42,10 @@ use url::Url;
 /// | `basic_api_token` profile and OAuth | either | rejected: site tokens would mix with gateway OAuth |
 ///
 /// A `credentials.service` credential must be a bearer token when the
-/// gateway is on, and a bearer credential requires the gateway.
+/// gateway is on, and a bearer credential requires the gateway. The same
+/// holds for the `credentials.lookup` credential, which reaches the site by
+/// its kind like any static token, but it is not execution material: the
+/// gateway still needs a bearer or OAuth execution credential beside it.
 pub fn validate_atlassian_gateway_credential(
     service: &str,
     patterns: &[String],
@@ -70,17 +73,19 @@ pub fn validate_atlassian_gateway_credential(
     let per_user_static = credentials
         .per_user
         .filter(|kind| !(delegated && matches!(*kind, "oauth" | "basic_api_token")));
-    let execution_credentials = [
-        ("credentials.service", credentials.service),
-        ("credentials.per_user", per_user_static),
+    // Each static credential with whether it is execution material.
+    let static_credentials = [
+        ("credentials.service", credentials.service, true),
+        ("credentials.per_user", per_user_static, true),
+        ("credentials.lookup", credentials.lookup, false),
     ];
     let mut has_gateway_execution_credential = delegated;
     let mut bearer_mode = None;
 
-    for (mode, credential) in execution_credentials {
+    for (mode, credential, execution) in static_credentials {
         if let Some(kind) = credential {
             if kind == "bearer_token" {
-                has_gateway_execution_credential = true;
+                has_gateway_execution_credential |= execution;
                 bearer_mode.get_or_insert(mode);
             } else if uses_gateway {
                 errors.push(format!(
@@ -769,6 +774,100 @@ mod tests {
                 validate(gateway, kinds(service, per_user, delegated)),
                 expected,
                 "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}"
+            );
+        }
+    }
+
+    /// The shared lookup credential reaches the site by its kind like any
+    /// static token: the gateway requires a bearer lookup credential and a
+    /// bearer one requires the gateway. It is never execution material, so
+    /// it does not stand in for a gateway execution credential.
+    #[test]
+    fn gateway_validation_holds_the_lookup_credential_to_the_route() {
+        const GATEWAY_LOOKUP_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.lookup.jira does not resolve to a bearer_token credential";
+        const LOOKUP_SITE_BEARER: &str = "credentials.lookup.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const SERVICE_SITE_BEARER: &str = "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const GATEWAY_NONE: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured";
+
+        let validate = |gateway: bool, credentials: ServiceCredentialKinds<'_>| {
+            let mut errors = Vec::new();
+            validate_atlassian_gateway_credential(
+                "jira",
+                &hosts(gateway),
+                Some(CLOUD_ID),
+                credentials,
+                &mut errors,
+            );
+            errors
+        };
+        let none: [&str; 0] = [];
+        let basic = Some("basic_api_token");
+        let bearer = Some("bearer_token");
+        let oauth = Some("oauth");
+        for (gateway, service, per_user, delegated, lookup, expected) in [
+            // Through the gateway, a bearer lookup credential beside each
+            // gateway execution credential.
+            (true, bearer, None, false, bearer, &none[..]),
+            (true, None, bearer, false, bearer, &none[..]),
+            (true, None, oauth, true, bearer, &none[..]),
+            (true, bearer, bearer, true, bearer, &none[..]),
+            // A basic lookup credential is rejected beside every one.
+            (
+                true,
+                bearer,
+                None,
+                false,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC][..],
+            ),
+            (
+                true,
+                None,
+                bearer,
+                false,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC][..],
+            ),
+            (true, None, oauth, true, basic, &[GATEWAY_LOOKUP_BASIC][..]),
+            (
+                true,
+                bearer,
+                bearer,
+                true,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC][..],
+            ),
+            // A lookup credential alone is no execution credential.
+            (true, None, None, false, bearer, &[GATEWAY_NONE][..]),
+            (
+                true,
+                None,
+                None,
+                false,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC, GATEWAY_NONE][..],
+            ),
+            // On the site route, a basic lookup credential; a bearer one
+            // needs the gateway.
+            (false, basic, None, false, basic, &none[..]),
+            (false, None, basic, false, basic, &none[..]),
+            (false, basic, None, false, bearer, &[LOOKUP_SITE_BEARER][..]),
+            (
+                false,
+                bearer,
+                None,
+                false,
+                bearer,
+                &[SERVICE_SITE_BEARER][..],
+            ),
+        ] {
+            let credentials = ServiceCredentialKinds::new(service, per_user)
+                .with_per_user_delegated(delegated)
+                .with_lookup(lookup);
+            assert_eq!(
+                validate(gateway, credentials),
+                expected,
+                "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}, lookup {lookup:?}"
             );
         }
     }

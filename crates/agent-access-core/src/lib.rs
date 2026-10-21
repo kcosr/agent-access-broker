@@ -4402,7 +4402,10 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
                     .credentials
                     .personal_connection(kind)
                     .is_some_and(|connection| connection.config.oauth.is_some()),
-            ),
+            )
+            .with_lookup(config.credentials.lookup.get(kind).and_then(|credential| {
+                resolved_credential_kind(&config.credentials, credential, &descriptor)
+            })),
         );
         backend.validate(&context, errors);
     }

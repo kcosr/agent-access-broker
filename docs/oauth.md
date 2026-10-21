@@ -512,8 +512,10 @@ A connection's method and route follow this table:
 | `atlassian-bearer-token` and `oauth` | On | Valid: people use OAuth and service accounts bearer tokens, both through the gateway |
 | `atlassian-api-token` and `oauth` | Either | Rejected: `credentials.per_user.<service> combines OAuth with a basic_api_token profile; ...` |
 
-A `credentials.service` entry must also be a `bearer_token` when the gateway
-is on. An `oauth` connection on a provider without the gateway fails with
+A `credentials.service` or `credentials.lookup` entry must also be a
+`bearer_token` when the gateway is on; the lookup credential serves only
+metadata lookups and never counts as the gateway's execution credential. An
+`oauth` connection on a provider without the gateway fails with
 `credentials.per_user.<service> offers delegated (OAuth) access, which
 requires providers.<service>.allowed_upstream_hosts to include
 api.atlassian.com`.

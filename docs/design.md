@@ -806,7 +806,10 @@ existence, ownership of a particular object, or an authorization outcome.
 `bearer_token` credentials for Jira and Confluence route through the Atlassian
 gateway (`api.atlassian.com`) and require `providers.<svc>.cloud_id` (a validated
 UUID) plus `api.atlassian.com` in `allowed_upstream_hosts`; `basic_api_token`
-credentials use the tenant base directly.
+credentials use the tenant base directly. With the gateway enabled, the service
+and lookup credentials must be `bearer_token` and per-user credentials
+`bearer_token` or OAuth, so no static credential silently takes the tenant
+route; the lookup credential never counts as execution material.
 
 Response presentation is common invoke metadata, not provider input. JSON and
 multipart `InvokeRequest` envelopes may carry top-level `readContentFormat`

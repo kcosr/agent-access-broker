@@ -577,13 +577,15 @@ Imported connections are not configured in TOML. See
 [command imports](command-imports.md#credentials).
 
 **Provider validation.** A backend's own configuration checks see the credential
-kinds configured for its service (`ServiceCredentialKinds`). For a
-`type = "connection"` entry, `per_user` is the connection's token profile kind
+kinds configured for its service under `credentials.service`,
+`credentials.per_user` and `credentials.lookup` (`ServiceCredentialKinds`). For
+a `type = "connection"` entry, `per_user` is the connection's token profile kind
 (`basic_api_token` or `bearer_token`), or `oauth` for a connection with only
 `oauth`, and a separate delegated flag reports that the connection also offers
 OAuth. Gmail therefore requires a connection with only `oauth`, and Jira and
 Confluence accept OAuth only through the Atlassian gateway, alone or beside an
-`atlassian-bearer-token` profile (see [`[providers.jira]`](#providersjira)).
+`atlassian-bearer-token` profile, with a `bearer_token` lookup credential when
+one is configured (see [`[providers.jira]`](#providersjira)).
 
 ### Connection token profiles
 
@@ -1222,16 +1224,18 @@ dependency_inward = "is blocked by"
   gateway and requires a `bearer_token` or OAuth execution credential (and vice
   versa: a `bearer_token` credential or an OAuth connection requires
   `api.atlassian.com` in the allowlist). With the gateway enabled, each
-  configured `credentials.service` entry must resolve to `bearer_token`, and
-  each `credentials.per_user` entry to `bearer_token` or OAuth: a static
-  `bearer_token`, or a credential connection whose `token_profile` is the
-  bearer profile `atlassian-bearer-token`, whose `oauth` names an
-  [Atlassian registration](oauth.md#atlassian), or both. A `basic_api_token`, a
-  connection with a basic profile such as `atlassian-api-token`, and a
-  `secret_store` (whose records carry their own kinds) are rejected. A
-  connection that combines `atlassian-api-token` with `oauth` is rejected with
-  or without the gateway, because Basic site tokens would mix with gateway
-  OAuth.
+  configured `credentials.service` and `credentials.lookup` entry must resolve
+  to `bearer_token`, and each `credentials.per_user` entry to `bearer_token` or
+  OAuth: a static `bearer_token`, or a credential connection whose
+  `token_profile` is the bearer profile `atlassian-bearer-token`, whose `oauth`
+  names an [Atlassian registration](oauth.md#atlassian), or both. A
+  `basic_api_token`, a connection with a basic profile such as
+  `atlassian-api-token`, and a `secret_store` (whose records carry their own
+  kinds) are rejected. A connection that combines `atlassian-api-token` with
+  `oauth` is rejected with or without the gateway, because Basic site tokens
+  would mix with gateway OAuth. The read-only lookup credential is not an
+  execution credential, so it never satisfies the gateway's execution
+  requirement on its own.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
   `media_types` entry must contain a `/`. See the cross-section limits checks in

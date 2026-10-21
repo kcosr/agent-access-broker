@@ -75,7 +75,9 @@ secret sources, token profiles, attachment limits and optional egress/TLS
 settings. Atlassian bearer credentials, such as a service account's scoped
 token under the `atlassian-bearer-token` profile, additionally require
 `cloud_id` and an explicit `https://api.atlassian.com/**` allowlist; credential
-kind selects that gateway rather than the tenant route.
+kind selects that gateway rather than the tenant route. With the gateway
+enabled, the service, per-user and lookup credentials must all reach it: a
+`bearer_token`, or OAuth for per-user access.
 
 For ordinary managed browser or `user_manage` credential management, enable the
 owner's self-service flag and grant them a `per_user` action on a service that
