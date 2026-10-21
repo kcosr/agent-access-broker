@@ -869,7 +869,7 @@ body `{"service": "…", "repository": "…"}`. Verification is authorized like
 storing the token, and its probe always runs as the credential owner, through a
 consumer the owner holds a `per_user` grant on; an administrator's own grants
 never authorize a probe. `service` names the consumer to probe. Without it, the
-broker probes the owner's entitled consumers in configured order, other than
+broker probes the owner's entitled consumers in service ID order, other than
 those needing a `repository`, until one whose backend has an identity probe
 answers (GitLab REST `/user`, Jira `myself`, Confluence `user/current`); when
 none has a probe, the token is checked locally only (`local_verified`). A
@@ -896,7 +896,7 @@ Credential management audit targets name `{"principal": …, "connection": …}`
 (verification adds `probeService`); retained-row deletes name
 `{"principal": …, "credentialId": …}`. Records of connection operations also
 list the connection's consuming services in
-`providerAudit.management.targetServices`, in configured order. An administrator
+`providerAudit.management.targetServices`, in service ID order. An administrator
 operation on a connection with exactly one consumer names it as `targetService`,
 its scope service; one on a connection several services share has no scope
 service, so no service policy manager sees it.
@@ -3446,8 +3446,11 @@ also stays listed whatever the caller's entitlement or ownership, as a
 cleanup-only row with `consumers: []`, `canConnect: false` and
 `canDisconnect: false`, so provider-side cleanup stays visible after the owner
 lost the last grant and disconnected.
-`displayName` is the first selecting connection's configured `display_name`, or
-its ID, and `connectionDescription` comes from an entitled consumer's backend.
+`displayName` is the configured `display_name` of the first connection, by
+connection ID, that selects the registration for the caller, or that
+connection's ID; connections sharing a registration should set the same
+`display_name`. `connectionDescription` comes from an entitled consumer's
+backend.
 An owned connection whose registration no credential connection selects for the
 caller any more, because its last consumer was removed or rebound, is still
 listed for local disconnect on ownership alone: its `displayName` is the

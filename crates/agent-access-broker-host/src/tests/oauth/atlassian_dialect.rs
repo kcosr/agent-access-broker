@@ -929,3 +929,43 @@ fn atlassian_registration_and_site_mismatches_fail_offline_validation() {
         ]
     );
 }
+
+/// Jira and Confluence may write their `cloud_id` in any UUID form, such as
+/// uppercase or braced; the registration's lowercase hyphenated target still
+/// names the same site. Another site is still rejected, named in that form.
+#[test]
+fn provider_cloud_ids_in_any_uuid_form_match_the_registration_target() {
+    const TARGET: &str = "abcdef01-2345-4678-9abc-def012345678";
+    let configured = |cloud_id: &str| {
+        atlassian_config(Deployment {
+            connections: &shared_connection(None, true),
+            target: TARGET,
+            ..Deployment::default()
+        })
+        .replace(
+            &format!("cloud_id = \"{CLOUD_ID}\""),
+            &format!("cloud_id = \"{cloud_id}\""),
+        )
+    };
+    for written in [
+        TARGET.to_uppercase(),
+        format!("{{{TARGET}}}"),
+        format!("{{{}}}", TARGET.to_uppercase()),
+        format!("urn:uuid:{TARGET}"),
+    ] {
+        assert_eq!(
+            validation_errors(&configured(&written)),
+            Vec::<String>::new(),
+            "{written}"
+        );
+    }
+    let elsewhere = |service: &str| {
+        format!(
+            "credentials.connections.atlassian.oauth: {service} does not act on the upstream registration atlassian grants access to: it acts through the Atlassian gateway on cloud ID {OTHER_CLOUD_ID}, not cloud ID {TARGET}"
+        )
+    };
+    assert_eq!(
+        validation_errors(&configured(&format!("{{{OTHER_CLOUD_ID}}}"))),
+        sorted([elsewhere("jira"), elsewhere("confluence")])
+    );
+}

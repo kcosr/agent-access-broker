@@ -2938,7 +2938,7 @@ fn set_result_schema(routes: &mut [HttpRouteSpec], method: &str, route: &str, sc
 fn connection_consumers_schema() -> Value {
     json!({
         "type": "array",
-        "description": "Consuming services the caller (or, on administrator routes, the principal) holds a per_user grant on, in configured order.",
+        "description": "Consuming services the caller (or, on administrator routes, the principal) holds a per_user grant on, in service ID order.",
         "items": {
             "type": "object", "additionalProperties": false,
             "required": ["service", "displayName", "credentialVerificationInputs"],

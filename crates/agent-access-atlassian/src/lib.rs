@@ -22,6 +22,7 @@ use agent_access_provider::{
     UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 use url::Url;
@@ -41,7 +42,10 @@ use url::Url;
 /// | `basic_api_token` profile and OAuth | either | rejected: site tokens would mix with gateway OAuth |
 ///
 /// A `credentials.service` credential must be a bearer token when the
-/// gateway is on, and a bearer credential requires the gateway.
+/// gateway is on, and a bearer credential requires the gateway. The same
+/// holds for the `credentials.lookup` credential, which reaches the site by
+/// its kind like any static token, but it is not execution material: the
+/// gateway still needs a bearer or OAuth execution credential beside it.
 pub fn validate_atlassian_gateway_credential(
     service: &str,
     patterns: &[String],
@@ -69,17 +73,19 @@ pub fn validate_atlassian_gateway_credential(
     let per_user_static = credentials
         .per_user
         .filter(|kind| !(delegated && matches!(*kind, "oauth" | "basic_api_token")));
-    let execution_credentials = [
-        ("credentials.service", credentials.service),
-        ("credentials.per_user", per_user_static),
+    // Each static credential with whether it is execution material.
+    let static_credentials = [
+        ("credentials.service", credentials.service, true),
+        ("credentials.per_user", per_user_static, true),
+        ("credentials.lookup", credentials.lookup, false),
     ];
     let mut has_gateway_execution_credential = delegated;
     let mut bearer_mode = None;
 
-    for (mode, credential) in execution_credentials {
+    for (mode, credential, execution) in static_credentials {
         if let Some(kind) = credential {
             if kind == "bearer_token" {
-                has_gateway_execution_credential = true;
+                has_gateway_execution_credential |= execution;
                 bearer_mode.get_or_insert(mode);
             } else if uses_gateway {
                 errors.push(format!(
@@ -119,6 +125,19 @@ pub fn validate_atlassian_gateway_credential(
 /// The Atlassian API gateway's origin.
 pub const ATLASSIAN_GATEWAY_ORIGIN: &str = "https://api.atlassian.com";
 
+/// A configured cloud ID in the one form the site declares, routes and
+/// binds: Atlassian's own, a lowercase hyphenated UUID. Configuration
+/// accepts a UUID in any form [`uuid::Uuid::parse_str`] does, such as
+/// uppercase or braced, so an OAuth registration's `target` matches it
+/// however it is written. A value that is not a UUID, which validation
+/// rejects whenever the gateway is on, is kept as written.
+fn canonical_cloud_id(cloud_id: &str) -> Cow<'_, str> {
+    match uuid::Uuid::parse_str(cloud_id) {
+        Ok(id) => Cow::Owned(id.hyphenated().to_string()),
+        Err(_) => Cow::Borrowed(cloud_id),
+    }
+}
+
 /// The stored token profile for an Atlassian account's email address and
 /// classic API token, presented as HTTP Basic on the site route. Classic
 /// tokens are account-wide, so one credential connection with this profile
@@ -153,7 +172,8 @@ pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
 ///   audience. Routine refresh keeps them; reconnecting, replacing the
 ///   account or new consent changes the binding;
 /// - for a route through the Atlassian gateway (a bearer token or delegated
-///   access), the configured `cloud_id`, the site the gateway reaches.
+///   access), the configured `cloud_id`, the site the gateway reaches, in its
+///   lowercase hyphenated form, however the configuration writes it.
 ///
 /// A token sealed under one method, account, connection generation or
 /// gateway site therefore never opens under another. Every input is fixed by
@@ -187,7 +207,8 @@ pub fn bind_atlassian_access<Stage: ContinuationStage>(
         ),
         _ => return Err(atlassian_access_unavailable()),
     };
-    Ok(binding.optional_text("gatewayCloudId", cloud_id.filter(|_| through_gateway)))
+    let gateway_cloud_id = cloud_id.filter(|_| through_gateway).map(canonical_cloud_id);
+    Ok(binding.optional_text("gatewayCloudId", gateway_cloud_id.as_deref()))
 }
 
 fn atlassian_access_unavailable() -> ProviderError {
@@ -226,6 +247,8 @@ pub struct AtlassianProduct {
 #[derive(Debug, Clone, Copy)]
 pub struct AtlassianSite<'a> {
     pub tenant_host: &'a str,
+    /// The cloud ID as configured. The site declares, routes, fingerprints
+    /// and binds its lowercase hyphenated form.
     pub cloud_id: Option<&'a str>,
     pub egress_proxy: Option<&'a EgressProxyConfig>,
     pub allowed_upstream_hosts: &'a [String],
@@ -267,14 +290,15 @@ impl AtlassianSite<'_> {
     }
 
     /// The site's upstream authority: the tenant host's origin, the cloud
-    /// ID when configured, and the Atlassian gateway when it routes through
-    /// it. Jira and Confluence on one site therefore act on the same
-    /// instance. `None` for a tenant host that is not a valid host.
+    /// ID when configured, in its lowercase hyphenated form, and the
+    /// Atlassian gateway when it routes through it. Jira and Confluence on
+    /// one site therefore act on the same instance. `None` for a tenant host
+    /// that is not a valid host.
     pub fn upstream_authority(&self) -> Option<UpstreamAuthority> {
         let mut authority =
             UpstreamAuthority::from_base_url(&format!("https://{}", self.tenant_host)).ok()?;
         if let Some(cloud_id) = self.cloud_id {
-            authority = authority.with_tenant(cloud_id);
+            authority = authority.with_tenant(canonical_cloud_id(cloud_id));
         }
         if self.uses_gateway() {
             authority = authority
@@ -285,14 +309,15 @@ impl AtlassianSite<'_> {
     }
 
     /// A digest of the configuration an upstream cursor's route depends on:
-    /// the tenant host, the gateway cloud ID and whether `api.atlassian.com`
-    /// is allowed. Continuations relaying a cursor bind it, beside the
-    /// execution material [`bind_atlassian_access`] binds, whose method and
-    /// kind select the route.
+    /// the tenant host, the cloud ID in its lowercase hyphenated form and
+    /// whether `api.atlassian.com` is allowed. Continuations relaying a
+    /// cursor bind it, beside the execution material [`bind_atlassian_access`]
+    /// binds, whose method and kind select the route.
     pub fn route_fingerprint(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"agent-access/atlassian-route/v1\0");
-        for field in [Some(self.tenant_host), self.cloud_id] {
+        let cloud_id = self.cloud_id.map(canonical_cloud_id);
+        for field in [Some(self.tenant_host), cloud_id.as_deref()] {
             match field {
                 Some(value) => {
                     digest.update([1]);
@@ -535,6 +560,61 @@ mod tests {
         assert!(invalid.upstream_authority().is_none());
     }
 
+    /// Configuration may write a cloud ID in any UUID form; the site
+    /// declares, routes and fingerprints its lowercase hyphenated form, so an
+    /// OAuth registration's target matches it however it is written.
+    #[test]
+    fn cloud_ids_in_any_uuid_form_are_declared_and_routed_canonically() {
+        const CANONICAL: &str = "abcdef01-2345-4678-9abc-def012345678";
+        let gateway = hosts(true);
+        let canonical = site(Some(CANONICAL), &gateway);
+        for written in [
+            "ABCDEF01-2345-4678-9ABC-DEF012345678",
+            "{abcdef01-2345-4678-9abc-def012345678}",
+            "urn:uuid:ABCDEF01-2345-4678-9ABC-DEF012345678",
+            "ABCDEF01234546789ABCDEF012345678",
+        ] {
+            let written_site = site(Some(written), &gateway);
+            let authority = written_site.upstream_authority().unwrap();
+            assert_eq!(authority.tenant(), Some(CANONICAL), "{written}");
+            assert_eq!(authority, canonical.upstream_authority().unwrap());
+            assert_eq!(
+                written_site.gateway_cloud_id().as_deref(),
+                Some(CANONICAL),
+                "{written}"
+            );
+            assert_eq!(
+                written_site.route_fingerprint(),
+                canonical.route_fingerprint(),
+                "{written}"
+            );
+            let routes =
+                AtlassianRoutes::new(PRODUCT, &written_site, &TestHost::default()).unwrap();
+            assert_eq!(
+                routes
+                    .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                        "token"
+                    )))
+                    .unwrap()
+                    .api_base
+                    .as_str(),
+                format!("https://api.atlassian.com/ex/confluence/{CANONICAL}/wiki/rest/api/")
+            );
+        }
+        // A value that is not a UUID is invalid with the gateway; without it,
+        // it is kept as written.
+        let tenant_only = hosts(false);
+        let unvalidated = site(Some("not-a-uuid"), &tenant_only);
+        assert_eq!(
+            unvalidated.upstream_authority().unwrap().tenant(),
+            Some("not-a-uuid")
+        );
+        assert_ne!(
+            unvalidated.route_fingerprint(),
+            site(None, &tenant_only).route_fingerprint()
+        );
+    }
+
     /// Every site declares the classic API token profile for the site route;
     /// only a site that uses the gateway adds the bearer profile, whose kind
     /// routes through it.
@@ -694,6 +774,100 @@ mod tests {
                 validate(gateway, kinds(service, per_user, delegated)),
                 expected,
                 "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}"
+            );
+        }
+    }
+
+    /// The shared lookup credential reaches the site by its kind like any
+    /// static token: the gateway requires a bearer lookup credential and a
+    /// bearer one requires the gateway. It is never execution material, so
+    /// it does not stand in for a gateway execution credential.
+    #[test]
+    fn gateway_validation_holds_the_lookup_credential_to_the_route() {
+        const GATEWAY_LOOKUP_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.lookup.jira does not resolve to a bearer_token credential";
+        const LOOKUP_SITE_BEARER: &str = "credentials.lookup.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const SERVICE_SITE_BEARER: &str = "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
+        const GATEWAY_NONE: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured";
+
+        let validate = |gateway: bool, credentials: ServiceCredentialKinds<'_>| {
+            let mut errors = Vec::new();
+            validate_atlassian_gateway_credential(
+                "jira",
+                &hosts(gateway),
+                Some(CLOUD_ID),
+                credentials,
+                &mut errors,
+            );
+            errors
+        };
+        let none: [&str; 0] = [];
+        let basic = Some("basic_api_token");
+        let bearer = Some("bearer_token");
+        let oauth = Some("oauth");
+        for (gateway, service, per_user, delegated, lookup, expected) in [
+            // Through the gateway, a bearer lookup credential beside each
+            // gateway execution credential.
+            (true, bearer, None, false, bearer, &none[..]),
+            (true, None, bearer, false, bearer, &none[..]),
+            (true, None, oauth, true, bearer, &none[..]),
+            (true, bearer, bearer, true, bearer, &none[..]),
+            // A basic lookup credential is rejected beside every one.
+            (
+                true,
+                bearer,
+                None,
+                false,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC][..],
+            ),
+            (
+                true,
+                None,
+                bearer,
+                false,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC][..],
+            ),
+            (true, None, oauth, true, basic, &[GATEWAY_LOOKUP_BASIC][..]),
+            (
+                true,
+                bearer,
+                bearer,
+                true,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC][..],
+            ),
+            // A lookup credential alone is no execution credential.
+            (true, None, None, false, bearer, &[GATEWAY_NONE][..]),
+            (
+                true,
+                None,
+                None,
+                false,
+                basic,
+                &[GATEWAY_LOOKUP_BASIC, GATEWAY_NONE][..],
+            ),
+            // On the site route, a basic lookup credential; a bearer one
+            // needs the gateway.
+            (false, basic, None, false, basic, &none[..]),
+            (false, None, basic, false, basic, &none[..]),
+            (false, basic, None, false, bearer, &[LOOKUP_SITE_BEARER][..]),
+            (
+                false,
+                bearer,
+                None,
+                false,
+                bearer,
+                &[SERVICE_SITE_BEARER][..],
+            ),
+        ] {
+            let credentials = ServiceCredentialKinds::new(service, per_user)
+                .with_per_user_delegated(delegated)
+                .with_lookup(lookup);
+            assert_eq!(
+                validate(gateway, credentials),
+                expected,
+                "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}, lookup {lookup:?}"
             );
         }
     }
@@ -1077,6 +1251,44 @@ mod tests {
             ] {
                 assert_eq!(
                     open(&signer, &alice, &access, cloud_id, &token),
+                    Err(ContinuationError::Invalid)
+                );
+            }
+        }
+
+        /// The gateway's site is bound in its lowercase hyphenated form, so
+        /// a configured cloud ID written in another UUID form binds the same
+        /// site, and another site still never opens the token.
+        #[test]
+        fn gateway_sites_bind_the_canonical_cloud_id() {
+            let signer = ContinuationSigner::new(None);
+            let alice = request("alice");
+            let braced = format!("{{{CLOUD_ID}}}");
+            let simple = CLOUD_ID.replace('-', "");
+            for access in [
+                ExecutionAccess::Static(bearer_credential("token")),
+                delegated("alice-oauth-1", "v1"),
+            ] {
+                let token = seal(&signer, &alice, &access, Some(CLOUD_ID));
+                for written in [braced.as_str(), simple.as_str()] {
+                    assert_eq!(
+                        open(&signer, &alice, &access, Some(written), &token).unwrap(),
+                        b"next"
+                    );
+                    let sealed = seal(&signer, &alice, &access, Some(written));
+                    assert_eq!(
+                        open(&signer, &alice, &access, Some(CLOUD_ID), &sealed).unwrap(),
+                        b"next"
+                    );
+                }
+                assert_eq!(
+                    open(
+                        &signer,
+                        &alice,
+                        &access,
+                        Some(&format!("{{{OTHER_CLOUD_ID}}}")),
+                        &token
+                    ),
                     Err(ContinuationError::Invalid)
                 );
             }

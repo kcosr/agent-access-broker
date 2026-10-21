@@ -210,8 +210,8 @@ impl<'a> ValidationContext<'a> {
     }
 }
 
-/// The credential kinds configured under `credentials.service.<service>` and
-/// `credentials.per_user.<service>`.
+/// The credential kinds configured under `credentials.service.<service>`,
+/// `credentials.per_user.<service>` and `credentials.lookup.<service>`.
 ///
 /// - `service` is `basic_api_token` or `bearer_token` for a static
 ///   credential.
@@ -222,6 +222,10 @@ impl<'a> ValidationContext<'a> {
 /// - `per_user_delegated` is set when the per-user connection also offers
 ///   delegated (OAuth) access, whether or not it has a token profile. A
 ///   backend that cannot accept delegated access must reject it.
+/// - `lookup` is `basic_api_token` or `bearer_token` for the shared,
+///   read-only metadata-lookup credential that service-mode lookups use. It
+///   is not an execution credential: a backend that requires one must not
+///   count it.
 ///
 /// `None` means the mode is not configured, or its connection's token
 /// profile is unsupported (credential validation reports that separately).
@@ -231,21 +235,29 @@ pub struct ServiceCredentialKinds<'a> {
     pub service: Option<&'a str>,
     pub per_user: Option<&'a str>,
     pub per_user_delegated: bool,
+    pub lookup: Option<&'a str>,
 }
 
 impl<'a> ServiceCredentialKinds<'a> {
-    /// Kinds without delegated per-user access.
+    /// Kinds without delegated per-user access or a lookup credential.
     pub fn new(service: Option<&'a str>, per_user: Option<&'a str>) -> Self {
         Self {
             service,
             per_user,
             per_user_delegated: false,
+            lookup: None,
         }
     }
 
     /// Reports whether the per-user connection offers delegated access.
     pub fn with_per_user_delegated(mut self, delegated: bool) -> Self {
         self.per_user_delegated = delegated;
+        self
+    }
+
+    /// Reports the kind of the service's lookup credential.
+    pub fn with_lookup(mut self, lookup: Option<&'a str>) -> Self {
+        self.lookup = lookup;
         self
     }
 }

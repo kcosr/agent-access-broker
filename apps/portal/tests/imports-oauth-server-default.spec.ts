@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -234,26 +234,18 @@ async function refreshThroughRead(token: string, account: string) {
   }, { timeout: 15_000, intervals: [250, 500, 1000] }).toBe(1);
 }
 
-async function expectUnclippedPermission(page: Page, text: string) {
-  const label = page.getByRole("table", { name: "Credentials" }).getByText(text, { exact: true });
-  await expect(label).toBeVisible();
-  // Playwright visibility alone accepts ellipsized text. Check actual text
-  // rectangles against the cell, viewport, and every clipping ancestor.
-  expect(await label.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    const cell = element.closest("td")!.getBoundingClientRect();
-    return [...range.getClientRects()].every((rect) => {
-      if (rect.left < cell.left - 1 || rect.right > cell.right + 1 || rect.left < -1 || rect.right > window.innerWidth + 1) return false;
-      for (let parent: Element | null = element.parentElement; parent; parent = parent.parentElement) {
-        const style = getComputedStyle(parent);
-        const bounds = parent.getBoundingClientRect();
-        if (["hidden", "clip", "auto", "scroll"].includes(style.overflowX) && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1)) return false;
-        if (["hidden", "clip", "auto", "scroll"].includes(style.overflowY) && (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1)) return false;
-      }
-      return true;
-    });
-  })).toBe(true);
+/**
+ * Opens the imported service's row in the Credentials drawer, which shows its
+ * permissions and connect availability, runs `check`, then closes the drawer:
+ * the OAuth window helper expects the row's actions alone on the page.
+ */
+async function inConnectionDrawer(page: Page, check: (drawer: Locator) => Promise<void>) {
+  await page.getByRole("table", { name: "Credentials" }).getByRole("link", { name: "Default metrics", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Default metrics credential", exact: true });
+  await expect(drawer).toBeVisible();
+  await check(drawer);
+  await drawer.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(drawer).toHaveCount(0);
 }
 
 // The issuer provides no identity claim. Synthetic consent choices make each
@@ -324,7 +316,9 @@ test("server-default discovery and group-granted personal connections need no cr
   try {
     await reader.goto(`${baseUrl}/ui/credentials`);
     await signIn(reader, "reader", "reader-password");
-    await expect(reader.getByText(/Server-default permissions/)).toBeVisible();
+    await inConnectionDrawer(reader, async (drawer) => {
+      await expect(drawer.getByText("Server-default permissions", { exact: true })).toBeVisible();
+    });
     const session = await managementRequest<{ role: string; selfServiceEnabled: boolean }>(reader, "/v1/auth/session");
     expect(session).toMatchObject({ role: "user", selfServiceEnabled: true });
     const targets = await managementRequest<OAuthConnectionTarget[]>(reader, "/v1/oauth/connections");
@@ -337,16 +331,16 @@ test("server-default discovery and group-granted personal connections need no cr
     const readerFlow = await openOAuthWindow(reader, reader.getByRole("button", { name: "Connect account", exact: true }), "Synthetic MCP consent");
     await readerFlow.consent.getByRole("link", { name: "Authorize reader account" }).click();
     await readerFlow.finish("authorized", "connected");
-    await expect(reader.getByText(/Scope details unavailable/)).toBeVisible();
     await expect(reader.getByText("Connected", { exact: true })).toBeVisible();
+    await inConnectionDrawer(reader, async (drawer) => {
+      await expect(drawer.getByText("Server-default permissions · Scope details unavailable", { exact: true })).toBeVisible();
+    });
     const firstRead = await invoke(readerToken.token);
     expect(firstRead.ok, await firstRead.text()).toBe(true);
     expect(calls.at(-1)?.account).toBe("reader");
     await refreshThroughRead(readerToken.token, "reader");
     expect(calls.slice(beforeConnection).every((call) => call.account === "reader")).toBe(true);
     await reader.reload();
-    await expect(reader.getByText(/Server-default permissions/)).toBeVisible();
-    await expect(reader.getByText(/Scope details unavailable/)).toBeVisible();
     const readerConnection = await managementRequest<OAuthConnectionTarget[]>(reader, "/v1/oauth/connections");
     expect(readerConnection[0].connection?.connectionId).not.toBe(refreshed[0].connection?.connectionId);
     expect(readerConnection[0].connection?.targets[0].scopes).toEqual([]);
@@ -359,9 +353,10 @@ test("server-default discovery and group-granted personal connections need no cr
     expect(calls.at(-1)?.account).toBe("discovery");
     const content = await reader.locator("body").innerText();
     for (const token of accessTokens.keys()) expect(content).not.toContain(token);
-    await expectUnclippedPermission(reader, "Server-default permissions");
-    await expectUnclippedPermission(reader, "Scope details unavailable");
-    await reader.screenshot({ path: testInfo.outputPath("default-permissions-connected-accounts.png"), fullPage: true });
+    await inConnectionDrawer(reader, async (drawer) => {
+      await expect(drawer.getByText("Server-default permissions · Scope details unavailable", { exact: true })).toBeVisible();
+      await reader.screenshot({ path: testInfo.outputPath("default-permissions-connected-accounts.png"), fullPage: true });
+    });
 
     // Losing setup entitlement retains ownership cleanup, but cannot reconnect
     // or use the account through the now-disabled Broker grant.
@@ -370,8 +365,14 @@ test("server-default discovery and group-granted personal connections need no cr
     const cleanup = await managementRequest<OAuthConnectionTarget[]>(reader, "/v1/oauth/connections");
     expect(cleanup).toHaveLength(1);
     expect(cleanup[0]).toMatchObject({ canConnect: false, connectUnavailableReason: "no_personal_access", canDisconnect: true, connection: { connectionId: readerConnection[0].connection!.connectionId } });
-    await expect(reader.getByRole("button", { name: "Reconnect", exact: true })).toBeDisabled();
-    await expect(reader.getByText("Reconnect requires an active grant for your personal account. You can still disconnect this account.", { exact: true })).toBeVisible();
+    const unavailable = "Reconnect requires an active grant for your personal account. You can still disconnect this account.";
+    const reconnect = reader.getByRole("button", { name: "Reconnect", exact: true });
+    await expect(reconnect).toBeDisabled();
+    // The disabled button explains why, as does the drawer.
+    await expect(reconnect).toHaveAttribute("title", unavailable);
+    await inConnectionDrawer(reader, async (drawer) => {
+      await expect(drawer.getByText(unavailable, { exact: true })).toBeVisible();
+    });
     const beforeRevokedRead = calls.length;
     expect((await invoke(readerToken.token)).ok).toBe(false);
     expect(calls).toHaveLength(beforeRevokedRead);
@@ -386,9 +387,10 @@ test("server-default discovery and group-granted personal connections need no cr
     await readerContext.close();
   }
   await page.goto(`${baseUrl}/ui/credentials`);
-  await expectUnclippedPermission(page, "Server-default permissions");
-  await expectUnclippedPermission(page, "Known scopes: metrics.read");
-  await page.screenshot({ path: testInfo.outputPath("default-permissions-known-scopes.png"), fullPage: true });
+  await inConnectionDrawer(page, async (drawer) => {
+    await expect(drawer.getByText("Server-default permissions · Known scopes: metrics.read", { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("default-permissions-known-scopes.png"), fullPage: true });
+  });
   expect(authorizations.size).toBe(2);
   expect([...authorizations.values()].every((form) => !form.has("scope") && form.get("resource") === endpoint && form.get("code_challenge_method") === "S256")).toBe(true);
   expect(tokenForms.filter((form) => form.get("grant_type") === "authorization_code")).toHaveLength(2);

@@ -75,7 +75,9 @@ secret sources, token profiles, attachment limits and optional egress/TLS
 settings. Atlassian bearer credentials, such as a service account's scoped
 token under the `atlassian-bearer-token` profile, additionally require
 `cloud_id` and an explicit `https://api.atlassian.com/**` allowlist; credential
-kind selects that gateway rather than the tenant route.
+kind selects that gateway rather than the tenant route. With the gateway
+enabled, the service, per-user and lookup credentials must all reach it: a
+`bearer_token`, or OAuth for per-user access.
 
 For ordinary managed browser or `user_manage` credential management, enable the
 owner's self-service flag and grant them a `per_user` action on a service that
@@ -95,10 +97,11 @@ before using a mutation. Confluence page create/update require an enabled native
 
 ### OAuth connections
 
-People can connect their Atlassian account instead of storing a token. Give the
-connection an `oauth` registration of the [`atlassian` dialect](oauth.md#atlassian)
-for the site, beside `token_profile = "atlassian-bearer-token"` for service
-accounts or alone; Jira can use the same connection:
+People can connect their Atlassian account instead of storing a token. Give
+each product's connection an `oauth` registration of the
+[`atlassian` dialect](oauth.md#atlassian) for the site, beside
+`token_profile = "atlassian-bearer-token"` for service accounts or alone.
+Without Jira, omit its entries:
 
 ```toml
 [providers.confluence]
@@ -109,15 +112,28 @@ allowed_upstream_hosts = [
   "https://api.media.atlassian.com/**",
 ]
 
-[credentials.connections.atlassian]
+[credentials.connections.jira]
 display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 
+[credentials.connections.confluence]
+display_name = "Atlassian"
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.per_user.jira]
+type = "connection"
+connection = "jira"
+
 [credentials.per_user.confluence]
 type = "connection"
-connection = "atlassian"
+connection = "confluence"
 ```
+
+Both connections use one registration, so a person connects Atlassian once for
+both products. Service accounts keep a token per product: Atlassian does not
+document one service-account token holding both products' scopes.
 
 - **Route.** OAuth always goes through the Atlassian gateway,
   `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/` and its
@@ -1150,11 +1166,14 @@ parent comment for reply lists, requested filters and effective `maxResults`,
 authorized space, execution context, principal and whether it authenticated,
 credential mode, [credential binding](#continuation-credential-binding) and
 the Confluence route configuration, like [attachment list tokens](#attachments). Upstream next links are accepted only when
-they remain on the same Confluence v2 comment collection and contain no
-unsupported query parameters. Pagination may come from `_links.next`, `next`, or
-an RFC `Link` header with `rel="next"`; multiple next links, changed resources,
-unsupported query parameters, or disagreement between body and header next links
-fail closed.
+they name the same Confluence v2 comment collection on the request's route and
+contain no unsupported query parameters. Confluence writes them from its site
+root (`/wiki/api/v2/...`), which on the Atlassian gateway is
+`/ex/confluence/<cloud_id>/`, so such a link names the collection below that
+root. Pagination may come from `_links.next`, `next`, or an RFC `Link` header
+with `rel="next"`; multiple next links, changed origins or resources, including
+another cloud ID's gateway path, unsupported query parameters, or disagreement
+between body and header next links fail closed.
 
 List results return `{ comments, count, hasMore, nextPageToken }`, where each
 comment includes `commentId`, `kind`, `containerType`, `pageId` or `blogId`,

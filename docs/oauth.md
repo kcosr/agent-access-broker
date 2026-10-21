@@ -55,7 +55,10 @@ each person's OAuth connection: one consent and one refresh family per owner
 and registration. Each service still acquires its own service-bound lease, and
 its own grants decide what it may do. An invocation holds one lease for its
 metadata lookups and its execution. Connecting, reconnecting or disconnecting
-affects every service that uses a connection on that registration. Imported MCP
+affects every service that uses a connection on that registration. The portal
+lists the registration once, labeled with the `display_name` of the first
+selecting connection by connection ID, or that connection's ID, so give
+connections that share a registration the same `display_name`. Imported MCP
 OAuth services publish their own single-service connection; see
 [imported OAuth](imported-oauth.md).
 
@@ -463,10 +466,12 @@ target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
 # People connect through OAuth; service accounts keep each product's
 # administrator-provisioned scoped token.
 [credentials.connections.jira]
+display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
+display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 
@@ -491,7 +496,9 @@ startup and reload check, without contacting Atlassian:
 - The registration has exactly one permission profile. It requests explicit
   `scopes` including `read:me` and `offline_access`, its `audience` is
   `api.atlassian.com`, and its `target` is the site's cloud ID written as a
-  lowercase hyphenated UUID, exactly as the providers' `cloud_id`.
+  lowercase hyphenated UUID, as Atlassian writes it. The providers' `cloud_id`
+  may write the same UUID in another form, such as uppercase or braced; the
+  Broker compares, routes and binds its lowercase hyphenated form.
 - Every service using the connection acts through the gateway on that cloud
   ID: Jira and Confluence whose `cloud_id` is the target and whose
   `allowed_upstream_hosts` include `api.atlassian.com`. Any other consumer
@@ -510,8 +517,10 @@ A connection's method and route follow this table:
 | `atlassian-bearer-token` and `oauth` | On | Valid: people use OAuth and service accounts bearer tokens, both through the gateway |
 | `atlassian-api-token` and `oauth` | Either | Rejected: `credentials.per_user.<service> combines OAuth with a basic_api_token profile; ...` |
 
-A `credentials.service` entry must also be a `bearer_token` when the gateway
-is on. An `oauth` connection on a provider without the gateway fails with
+A `credentials.service` or `credentials.lookup` entry must also be a
+`bearer_token` when the gateway is on; the lookup credential serves only
+metadata lookups and never counts as the gateway's execution credential. An
+`oauth` connection on a provider without the gateway fails with
 `credentials.per_user.<service> offers delegated (OAuth) access, which
 requires providers.<service>.allowed_upstream_hosts to include
 api.atlassian.com`.
@@ -645,8 +654,40 @@ registered and shared separately, and each has its own
   together. Atlassian answers a revoked, expired or reused refresh token with
   HTTP 403 `invalid_grant`, which also requires reconnect, and HTTP 429 holds
   refresh until its `Retry-After` wait.
+- The token endpoint answering HTTP 401, with any error other than
+  `invalid_grant`, rejects the registration's client credentials: Atlassian
+  answers a wrong client secret with 401 `access_denied`. A connection whose
+  refresh gets it keeps its refresh token and reports
+  `operator_action_required` with reason `oauth_application_credential` until
+  an administrator corrects the client secret and reloads. Reconnecting cannot
+  help: a consent fails with the same reason. `access_denied` or
+  `invalid_scope` with another status remains the person's permission
+  rejection.
 - Leases carry the profile's cloud ID and the `api.atlassian.com` audience,
   which Jira and Confluence pin before each gateway request.
+
+### Atlassian connection failures
+
+A connect that fails with `oauth_permission_denied` stores nothing: the
+person's grant does not cover the profile. The Broker's
+[`permission_ineligible`](#refresh-durability-and-recovery) service log event
+says why:
+
+- `target_discovered` is `false`: the person picked another site at
+  Atlassian's site picker, or cannot use the profile's site.
+  `discovered_targets` lists the cloud IDs Atlassian reported instead.
+- `missing_token_scopes` lists requested scopes Atlassian did not grant,
+  usually because the integration's permissions in the developer console do
+  not include them.
+- `missing_target_scopes` lists requested scopes the site's entry does not
+  carry, such as the scopes of a product the person cannot use there; see
+  [one registration or one per product](#one-registration-or-one-per-product).
+  Only `read:me` applies to the account rather than a site, so a profile
+  requesting another account-level scope cannot connect.
+
+The same event with `phase` `target_revalidation` explains an existing
+connection whose access is denied after a refresh, such as when the person
+lost access to the site.
 
 ### Atlassian capacity and lifecycle
 
@@ -1027,6 +1068,22 @@ and outcomes, connection status changes, and configuration activation. They use
 connection/attempt identifiers and sanitized outcome codes, without tokens,
 authorization codes, state values or provider response bodies. Ordinary action
 and management audit entries retain the existing Broker audit boundary.
+
+A `permission_ineligible` warning records why a connection does not qualify for
+its permission profile, where that is decided: at consent (`phase` `install`,
+which stores nothing) and at target revalidation after a refresh (`phase`
+`target_revalidation`, with the `connection_id`). It names the `owner`,
+`registration` and `permission_profile`, the profile's `profile_target` and
+`profile_audience`, whether a discovered target matched them
+(`target_discovered`), the requested scopes other than `offline_access` that
+the token lacks (`missing_token_scopes`) and that the profile's target lacks
+(`missing_target_scopes`, all of them when it was not discovered), and every
+discovered target ID (`discovered_targets`). Target IDs and audiences appear
+as a URL without its userinfo, query and fragment, or as a plain identifier
+such as a cloud ID; any other value appears as `[redacted]`. Lease checks that
+deny the connection afterwards do not repeat it, and `outcome` is
+`oauth_permission_denied`, the reason the person and the connection metadata
+see.
 
 ## Remote revocation
 

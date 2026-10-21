@@ -107,9 +107,10 @@ broker sessions while allowing unrelated malformed cookies.
 responses: one row per credential connection naming its entitled services and
 counting the others, verification through a Git gateway service with a
 repository, one row per OAuth registration whose disconnect confirmation names
-the affected services, an administered user's OAuth registrations shown
-read-only to administrators and auditors with their remote revocation, and
-deletion of a retained stored credential by ID. The
+the affected services and whose status shows a failed or unconfirmed remote
+revocation beside the connection status, an administered user's OAuth
+registrations shown read-only to administrators and auditors with their remote
+revocation, and deletion of a retained stored credential by ID. The
 real-broker `portal.spec.ts` and `my-access-metadata.spec.ts` store, verify and
 delete connection tokens for a user and for an administered principal.
 
@@ -2010,8 +2011,16 @@ gateway on the configured site and refused for another site, static tokens
 routed by kind, one recovery across the lookups and execution, a second 401 as
 `credential_invalid` with reconnect, read-back failures after an accepted write
 reported applied but unverified and failures before it passed through
-unchanged, and, for Jira, uploads and downloads repeated once after a 401; for
-Confluence, a personal-space (`~key`) page read and search through the gateway.
+unchanged. For Jira, they also cover uploads and downloads repeated once after
+a 401, a renamed project key resolved and read through the gateway, a moved
+issue denied after the gateway recheck before any read or write, and
+`issue.view`'s embedded links disclosed with universal reach. For Confluence,
+they cover a personal-space (`~key`) page read and search, a page read by its
+space alias and a search keeping aliased links on the site, and comment, reply,
+ancestor and direct-child lists following Confluence's site-relative `next`
+links below the gateway's site path, including a two-page comment list, while
+links naming another resource, cloud ID or origin fail closed. Browser links
+in every result name the site, never `api.atlassian.com`.
 
 The Broker host's `tests::oauth::atlassian_dialect` drives browser consent and
 a delegated lease through the OAuth manager with a test consumer that acts

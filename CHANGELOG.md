@@ -6,11 +6,57 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Atlassian gateway lookup credentials must be bearer tokens.** With the
+  Atlassian gateway enabled (`cloud_id` set and `api.atlassian.com`
+  allowlisted), `credentials.lookup.jira` and `credentials.lookup.confluence`
+  must be `bearer_token`, like the service and personal credentials. A basic
+  lookup credential beside the gateway now fails `config validate`, and a
+  bearer lookup credential requires the gateway. See
+  [credential kinds](docs/configuration.md#credential-connections).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+
 ### Added
+
+- **Why an OAuth connection is not eligible.** When a connection does not
+  qualify for its permission profile at consent or after a refresh, the Broker
+  logs a `permission_ineligible` warning naming the requested scopes the token
+  and the target lack and the targets the provider listed. URL credentials,
+  queries and fragments are never logged. See
+  [Atlassian connection failures](docs/oauth.md#atlassian-connection-failures).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+- **SDK: lookup credential kind.** `ServiceCredentialKinds` reports the kind of
+  `credentials.lookup.<service>` (`lookup`, `with_lookup`), so provider
+  validation can check it.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Changed
 
+- **The portal Credentials list has no Permissions column.** An OAuth
+  connection's permissions, scope evidence, connect availability and remote
+  revocation are in its drawer, and a disabled Connect button's tooltip says
+  why. A failed or unconfirmed remote revocation shows in the row's status
+  beside the connection's own status. See the
+  [portal user guide](docs/portal-guide/user.md).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+
 ### Fixed
+
+- **Confluence paging through the Atlassian gateway.** Comment and reply lists
+  and `page.move`'s order check follow Confluence's site-relative next links
+  on the gateway route (OAuth and bearer tokens). They failed whenever a next
+  page existed, and a move under a parent with more than 250 children was
+  reported applied but unverified. Links naming another resource, cloud ID or
+  origin are still refused.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+- **Atlassian token-endpoint 401.** A 401 from Atlassian's token endpoint is a
+  rejected application credential (`operator_action_required`), not a
+  permission denial asking people to reconnect.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+- **Atlassian cloud IDs in any UUID form.** A provider `cloud_id` written in
+  upper case or another UUID form now matches the Atlassian OAuth registration
+  `target`. Gateway continuations and draft handles issued under such a value
+  before the upgrade are refused once.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Removed
 

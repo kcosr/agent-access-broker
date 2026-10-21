@@ -4,7 +4,9 @@
 //! lookups and execution, and receipts for writes whose read-back the
 //! connection stopped. Static tokens keep their routes. Attachment
 //! downloads present either only within the configured site, revalidating
-//! delegated access before each authorized redirect hop.
+//! delegated access before each authorized redirect hop. Renamed project
+//! keys, moved issues and `issue.view`'s embedded links resolve through the
+//! gateway like any other read, with browser links on the site.
 use super::*;
 use agent_access_atlassian::ATLASSIAN_OAUTH_AUDIENCE;
 use agent_access_provider::host::{HostPort, delegated_credential, port_failure};
@@ -14,7 +16,7 @@ use agent_access_provider::test_support::{
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
@@ -151,7 +153,11 @@ fn provider(server: &MockServer) -> JiraProvider {
 }
 
 fn eng_scopes() -> ResourceScopes {
-    BTreeMap::from([("project".to_string(), vec!["ENG".to_string()])])
+    project_scopes("ENG")
+}
+
+fn project_scopes(project: &str) -> ResourceScopes {
+    BTreeMap::from([("project".to_string(), vec![project.to_string()])])
 }
 
 /// `inputs` for `action`, admitted on project `ENG` with `credential` as the
@@ -161,13 +167,23 @@ fn delegated_invocation(
     inputs: Value,
     credential: &DelegatedCredential,
 ) -> ProviderInvocation {
+    delegated_invocation_builder("ENG", action, inputs, credential).build()
+}
+
+/// `inputs` for `action`, admitted on `project` with `credential` as the
+/// execution material and lookup access.
+fn delegated_invocation_builder(
+    project: &str,
+    action: &str,
+    inputs: Value,
+    credential: &DelegatedCredential,
+) -> InvocationBuilder {
     InvocationBuilder::new("jira", action)
         .inputs(inputs)
-        .resources(eng_scopes())
+        .resources(project_scopes(project))
         .credential_mode(CredentialMode::PerUser)
         .delegated(credential.clone())
         .delegated_lookup(credential.clone())
-        .build()
 }
 
 async fn resolve(
@@ -910,4 +926,280 @@ async fn attachment_downloads_revalidate_access_before_each_hop() {
         );
         assert!(lease.rejected().is_empty());
     }
+}
+
+/// Issue `key` (`id`) in `project` as the gateway returns it, whose REST
+/// `self` links name `api.atlassian.com`.
+fn gateway_issue(id: &str, key: &str, project: &str) -> Value {
+    json!({
+        "id": id,
+        "key": key,
+        "self": format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issue/{id}"),
+        "fields": {
+            "project": {
+                "key": project,
+                "self": format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/project/{project}")
+            },
+            "summary": "Broken build",
+            "status": { "name": "Open" },
+            "issuetype": { "name": "Task" },
+            "description": null
+        }
+    })
+}
+
+/// The path, `fields` query and presented authorization of each request
+/// `server` got.
+async fn field_requests(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| {
+            let fields = request
+                .url
+                .query_pairs()
+                .find(|(name, _)| name == "fields")
+                .map(|(_, value)| value.into_owned())
+                .unwrap_or_default();
+            format!(
+                "{} {} fields={fields} {}",
+                request.method,
+                request.url.path(),
+                request
+                    .headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("-")
+            )
+        })
+        .collect()
+}
+
+/// A project renamed from `OLD` to `NEW`, read with OAuth: the caller's old
+/// key or site link resolves through the gateway to `NEW`, which policy
+/// admits; execution confirms the issue again on the gateway and reads it by
+/// its current key. A grant on `OLD` alone is denied after the confirming
+/// lookup. The link shown to the caller names the site, not the gateway.
+#[tokio::test]
+async fn oauth_resolves_a_renamed_project_key_through_the_gateway() {
+    for locator in [
+        json!({ "issue": "OLD-123" }),
+        json!({ "url": "https://example.atlassian.net/jira/software/c/projects/OLD/issues/OLD-123" }),
+    ] {
+        let server = MockServer::start().await;
+        for key in ["OLD-123", "NEW-123"] {
+            answer(
+                &server,
+                "GET",
+                &format!("{GATEWAY}/issue/{key}"),
+                "Bearer oauth-1",
+                200,
+                gateway_issue("10123", "NEW-123", "NEW"),
+            )
+            .await;
+        }
+        let lease = Lease::new(CLOUD_ID);
+        let credential = delegated_credential(lease.clone());
+        let provider = provider(&server);
+
+        let resolution = resolve(&provider, "issue.view", locator.clone(), &credential)
+            .await
+            .unwrap();
+        assert_eq!(resolution.scopes(), &project_scopes("NEW"), "{locator}");
+        let result = provider
+            .invoke(
+                delegated_invocation_builder("NEW", "issue.view", locator.clone(), &credential)
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.result["key"], "NEW-123", "{}", result.result);
+        assert_eq!(result.result["project"], "NEW");
+        assert_eq!(
+            result.result["webUrl"],
+            "https://example.atlassian.net/browse/NEW-123"
+        );
+        assert!(
+            !result.result.to_string().contains("api.atlassian.com"),
+            "{}",
+            result.result
+        );
+        let lookup = format!("GET {GATEWAY}/issue/OLD-123 fields=project Bearer oauth-1");
+        assert_eq!(
+            field_requests(&server).await,
+            [
+                lookup.clone(),
+                lookup.clone(),
+                format!(
+                    "GET {GATEWAY}/issue/NEW-123 fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description Bearer oauth-1"
+                ),
+            ],
+            "{locator}"
+        );
+
+        let error = provider
+            .invoke(
+                delegated_invocation_builder("OLD", "issue.view", locator.clone(), &credential)
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::ScopeUnresolved,
+            "{locator}"
+        );
+        assert!(error.result.is_none());
+        assert_eq!(field_requests(&server).await[3..], [lookup], "{locator}");
+        assert!(lease.rejected().is_empty());
+    }
+}
+
+/// An issue that moves out of the admitted project after scope resolution:
+/// execution confirms it again through the gateway with the connection's
+/// access and denies before any read or write is sent.
+#[tokio::test]
+async fn oauth_rechecks_a_moved_issue_through_the_gateway_before_acting() {
+    let route = format!("{GATEWAY}/issue/ENG-1");
+    for (action, inputs) in [
+        ("issue.view", json!({ "issue": "ENG-1" })),
+        (
+            "issue.update",
+            json!({ "issue": "ENG-1", "summary": "Updated summary" }),
+        ),
+        (
+            "comment.delete",
+            json!({ "issue": "ENG-1", "commentId": "10200" }),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(route.as_str()))
+            .and(header("authorization", "Bearer oauth-1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(gateway_issue("10001", "ENG-1", "ENG")),
+            )
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        answer(
+            &server,
+            "GET",
+            &route,
+            "Bearer oauth-1",
+            200,
+            gateway_issue("10001", "OTHER-9", "OTHER"),
+        )
+        .await;
+        let credential = delegated_credential(Lease::new(CLOUD_ID));
+        let provider = provider(&server);
+
+        let resolution = resolve(&provider, action, inputs.clone(), &credential)
+            .await
+            .unwrap();
+        assert_eq!(resolution.scopes(), &eng_scopes(), "{action}");
+        let error = provider
+            .invoke(delegated_invocation(action, inputs, &credential))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::ScopeUnresolved,
+            "{action}: {error:?}"
+        );
+        assert_eq!(
+            error.message, "Jira issue moved outside the authorized scope",
+            "{action}"
+        );
+        assert!(error.result.is_none(), "{action}");
+        assert!(!format!("{error:?}").contains("OTHER"), "{action}");
+        assert_eq!(
+            field_requests(&server).await,
+            vec![format!("GET {route} fields=project Bearer oauth-1"); 2],
+            "{action}"
+        );
+    }
+}
+
+/// `issue.view` with universal reach, through the gateway with OAuth: the
+/// execution read alone asks for the issue's links, with the connection's
+/// access, and the view lists them by key. Neither the view nor its links
+/// carry the gateway's REST `self` URLs; the browser link names the site.
+#[tokio::test]
+async fn oauth_issue_view_discloses_embedded_links_through_the_gateway() {
+    let server = MockServer::start().await;
+    let route = format!("{GATEWAY}/issue/ENG-1");
+    let mut source = gateway_issue("10001", "ENG-1", "ENG");
+    source["fields"]["issuelinks"] = json!([{
+        "id": "20001",
+        "self": format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issueLink/20001"),
+        "type": {
+            "id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks",
+            "self": format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issueLinkType/10000")
+        },
+        "outwardIssue": {
+            "id": "10042", "key": "CM-42",
+            "self": format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issue/10042"),
+            "fields": { "summary": "Linked title", "issuetype": { "name": "Bug" } }
+        }
+    }]);
+    Mock::given(method("GET"))
+        .and(path(route.as_str()))
+        .and(query_param("fields", "project"))
+        .and(header("authorization", "Bearer oauth-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(gateway_issue("10001", "ENG-1", "ENG")),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    answer(&server, "GET", &route, "Bearer oauth-1", 200, source).await;
+    let credential = delegated_credential(Lease::new(CLOUD_ID));
+    let provider = provider(&server);
+
+    let result = provider
+        .invoke(
+            delegated_invocation_builder(
+                "ENG",
+                "issue.view",
+                json!({ "issue": "ENG-1" }),
+                &credential,
+            )
+            .universal_reach(true)
+            .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.result["issueLinks"],
+        json!([{
+            "key": "CM-42", "type": "Blocks", "direction": "outward",
+            "relationship": "blocks", "summary": "Linked title", "issueType": "Bug"
+        }])
+    );
+    assert_eq!(
+        result.result["webUrl"],
+        "https://example.atlassian.net/browse/ENG-1"
+    );
+    assert!(
+        !result.result.to_string().contains("api.atlassian.com"),
+        "{}",
+        result.result
+    );
+    assert_eq!(
+        result.audit.as_ref().unwrap()["issueLinks"],
+        json!({ "status": "disclosed", "count": 1 })
+    );
+    assert_eq!(
+        field_requests(&server).await,
+        [
+            format!("GET {route} fields=project Bearer oauth-1"),
+            format!(
+                "GET {route} fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description,issuelinks Bearer oauth-1"
+            ),
+        ]
+    );
 }

@@ -188,12 +188,15 @@ derives `Deserialize`. Reject unknown fields with
 - `validate(&ValidationContext, &mut errors)` pushes messages that name fields
   under `providers.<kind>`. The context exposes only `deployment.environment`
   (with `production()`), the policy authority, the Broker limits and the
-  credential kinds configured for this service under `credentials.service` and
-  `credentials.per_user` (`ServiceCredentialKinds`). A per-user credential
-  connection reports its token profile's kind, or `oauth` when it offers only
-  delegated access, and `per_user_delegated` is set whenever it offers
-  delegated access; a backend that cannot use delegated access rejects it. The
-  context does not expose the rest of the configuration or any store.
+  credential kinds configured for this service under `credentials.service`,
+  `credentials.per_user` and `credentials.lookup` (`ServiceCredentialKinds`).
+  A per-user credential connection reports its token profile's kind, or
+  `oauth` when it offers only delegated access, and `per_user_delegated` is set
+  whenever it offers delegated access; a backend that cannot use delegated
+  access rejects it. `lookup` is the kind of the shared read-only lookup
+  credential, which is never execution material: a backend that requires an
+  execution credential does not count it. The context does not expose the
+  rest of the configuration or any store.
 - `validate_resource_attributes` checks private resource values against the
   active configuration. Its diagnostics must not contain the supplied values,
   because administrators see them.

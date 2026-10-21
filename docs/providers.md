@@ -164,6 +164,8 @@ through `https://api.atlassian.com/ex/...`. This requires
 `providers.<service>.cloud_id` and allowlisting `api.atlassian.com`.
 `basic_api_token` credentials use the tenant base instead. Credential *kind*
 selects gateway-vs-tenant routing; credential *mode* still comes from policy.
+With the gateway allowlisted, the service and lookup credentials must be
+`bearer_token` too (see [`[providers.jira]`](configuration.md#providersjira)).
 
 ## Git HTTP gateway
 

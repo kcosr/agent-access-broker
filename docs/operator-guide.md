@@ -788,6 +788,16 @@ instead of the provider's reason, and the operation's `invoke_completed` event
 carries the same `diagnosticCode` when an invocation hook was rejected. A trace classified
 outside any provider hook logs `provider_hook_context_missing`.
 
+A delegated OAuth connection that does not qualify for its permission profile
+logs a `permission_ineligible` warning under `agent_access_core::oauth` at
+consent and at target revalidation after a refresh, never on each lease check.
+It names the registration and permission profile, whether the profile's target
+was discovered, the requested scopes the token and the target lack, and the
+discovered target IDs, without tokens, codes or secrets. See
+[OAuth refresh and recovery](oauth.md#refresh-durability-and-recovery) for its
+fields and [Atlassian connection failures](oauth.md#atlassian-connection-failures)
+for the usual causes.
+
 For Jira search result denials, `jira_search_issue_key_invalid`,
 `jira_search_issue_project_mismatch`, and `jira_search_project_unauthorized`
 distinguish metadata validation from project containment. The raw audit's
@@ -1408,11 +1418,10 @@ To upgrade:
    selects. They remain listed for their owners and administrators until
    deleted.
 
-Rolling back follows the store-version rule above. The previous binary must
-already run the store's schema, `027_command_imports` or, once GitLab remote
-revocation is deployed, `028_oauth_revocations`: the store refuses a binary
-whose schema predates the database's, so rolling back across `027`, `028` or
-any later migration needs the backup taken before that migration.
+Credential connections add no migration of their own, so rolling back follows
+the [general rollback rule](#upgrade-and-rollback): the store refuses a binary
+whose schema predates the database's, and rolling back across any migration
+needs the backup taken before it.
 
 - **Immediate rollback**, before anything is written under the new version, is
   the previous binary with its previous configuration. Tokens the new

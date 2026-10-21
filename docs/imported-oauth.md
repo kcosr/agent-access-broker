@@ -156,7 +156,7 @@ enabled; retired or blocked imports still permit cleanup. Reconnect remains
 subject to current setup authority. See [connection management](oauth.md#browser-management-api)
 for capability flags, shared registrations and retained unbound slots.
 
-The import profile selector, discovery connection and Credentials list show
+The import profile selector, discovery connection and Credentials drawer show
 **Server-default permissions** for that mode. Connection details show **Known
 scopes** when evidence is available, or **Scope details unavailable**. Missing
 scope details do not mean the account has no permissions, and known scopes may

@@ -99,10 +99,11 @@ Disconnecting ends access through the Broker at once. For GitLab, the Broker
 also revokes the connection's tokens in GitLab, and so it does for the previous
 connection when you reconnect or replace the account, or when an administrator
 disables your account. The disconnect notice shows how revoking the
-disconnected account's tokens went. The row shows the same for the connections
-the Broker ended, for up to 30 days, beside the current connection's own
-status; it never describes the current connection, which may use another
-account:
+disconnected account's tokens went. The connection's drawer shows the same for
+the connections the Broker ended, for up to 30 days, and the row's status shows
+**Revocation failed** or **Revocation unconfirmed** beside the current
+connection's own status. These states never describe the current connection,
+which may use another account:
 
 - **Revoked at provider**: GitLab revoked the ended connections' tokens.
 - **Revocation pending**: GitLab could not answer yet; the Broker keeps trying.
@@ -126,7 +127,7 @@ signed-in browser session; the CLI setup token alone cannot authorize it. See
 [Gmail](providers-gmail.md), [GitLab](oauth.md#gitlab),
 [OAuth connections](oauth.md), and [imported OAuth](imported-oauth.md).
 
-An imported MCP connection may show **Server-default permissions**. Its
+An imported MCP connection's details may show **Server-default permissions**. Its
 authorization server chooses the permissions for that service. **Known scopes**
 lists currently known scope details. These may come from a token response or
 OAuth's rules for retaining or inferring scopes when a response omits them; they

@@ -2012,13 +2012,13 @@ fn comment_pagination_next_link_must_stay_on_same_collection() {
     let current_url =
         Url::parse("https://example.atlassian.net/wiki/api/v2/pages/123456/inline-comments")
             .unwrap();
-    let api_base = Url::parse("https://example.atlassian.net/wiki/api/v2/").unwrap();
+    let site_base = Url::parse("https://example.atlassian.net/").unwrap();
     let allowed = vec!["https://example.atlassian.net/wiki/api/v2/**".to_string()];
 
     assert_eq!(
         next_comment_page_cursor(
             &current_url,
-            &api_base,
+            &site_base,
             "/wiki/api/v2/pages/123456/inline-comments?cursor=abc&limit=2&body-format=storage&resolution-status=open&sort=-created-date",
             &allowed
         )
@@ -2035,7 +2035,7 @@ fn comment_pagination_next_link_must_stay_on_same_collection() {
         "/wiki/api/v2/pages/123456/inline-comments?cursor=",
     ] {
         assert!(
-            next_comment_page_cursor(&current_url, &api_base, link, &allowed).is_err(),
+            next_comment_page_cursor(&current_url, &site_base, link, &allowed).is_err(),
             "expected comment pagination link to fail validation: {link}"
         );
     }
@@ -2046,13 +2046,13 @@ fn comment_pagination_sources_reject_ambiguous_link_headers() {
     let current_url =
         Url::parse("https://example.atlassian.net/wiki/api/v2/pages/123456/inline-comments")
             .unwrap();
-    let api_base = Url::parse("https://example.atlassian.net/wiki/api/v2/").unwrap();
+    let site_base = Url::parse("https://example.atlassian.net/").unwrap();
     let allowed = vec!["https://example.atlassian.net/wiki/api/v2/**".to_string()];
 
     assert_eq!(
         next_comment_page_cursor_from_sources(
             &current_url,
-            &api_base,
+            &site_base,
             None,
             &["/wiki/api/v2/pages/123456/inline-comments?cursor=abc".to_string()],
             &allowed,
@@ -2063,7 +2063,7 @@ fn comment_pagination_sources_reject_ambiguous_link_headers() {
     assert_eq!(
         next_comment_page_cursor_from_sources(
             &current_url,
-            &api_base,
+            &site_base,
             Some("/wiki/api/v2/pages/123456/inline-comments?cursor=abc"),
             &["/wiki/api/v2/pages/123456/inline-comments?cursor=abc".to_string()],
             &allowed,
@@ -2074,7 +2074,7 @@ fn comment_pagination_sources_reject_ambiguous_link_headers() {
     assert!(
         next_comment_page_cursor_from_sources(
             &current_url,
-            &api_base,
+            &site_base,
             Some("/wiki/api/v2/pages/123456/inline-comments?cursor=abc"),
             &["/wiki/api/v2/pages/123456/inline-comments?cursor=def".to_string()],
             &allowed,
@@ -2102,6 +2102,155 @@ fn comment_pagination_sources_reject_ambiguous_link_headers() {
         ),
     );
     assert!(comment_next_links_from_headers(&headers).is_err());
+}
+
+/// On the Atlassian gateway, Confluence writes v2 `next` links from its site
+/// root, `/ex/confluence/<cloud_id>/`: a path-absolute `/wiki/api/v2/...`
+/// link names the collection below that root. Every list reads them so;
+/// every other link must still name the same collection on the route's
+/// origin and allowlist, with the usual query checks.
+#[test]
+fn v2_next_links_on_the_gateway_name_the_collection_below_the_site_root() {
+    const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
+    const OTHER_CLOUD_ID: &str = "99999999-8888-4777-8666-555555555555";
+    let gateway = format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}");
+    let site_base = Url::parse(&format!("{gateway}/")).unwrap();
+    let gateway_hosts = vec!["https://api.atlassian.com/ex/confluence/**".to_string()];
+    let next = |collection: &str, link: &str, allowed: &[String]| {
+        let current_url =
+            Url::parse(&format!("{gateway}/wiki/api/v2/{collection}?limit=2")).unwrap();
+        match collection.rsplit('/').next().unwrap() {
+            "ancestors" => next_page_cursor(
+                &current_url,
+                &site_base,
+                link,
+                allowed,
+                "ancestor",
+                &["limit"],
+            ),
+            "direct-children" => next_page_cursor(
+                &current_url,
+                &site_base,
+                link,
+                allowed,
+                "direct-child",
+                &["limit"],
+            ),
+            _ => next_comment_page_cursor(&current_url, &site_base, link, allowed),
+        }
+    };
+    for collection in [
+        "pages/123456/footer-comments",
+        "pages/123456/inline-comments",
+        "blogposts/123456/footer-comments",
+        "blogposts/123456/inline-comments",
+        "footer-comments/5001/children",
+        "inline-comments/6001/children",
+        "pages/200/ancestors",
+        "pages/55555/direct-children",
+    ] {
+        for link in [
+            // As Confluence writes it, from the site root.
+            format!("/wiki/api/v2/{collection}?cursor=abc&limit=2"),
+            // The route's own path, absolute or path-absolute.
+            format!("{gateway}/wiki/api/v2/{collection}?cursor=abc&limit=2"),
+            format!("/ex/confluence/{CLOUD_ID}/wiki/api/v2/{collection}?cursor=abc"),
+        ] {
+            assert_eq!(
+                next(collection, &link, &gateway_hosts).unwrap(),
+                "abc",
+                "{collection}: {link}"
+            );
+        }
+
+        let changed_resource = format!("Confluence {} pagination changed resource", {
+            match collection.rsplit('/').next().unwrap() {
+                "ancestors" => "ancestor",
+                "direct-children" => "direct-child",
+                _ => "comment",
+            }
+        });
+        let changed_origin = changed_resource.replace("changed resource", "changed origin");
+        for (link, expected) in [
+            // Another resource below the site root.
+            (
+                "/wiki/api/v2/pages/999999/footer-comments?cursor=abc".to_string(),
+                &changed_resource,
+            ),
+            // The collection below another site's gateway path.
+            (
+                format!("/ex/confluence/{OTHER_CLOUD_ID}/wiki/api/v2/{collection}?cursor=abc"),
+                &changed_resource,
+            ),
+            (
+                format!(
+                    "https://api.atlassian.com/ex/confluence/{OTHER_CLOUD_ID}/wiki/api/v2/{collection}?cursor=abc"
+                ),
+                &changed_resource,
+            ),
+            // The gateway origin without the site's path: another resource,
+            // or this collection outside the site.
+            (
+                "https://api.atlassian.com/wiki/api/v2/pages/999999/footer-comments?cursor=abc"
+                    .to_string(),
+                &changed_resource,
+            ),
+            (
+                format!("https://api.atlassian.com/wiki/api/v2/{collection}?cursor=abc"),
+                &changed_resource,
+            ),
+            (
+                format!("//api.atlassian.com/wiki/api/v2/{collection}?cursor=abc"),
+                &changed_resource,
+            ),
+            // Another origin, however the link names it.
+            (
+                format!(
+                    "https://evil.example/ex/confluence/{CLOUD_ID}/wiki/api/v2/{collection}?cursor=abc"
+                ),
+                &changed_origin,
+            ),
+            (
+                format!("//evil.example/wiki/api/v2/{collection}?cursor=abc"),
+                &changed_origin,
+            ),
+            (
+                format!("/\\evil.example/wiki/api/v2/{collection}?cursor=abc"),
+                &changed_origin,
+            ),
+        ] {
+            assert_eq!(
+                next(collection, &link, &gateway_hosts),
+                Err(ConfluenceBackendError::Protocol(expected.clone())),
+                "{collection}: {link}"
+            );
+        }
+
+        // The query keeps its checks below the site root.
+        for link in [
+            format!("/wiki/api/v2/{collection}"),
+            format!("/wiki/api/v2/{collection}?cursor=abc&cursor=def"),
+            format!("/wiki/api/v2/{collection}?cursor="),
+            format!("/wiki/api/v2/{collection}?cursor=abc&expand=body"),
+        ] {
+            assert!(
+                next(collection, &link, &gateway_hosts).is_err(),
+                "{collection}: {link}"
+            );
+        }
+        // The URL a link names on the route must be allowlisted.
+        assert_eq!(
+            next(
+                collection,
+                &format!("/wiki/api/v2/{collection}?cursor=abc"),
+                &["https://example.atlassian.net/**".to_string()],
+            ),
+            Err(ConfluenceBackendError::Protocol(
+                "Confluence upstream URL is not allowlisted".to_string()
+            )),
+            "{collection}"
+        );
+    }
 }
 
 #[test]
