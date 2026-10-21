@@ -2325,8 +2325,25 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         &["expectedVersion"],
         1,
     );
+    set_request_body_schema(
+        &mut routes,
+        "POST",
+        "/v1/admin/groups",
+        group_write_body_schema(false),
+    );
+    set_request_body_schema(
+        &mut routes,
+        "PATCH",
+        "/v1/admin/groups/{group}",
+        group_write_body_schema(true),
+    );
     for route in &mut routes {
         route.result_schema = match route.operation.as_str() {
+            "admin.groups.list" => {
+                Some(json!({"type":"array", "items":group_record_schema(false)}))
+            }
+            "admin.groups.create" | "admin.groups.patch" => Some(group_record_schema(false)),
+            "admin.groups.inspect" => Some(group_record_schema(true)),
             "admin.principals.identity_access.inspect"
             | "admin.principals.identity_access.patch" => Some(identity_access_schema()),
             "admin.principals.identity_bindings.list" => Some(json!({
@@ -2416,6 +2433,56 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         }}),
     );
     routes
+}
+
+fn group_auto_enrollment_schema() -> Value {
+    json!({"type":"boolean", "description":"Automatically add newly created Microsoft accounts to this enabled group with persistent local membership after existing Microsoft admission checks. Applies once at account creation; clearing the setting does not remove memberships."})
+}
+
+fn group_write_body_schema(patch: bool) -> Value {
+    let mut schema = json!({
+        "type":"object", "additionalProperties":false,
+        "properties":{
+            "displayName":{"type":["string","null"]},
+            "description":{"type":["string","null"]},
+            "autoEnrollNewMicrosoftUsers":group_auto_enrollment_schema()
+        }
+    });
+    if patch {
+        schema["minProperties"] = json!(1);
+        schema["properties"]["status"] = json!({"enum":["active","disabled"]});
+    } else {
+        schema["required"] = json!(["groupId"]);
+        schema["properties"]["groupId"] = json!({"type":"string","minLength":1});
+        schema["properties"]["autoEnrollNewMicrosoftUsers"]["default"] = json!(false);
+    }
+    schema
+}
+
+fn group_record_schema(detail: bool) -> Value {
+    let mut schema = json!({
+        "type":"object", "additionalProperties":false,
+        "required":["groupId","displayName","description","status","autoEnrollNewMicrosoftUsers",
+            "createdAt","createdBy","updatedAt","updatedBy","disabledAt","memberCount"],
+        "properties":{
+            "groupId":{"type":"string"}, "displayName":{"type":["string","null"]},
+            "description":{"type":["string","null"]}, "status":{"enum":["active","disabled"]},
+            "autoEnrollNewMicrosoftUsers":group_auto_enrollment_schema(),
+            "createdAt":{"type":["string","null"]}, "createdBy":{"type":["string","null"]},
+            "updatedAt":{"type":["string","null"]}, "updatedBy":{"type":["string","null"]},
+            "disabledAt":{"type":["string","null"]}, "memberCount":{"type":"integer","minimum":0}
+        }
+    });
+    if detail {
+        for field in ["members", "policyReferenceSections"] {
+            schema["required"]
+                .as_array_mut()
+                .expect("required array")
+                .push(json!(field));
+            schema["properties"][field] = json!({"type":"array","items":{"type":"object"}});
+        }
+    }
+    schema
 }
 
 fn identity_namespace_schema() -> Value {
@@ -3852,6 +3919,51 @@ mod managed_identity_contract_tests {
         assert_eq!(patch.method, "PATCH");
         assert!(patch.sensitive_request_pointers.is_empty());
         assert!(patch.sensitive_response_pointers.is_empty());
+    }
+
+    #[test]
+    fn group_auto_enrollment_projects_into_openapi_and_send_schema() {
+        let mut catalog = empty_catalog(json!({}));
+        catalog.routes = principal_group_admin_routes();
+        let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
+        let send = send_schema_from_catalog(&catalog);
+        for (path, method) in [
+            ("/v1/admin/groups", "POST"),
+            ("/v1/admin/groups/{group}", "PATCH"),
+        ] {
+            let operation = &openapi["paths"][path][method.to_ascii_lowercase()];
+            let body = &operation["requestBody"]["content"]["application/json"]["schema"];
+            assert_eq!(
+                body["properties"]["autoEnrollNewMicrosoftUsers"]["type"],
+                "boolean"
+            );
+            assert_eq!(body["additionalProperties"], false);
+            assert!(
+                operation["responses"]["200"]
+                    .to_string()
+                    .contains("autoEnrollNewMicrosoftUsers")
+            );
+            let variant = send["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| {
+                    v["properties"]["route"]["const"] == path
+                        && v["properties"]["method"]["const"] == method
+                })
+                .unwrap();
+            assert_eq!(
+                variant["properties"]["body"]["properties"]["autoEnrollNewMicrosoftUsers"]["type"],
+                "boolean"
+            );
+        }
+        let create = &openapi["paths"]["/v1/admin/groups"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"];
+        assert_eq!(create["required"], json!(["groupId"]));
+        assert_eq!(
+            create["properties"]["autoEnrollNewMicrosoftUsers"]["default"],
+            false
+        );
     }
 
     #[test]

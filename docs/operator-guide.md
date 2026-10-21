@@ -1295,6 +1295,14 @@ across `029` needs the backup taken before it: the previous binary refuses the
 migrated store, and settings changed after the upgrade are lost with the restored
 backup.
 
+Migration `030_group_auto_enrollment` follows `029_identity_access_path_controls`.
+It adds the managed-group setting for automatically adding new Microsoft users,
+defaulting to off for every existing group. It does not change existing group
+memberships or JIT admission. Deploy matching portal and CLI artifacts to manage
+the setting. Administrators enable it per group after upgrade; no TOML change or
+reload is needed. Rolling back across `030` requires the pre-migration backup,
+as the previous binary refuses the migrated store.
+
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
 fresh store at a new path, then reconstruct principals, credentials, resources,
@@ -1565,7 +1573,25 @@ least one active mapping reaches an active broker group. The initial display
 name uses the first available bounded value from Microsoft `name`,
 `preferred_username`, then `email`; email is stored separately when present.
 These values initialize a JIT principal but are not identity keys and later
-logins do not overwrite them. To bind an existing principal directly:
+logins do not overwrite them.
+
+Administrators may enable **Automatically add new Microsoft users** on one or
+more managed groups, or use
+`agent-access admin groups update <group> --auto-enroll-new-microsoft-users true`.
+This database setting takes effect without reload and does not change the
+mapped-group admission requirement. JIT adds persistent local membership in
+each selected active group atomically with a new account. Existing accounts,
+including administrator-linked accounts on their first Microsoft sign-in, are
+not enrolled. Later sign-ins never restore removed local memberships. Disabled
+groups retain the setting but pause enrollment until re-enabled; users created
+during that pause are not backfilled. Clearing the setting affects only future
+account creation.
+
+Local memberships survive Microsoft membership expiry, removal, and provider
+disable. This also applies when the selected group has an Entra mapping: the
+local contribution remains after the Microsoft contribution ends. Follow
+[Microsoft onboarding](administrator-guide.md#microsoft-onboarding) when
+selecting groups and planning offboarding. To bind an existing principal directly:
 
 ```bash
 agent-access admin principals login-methods oidc link alice \

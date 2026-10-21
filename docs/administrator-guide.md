@@ -452,6 +452,41 @@ Use real tenant Object IDs, not the example UUIDs, email addresses, or group nam
 Link an existing principal before its first Microsoft login if that identity must
 retain existing credentials/grants. The broker does not merge accounts by email.
 
+To give newly created Microsoft users a local baseline membership, enable
+**Automatically add new Microsoft users** on each desired group's **Overview**
+or when creating the group. Any number of groups can be selected. The CLI
+equivalents are:
+
+```bash
+agent-access admin groups create baseline-users --display-name "Baseline users" \
+  --auto-enroll-new-microsoft-users
+agent-access admin groups update baseline-users --auto-enroll-new-microsoft-users true
+```
+
+This setting is stored with the group in the database and takes effect without
+a configuration reload. The existing mapped-group admission check still applies.
+After admission, JIT adds ordinary local membership in every selected active
+group in the same transaction as the new account and browser session. The
+membership records identify the Microsoft sign-in source as their creator.
+
+Only account creation triggers enrollment. An administrator-linked account's
+first Microsoft sign-in does not qualify. A local-only account that signs in
+through Microsoft without being linked follows normal JIT behavior: Broker may
+create a separate account, and that new account qualifies. Existing accounts
+are never backfilled, and later sign-ins never restore memberships removed by
+an administrator. Setting the option to `false` affects future enrollment only.
+Disabling a group preserves its setting and pauses enrollment; re-enabling it
+resumes enrollment for future accounts without adding users created during the
+pause.
+
+These local memberships persist after Microsoft evidence expires or the user
+loses an Entra group. A group that is both mapped and selected for enrollment
+initially reports `local_and_microsoft`; its local membership continues to
+provide access when the Microsoft contribution ends. Review that consequence
+when selecting groups. Membership grants no account role or service management
+assignment. Successful login audit details include `autoEnrolledGroupIds`, and
+group setting changes have supplemental success audit records.
+
 Group evidence refreshes only on successful Microsoft login and expires at the
 configured TTL. There is no background directory sync or Graph expansion; group
 overage denies login. Local groups, roles, direct grants, and tokens are independent

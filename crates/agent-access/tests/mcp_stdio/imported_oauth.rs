@@ -671,6 +671,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
                 group_id: "metrics-readers".into(),
                 display_name: None,
                 description: None,
+                auto_enroll_new_microsoft_users: false,
                 created_by: "admin".into(),
             })
             .unwrap();

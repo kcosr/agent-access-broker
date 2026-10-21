@@ -232,6 +232,7 @@ async fn oauth_fixture_with(
                 group_id: group.into(),
                 display_name: None,
                 description: None,
+                auto_enroll_new_microsoft_users: false,
                 created_by: "test".into(),
             })
             .unwrap();

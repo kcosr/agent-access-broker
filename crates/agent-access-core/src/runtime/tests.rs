@@ -6712,6 +6712,7 @@ fn managed_identity_toml_policy_accepts_existing_db_subjects() {
         .unwrap();
         store
             .create_group(crate::GroupWriteRequest {
+                auto_enroll_new_microsoft_users: false,
                 group_id: "agents".to_string(),
                 display_name: None,
                 description: None,
@@ -7276,6 +7277,7 @@ async fn managed_policy_mutation_validates_non_anonymous_subject_without_relocki
     .unwrap();
     store
         .create_group(crate::GroupWriteRequest {
+            auto_enroll_new_microsoft_users: false,
             group_id: "agents".to_string(),
             display_name: None,
             description: None,
@@ -9308,6 +9310,7 @@ fn personal_setup_admission_uses_transaction_groups_and_exclusive_policy_authori
         .unwrap();
         store
             .create_group(crate::GroupWriteRequest {
+                auto_enroll_new_microsoft_users: false,
                 group_id: "agents".into(),
                 display_name: None,
                 description: None,
@@ -9443,6 +9446,7 @@ fn personal_setup_admission_uses_toml_identity_groups_instead_of_store_membershi
         .unwrap();
         store
             .create_group(crate::GroupWriteRequest {
+                auto_enroll_new_microsoft_users: false,
                 group_id: "agents".into(),
                 display_name: None,
                 description: None,

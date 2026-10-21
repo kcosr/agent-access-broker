@@ -914,6 +914,7 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
                 group_id: group.into(),
                 display_name: None,
                 description: None,
+                auto_enroll_new_microsoft_users: false,
                 created_by: "admin".into(),
             })
             .unwrap();

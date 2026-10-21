@@ -1458,6 +1458,14 @@ pub(super) fn validate_identity_access_path_controls_structure(
     validate_structure_through(conn, MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION)?;
     identity_access::check_identity_token_rows(conn)
 }
+/// Preserve the complete prior schema and human identity invariants when
+/// admitting the group enrollment setting.
+pub(super) fn validate_group_auto_enrollment_structure(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION)?;
+    identity_access::check_identity_token_rows(conn)
+}
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
 fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {

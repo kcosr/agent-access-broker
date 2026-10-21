@@ -26,7 +26,7 @@ const connection: CredentialConnection = {
 function fixture(session = admin): PaletteEntities {
   return {
     session, types: indexResourceTypes(RESOURCE_TYPES), principals: [],
-    groups: [{ groupId: "ops-id", displayName: "Platform Crew", description: "Night shift responders", status: "disabled", memberCount: 2 }],
+    groups: [{ groupId: "ops-id", displayName: "Platform Crew", description: "Night shift responders", status: "disabled", autoEnrollNewMicrosoftUsers: false, memberCount: 2 }],
     catalog: { resources: [], resourceGroups: [], services: [service], executionContexts: { allowedValues: ["default"], contextRequired: false }, subjects: { users: [], groups: [{ groupId: "ops-id", displayName: "Platform Crew", status: "disabled" }], anonymous: false } },
     grants: [{ grantRef: "read-platform", subjects: ["group:ops-id"], service: "jira", actions: ["issue.view"], executionContexts: ["default"], resources: { resourceIds: [], resourceGroupIds: [] }, credentialMode: "per_user", status: "active", writable: true }],
     resources: [

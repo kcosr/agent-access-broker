@@ -1082,6 +1082,7 @@ pub(crate) async fn microsoft_oidc_callback(
             "provider": "microsoft",
             "loginMethodId": result.login_method.login_method_id,
             "jitCreated": jit_created,
+            "autoEnrolledGroupIds": result.auto_enrolled_group_ids,
             "effectiveGroupCount": result.membership.groups.len(),
         }),
     )

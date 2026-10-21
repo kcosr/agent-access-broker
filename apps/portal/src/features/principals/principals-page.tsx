@@ -516,6 +516,7 @@ function GroupDrawer({ group, onClose, returnFocus }: { group: GroupRecord; onCl
           items={[
             { label: "Group", value: <span className="wb-num">{group.groupId}</span> },
             { label: "Description", value: group.description || <span className="wb-muted">None</span> },
+            { label: "New Microsoft users", value: group.autoEnrollNewMicrosoftUsers ? group.status === "active" ? "Automatically added" : "Enrollment paused" : "Not automatically added" },
             group.createdAt ? { label: "Created", value: <><Time value={group.createdAt} format="datetime" />{group.createdBy ? <span className="wb-muted"> by {group.createdBy}</span> : null}</> } : null,
             group.updatedAt ? { label: "Updated", value: <Time value={group.updatedAt} format="datetime" /> } : null
           ]}

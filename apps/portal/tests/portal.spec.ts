@@ -963,16 +963,25 @@ test("local browser login supports administration, self-service credentials, tok
     await dialog.getByLabel("Group ID").fill("users");
     await dialog.getByLabel("Display name").fill("Users");
     await dialog.getByLabel("Description").fill("Policy users");
+    await expect(dialog.getByRole("checkbox", { name: "Automatically add new Microsoft users", exact: true })).not.toBeChecked();
+    await dialog.getByRole("checkbox", { name: "Automatically add new Microsoft users", exact: true }).check();
     await dialog.getByRole("button", { name: "Create group", exact: true }).click();
     await expect(toast("Group created")).toBeVisible();
     await expect(page).toHaveURL(/\/ui\/admin\/groups\/users$/);
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
+    const enrollment = page.getByRole("checkbox", { name: "Automatically add new Microsoft users", exact: true });
+    await expect(enrollment).toBeChecked();
+    await page.reload();
+    await expect(enrollment).toBeChecked();
+    await expect(enrollment).toHaveAccessibleDescription(/after the existing Microsoft group admission checks.*local and persists after Microsoft membership expires.*later sign-ins do not restore removed memberships/);
 
     await page.getByLabel("Display name").fill("User Access");
     await page.getByLabel("Description").fill("Principals with Jira access");
+    await enrollment.uncheck();
     await page.getByRole("button", { name: "Save group", exact: true }).click();
     await expect(toast("Group saved")).toBeVisible();
     await expect(page.getByRole("heading", { name: "User Access", exact: true })).toBeVisible();
+    expect(await browserManagementRequest(page, "/v1/admin/groups/users")).toMatchObject({ autoEnrollNewMicrosoftUsers: false });
     await page.getByRole("link", { name: "Groups", exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/admin\/principals\?kind=groups$/);
     await expect(tableRow(page, "User Access")).toBeVisible();
@@ -981,8 +990,18 @@ test("local browser login supports administration, self-service credentials, tok
     dialog = page.getByRole("dialog", { name: "Create group", exact: true });
     await dialog.getByLabel("Group ID").fill("operators");
     await dialog.getByLabel("Display name").fill("Operators");
+    await dialog.getByRole("checkbox", { name: "Automatically add new Microsoft users", exact: true }).check();
     await dialog.getByRole("button", { name: "Create group", exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/admin\/groups\/operators$/);
+    await expect(enrollment).toBeChecked();
+    await page.getByRole("button", { name: "Disable", exact: true }).click();
+    await confirmDialog(page, "Disable group?", "Disable group");
+    await expect(page.getByText("Enrollment is paused while this group is disabled.", { exact: false })).toBeVisible();
+    await expect(enrollment).toBeChecked();
+    expect(await browserManagementRequest(page, "/v1/admin/groups/operators")).toMatchObject({ status: "disabled", autoEnrollNewMicrosoftUsers: true });
+    await page.getByRole("button", { name: "Enable", exact: true }).click();
+    await expect(page.getByText("Enrollment is paused while this group is disabled.", { exact: false })).toHaveCount(0);
+    await expect(enrollment).toBeChecked();
     await page.getByRole("link", { name: "Groups", exact: true }).click();
     await expect(tableRow(page, "Operators")).toBeVisible();
     // The list row opens a summary drawer; the drawer opens the full page.

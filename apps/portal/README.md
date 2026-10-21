@@ -7,6 +7,14 @@ with read-only controls. Service policy managers work within their assigned
 services. Personal tokens, credentials and connections require the account's
 independent self-service setting.
 
+On a managed group's Overview, administrators can select **Automatically add
+new Microsoft users**. Every enabled group with this setting receives new
+accounts created through Microsoft sign-in after the existing group admission
+checks pass. These are persistent local memberships: they survive Microsoft
+membership expiry, and the setting does not add existing accounts or restore
+removed memberships on later sign-ins. Disabling a group pauses enrollment;
+re-enabling it resumes enrollment for future new accounts.
+
 Deployment and day-to-day administration are covered in the
 [operator guide](../../docs/operator-guide.md),
 [role reference](../../docs/roles.md) and

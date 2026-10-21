@@ -1065,6 +1065,26 @@ Existing explicitly linked principals may sign in with no mapped groups and keep
 any independent local membership. Microsoft group mappings never assign the
 managed `admin` role.
 
+Administrators may opt each managed group into automatic local membership for
+new Microsoft users with the database-owned
+`auto_enroll_new_microsoft_users` flag (default false). JIT first applies its
+existing admission check, then selects all active opted-in groups and adds
+ordinary local membership in the principal/login/session creation transaction.
+These memberships are persistent and independent of Microsoft evidence,
+including when a group has both local and Microsoft contributions. Existing
+linked accounts and subsequent sign-ins do not trigger enrollment; removed
+memberships are never restored automatically. Disabled groups retain the flag
+and resume enrollment for future new accounts when re-enabled, with no backfill.
+Concurrent group edits serialize with account creation. The creation commit is
+the once-only boundary, even if later audit or cookie delivery fails.
+
+The transaction returns the enrolled IDs for the successful login audit's
+`autoEnrolledGroupIds`. Group flag changes use mandatory audit preflight plus a
+supplemental `success` record under the existing group operation, with old/new
+values captured in the mutation transaction. Audit is a separate store;
+completion emission is not crash-atomic with the managed write, and a completion
+audit failure does not undo or report failure for a committed group mutation.
+
 ## Trusted human identity and MCP admission
 
 `X-Agent-Access-User` selects one typed username ingress mode before ordinary

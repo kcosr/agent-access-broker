@@ -8,9 +8,18 @@ import { paths } from "../app/paths";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
 import { usePortalInvalidation } from "../data/invalidation";
+import type { GroupRecord } from "../types";
 
-export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string };
-export type NewGroup = { groupId: string; displayName: string; description: string };
+export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean };
+export type NewGroup = { groupId: string; displayName: string; description: string; autoEnrollNewMicrosoftUsers: boolean };
+
+export function groupProfilePatch(group: Pick<GroupRecord, "displayName" | "description" | "autoEnrollNewMicrosoftUsers">, draft: Omit<NewGroup, "groupId">): GroupPatch {
+  const patch: GroupPatch = {};
+  if (draft.displayName !== (group.displayName ?? "")) patch.displayName = draft.displayName || null;
+  if (draft.description !== (group.description ?? "")) patch.description = draft.description || null;
+  if (draft.autoEnrollNewMicrosoftUsers !== group.autoEnrollNewMicrosoftUsers) patch.autoEnrollNewMicrosoftUsers = draft.autoEnrollNewMicrosoftUsers;
+  return patch;
+}
 
 export function useGroupActions() {
   const { attempt } = useSession();
@@ -32,7 +41,8 @@ export function useGroupActions() {
         brokerApi.adminCreateGroup(current, {
           groupId,
           displayName: input.displayName.trim() || undefined,
-          description: input.description.trim() || undefined
+          description: input.description.trim() || undefined,
+          autoEnrollNewMicrosoftUsers: input.autoEnrollNewMicrosoftUsers
         })
       );
       toast("Group created", { tone: "success" });
@@ -50,7 +60,7 @@ export function useGroupActions() {
     function confirmDisable(groupId: string) {
       confirm({
         title: "Disable group?",
-        body: `Grants that name ${groupId} stop applying to its members until it is enabled again. Memberships are kept.`,
+        body: `Grants that name ${groupId} stop applying to its members until it is enabled again. Memberships are kept. Automatic enrollment of new Microsoft users is paused while the group is disabled.`,
         confirmLabel: "Disable group",
         onConfirm: () => patch(groupId, { status: "disabled" })
       });

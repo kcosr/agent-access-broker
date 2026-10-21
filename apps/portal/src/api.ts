@@ -377,7 +377,7 @@ export const brokerApi = {
     ),
   adminCreateGroup: (
     session: Session,
-    body: { groupId: string; displayName?: string; description?: string }
+    body: { groupId: string; displayName?: string; description?: string; autoEnrollNewMicrosoftUsers?: boolean }
   ) =>
     managementRequest<GroupRecord>(
       "/v1/admin/groups",
@@ -390,7 +390,7 @@ export const brokerApi = {
   adminPatchGroup: (
     session: Session,
     groupId: string,
-    body: { displayName?: string | null; description?: string | null; status?: string }
+    body: { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean }
   ) =>
     managementRequest<GroupRecord>(
       `/v1/admin/groups/${enc(groupId)}`,

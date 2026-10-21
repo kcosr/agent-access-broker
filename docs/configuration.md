@@ -849,6 +849,11 @@ secret references are not resolved.
   unmapped group set; that authoritative set removes prior Microsoft-derived
   contributions without affecting local access. Set `jit_provisioning = false`
   to require administrators to link every Microsoft user Object ID first.
+  Administrators can separately select managed groups with **Automatically add
+  new Microsoft users** in the portal. This database setting adds persistent
+  local membership once, when JIT creates the account after admission succeeds;
+  it has no TOML option and does not change admission. See
+  [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
 - Microsoft group claims that explicitly indicate overage, are distributed,
   contain more than 200 entries, or are malformed reject that login. The broker
   does not call Microsoft Graph to expand them. Microsoft groups can contribute

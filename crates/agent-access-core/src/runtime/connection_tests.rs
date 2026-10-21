@@ -390,6 +390,7 @@ fn managed_matrix() -> (
     let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
     store
         .create_group(crate::GroupWriteRequest {
+            auto_enroll_new_microsoft_users: false,
             group_id: "agents".into(),
             display_name: None,
             description: None,

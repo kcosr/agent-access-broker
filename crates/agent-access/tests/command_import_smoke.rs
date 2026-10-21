@@ -244,6 +244,7 @@ fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
             group_id: "engineering".into(),
             display_name: None,
             description: None,
+            auto_enroll_new_microsoft_users: false,
             created_by: "admin".into(),
         })
         .unwrap();

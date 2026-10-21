@@ -592,7 +592,17 @@ For an already-bound principal, a complete empty or unmapped set still permits
 login and removes prior Microsoft-derived contributions; local memberships,
 roles, and direct grants remain. An unbound subject can be JIT-created only when
 JIT is enabled and at least one claimed Microsoft group has an active binding
-to an active broker group. OIDC logout is broker-local: `/v1/auth/logout`
+to an active broker group. After this admission check, account creation adds
+ordinary local membership in every active managed group with
+`autoEnrollNewMicrosoftUsers = true`, in the same transaction as the principal
+and browser session. Existing accounts, including previously linked accounts
+on their first Microsoft login, are not enrolled. Later sign-ins never restore
+removed local memberships. The successful Microsoft login audit includes
+`autoEnrolledGroupIds`, a sorted array of the groups enrolled by that
+transaction, beside `jitCreated`; the array is empty when no groups were
+enrolled, including logins of existing accounts. These local memberships
+persist independently of Microsoft evidence expiry or removal.
+OIDC logout is broker-local: `/v1/auth/logout`
 revokes the broker session but does not end the user's Microsoft SSO session.
 
 `tokenIssuancePolicy.selfAgentInvoke` is present for every authenticated
@@ -1341,12 +1351,38 @@ from the effective-only management views.
 
 Managed group writes require `identity.authority = "managed"` and a managed
 store. `POST /v1/admin/groups` accepts `groupId`, `displayName`, and
-`description`; duplicate group IDs return `version_conflict`. `PATCH
+`description`, plus optional boolean `autoEnrollNewMicrosoftUsers` (default
+`false`); duplicate group IDs return `version_conflict`. `PATCH
 /v1/admin/groups/{group}` accepts any non-empty subset of `displayName`,
-`description`, and `status`; `displayName` or `description` set to `null` clears
-the value, and `status` is `active` or `disabled`. Disabled groups remain
-visible and keep memberships but do not satisfy policy grants. `PUT
-/v1/admin/groups/{group}/members/{principal}` and the equivalent principal-owned
+`description`, `status`, and boolean `autoEnrollNewMicrosoftUsers`;
+`displayName` or `description` set to `null` clears the value, and `status` is
+`active` or `disabled`. Group records expose `autoEnrollNewMicrosoftUsers` in
+list, detail, and mutation responses; TOML-owned groups report `false`.
+Disabled groups remain visible and keep memberships but do not satisfy policy
+grants.
+
+`autoEnrollNewMicrosoftUsers` selects the group for local membership when
+Microsoft JIT creates an account, after the existing mapped-group admission
+check. It has no effect on existing accounts, account roles, or later logins.
+Disabled groups retain the flag but skip enrollment; re-enabling resumes it
+for future accounts without backfill. Clearing the flag leaves prior local
+memberships intact. If the group is also mapped from Microsoft, an enrolled
+user has `local_and_microsoft` provenance while both contributions are current
+and keeps local membership when Microsoft evidence expires or is removed.
+
+Group create and patch retain mandatory audit preflight, including the requested
+`autoEnrollNewMicrosoftUsers` boolean when supplied. Actual flag changes also
+emit a supplemental record under `admin.groups.create` or `admin.groups.patch`
+with `phase = "success"` and a target containing `group` plus
+`autoEnrollNewMicrosoftUsers: {previous, current}`, captured inside the mutation
+transaction. Creation emits that record when the flag is enabled. A flag-only
+patch to the current value changes no row metadata and emits no supplemental
+record. The mutation owner completes the write and supplemental audit even if
+the client disconnects; failure of that supplemental audit does not change a
+committed mutation's response. The audit and managed stores are separate, so
+completion records are not crash-atomic with the write.
+
+`PUT /v1/admin/groups/{group}/members/{principal}` and the equivalent principal-owned
 `PUT /v1/admin/principals/{principal}/groups/{group}` require both resources to
 exist; missing groups return `group_not_found` and missing principals return
 `principal_not_found`. The principal may be active or disabled; disabled

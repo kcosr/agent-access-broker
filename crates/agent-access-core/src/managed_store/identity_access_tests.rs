@@ -1055,10 +1055,12 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
         let upgraded = migration_rows(&path);
         assert_eq!(upgraded[..ledger.len()], ledger[..], "{version}");
         assert_eq!(upgraded.len(), MANAGED_STORE_MIGRATIONS.len(), "{version}");
+        let identity_path_migration = upgraded.iter().find(|row|
+            row.0 == MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION).unwrap();
         assert_eq!(
             (
-                upgraded.last().unwrap().0.as_str(),
-                upgraded.last().unwrap().1.as_str()
+                identity_path_migration.0.as_str(),
+                identity_path_migration.1.as_str()
             ),
             (
                 MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION,

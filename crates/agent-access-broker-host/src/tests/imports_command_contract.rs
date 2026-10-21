@@ -423,6 +423,7 @@ fn avery(runtime: &BrokerRuntime, config: &BrokerConfig, services: &[&str]) -> (
             group_id: "engineering".into(),
             display_name: None,
             description: None,
+            auto_enroll_new_microsoft_users: false,
             created_by: "admin".into(),
         })
         .unwrap();
