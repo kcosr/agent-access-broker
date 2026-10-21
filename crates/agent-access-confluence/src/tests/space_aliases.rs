@@ -1,13 +1,13 @@
 //! Spaces whose URL alias differs from their key: Confluence Cloud lets an
 //! administrator change a space's URL while the API keeps the key. Here the
-//! space `RAILS` is served under `/spaces/VLABS`.
+//! space `ROCKET` is served under `/spaces/VECTOR`.
 use super::*;
 
-const PAGE_ID: &str = "44867030046";
-const BLOG_ID: &str = "44867030100";
+const PAGE_ID: &str = "70000000046";
+const BLOG_ID: &str = "70000000100";
 const SPACE_ID: &str = "98765";
-const ALIASED_PAGE_LINK: &str = "/spaces/VLABS/pages/44867030046/Deployed+RAILS+Models";
-const ALIASED_BLOG_LINK: &str = "/spaces/VLABS/blog/2026/10/01/44867030100/Release+notes";
+const ALIASED_PAGE_LINK: &str = "/spaces/VECTOR/pages/70000000046/Deployment+Notes";
+const ALIASED_BLOG_LINK: &str = "/spaces/VECTOR/blog/2026/10/01/70000000100/Release+notes";
 const SITE: &str = "https://example.atlassian.net/wiki";
 
 /// The v1 content shape `content/search` and `content/{id}` return with
@@ -29,9 +29,9 @@ fn rails_page(link: &str) -> Value {
     v1_content(
         "page",
         PAGE_ID,
-        "Deployed RAILS Models",
+        "Deployment Notes",
         link,
-        ("RAILS", "/spaces/VLABS"),
+        ("ROCKET", "/spaces/VECTOR"),
     )
 }
 
@@ -39,7 +39,7 @@ fn alias_invocation(action: &str, inputs: Value) -> ProviderInvocation {
     let search = matches!(action, "search" | "blog.search");
     let mut resource_scopes = ResourceScopes::new();
     if !search {
-        resource_scopes.insert("space".to_string(), vec!["RAILS".to_string()]);
+        resource_scopes.insert("space".to_string(), vec!["ROCKET".to_string()]);
     }
     let builder = InvocationBuilder::new("confluence", action)
         .inputs(inputs)
@@ -47,7 +47,7 @@ fn alias_invocation(action: &str, inputs: Value) -> ProviderInvocation {
         .credential(credential())
         .lookup_credential(credential());
     if search {
-        builder.search(confluence_search_preflight(["ENG", "RAILS"]))
+        builder.search(confluence_search_preflight(["ENG", "ROCKET"]))
     } else {
         builder
     }
@@ -80,49 +80,52 @@ async fn mount_json(server: &MockServer, route: String, body: Value) {
 fn space_url_names_take_the_reported_alias_or_the_space_link() {
     let config = confluence_config();
     let alias = |reported: Option<&str>, link: Option<&str>| {
-        ConfluenceSpaceUrlNames::new("RAILS", reported, link, &config).alias
+        ConfluenceSpaceUrlNames::new("ROCKET", reported, link, &config).alias
     };
     for link in [
-        "/spaces/VLABS",
-        "/spaces/VLABS/overview",
-        "/wiki/spaces/VLABS",
-        "spaces/VLABS",
-        "https://example.atlassian.net/wiki/spaces/VLABS",
+        "/spaces/VECTOR",
+        "/spaces/VECTOR/overview",
+        "/wiki/spaces/VECTOR",
+        "spaces/VECTOR",
+        "https://example.atlassian.net/wiki/spaces/VECTOR",
     ] {
-        assert_eq!(alias(None, Some(link)).as_deref(), Some("VLABS"), "{link}");
+        assert_eq!(alias(None, Some(link)).as_deref(), Some("VECTOR"), "{link}");
     }
     // A lowercase alias is well formed; it stays case-exact.
-    assert_eq!(alias(None, Some("/spaces/vlabs")).as_deref(), Some("vlabs"));
+    assert_eq!(
+        alias(None, Some("/spaces/vector")).as_deref(),
+        Some("vector")
+    );
     for link in [
-        "/spaces/RAILS",
-        "/spaces/VLABS/pages/44867030046/Title",
-        "/spaces/VLABS/home",
-        "/spaces/VLABS?x=1",
-        "/spaces/VLABS#top",
-        "/spaces/~VLABS",
+        "/spaces/ROCKET",
+        "/spaces/VECTOR/pages/70000000046/Title",
+        "/spaces/VECTOR/home",
+        "/spaces/VECTOR?x=1",
+        "/spaces/VECTOR#top",
+        "/spaces/~VECTOR",
         "/spaces/V%20LABS",
-        "https://other.example/wiki/spaces/VLABS",
-        "https://example.atlassian.net:443/wiki/spaces/VLABS",
-        "http://example.atlassian.net/wiki/spaces/VLABS",
-        "/rest/api/space/VLABS",
+        "https://other.example/wiki/spaces/VECTOR",
+        "https://example.atlassian.net:443/wiki/spaces/VECTOR",
+        "http://example.atlassian.net/wiki/spaces/VECTOR",
+        "/rest/api/space/VECTOR",
     ] {
         assert_eq!(alias(None, Some(link)), None, "{link}");
     }
-    assert_eq!(alias(Some("VLABS"), None).as_deref(), Some("VLABS"));
+    assert_eq!(alias(Some("VECTOR"), None).as_deref(), Some("VECTOR"));
     assert_eq!(
-        alias(Some("VLABS"), Some("/spaces/OTHER")).as_deref(),
-        Some("VLABS")
+        alias(Some("VECTOR"), Some("/spaces/OTHER")).as_deref(),
+        Some("VECTOR")
     );
     assert_eq!(
-        alias(Some("V LABS"), Some("/spaces/VLABS")).as_deref(),
-        Some("VLABS")
+        alias(Some("VEC TOR"), Some("/spaces/VECTOR")).as_deref(),
+        Some("VECTOR")
     );
-    assert_eq!(alias(Some("RAILS"), None), None);
+    assert_eq!(alias(Some("ROCKET"), None), None);
 
-    let names = ConfluenceSpaceUrlNames::new("RAILS", Some("VLABS"), None, &config);
-    assert!(names.names("RAILS"));
-    assert!(names.names("VLABS"));
-    assert!(!names.names("vlabs"));
+    let names = ConfluenceSpaceUrlNames::new("ROCKET", Some("VECTOR"), None, &config);
+    assert!(names.names("ROCKET"));
+    assert!(names.names("VECTOR"));
+    assert!(!names.names("vector"));
     assert!(!names.names("OTHER"));
 }
 
@@ -131,20 +134,20 @@ fn v2_space_parser_reads_a_well_formed_current_active_alias() {
     let space = |alias: Value| {
         space_from_value(json!({
             "id": SPACE_ID,
-            "key": "RAILS",
+            "key": "ROCKET",
             "status": "current",
             "currentActiveAlias": alias,
-            "_links": { "webui": "/spaces/VLABS" }
+            "_links": { "webui": "/spaces/VECTOR" }
         }))
         .unwrap()
     };
-    let aliased = space(json!("VLABS"));
-    assert_eq!(aliased.key, "RAILS");
-    assert_eq!(aliased.alias.as_deref(), Some("VLABS"));
-    assert_eq!(aliased.web_url.as_deref(), Some("/spaces/VLABS"));
+    let aliased = space(json!("VECTOR"));
+    assert_eq!(aliased.key, "ROCKET");
+    assert_eq!(aliased.alias.as_deref(), Some("VECTOR"));
+    assert_eq!(aliased.web_url.as_deref(), Some("/spaces/VECTOR"));
     for unusable in [
-        json!("RAILS"),
-        json!("V LABS"),
+        json!("ROCKET"),
+        json!("VEC TOR"),
         json!(""),
         json!(null),
         json!(7),
@@ -153,8 +156,8 @@ fn v2_space_parser_reads_a_well_formed_current_active_alias() {
     }
 }
 
-/// The production failure: `text ~ "Qwen"` returned pages from `RAILS`,
-/// linked under `/spaces/VLABS`, and one rejected link failed the search.
+/// The original failure: a text search returned pages from `ROCKET`,
+/// linked under `/spaces/VECTOR`, and one rejected link failed the search.
 #[tokio::test]
 async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing() {
     let server = MockServer::start().await;
@@ -166,10 +169,10 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
                 { "content": rails_page(ALIASED_PAGE_LINK) },
                 { "content": v1_content(
                     "page",
-                    "44867030047",
+                    "70000000047",
                     "Unrelated Title",
-                    "/spaces/OTHER/pages/44867030047/Unrelated+Title",
-                    ("RAILS", "/spaces/VLABS"),
+                    "/spaces/OTHER/pages/70000000047/Unrelated+Title",
+                    ("ROCKET", "/spaces/VECTOR"),
                 ) },
                 { "content": v1_content(
                     "page",
@@ -188,7 +191,7 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
             json!({
                 "query": {
                     "type": "cql",
-                    "value": r#"text ~ "Qwen" ORDER BY lastModified DESC"#
+                    "value": r#"text ~ "launch" ORDER BY lastModified DESC"#
                 },
                 "maxResults": 3
             }),
@@ -197,15 +200,15 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
         .unwrap();
 
     let pages = &result.result["pages"];
-    assert_eq!(pages[0]["space"], "RAILS");
+    assert_eq!(pages[0]["space"], "ROCKET");
     assert_eq!(pages[0]["webUrl"], format!("{SITE}{ALIASED_PAGE_LINK}"));
-    assert_eq!(pages[0]["spaceUrl"], format!("{SITE}/spaces/VLABS"));
-    assert_eq!(pages[1]["space"], "RAILS");
+    assert_eq!(pages[0]["spaceUrl"], format!("{SITE}/spaces/VECTOR"));
+    assert_eq!(pages[1]["space"], "ROCKET");
     assert_eq!(
         pages[1]["webUrl"],
-        format!("{SITE}/pages/viewpage.action?pageId=44867030047")
+        format!("{SITE}/pages/viewpage.action?pageId=70000000047")
     );
-    assert_eq!(pages[1]["spaceUrl"], format!("{SITE}/spaces/VLABS"));
+    assert_eq!(pages[1]["spaceUrl"], format!("{SITE}/spaces/VECTOR"));
     assert_eq!(
         pages[2]["webUrl"],
         format!("{SITE}/spaces/ENG/pages/123456/Runbook")
@@ -213,7 +216,7 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
     assert_eq!(pages[2]["spaceUrl"], format!("{SITE}/spaces/ENG"));
 
     let audit = result.audit.as_ref().unwrap();
-    assert_eq!(audit["observedSpaces"], json!(["ENG", "RAILS"]));
+    assert_eq!(audit["observedSpaces"], json!(["ENG", "ROCKET"]));
     assert_eq!(
         audit["browserUrlFallbacks"],
         json!({
@@ -226,7 +229,7 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
         })
     );
     let audit = audit.to_string();
-    for private in ["OTHER", "Unrelated", "44867030047", "VLABS"] {
+    for private in ["OTHER", "Unrelated", "70000000047", "VECTOR"] {
         assert!(!audit.contains(private), "{private} in {audit}");
     }
 }
@@ -244,14 +247,14 @@ async fn blog_search_returns_aliased_links_and_replaces_a_foreign_one_without_fa
                     BLOG_ID,
                     "Release notes",
                     ALIASED_BLOG_LINK,
-                    ("RAILS", "/spaces/VLABS/overview"),
+                    ("ROCKET", "/spaces/VECTOR/overview"),
                 ) },
                 { "content": v1_content(
                     "blogpost",
-                    "44867030101",
+                    "70000000101",
                     "Other notes",
-                    "/spaces/OTHER/blog/2026/10/02/44867030101/Other+notes",
-                    ("RAILS", "/spaces/VLABS"),
+                    "/spaces/OTHER/blog/2026/10/02/70000000101/Other+notes",
+                    ("ROCKET", "/spaces/VECTOR"),
                 ) },
             ]
         }),
@@ -261,7 +264,7 @@ async fn blog_search_returns_aliased_links_and_replaces_a_foreign_one_without_fa
         .invoke(alias_invocation(
             "blog.search",
             json!({
-                "query": { "type": "cql", "value": r#"text ~ "Qwen""# },
+                "query": { "type": "cql", "value": r#"text ~ "launch""# },
                 "maxResults": 2
             }),
         ))
@@ -269,15 +272,15 @@ async fn blog_search_returns_aliased_links_and_replaces_a_foreign_one_without_fa
         .unwrap();
 
     let blogs = &result.result["blogs"];
-    assert_eq!(blogs[0]["space"], "RAILS");
+    assert_eq!(blogs[0]["space"], "ROCKET");
     assert_eq!(blogs[0]["webUrl"], format!("{SITE}{ALIASED_BLOG_LINK}"));
     assert_eq!(
         blogs[0]["spaceUrl"],
-        format!("{SITE}/spaces/VLABS/overview")
+        format!("{SITE}/spaces/VECTOR/overview")
     );
     assert_eq!(
         blogs[1]["webUrl"],
-        format!("{SITE}/pages/viewpage.action?pageId=44867030101")
+        format!("{SITE}/pages/viewpage.action?pageId=70000000101")
     );
     let fallbacks = &result.audit.as_ref().unwrap()["browserUrlFallbacks"];
     assert_eq!(fallbacks["count"], 1);
@@ -305,18 +308,18 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
         json!({
             "results": [{
                 "id": SPACE_ID,
-                "key": "RAILS",
+                "key": "ROCKET",
                 "status": "current",
                 "homepageId": "55555",
-                "currentActiveAlias": "VLABS",
-                "_links": { "webui": "/spaces/VLABS" }
+                "currentActiveAlias": "VECTOR",
+                "_links": { "webui": "/spaces/VECTOR" }
             }]
         }),
     )
     .await;
     let provider = alias_provider(&server);
     let aliased_url = format!("{SITE}{ALIASED_PAGE_LINK}");
-    let key_url = format!("{SITE}/spaces/RAILS/pages/{PAGE_ID}/Deployed+RAILS+Models");
+    let key_url = format!("{SITE}/spaces/ROCKET/pages/{PAGE_ID}/Deployment+Notes");
     for url in [&aliased_url, &key_url] {
         for (action, inputs) in [
             ("page.view", json!({ "url": url })),
@@ -324,7 +327,7 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
             (
                 "page.create",
                 json!({
-                    "space": "RAILS",
+                    "space": "ROCKET",
                     "title": "Child",
                     "contentFormat": "storage",
                     "content": "<p>child</p>",
@@ -336,13 +339,13 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
                 .lookup_scopes(action, &inputs, Some(&lookup()))
                 .await
                 .unwrap_or_else(|error| panic!("{action} {url}: {error:?}"));
-            assert_eq!(scopes["space"], vec!["RAILS"], "{action} {url}");
+            assert_eq!(scopes["space"], vec!["ROCKET"], "{action} {url}");
         }
     }
 
     // Neither the key nor the alias: the locator fails closed.
-    let foreign_url = format!("{SITE}/spaces/OTHER/pages/{PAGE_ID}/Deployed+RAILS+Models");
-    let lowercase_url = format!("{SITE}/spaces/vlabs/pages/{PAGE_ID}/Deployed+RAILS+Models");
+    let foreign_url = format!("{SITE}/spaces/OTHER/pages/{PAGE_ID}/Deployment+Notes");
+    let lowercase_url = format!("{SITE}/spaces/vector/pages/{PAGE_ID}/Deployment+Notes");
     for url in [&foreign_url, &lowercase_url] {
         let error = provider
             .lookup_scopes("page.view", &json!({ "url": url }), Some(&lookup()))
@@ -370,9 +373,9 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
         .invoke(alias_invocation("page.view", json!({ "url": aliased_url })))
         .await
         .unwrap();
-    assert_eq!(view.result["space"], "RAILS");
+    assert_eq!(view.result["space"], "ROCKET");
     assert_eq!(view.result["webUrl"], format!("{SITE}{ALIASED_PAGE_LINK}"));
-    assert_eq!(view.result["spaceUrl"], format!("{SITE}/spaces/VLABS"));
+    assert_eq!(view.result["spaceUrl"], format!("{SITE}/spaces/VECTOR"));
     assert!(
         view.audit
             .as_ref()
@@ -388,9 +391,9 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
 fn space_only_urls_are_not_content_locators() {
     let config = confluence_config();
     for url in [
-        format!("{SITE}/spaces/VLABS"),
-        format!("{SITE}/spaces/VLABS/overview"),
-        format!("{SITE}/spaces/VLABS/pages"),
+        format!("{SITE}/spaces/VECTOR"),
+        format!("{SITE}/spaces/VECTOR/overview"),
+        format!("{SITE}/spaces/VECTOR/pages"),
     ] {
         let page = page_locator_from_inputs(&json!({ "url": url }), &config).unwrap_err();
         assert_eq!(page.reason_code(), ReasonCode::LocatorInvalid, "{url}");
@@ -398,12 +401,12 @@ fn space_only_urls_are_not_content_locators() {
         assert_eq!(blog.reason_code(), ReasonCode::LocatorInvalid, "{url}");
     }
     let page = page_locator_from_inputs(
-        &json!({ "url": format!("{SITE}/spaces/vlabs/pages/{PAGE_ID}/Title") }),
+        &json!({ "url": format!("{SITE}/spaces/vector/pages/{PAGE_ID}/Title") }),
         &config,
     )
     .unwrap();
-    assert_eq!(page.url_space.as_deref(), Some("vlabs"));
-    for segment in ["V%20LABS", "%7Evlabs", "-vlabs"] {
+    assert_eq!(page.url_space.as_deref(), Some("vector"));
+    for segment in ["VEC%20TOR", "%7Evector", "-vector"] {
         let url = format!("{SITE}/spaces/{segment}/pages/{PAGE_ID}/Title");
         let error = page_locator_from_inputs(&json!({ "url": url }), &config).unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{segment}");
@@ -414,7 +417,7 @@ fn space_only_urls_are_not_content_locators() {
 /// names the alias even when the space carries no browser link.
 #[tokio::test]
 async fn blog_url_locators_and_reads_use_the_v2_space_alias() {
-    for space_link in [Some("/spaces/VLABS"), None] {
+    for space_link in [Some("/spaces/VECTOR"), None] {
         let server = MockServer::start().await;
         mount_json(
             &server,
@@ -433,9 +436,9 @@ async fn blog_url_locators_and_reads_use_the_v2_space_alias() {
         .await;
         let mut space = json!({
             "id": SPACE_ID,
-            "key": "RAILS",
+            "key": "ROCKET",
             "status": "current",
-            "currentActiveAlias": "VLABS"
+            "currentActiveAlias": "VECTOR"
         });
         if let Some(link) = space_link {
             space["_links"] = json!({ "webui": link });
@@ -448,7 +451,7 @@ async fn blog_url_locators_and_reads_use_the_v2_space_alias() {
                 .lookup_scopes(action, &json!({ "url": aliased_url }), Some(&lookup()))
                 .await
                 .unwrap();
-            assert_eq!(scopes["space"], vec!["RAILS"], "{action} {space_link:?}");
+            assert_eq!(scopes["space"], vec!["ROCKET"], "{action} {space_link:?}");
         }
         let foreign_url = format!("{SITE}/spaces/OTHER/blog/2026/10/01/{BLOG_ID}/Release+notes");
         let error = provider
@@ -465,11 +468,11 @@ async fn blog_url_locators_and_reads_use_the_v2_space_alias() {
             .invoke(alias_invocation("blog.view", json!({ "url": aliased_url })))
             .await
             .unwrap();
-        assert_eq!(view.result["space"], "RAILS");
+        assert_eq!(view.result["space"], "ROCKET");
         assert_eq!(view.result["webUrl"], format!("{SITE}{ALIASED_BLOG_LINK}"));
         let space_url = match space_link {
-            Some(_) => format!("{SITE}/spaces/VLABS"),
-            None => format!("{SITE}/spaces/RAILS"),
+            Some(_) => format!("{SITE}/spaces/VECTOR"),
+            None => format!("{SITE}/spaces/ROCKET"),
         };
         assert_eq!(view.result["spaceUrl"], space_url);
         assert!(
@@ -501,21 +504,21 @@ fn page_blog_and_draft_results_accept_aliased_links() {
         "_links": { "webui": ALIASED_BLOG_LINK }
     }))
     .unwrap();
-    blog.space = "RAILS".to_string();
-    blog.space_alias = Some("VLABS".to_string());
-    blog.space_web_url = Some("/spaces/VLABS/overview".to_string());
+    blog.space = "ROCKET".to_string();
+    blog.space_alias = Some("VECTOR".to_string());
+    blog.space_web_url = Some("/spaces/VECTOR/overview".to_string());
     let view = blog_view_result(&blog, &config, &mut fallbacks).unwrap();
     assert_eq!(view["webUrl"], format!("{SITE}{ALIASED_BLOG_LINK}"));
-    assert_eq!(view["spaceUrl"], format!("{SITE}/spaces/VLABS/overview"));
+    assert_eq!(view["spaceUrl"], format!("{SITE}/spaces/VECTOR/overview"));
 
     for content_type in [
         ConfluenceDraftContentType::Page,
         ConfluenceDraftContentType::Blog,
     ] {
         let mut draft = draft_content(PAGE_ID, content_type);
-        draft.space = "RAILS".to_string();
-        draft.space_alias = Some("VLABS".to_string());
-        draft.space_web_url = Some("/spaces/VLABS".to_string());
+        draft.space = "ROCKET".to_string();
+        draft.space_alias = Some("VECTOR".to_string());
+        draft.space_web_url = Some("/spaces/VECTOR".to_string());
         let result = draft_content_result(
             "draft.test",
             &draft,
@@ -526,8 +529,8 @@ fn page_blog_and_draft_results_accept_aliased_links() {
             &mut fallbacks,
         )
         .unwrap();
-        assert_eq!(result["space"], "RAILS");
-        assert_eq!(result["spaceUrl"], format!("{SITE}/spaces/VLABS"));
+        assert_eq!(result["space"], "ROCKET");
+        assert_eq!(result["spaceUrl"], format!("{SITE}/spaces/VECTOR"));
         assert_eq!(
             result["webUrl"],
             format!("{SITE}/pages/viewpage.action?pageId={PAGE_ID}")
@@ -570,15 +573,15 @@ fn fallback_audit_keeps_a_bounded_count_and_sample() {
 /// alias, with or without a space browser link.
 #[tokio::test]
 async fn page_create_keeps_aliased_links_from_the_resolved_space() {
-    const CREATED_LINK: &str = "/spaces/VLABS/pages/900001/Child";
-    for space_link in [Some("/spaces/VLABS"), None] {
+    const CREATED_LINK: &str = "/spaces/VECTOR/pages/900001/Child";
+    for space_link in [Some("/spaces/VECTOR"), None] {
         let server = MockServer::start().await;
         let mut space = json!({
             "id": SPACE_ID,
-            "key": "RAILS",
+            "key": "ROCKET",
             "status": "current",
             "homepageId": "55555",
-            "currentActiveAlias": "VLABS"
+            "currentActiveAlias": "VECTOR"
         });
         if let Some(link) = space_link {
             space["_links"] = json!({ "webui": link });
@@ -612,7 +615,7 @@ async fn page_create_keeps_aliased_links_from_the_resolved_space() {
             .invoke(alias_invocation(
                 "page.create",
                 json!({
-                    "space": "RAILS",
+                    "space": "ROCKET",
                     "title": "Child",
                     "contentFormat": "storage",
                     "content": "<p>child</p>"
@@ -620,15 +623,15 @@ async fn page_create_keeps_aliased_links_from_the_resolved_space() {
             ))
             .await
             .unwrap();
-        assert_eq!(result.result["space"], "RAILS", "{space_link:?}");
+        assert_eq!(result.result["space"], "ROCKET", "{space_link:?}");
         assert_eq!(result.result["webUrl"], format!("{SITE}{CREATED_LINK}"));
         let space_url = match space_link {
-            Some(_) => format!("{SITE}/spaces/VLABS"),
-            None => format!("{SITE}/spaces/RAILS"),
+            Some(_) => format!("{SITE}/spaces/VECTOR"),
+            None => format!("{SITE}/spaces/ROCKET"),
         };
         assert_eq!(result.result["spaceUrl"], space_url);
         let audit = result.audit.as_ref().unwrap();
-        assert_eq!(audit["space"], "RAILS");
+        assert_eq!(audit["space"], "ROCKET");
         assert!(audit.get("browserUrlFallbacks").is_none(), "{audit}");
     }
 }
@@ -644,7 +647,7 @@ async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link(
         .mount(&server)
         .await;
     let mut updated = rails_page(ALIASED_PAGE_LINK);
-    updated["space"] = json!({ "key": "RAILS" });
+    updated["space"] = json!({ "key": "ROCKET" });
     updated["version"] = json!({ "number": 4 });
     Mock::given(method("PUT"))
         .and(path(format!("/wiki/rest/api/content/{PAGE_ID}")))
@@ -665,12 +668,12 @@ async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link(
         ))
         .await
         .unwrap();
-    assert_eq!(result.result["space"], "RAILS");
+    assert_eq!(result.result["space"], "ROCKET");
     assert_eq!(
         result.result["webUrl"],
         format!("{SITE}{ALIASED_PAGE_LINK}")
     );
-    assert_eq!(result.result["spaceUrl"], format!("{SITE}/spaces/VLABS"));
+    assert_eq!(result.result["spaceUrl"], format!("{SITE}/spaces/VECTOR"));
     assert!(
         result
             .audit
@@ -682,9 +685,9 @@ async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link(
 }
 
 /// Searches that name a space by its URL alias, in CQL or `spaces`, against
-/// an upstream that resolves the alias to `RAILS`. Returned content is checked
+/// an upstream that resolves the alias to `ROCKET`. Returned content is checked
 /// against the authorization boundary, so the alias neither widens nor narrows
-/// access, and an exclusion of `RAILS` holds whichever name the caller used.
+/// access, and an exclusion of `ROCKET` holds whichever name the caller used.
 #[tokio::test]
 async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() {
     let all_except = |excluded: &[&str]| {
@@ -697,41 +700,41 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             values.iter().map(ToString::to_string).collect(),
         )
     };
-    let alias_cql = json!({ "query": { "type": "cql", "value": "space = VLABS" } });
-    let alias_spaces = json!({ "query": { "type": "cql", "value": "" }, "spaces": ["VLABS"] });
+    let alias_cql = json!({ "query": { "type": "cql", "value": "space = VECTOR" } });
+    let alias_spaces = json!({ "query": { "type": "cql", "value": "" }, "spaces": ["VECTOR"] });
     for (action, scope, inputs, cql, outcome) in [
         (
             "search",
             all_except(&[]),
             &alias_cql,
-            Some("(space = VLABS) AND type = page"),
+            Some("(space = VECTOR) AND type = page"),
             Ok(()),
         ),
         (
             "blog.search",
             all_except(&[]),
             &alias_cql,
-            Some("(space = VLABS) AND type = blogpost"),
+            Some("(space = VECTOR) AND type = blogpost"),
             Ok(()),
         ),
         (
             "search",
             all_except(&[]),
             &alias_spaces,
-            Some("space IN (VLABS) AND type = page"),
+            Some("space IN (VECTOR) AND type = page"),
             Ok(()),
         ),
         (
             "search",
-            finite(&["ENG", "RAILS"]),
+            finite(&["ENG", "ROCKET"]),
             &alias_cql,
-            Some("(space = VLABS) AND space IN (ENG, RAILS) AND type = page"),
+            Some("(space = VECTOR) AND space IN (ENG, ROCKET) AND type = page"),
             Ok(()),
         ),
         // A finite boundary admits only granted keys in `spaces`.
         (
             "search",
-            finite(&["ENG", "RAILS"]),
+            finite(&["ENG", "ROCKET"]),
             &alias_spaces,
             None,
             Err(ReasonCode::ServiceActionDenied),
@@ -740,28 +743,28 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             "search",
             finite(&["ENG"]),
             &alias_cql,
-            Some("(space = VLABS) AND space IN (ENG) AND type = page"),
+            Some("(space = VECTOR) AND space IN (ENG) AND type = page"),
             Err(ReasonCode::ScopeUnresolved),
         ),
         (
             "search",
-            all_except(&["RAILS"]),
+            all_except(&["ROCKET"]),
             &alias_cql,
-            Some("(space = VLABS) AND space NOT IN (RAILS) AND type = page"),
+            Some("(space = VECTOR) AND space NOT IN (ROCKET) AND type = page"),
             Err(ReasonCode::ScopeUnresolved),
         ),
         (
             "search",
-            all_except(&["RAILS"]),
+            all_except(&["ROCKET"]),
             &alias_spaces,
-            Some("space IN (VLABS) AND type = page"),
+            Some("space IN (VECTOR) AND type = page"),
             Err(ReasonCode::ScopeUnresolved),
         ),
         (
             "blog.search",
-            all_except(&["RAILS"]),
+            all_except(&["ROCKET"]),
             &alias_cql,
-            Some("(space = VLABS) AND space NOT IN (RAILS) AND type = blogpost"),
+            Some("(space = VECTOR) AND space NOT IN (ROCKET) AND type = blogpost"),
             Err(ReasonCode::ScopeUnresolved),
         ),
     ] {
@@ -774,7 +777,7 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
                 BLOG_ID,
                 "Release notes",
                 ALIASED_BLOG_LINK,
-                ("RAILS", "/spaces/VLABS"),
+                ("ROCKET", "/spaces/VECTOR"),
             )
         };
         mount_json(
@@ -795,10 +798,10 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             Ok(()) => {
                 let result = result.unwrap_or_else(|error| panic!("{case}: {error:?}"));
                 let field = if action == "search" { "pages" } else { "blogs" };
-                assert_eq!(result.result[field][0]["space"], "RAILS", "{case}");
+                assert_eq!(result.result[field][0]["space"], "ROCKET", "{case}");
                 assert_eq!(
                     result.audit.as_ref().unwrap()["observedSpaces"],
-                    json!(["RAILS"]),
+                    json!(["ROCKET"]),
                     "{case}"
                 );
             }

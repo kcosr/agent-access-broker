@@ -565,8 +565,8 @@ A missing link or one that proves no content ID is replaced without an entry.
 ### Space URL aliases
 
 Confluence Cloud lets an administrator change a space's URL. The API keeps the
-space key, for example `RAILS`, while browser links use the URL alias, for
-example `/spaces/VLABS/pages/...`. A browser link's space segment is accepted
+space key, for example `ROCKET`, while browser links use the URL alias, for
+example `/spaces/VECTOR/pages/...`. A browser link's space segment is accepted
 when it equals the result's space key or that space's alias. The alias is the
 v2 space object's `currentActiveAlias` where the broker already reads that
 object (page create, blog, blog draft, and page draft results), and otherwise
@@ -713,8 +713,8 @@ narrow the query without losing all-except exclusions. Every returned page is
 validated against the authorization boundary, the granted space keys or the
 all-except exclusions, not against the space names the caller wrote: Confluence
 may resolve a [space URL alias](#space-url-aliases) to its key, so a caller who
-names `VLABS` receives content of space `RAILS` when that space is authorized,
-and an excluded `RAILS` stays excluded whichever name the caller used. Backend search
+names `VECTOR` receives content of space `ROCKET` when that space is authorized,
+and an excluded `ROCKET` stays excluded whichever name the caller used. Backend search
 GETs `content/search` with `cql=<composed>`, `limit=<max>`,
 `expand=space,version,history`, and an optional `cursor`. As with Jira, `<max>` (the
 caller's `maxResults`) defaults to `providers.confluence.search.max_results`

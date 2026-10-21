@@ -2437,7 +2437,7 @@ fn wildcard_cql_space_predicates_narrow_the_query_not_containment() {
     ))
     .unwrap();
     assert_eq!(boundary, EffectiveSearchScope::AllExcept(BTreeSet::new()));
-    assert!(boundary.authorizes_value("RAILS"));
+    assert!(boundary.authorizes_value("ROCKET"));
     assert_eq!(boundary.values_for_backend(), Vec::<String>::new());
 }
 
