@@ -17,7 +17,7 @@ function fixture(t) {
   git("remote", "add", "origin", "https://github.com/example/broker.git");
   writeFileSync(join(root, "Cargo.toml"), '[workspace.package]\nversion = "0.1.0"\n');
   writeFileSync(join(root, "Cargo.lock"), 'version = 4\n');
-  writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-10-10\n\n- Qualified release.\n");
+  writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n### Added\n\n## [0.1.0] - 2026-10-10\n\n### Added\n\n- Qualified release.\n\n### Removed\n");
   git("add", ".");
   git("commit", "--message", "Prepared release");
   const commit = git("rev-parse", "HEAD").trim();
@@ -92,7 +92,7 @@ test("publication tags the exact qualified commit, pushes only that tag and publ
   assert.equal(f.git("status", "--porcelain"), "");
   assert.deepEqual(writes(f.calls).map(([command, operation, next]) => `${command} ${operation}${command === "gh" ? ` ${next}` : ""}`), ["git tag", "git push", "gh release create", "gh release edit"]);
   assert.deepEqual(f.calls.at(-1), ["gh", "release", "edit", "v0.1.0", "--repo", "github.com/example/broker", "--draft=false"]);
-  assert.equal(f.state.draft.body, "- Qualified release.");
+  assert.equal(f.state.draft.body, "### Added\n\n- Qualified release.", "empty note headings are not published");
   assert.equal(f.state.draft.draft, false);
   assert.equal(existsSync(f.state.notesFile), false);
 });
@@ -119,7 +119,7 @@ test("remote divergence, dirty source and unprepared changelog fail before publi
   writeFileSync(join(f.root, "untracked"), "preserve");
   assert.throws(f.publish, /clean worktree/);
   rmSync(join(f.root, "untracked"));
-  writeFileSync(join(f.root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n- New work.\n");
+  writeFileSync(join(f.root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- New work.\n");
   f.git("add", "CHANGELOG.md");
   f.git("commit", "--message", "Unprepared candidate");
   assert.throws(f.publish, /Prepared changelog/);
@@ -128,7 +128,7 @@ test("remote divergence, dirty source and unprepared changelog fail before publi
 
 test("existing published releases and mismatched drafts are never changed", (t) => {
   const f = fixture(t);
-  f.state.draft = { tag_name: "v0.1.0", target_commitish: f.commit, name: "v0.1.0", body: "- Qualified release.", draft: false, prerelease: false };
+  f.state.draft = { tag_name: "v0.1.0", target_commitish: f.commit, name: "v0.1.0", body: "### Added\n\n- Qualified release.", draft: false, prerelease: false };
   assert.throws(f.publish, /already published/);
   f.state.draft.draft = true;
   f.state.draft.body = "Unexpected content";

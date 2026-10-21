@@ -5,7 +5,8 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseVersion, preparedRelease, releaseRepository, workspaceVersion } from "./release-plan.mjs";
+import { preparedRelease } from "./changelog.mjs";
+import { parseVersion, releaseRepository, workspaceVersion } from "./release-plan.mjs";
 import { validateQualification } from "./release-qualification.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 
