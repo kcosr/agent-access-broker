@@ -2951,21 +2951,24 @@ fn rejects_atlassian_gateway_without_valid_cloud_id() {
 }
 
 #[test]
-fn backend_validation_passes_static_and_secret_store_kinds_as_written() {
-    let config = sample_broker();
+fn backend_validation_sees_static_kinds_and_secret_stores() {
+    let mut config = sample_broker();
     let jira = configured_provider_descriptors(&config)
         .into_iter()
         .find(|descriptor| descriptor.service == "jira")
         .unwrap();
-    let resolve = |credential: CredentialConfig| {
-        resolved_credential_kind(&config.credentials, &credential, &jira).map(str::to_string)
-    };
-    assert_eq!(
-        resolve(jira_per_user_credential("/etc/agent-access/jira.json")).as_deref(),
-        Some("secret_store")
+    config.credentials.per_user.insert(
+        "jira".to_string(),
+        jira_per_user_credential("/etc/agent-access/jira.json"),
     );
-    let service = config.credentials.service.get("jira").unwrap().clone();
-    assert_eq!(resolve(service).as_deref(), Some("basic_api_token"));
+    let sources = BackendCredentials::new(&config.credentials, "jira", &jira);
+    let kinds = sources.kinds();
+    assert!(kinds.per_user_secret_store);
+    assert!(kinds.per_user_profiles.is_empty() && !kinds.per_user_delegated);
+    assert_eq!(
+        kinds.service,
+        Some(CredentialSource::static_kind("basic_api_token"))
+    );
 }
 
 #[test]
@@ -3070,12 +3073,8 @@ fn accepts_one_atlassian_connection_for_jira_and_confluence_on_the_site_route() 
             );
         }
         assert_eq!(
-            resolved_credential_kind(
-                &config.credentials,
-                &config.credentials.per_user[service],
-                &descriptors[service],
-            ),
-            Some("basic_api_token"),
+            per_user_profile_kinds(&config, service, &descriptors[service]),
+            ["basic_api_token"],
             "{service}"
         );
     }
@@ -3192,12 +3191,8 @@ fn accepts_per_product_bearer_connections_through_the_gateway() {
     let descriptors = configured_service_descriptors(&config);
     for service in ["jira", "confluence"] {
         assert_eq!(
-            resolved_credential_kind(
-                &config.credentials,
-                &config.credentials.per_user[service],
-                &descriptors[service],
-            ),
-            Some("bearer_token"),
+            per_user_profile_kinds(&config, service, &descriptors[service]),
+            ["bearer_token"],
             "{service}"
         );
     }
@@ -3422,20 +3417,30 @@ fn backend_validation_resolves_connection_token_profiles() {
         .connections
         .insert("unknown_profile".to_string(), token_connection("unknown"));
     let resolve = |connection: &str| {
-        resolved_credential_kind(
-            &config.credentials,
-            &connection_per_user_credential(connection),
-            &jira,
+        let mut config = config.clone();
+        config.credentials.per_user.insert(
+            "jira".to_string(),
+            connection_per_user_credential(connection),
+        );
+        let sources = BackendCredentials::new(&config.credentials, "jira", &jira);
+        let kinds = sources.kinds();
+        (
+            kinds
+                .per_user_profiles
+                .iter()
+                .map(|profile| (profile.name.clone(), profile.kind))
+                .collect::<Vec<_>>(),
+            kinds.per_user_delegated,
         )
-        .map(str::to_string)
     };
+    let api_token = || vec![("atlassian-api-token".to_string(), "basic_api_token")];
 
-    assert_eq!(resolve("jira").as_deref(), Some("basic_api_token"));
-    // The token profile's kind, even when OAuth is also configured.
-    assert_eq!(resolve("both").as_deref(), Some("basic_api_token"));
-    assert_eq!(resolve("oauth_only").as_deref(), Some("oauth"));
-    assert_eq!(resolve("unknown_profile"), None);
-    assert_eq!(resolve("missing"), None);
+    assert_eq!(resolve("jira"), (api_token(), false));
+    // The token profiles, even when OAuth is also configured.
+    assert_eq!(resolve("both"), (api_token(), true));
+    assert_eq!(resolve("oauth_only"), (vec![], true));
+    assert_eq!(resolve("unknown_profile"), (vec![], false));
+    assert_eq!(resolve("missing"), (vec![], false));
 }
 
 #[test]
@@ -5647,6 +5652,20 @@ fn connection_per_user_credential(connection: &str) -> CredentialConfig {
         read_only: None,
         connection: Some(connection.to_string()),
     }
+}
+
+/// The kinds of the per-user token profiles backend validation sees for
+/// `service`.
+fn per_user_profile_kinds(
+    config: &BrokerConfig,
+    service: &str,
+    descriptor: &ServiceDescriptor,
+) -> Vec<&'static str> {
+    BackendCredentials::new(&config.credentials, service, descriptor)
+        .per_user_profiles
+        .iter()
+        .map(|profile| profile.kind)
+        .collect()
 }
 
 fn token_connection(profile: &str) -> ConnectionConfig {

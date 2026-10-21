@@ -129,7 +129,12 @@ impl BackendConfig for TeamsConfig {
         if context.policy_authority != "managed" {
             errors.push("providers.teams requires policy.authority = managed".into());
         }
-        if context.credentials.service.is_some() || context.credentials.per_user.is_some() {
+        let credentials = context.credentials;
+        if credentials.service.is_some()
+            || !credentials.per_user_profiles.is_empty()
+            || credentials.per_user_delegated
+            || credentials.per_user_secret_store
+        {
             errors.push(
                 "providers.teams does not accept service or per-user execution credentials".into(),
             );

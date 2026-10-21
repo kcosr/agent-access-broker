@@ -16,9 +16,9 @@ pub use oauth::{ATLASSIAN_OAUTH_AUDIENCE, ATLASSIAN_OAUTH_DIALECT};
 
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ClientProfile, ContinuationBinding, ContinuationStage, CredentialDescriptor, EgressDeclaration,
-    EgressProxyConfig, ExecutionAccess, ProviderBuildError, ProviderError, ReasonCode,
-    ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority, UpstreamClient,
+    ClientProfile, ContinuationBinding, ContinuationStage, CredentialDescriptor, CredentialSource,
+    EgressDeclaration, EgressProxyConfig, ExecutionAccess, ProviderBuildError, ProviderError,
+    ReasonCode, ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority, UpstreamClient,
     UpstreamClientSpec,
 };
 use sha2::{Digest, Sha256};
@@ -55,10 +55,14 @@ pub fn validate_atlassian_gateway_credential(
 ) {
     let uses_gateway = uses_atlassian_gateway_host(patterns);
     let delegated = credentials.per_user_delegated;
+    let per_user_basic = credentials
+        .per_user_profiles
+        .iter()
+        .any(|profile| profile.kind == "basic_api_token");
     if delegated {
-        if credentials.per_user == Some("basic_api_token") {
+        if per_user_basic {
             errors.push(format!(
-                "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent"
+                "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's service_account_token_profiles must list only atlassian-bearer-token"
             ));
         }
         if !uses_gateway {
@@ -67,31 +71,44 @@ pub fn validate_atlassian_gateway_credential(
             ));
         }
     }
-    // Beside OAuth, the per-user kind is `oauth` for a connection without a
-    // token profile, whose access is the delegated credential checked above,
-    // or a basic profile, already rejected above.
+    // Beside OAuth, a basic profile is already rejected above. A secret
+    // store's records each carry their own kind, which counts as not bearer.
     let per_user_static = credentials
-        .per_user
-        .filter(|kind| !(delegated && matches!(*kind, "oauth" | "basic_api_token")));
-    // Each static credential with whether it is execution material.
+        .per_user_profiles
+        .iter()
+        .map(|profile| profile.kind)
+        .filter(|kind| !(delegated && *kind == "basic_api_token"))
+        .chain(credentials.per_user_secret_store.then_some("secret_store"))
+        .collect::<Vec<_>>();
+    fn shared_kind(source: Option<CredentialSource<'_>>) -> Vec<&str> {
+        match source {
+            Some(CredentialSource::Static { kind, .. }) => vec![kind],
+            Some(_) => vec!["secret_store"],
+            None => Vec::new(),
+        }
+    }
+    // Each source's static kinds with whether they are execution material.
     let static_credentials = [
-        ("credentials.service", credentials.service, true),
+        (
+            "credentials.service",
+            shared_kind(credentials.service),
+            true,
+        ),
         ("credentials.per_user", per_user_static, true),
-        ("credentials.lookup", credentials.lookup, false),
+        ("credentials.lookup", shared_kind(credentials.lookup), false),
     ];
     let mut has_gateway_execution_credential = delegated;
     let mut bearer_mode = None;
 
-    for (mode, credential, execution) in static_credentials {
-        if let Some(kind) = credential {
-            if kind == "bearer_token" {
-                has_gateway_execution_credential |= execution;
-                bearer_mode.get_or_insert(mode);
-            } else if uses_gateway {
-                errors.push(format!(
-                    "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but {mode}.{service} does not resolve to a bearer_token credential"
-                ));
-            }
+    for (mode, kinds, execution) in static_credentials {
+        if kinds.contains(&"bearer_token") {
+            has_gateway_execution_credential |= execution;
+            bearer_mode.get_or_insert(mode);
+        }
+        if uses_gateway && kinds.iter().any(|kind| *kind != "bearer_token") {
+            errors.push(format!(
+                "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but {mode}.{service} does not resolve to a bearer_token credential"
+            ));
         }
     }
 
@@ -508,6 +525,7 @@ impl std::error::Error for AtlassianRouteUnavailable {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::CredentialProfile;
     use agent_access_provider::test_support::{TestHost, basic_credential, bearer_credential};
 
     const PRODUCT: AtlassianProduct = AtlassianProduct {
@@ -669,6 +687,39 @@ mod tests {
         }
     }
 
+    /// The sources validation sees for a `service` credential of a static
+    /// kind and a per-user entry written as the one kind it resolves to:
+    /// a profile of that kind, `oauth` for delegated access alone (set by
+    /// the caller), or `secret_store`.
+    fn credential_kinds(
+        service: Option<&'static str>,
+        per_user: Option<&'static str>,
+    ) -> ServiceCredentialKinds<'static> {
+        static BASIC: std::sync::LazyLock<[CredentialProfile; 1]> =
+            std::sync::LazyLock::new(|| {
+                [CredentialProfile::new(
+                    ATLASSIAN_API_TOKEN_PROFILE,
+                    "basic_api_token",
+                )]
+            });
+        static BEARER: std::sync::LazyLock<[CredentialProfile; 1]> =
+            std::sync::LazyLock::new(|| {
+                [CredentialProfile::new(
+                    ATLASSIAN_BEARER_TOKEN_PROFILE,
+                    "bearer_token",
+                )]
+            });
+        let kinds = ServiceCredentialKinds::default()
+            .with_service(service.map(CredentialSource::static_kind));
+        match per_user {
+            Some("basic_api_token") => kinds.with_per_user_profiles(&*BASIC),
+            Some("bearer_token") => kinds.with_per_user_profiles(&*BEARER),
+            Some("secret_store") => kinds.with_per_user_secret_store(true),
+            Some("oauth") | None => kinds,
+            Some(other) => panic!("unexpected per-user kind {other}"),
+        }
+    }
+
     /// Every row of the Atlassian validation and routing table, with and
     /// without simultaneous service credentials: the gateway takes bearer
     /// tokens and OAuth, the site takes Basic tokens, and a connection never
@@ -678,7 +729,7 @@ mod tests {
         const SITE_BEARER: &str = "credentials.per_user.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
         const SERVICE_SITE_BEARER: &str = "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
         const OAUTH_SITE: &str = "credentials.per_user.jira offers delegated (OAuth) access, which requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
-        const BASIC_WITH_OAUTH: &str = "credentials.per_user.jira combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent";
+        const BASIC_WITH_OAUTH: &str = "credentials.per_user.jira combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's service_account_token_profiles must list only atlassian-bearer-token";
         const GATEWAY_PER_USER_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.per_user.jira does not resolve to a bearer_token credential";
         const GATEWAY_SERVICE_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.service.jira does not resolve to a bearer_token credential";
         const GATEWAY_NONE: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured";
@@ -695,7 +746,7 @@ mod tests {
             errors
         };
         let kinds = |service, per_user, delegated| {
-            ServiceCredentialKinds::new(service, per_user).with_per_user_delegated(delegated)
+            credential_kinds(service, per_user).with_per_user_delegated(delegated)
         };
         let none: [&str; 0] = [];
         let basic = Some("basic_api_token");
@@ -861,9 +912,9 @@ mod tests {
                 &[SERVICE_SITE_BEARER][..],
             ),
         ] {
-            let credentials = ServiceCredentialKinds::new(service, per_user)
+            let credentials = credential_kinds(service, per_user)
                 .with_per_user_delegated(delegated)
-                .with_lookup(lookup);
+                .with_lookup(lookup.map(CredentialSource::static_kind));
             assert_eq!(
                 validate(gateway, credentials),
                 expected,

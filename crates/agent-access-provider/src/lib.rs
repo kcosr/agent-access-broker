@@ -224,8 +224,8 @@ pub use attribution::{
 pub use authority::UpstreamAuthority;
 pub use authorization::{CredentialPlacement, CredentialPlacementError, UpstreamAuthorization};
 pub use backend::{
-    BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, ServiceCredentialKinds,
-    ValidationContext, parse_backend_config,
+    BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, CredentialSource,
+    ServiceCredentialKinds, ValidationContext, parse_backend_config,
 };
 pub use capabilities::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,

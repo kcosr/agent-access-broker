@@ -758,7 +758,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
     let none: Vec<String> = Vec::new();
     let basic_with_oauth = |service: &str| {
         format!(
-            "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent"
+            "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's service_account_token_profiles must list only atlassian-bearer-token"
         )
     };
     let oauth_needs_gateway = |service: &str| {

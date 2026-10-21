@@ -195,8 +195,16 @@ impl CredentialDescriptor {
         self
     }
 
+    /// Declares the managed-store token profile `name` storing `kind`.
     pub fn profile(mut self, name: impl Into<String>, kind: &'static str) -> Self {
         self.profiles.push(CredentialProfile::new(name, kind));
+        self
+    }
+
+    /// Declares `profile`, built with its optional label and route-bound
+    /// flag.
+    pub fn with_profile(mut self, profile: CredentialProfile) -> Self {
+        self.profiles.push(profile);
         self
     }
 }
@@ -224,11 +232,24 @@ impl Default for CredentialDescriptor {
 }
 
 /// A managed-store credential profile and the credential kind it stores.
+///
+/// A credential connection lists the profiles it accepts, and a stored token
+/// keeps the profile it was saved as. The host lends a credential with its
+/// profile ([`crate::ExecutionCredential::profile`]).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialProfile {
     pub name: String,
     pub kind: &'static str,
+    /// The name people see where they choose a token type; management falls
+    /// back to [`Self::name`] when it is unset.
+    pub label: Option<String>,
+    /// Only the declaring provider may present a credential of this profile,
+    /// because the provider decides where it goes. The host never lets a
+    /// Git gateway present one: configuration rejects a connection listing
+    /// it beside a Git gateway consumer, and the gateway refuses it before
+    /// sending.
+    pub route_bound: bool,
 }
 
 impl CredentialProfile {
@@ -236,7 +257,21 @@ impl CredentialProfile {
         Self {
             name: name.into(),
             kind,
+            label: None,
+            route_bound: false,
         }
+    }
+
+    /// Sets the label people see for the profile.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Marks the profile route-bound: only this provider may present it.
+    pub fn route_bound(mut self) -> Self {
+        self.route_bound = true;
+        self
     }
 }
 
@@ -546,11 +581,16 @@ impl ServiceDescriptor {
             .map(|(scope, binding)| (scope.as_str(), binding))
     }
 
-    pub fn credential_profile_kind(&self, profile: &str) -> Option<&'static str> {
+    /// The token profile `profile` this service declares.
+    pub fn credential_profile(&self, profile: &str) -> Option<&CredentialProfile> {
         self.credentials
             .profiles
             .iter()
             .find(|candidate| candidate.name == profile)
+    }
+
+    pub fn credential_profile_kind(&self, profile: &str) -> Option<&'static str> {
+        self.credential_profile(profile)
             .map(|candidate| candidate.kind)
     }
 
@@ -613,6 +653,18 @@ impl ServiceDescriptor {
             errors.push(format!(
                 "service {service} needs a delegated connection description of at most 512 bytes"
             ));
+        }
+        for profile in &self.credentials.profiles {
+            if profile
+                .label
+                .as_deref()
+                .is_some_and(|label| label.trim().is_empty() || label.len() > 128)
+            {
+                errors.push(format!(
+                    "service {service} token profile {} needs a label of at most 128 bytes",
+                    profile.name
+                ));
+            }
         }
         let mut actions = BTreeSet::new();
         for action in &self.actions {
