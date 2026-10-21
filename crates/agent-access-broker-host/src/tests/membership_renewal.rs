@@ -2328,11 +2328,12 @@ async fn me_reports_the_window_of_a_renewal_it_waited_for() {
 
 /// A renewal wait holds the caller's per-principal capacity: while one
 /// person's requests wait for a slow renewal, their excess requests are
-/// refused on HTTP, MCP and Git, and another person keeps their capacity.
+/// refused on HTTP, browser session reads, MCP and Git, and another person
+/// keeps their capacity.
 #[tokio::test]
 async fn renewal_waits_hold_per_principal_capacity() {
     let f = fixture_configured(Duration::from_secs(30), |config| {
-        config.limits.max_concurrent_requests_per_principal = 3;
+        config.limits.max_concurrent_requests_per_principal = 4;
         config.mcp.max_control_requests_per_principal = 2;
     })
     .await;
@@ -2362,6 +2363,17 @@ async fn renewal_waits_hold_per_principal_capacity() {
             &format!("renewal-capacity-{index}"),
         )));
     }
+    // A browser session read of the same person takes the fourth slot.
+    let session_request = |person: &Person, request_id: &str| {
+        let app = f.app.clone();
+        let request = f
+            .request(Method::GET, "/v1/auth/session", request_id)
+            .header(COOKIE, &person.cookie)
+            .body(Body::empty())
+            .unwrap();
+        async move { app.oneshot(request).await.unwrap() }
+    };
+    let session_waiting = tokio::spawn(session_request(&f.person, "renewal-capacity-session"));
     // Two MCP requests of the same person wait too, on their own intake
     // capacity.
     let mcp_request = |request_id: &str| {
@@ -2384,6 +2396,7 @@ async fn renewal_waits_hold_per_principal_capacity() {
         .collect::<Vec<_>>();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(waiting.iter().all(|request| !request.is_finished()));
+    assert!(!session_waiting.is_finished());
     assert!(mcp_waiting.iter().all(|request| !request.is_finished()));
 
     // The person's excess requests are refused at once.
@@ -2402,6 +2415,12 @@ async fn renewal_waits_hold_per_principal_capacity() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let response = mcp_request("renewal-capacity-mcp-excess").await;
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let response = session_request(&f.person, "renewal-capacity-session-excess").await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response_json(response).await["reasonCode"],
+        "concurrency_limited"
+    );
 
     // Another person keeps their capacity on every path.
     assert_eq!(
@@ -2415,11 +2434,21 @@ async fn renewal_waits_hold_per_principal_capacity() {
             .await,
         "other person",
     );
+    let response = session_request(&other, "renewal-capacity-other-session").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let session = response_json(response).await;
+    assert_eq!(session["result"]["authenticated"], true);
+    assert_eq!(session["result"]["principal"], other.principal.as_str());
 
     gate.add_permits(1);
     for request in waiting {
         assert_eq!(request.await.unwrap().status(), StatusCode::OK);
     }
+    let response = session_waiting.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let session = response_json(response).await;
+    assert_eq!(session["result"]["authenticated"], true);
+    assert_eq!(session["result"]["principal"], f.person.principal.as_str());
     for request in mcp_waiting {
         let response = request.await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);

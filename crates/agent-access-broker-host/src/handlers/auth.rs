@@ -143,9 +143,45 @@ pub(crate) async fn auth_session(
         )
         .await;
     }
-    match resolve_browser_cookie_identity_blocking(&state, snapshot.clone(), headers.clone()).await
+    let pending =
+        match resolve_browser_cookie_identity_pending(snapshot.clone(), headers.clone()).await {
+            Ok(Some(pending)) => pending,
+            Ok(None) => {
+                // A browser opening the login page normally has no session
+                // cookie. Keep admission limits, but do not turn that ordinary
+                // read into audit traffic or make it depend on audit-writer
+                // availability.
+                if let Err(response) = check_auth_source_guard(&state, response_context).await {
+                    return *response;
+                }
+                return auth_response(
+                    StatusCode::OK,
+                    auth_success_envelope(
+                        &request_id,
+                        &broker_request_id,
+                        operation,
+                        None,
+                        unauthenticated_result(&snapshot),
+                    ),
+                );
+            }
+            Err(_) => return invalid_session_response(&state, response_context).await,
+        };
+    // A membership renewal wait holds the principal's own capacity. A session
+    // read spends no password-login budget.
+    let _principal_permit = match acquire_auth_principal_concurrency(
+        &state,
+        response_context,
+        &pending.value().identity.principal,
+        &pending.value().identity.principal,
+    )
+    .await
     {
-        Ok(Some(cookie_identity)) => {
+        Ok(permit) => permit,
+        Err(response) => return *response,
+    };
+    match pending.admit(&state, &snapshot, &headers).await {
+        Ok(cookie_identity) => {
             let result = session_result(&snapshot, &cookie_identity).await;
             auth_success_response(
                 response_context,
@@ -155,43 +191,35 @@ pub(crate) async fn auth_session(
             )
             .await
         }
-        Ok(None) => {
-            // A browser opening the login page normally has no session cookie.
-            // Keep admission limits, but do not turn that ordinary read into
-            // audit traffic or make it depend on audit-writer availability.
-            if let Err(response) = check_auth_source_guard(&state, response_context).await {
-                return *response;
-            }
-            auth_response(
-                StatusCode::OK,
-                auth_success_envelope(
-                    &request_id,
-                    &broker_request_id,
-                    operation,
-                    None,
-                    unauthenticated_result(&snapshot),
-                ),
-            )
-        }
-        Err(_) => {
-            if let Err(response) = check_auth_source_guard(&state, response_context).await {
-                return *response;
-            }
-            let envelope = auth_success_envelope(
-                &request_id,
-                &broker_request_id,
-                operation,
-                None,
-                unauthenticated_result(&snapshot),
-            );
-            let identity = IdentityContext::anonymous();
-            let mut response =
-                auth_audited_response(&snapshot, StatusCode::OK, envelope, &identity, &source)
-                    .await;
-            clear_session_cookie(&snapshot, response.headers_mut());
-            response
-        }
+        Err(_) => invalid_session_response(&state, response_context).await,
     }
+}
+
+/// The session read's answer for a cookie that resolves to no session, before
+/// or after a membership renewal wait: unauthenticated, audited, and clearing
+/// the cookie.
+async fn invalid_session_response(state: &AppState, context: AuthResponseContext<'_>) -> Response {
+    if let Err(response) = check_auth_source_guard(state, context).await {
+        return *response;
+    }
+    let envelope = auth_success_envelope(
+        context.request_id,
+        context.broker_request_id,
+        context.operation,
+        None,
+        unauthenticated_result(context.snapshot),
+    );
+    let identity = IdentityContext::anonymous();
+    let mut response = auth_audited_response(
+        context.snapshot,
+        StatusCode::OK,
+        envelope,
+        &identity,
+        context.source,
+    )
+    .await;
+    clear_session_cookie(context.snapshot, response.headers_mut());
+    response
 }
 
 pub(crate) async fn auth_local_login(
@@ -813,33 +841,50 @@ async fn acquire_auth_principal_guard(
     principal: &str,
     authenticated: bool,
 ) -> Result<IngressPermit, Box<Response>> {
-    let limits = context.snapshot.runtime.limits();
     let principal_source = auth_principal_source_key(principal, &auth_source_key(context.source));
     let concurrency_key = if authenticated {
         principal
     } else {
         principal_source.as_str()
     };
-    let principal_permit = match state.reloadable.shared_ingress.try_principal_concurrency(
-        concurrency_key,
-        limits.max_concurrent_requests_per_principal,
-    ) {
-        Ok(permit) => permit,
-        Err(error) => {
-            return Err(Box::new(
-                auth_limit_response(context, Some(principal.to_string()), error).await,
-            ));
-        }
-    };
+    let principal_permit =
+        acquire_auth_principal_concurrency(state, context, principal, concurrency_key).await?;
     if let Err(error) = state.reloadable.shared_ingress.check_auth_principal_rate(
         &principal_source,
-        limits.auth_requests_per_principal_per_minute,
+        context
+            .snapshot
+            .runtime
+            .limits()
+            .auth_requests_per_principal_per_minute,
     ) {
         return Err(Box::new(
             auth_limit_response(context, Some(principal.to_string()), error).await,
         ));
     }
     Ok(principal_permit)
+}
+
+/// Takes one of `principal`'s concurrent request slots under `key`, without
+/// charging any authentication rate budget.
+async fn acquire_auth_principal_concurrency(
+    state: &AppState,
+    context: AuthResponseContext<'_>,
+    principal: &str,
+    key: &str,
+) -> Result<IngressPermit, Box<Response>> {
+    match state.reloadable.shared_ingress.try_principal_concurrency(
+        key,
+        context
+            .snapshot
+            .runtime
+            .limits()
+            .max_concurrent_requests_per_principal,
+    ) {
+        Ok(permit) => Ok(permit),
+        Err(error) => Err(Box::new(
+            auth_limit_response(context, Some(principal.to_string()), error).await,
+        )),
+    }
 }
 
 async fn auth_limit_response(
@@ -884,21 +929,6 @@ fn principal_rate_key_is_safe(principal: &str) -> bool {
         && principal
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '@' | '+' | '-'))
-}
-
-/// Resolves the request's browser session, then admits Microsoft membership
-/// renewal for it, for a route without per-principal capacity. After a wait
-/// the session is resolved again from the same cookie, so a session revoked
-/// meanwhile fails.
-pub(crate) async fn resolve_browser_cookie_identity_blocking(
-    state: &AppState,
-    snapshot: Arc<RuntimeSnapshot>,
-    headers: HeaderMap,
-) -> Result<Option<BrowserCookieIdentity>, IdentityFailure> {
-    match resolve_browser_cookie_identity_pending(snapshot.clone(), headers.clone()).await? {
-        Some(pending) => pending.admit(state, &snapshot, &headers).await.map(Some),
-        None => Ok(None),
-    }
 }
 
 /// Resolves the request's browser session for membership renewal

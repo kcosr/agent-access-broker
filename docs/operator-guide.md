@@ -1751,7 +1751,12 @@ eight-hour default):
   identity revalidates its original proof. A request that times out proceeds
   with the expired evidence; the renewal keeps running and later requests see
   its result. When no renewal may start, for example during a backoff, the
-  request proceeds with the expired evidence without waiting.
+  request proceeds with the expired evidence without waiting. A waiting
+  request, including a browser session read, holds one of its principal's
+  `max_concurrent_requests_per_principal` slots (on HTTP MCP, one of its
+  `mcp.max_control_requests_per_principal` intake slots), so the person's
+  excess requests are refused with `concurrency_limited` rather than queueing
+  behind one slow renewal.
 
 An active person is therefore usually renewed about every three quarters of the
 TTL and never sees expiry. People whose agents are idle are not renewed; their
