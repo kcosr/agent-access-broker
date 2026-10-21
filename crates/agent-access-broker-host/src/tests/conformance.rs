@@ -334,6 +334,15 @@ async fn conformance_actions_reach_every_discovery_surface() {
     let fixture = conformance().await;
 
     let catalog = fixture.get("/v1/spec/catalog").await;
+    for (id, supports_exclusions) in [("conformance_item", true), ("conformance_endpoint", false)] {
+        let resource_type = catalog["resourceTypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap();
+        assert_eq!(resource_type["supportsExclusions"], supports_exclusions);
+    }
     let service = catalog["services"]
         .as_array()
         .unwrap()
@@ -851,6 +860,15 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         .await
         .unwrap();
     let types = response_json(types).await;
+    assert!(
+        types["resourceTypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["id"] == "conformance_endpoint"
+                && entry["supportsExclusions"] == false),
+        "{types}"
+    );
     assert!(
         types["resourceTypes"]
             .as_array()

@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Resource type metadata API additions require consumer updates.**
+  `ImportedResourceTypeDeclaration`, exposed through the host's `test-support`
+  API, gains the public `supports_exclusions` field. Downstream struct literals
+  must supply it (`true` preserves existing behavior), and exhaustive
+  destructuring must include it or use `..`. Deserializing SDK
+  `ResourceTypeMetadata` now requires the `supportsExclusions` boolean, which
+  the Broker always includes in resource-type listings and catalogs.
 - **Atlassian gateway lookup credentials must be bearer tokens.** With the
   Atlassian gateway enabled (`cloud_id` set and `api.atlassian.com`
   allowlisted), `credentials.lookup.jira` and `credentials.lookup.confluence`
@@ -17,6 +24,14 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Resource types can opt out of group exclusions.** Command manifests can
+  set `supportsExclusions: false`, and SDK descriptors offer
+  `with_supports_exclusions(false)`. The portal hides unsupported exclusion
+  choices; catalog validation and import acceptance reject invalid memberships,
+  with blocking group references in import review. The default remains `true`,
+  and command authorization payloads are unchanged. After storing an opt-out,
+  rollback to a Broker predating the field requires the pre-upgrade backup; see
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
 - **Why an OAuth connection is not eligible.** When a connection does not
   qualify for its permission profile at consent or after a refresh, the Broker
   logs a `permission_ineligible` warning naming the requested scopes the token

@@ -333,7 +333,7 @@ impl super::BrokerRuntime {
     }
 
     /// Checks a managed resource catalog against this generation's registry:
-    /// every resource's type and selector, and its attribute bindings.
+    /// every resource's type and selector, group exclusions, and attribute bindings.
     fn check_stored_resources(
         &self,
         catalog: &crate::ManagedResourceCatalog,
@@ -341,9 +341,10 @@ impl super::BrokerRuntime {
         if self.config.policy.authority != "managed" {
             return Ok(());
         }
-        let errors = crate::validate_resource_definition_types(
+        let errors = crate::validate_resource_catalog_types(
             self.resource_types.registry(),
             &catalog.resources,
+            &catalog.resource_groups,
         );
         if !errors.is_empty() {
             return Err(crate::ManagedStoreError::InputInvalid(errors.join("; ")));
@@ -411,6 +412,7 @@ mod tests {
             pattern: "[A-Z][A-Z0-9]{1,9}".into(),
             max_length: 256,
             example: "OPS".into(),
+            supports_exclusions: true,
             attributes: vec![ImportedResourceAttributeDeclaration {
                 name: "region".into(),
                 label: "Region".into(),

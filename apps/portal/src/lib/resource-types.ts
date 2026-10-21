@@ -46,3 +46,16 @@ export function selectorPlaceholder(types: ResourceTypes, type: ResourceType, ki
   const metadata = types.get(type);
   return kind === "namespace" ? metadata?.namespace?.example : metadata?.example;
 }
+
+/** Unknown type metadata cannot authorize a new exclusion. */
+export function supportsResourceExclusions(types: ResourceTypes, type: ResourceType): boolean {
+  return types.get(type)?.supportsExclusions === true;
+}
+
+/** Cached metadata can guide new choices, but cannot invalidate a stored membership. */
+export function resourceExclusionIssue(types: ResourceTypes, type: ResourceType, saved = false): string | null {
+  if (supportsResourceExclusions(types, type)) return null;
+  if (saved) return "Saved exclusion. The broker validates this membership when saving.";
+  if (!types.has(type)) return "Resource type metadata is unavailable. Refresh resource types to check new choices.";
+  return "The loaded resource type does not support new exclusions. Remove this added exclusion or refresh resource types.";
+}

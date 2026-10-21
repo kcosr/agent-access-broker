@@ -50,6 +50,11 @@ actions and exposes typed wrappers for supported services.
   Confluence page scopes, or generic HTTP services. Group exclusions apply
   across selections within one grant/token boundary, including when their
   resource entry is disabled or context-ineligible; they are not global denies.
+  Resource types may opt out with `supportsExclusions: false`: validate every
+  excluded group membership at catalog validation and publication, including
+  unused groups. Never silently drop an unsupported exclusion. Imported-type
+  acceptance rechecks group blockers transactionally against the candidate
+  registry; retained declarations keep their accepted capability.
 - Runtime specs are part of the supported interface. When changing broker
   actions, typed CLI commands, `agent-access invoke`, JSON `send`, or HTTP
   routes, keep the caller-filtered catalog, OpenAPI projection, send schema,

@@ -284,6 +284,7 @@ export function ImportTab({
                         <span key={type.id}>
                           {index ? ", " : null}
                           {type.label} <span className="wb-mono wb-muted">{type.brokerType}</span>
+                          <span className="wb-muted"> · exclusions {type.supportsExclusions === false ? "not supported" : "supported"}</span>
                           {type.removed ? <span className="wb-muted"> (removed; kept for its resources)</span> : null}
                         </span>
                       ))}

@@ -117,7 +117,9 @@ const DETAIL_TEXT: Record<ImportResourceTypeChangeDetail, string> = {
   max_length: "maximum length",
   attribute_added_required: "new required attribute",
   attribute_made_required: "attribute made required",
-  attribute_pattern: "attribute pattern"
+  attribute_pattern: "attribute pattern",
+  exclusions_supported: "exclusions supported",
+  exclusions_unsupported: "exclusions no longer supported"
 };
 
 export function typeChangeDetails(change: ImportResourceTypeChange): string {
@@ -131,7 +133,7 @@ export function typeChangeOutcome(change: ImportResourceTypeChange): string {
     case "applied":
       return change.change === "added" ? "Registered on acceptance." : "Applied on acceptance.";
     case "needs_new_id":
-      return `Not applied: stored resources hold attribute values this change would need to check. Actions using the type are unsupported until the command declares it under a new type id.`;
+      return `Not applied: stored resources hold attribute values this change would need to check. The previously accepted type, including its exclusion support, is retained. Actions using the type are unsupported until the command declares it under a new type id.`;
     case "retained":
       return `Kept for its ${resources}; it accepts no new resources. Delete ${change.resourceCount === 1 ? "it" : "them"}, then accept a refresh to drop the type.`;
     case "dropped":

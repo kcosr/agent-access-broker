@@ -160,6 +160,7 @@ pub(crate) fn proposed_metadata(
                     .or_else(|| proposals.remove(declared.id.as_str()))
                     .unwrap_or_default(),
                 removed: false,
+                supports_exclusions: declared.supports_exclusions,
                 label: declared.label.clone(),
                 plural_label: declared.plural_label.clone(),
                 pattern: declared.pattern.clone(),
@@ -435,6 +436,31 @@ mod tests {
 
     fn sample() -> Manifest {
         parse(&serde_json::to_vec(&crate::manifest::tests::sample()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn metadata_carries_exclusion_capability_without_changing_action_authority() {
+        let definition = definition(&[
+            ImportedCredentialMode::Service,
+            ImportedCredentialMode::PerUser,
+        ]);
+        let mut manifest = sample();
+        let before = discovery(&definition, "ticketing", &manifest, None).unwrap();
+        let accepted = before.service_metadata.as_ref().unwrap();
+        assert!(accepted.resource_types[0].supports_exclusions);
+        manifest.resource_types[0].supports_exclusions = false;
+        let after = discovery(&definition, "ticketing", &manifest, Some(accepted)).unwrap();
+        assert!(!after.service_metadata.as_ref().unwrap().resource_types[0].supports_exclusions);
+        assert_eq!(
+            serde_json::to_value(&before.tools).unwrap(),
+            serde_json::to_value(&after.tools).unwrap()
+        );
+        let mut accepted = after.service_metadata.unwrap();
+        accepted.resource_types[0].removed = true;
+        assert!(
+            !proposed_metadata("ticketing", &manifest, Some(&accepted)).resource_types[0]
+                .supports_exclusions
+        );
     }
 
     #[test]

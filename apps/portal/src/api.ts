@@ -112,7 +112,8 @@ export class ApiError extends Error {
 function importChangeBlocked(target: ManagementEnvelope<unknown>["target"]): ImportChangeBlocked | undefined {
   const affectedGrants = Array.isArray(target?.affectedGrants) ? target.affectedGrants : [];
   const resources = Array.isArray(target?.resources) ? target.resources : [];
-  return affectedGrants.length || resources.length ? { affectedGrants, resources } : undefined;
+  const resourceGroups = Array.isArray(target?.resourceGroups) ? target.resourceGroups : [];
+  return affectedGrants.length || resources.length || resourceGroups.length ? { affectedGrants, resources, resourceGroups } : undefined;
 }
 
 function requestId() {

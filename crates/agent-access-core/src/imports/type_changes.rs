@@ -54,7 +54,8 @@ pub fn imported_type_descriptor(
         declared.example.clone(),
         pattern,
         attributes,
-    ))
+    )
+    .with_supports_exclusions(declared.supports_exclusions))
 }
 
 /// The manifest type id a command action names in
@@ -127,6 +128,10 @@ pub enum ImportedResourceTypeChangeDetail {
     AttributeMadeRequired,
     /// An attribute's pattern changed.
     AttributePattern,
+    /// Resources may no longer be excluded by groups.
+    ExclusionsUnsupported,
+    /// Resources may again be excluded by groups.
+    ExclusionsSupported,
 }
 
 impl ImportedResourceTypeChangeDetail {
@@ -166,6 +171,16 @@ pub struct ImportedTypeResource {
     pub id: String,
     pub selector: ResourceSelector,
     pub attributes: BTreeSet<String>,
+    /// Every group that excludes this resource, including unused groups.
+    pub excluded_by: BTreeSet<String>,
+}
+
+/// A group preventing a type from disabling exclusions.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedTypeBlockingGroup {
+    pub id: String,
+    pub resource_ids: Vec<String>,
 }
 
 impl ImportedTypeResource {
@@ -222,6 +237,13 @@ fn compare(
         if changed {
             details.insert(detail);
         }
+    }
+    if accepted.supports_exclusions != declared.supports_exclusions {
+        details.insert(if declared.supports_exclusions {
+            Detail::ExclusionsSupported
+        } else {
+            Detail::ExclusionsUnsupported
+        });
     }
     let old = accepted
         .attributes
@@ -442,6 +464,8 @@ pub struct ImportedTypeAcceptance {
     deletions: Vec<(String, Vec<String>)>,
     /// Removed types the acceptance drops; they must have no resources.
     dropped: Vec<String>,
+    /// Types being changed to disallow excluded memberships.
+    exclusion_free: Vec<String>,
 }
 
 impl ImportedTypeAcceptance {
@@ -483,6 +507,9 @@ impl ImportedTypeAcceptance {
                 ));
             }
             let comparison = compare(accepted, declared);
+            if accepted.supports_exclusions && !declared.supports_exclusions {
+                plan.exclusion_free.push(declared.broker_type.clone());
+            }
             if comparison.needs_value_free_type() {
                 plan.value_free.push(declared.broker_type.clone());
             }
@@ -516,6 +543,7 @@ impl ImportedTypeAcceptance {
             .chain(self.matching.iter().map(|(broker_type, _)| broker_type))
             .chain(self.deletions.iter().map(|(broker_type, _)| broker_type))
             .chain(&self.dropped)
+            .chain(&self.exclusion_free)
             .map(String::as_str)
             .collect()
     }
@@ -558,6 +586,40 @@ impl ImportedTypeAcceptance {
             .into_iter()
             .map(|(broker_type, ids)| (broker_type, ids.into_iter().collect()))
             .collect()
+    }
+
+    /// All excluded memberships blocking a downgrade, grouped by type and group.
+    /// Keep this separate from resource grammar/attribute violations: the remedy
+    /// is to edit group memberships, not to delete otherwise valid resources.
+    pub fn group_violations(
+        &self,
+        usage: &ImportedTypeUsage,
+    ) -> BTreeMap<String, Vec<ImportedTypeBlockingGroup>> {
+        let mut violations = BTreeMap::new();
+        for broker_type in &self.exclusion_free {
+            let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
+            for resource in usage.get(broker_type).into_iter().flatten() {
+                for group in &resource.excluded_by {
+                    groups
+                        .entry(group.clone())
+                        .or_default()
+                        .insert(resource.id.clone());
+                }
+            }
+            if !groups.is_empty() {
+                violations.insert(
+                    broker_type.clone(),
+                    groups
+                        .into_iter()
+                        .map(|(id, resources)| ImportedTypeBlockingGroup {
+                            id,
+                            resource_ids: resources.into_iter().collect(),
+                        })
+                        .collect(),
+                );
+            }
+        }
+        violations
     }
 
     /// Removed attributes whose stored values the acceptance deletes, by

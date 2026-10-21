@@ -2792,9 +2792,10 @@ impl BrokerRuntime {
         }
         // Type-specific selector checks mirror the store's structural catalog
         // checks, so an invalid resource is an input error, not a policy issue.
-        let resource_errors = crate::validate_resource_definition_types(
+        let resource_errors = crate::validate_resource_catalog_types(
             self.resource_types.registry(),
             &catalog.resources,
+            &catalog.resource_groups,
         );
         if !resource_errors.is_empty() {
             return Err(ManagedStoreError::InputInvalid(resource_errors.join("; ")));

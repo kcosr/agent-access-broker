@@ -68,7 +68,9 @@ export function useQueryAccess() {
 
 /**
  * Registered resource types change only with the broker build and when a
- * command import is accepted, which refetches them (`useImportActions`).
+ * command import is accepted, which refetches them (`useImportActions`). Group
+ * editors refresh them on opening, on request and after a rejected save to
+ * expose changes made by other operators.
  */
 export function useResourceTypesQuery(): ResourceTypes {
   const { viewer, signedIn, runQuery } = useQueryAccess();

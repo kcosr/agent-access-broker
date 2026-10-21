@@ -275,7 +275,7 @@ Health and discovery:
 | `GET` | `/v1/readyz` | Readiness probe (no request-id, no auth) |
 | `GET` | `/v1/me` | Resolved identity summary and the caller's service invocation limits |
 | `GET` | `/v1/broker/status` | Immutable assembly, host, SDK and compiled module identity, and contract versions |
-| `GET` | `/v1/resource-types` | Registered resource types, labels, examples, and supported selectors |
+| `GET` | `/v1/resource-types` | Registered resource types, labels, examples, supported selectors, and exclusion capability |
 | `GET` | `/v1/capabilities` | Capability bundle (identity summary plus visible services) |
 | `GET` | `/v1/services` | Visible services |
 | `GET` | `/v1/services/{service}` | One service's visible capabilities |
@@ -341,7 +341,10 @@ caller-filtered runtime catalog carry the same field.
 `GET /v1/resource-types` requires an authenticated caller (anonymous callers
 receive `identity_required`, as on the spec routes) and a valid
 `X-Agent-Access-Request-Id`, but no admin right, provider grant, or execution
-context. It returns `{"resourceTypes":[...]}` in registration order. A type a
+context. It returns `{"resourceTypes":[...]}` in registration order. Every entry
+includes the resolved `supportsExclusions` boolean, which defaults to `true`.
+When `false`, resources of that type cannot be excluded by resource groups;
+see [resource groups](resources.md#groups-and-exclusions). A type a
 command import declares carries its `importedService`; one that import no
 longer declares, kept for its remaining resources, is marked `removed: true`
 and accepts no new resources.
@@ -3512,6 +3515,15 @@ token input is marked sensitive and plaintext is never returned. These routes ar
 excluded from agent MCP tools. Restoring retained grants requires confirmation.
 Preview results include grant IDs by action, so reviewing one changed action need
 not confirm unrelated grants on the same service.
+
+Command import type reviews also report exclusion-capability changes in
+`resourceTypeChanges`: `exclusions_supported` or `exclusions_unsupported` in
+`details`, and `blockingGroups: [{id, resourceIds}]` when group exclusions prevent
+an opt-out. A rejected acceptance reports those references as
+`target.resourceGroups: [{type, id, resourceIds}]`, where `type` is the Broker
+resource type ID and `id` is the group ID. Lists and resource memberships are
+bounded at 100. Remove the indicated exclusions before retrying; the check runs
+again inside acceptance. See [imported resource types](imported-services.md#imported-resource-types).
 
 The `POST /v1/admin/imports/{service}/accept` result always includes
 `classificationChanges: [{action, from, to}]`, with `from` `"read"`, `"write"` or

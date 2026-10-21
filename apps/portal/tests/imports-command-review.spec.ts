@@ -420,3 +420,37 @@ test("a removed imported type accepts no new resources", async ({ page }) => {
   await expect(type.locator('option[value="ticketing_queue"]')).toHaveCount(0);
   expect(api.errors).toEqual([]);
 });
+
+test("an exclusion opt-out explains blocking group memberships and prevents acceptance", async ({ page }) => {
+  const data = commandRefreshed();
+  data.preview!.manifest.serviceMetadata!.resourceTypes[0]!.supportsExclusions = false;
+  data.resourceTypeChanges = [{ ...data.resourceTypeChanges![0]!, details: ["exclusions_unsupported"], blocked: true, blockingGroups: [{ id: "engineering", resourceIds: ["ops"] }] }];
+  const api = await mockCommandImportApi(page, data);
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  const dialog = review(page);
+  const project = dialog.getByRole("group", { name: "Resource type project", exact: true });
+  await expect(project).toContainText("exclusions not supported (inclusions only)");
+  await expect(project).toContainText("Changed: exclusions no longer supported.");
+  await expect(project).toContainText("remove the listed exclusions from these groups");
+  await expect(project.getByRole("link", { name: "engineering", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resource-groups?item=engineering");
+  await expect(project.getByRole("link", { name: "ops", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resources?item=ops");
+  await expect(dialog.getByRole("button", { name: "Accept selected actions", exact: true })).toBeDisabled();
+  expect(api.accepted).toEqual([]);
+  expect(api.errors).toEqual([]);
+});
+
+test("a transactional exclusion blocker identifies group memberships to remove", async ({ page }) => {
+  const api = await mockCommandImportApi(page, commandRefreshed());
+  api.acceptBlocked = { resourceGroups: [{ type: "ticketing_project", id: "engineering", resourceIds: ["ops"] }] };
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  const dialog = review(page);
+  await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
+  const alert = dialog.getByRole("alert");
+  await expect(alert).toContainText("Remove the listed exclusions from these groups, then refresh the preview");
+  await expect(alert).not.toContainText("Edit or delete them");
+  await expect(alert.getByRole("link", { name: "engineering", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resource-groups?item=engineering");
+  await expect(alert.getByRole("link", { name: "ops", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resources?item=ops");
+  expect(api.errors).toEqual([]);
+});

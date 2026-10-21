@@ -3491,9 +3491,11 @@ pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_pro
 pub fn agent_access_provider::ResourceTypeDescriptor::pattern(&self) -> core::option::Option<&agent_access_provider::ResourcePattern>
 pub const fn agent_access_provider::ResourceTypeDescriptor::plural_label(&self) -> &str
 pub fn agent_access_provider::ResourceTypeDescriptor::selector_kinds(&self) -> alloc::vec::Vec<&'static str>
+pub const fn agent_access_provider::ResourceTypeDescriptor::supports_exclusions(&self) -> bool
 pub fn agent_access_provider::ResourceTypeDescriptor::validate_attributes(&self, &agent_access_provider::ResourceSelector, &agent_access_provider::ResourceAttributes, bool) -> core::result::Result<(), alloc::string::String>
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_action_inputs(self, agent_access_provider::ResourceActionInputs) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_namespace(self, agent_access_provider::NamespaceSelectorDescriptor) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_supports_exclusions(self, bool) -> Self
 impl core::clone::Clone for agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::clone(&self) -> agent_access_provider::ResourceTypeDescriptor
 impl core::fmt::Debug for agent_access_provider::ResourceTypeDescriptor
@@ -3515,6 +3517,7 @@ pub agent_access_provider::ResourceTypeMetadata::namespace: core::option::Option
 pub agent_access_provider::ResourceTypeMetadata::plural_label: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::removed: bool
 pub agent_access_provider::ResourceTypeMetadata::selectors: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::ResourceTypeMetadata::supports_exclusions: bool
 impl core::clone::Clone for agent_access_provider::ResourceTypeMetadata
 pub fn agent_access_provider::ResourceTypeMetadata::clone(&self) -> agent_access_provider::ResourceTypeMetadata
 impl core::cmp::Eq for agent_access_provider::ResourceTypeMetadata

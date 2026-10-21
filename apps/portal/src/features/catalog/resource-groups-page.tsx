@@ -5,7 +5,7 @@ import { AdminButton, AdminForm } from "../../components/admin-access";
 // Admin › Catalog › Resource groups: flat include/exclude sets of resources.
 // URL-driven table (`?item=<id>`, `?item=new` to add) with a drawer for
 // members, used-by, edit, and delete.
-import { useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { ResourceGroupRecord, ResourceRecord } from "../../types";
 import { resourceLabel } from "../../lib/resource-labels";
 import { resourceTypeLabel, useResourceTypes, type ResourceTypes } from "../../lib/resource-types";
@@ -397,20 +397,44 @@ function GroupEditorDrawer({ model, record, onDone }: { model: GroupsModel; reco
   const [name, setName] = useState(record?.name ?? "");
   const [included, setIncluded] = useState(record?.includedResourceIds ?? []);
   const [excluded, setExcluded] = useState(record?.excludedResourceIds ?? []);
+  const [savedExclusions] = useState(record?.excludedResourceIds ?? []);
+  // Refreshing catalog eligibility must not advance the version of this draft.
+  const [expectedVersion] = useState(record?.version);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [attempted, setAttempted] = useState(false);
+  const [refreshingTypes, setRefreshingTypes] = useState(false);
+  const [typeRefreshFailed, setTypeRefreshFailed] = useState(false);
+  const refreshTypes = useCallback(async () => {
+    setRefreshingTypes(true);
+    setTypeRefreshFailed(false);
+    try {
+      await actions.refreshResourceTypes();
+    } catch {
+      setTypeRefreshFailed(true);
+    } finally {
+      setRefreshingTypes(false);
+    }
+  }, [actions.refreshResourceTypes]);
+  useEffect(() => { void refreshTypes(); }, [refreshTypes]);
   const nameError = attempted && !name.trim() ? "Enter a group name." : undefined;
+  const invalidExclusions = excluded.some((id) => {
+    // A stored exclusion has already passed backend validation. Missing or
+    // stale type metadata must never turn it into a suggested policy removal.
+    if (savedExclusions.includes(id)) return false;
+    const resource = model.byId.get(id);
+    return resource && model.types.get(resource.resourceType)?.supportsExclusions === false;
+  });
   const close = () => (onDone ? onDone() : list.close());
 
   async function save() {
     setAttempted(true);
-    if (!name.trim()) return;
+    if (!name.trim() || invalidExclusions) return;
     setPending(true);
     setError(null);
     try {
       const saved = await actions.saveGroup(
-        { name: name.trim(), includedResourceIds: included, excludedResourceIds: excluded, ...(record ? { expectedVersion: record.version } : {}) },
+        { name: name.trim(), includedResourceIds: included, excludedResourceIds: excluded, ...(record ? { expectedVersion } : {}) },
         record?.id
       );
       if (record) close();
@@ -443,7 +467,7 @@ function GroupEditorDrawer({ model, record, onDone }: { model: GroupsModel; reco
           <Button onClick={close} disabled={pending}>
             Cancel
           </Button>
-          <AdminButton type="submit" form={formId} variant="primary" pending={pending}>
+          <AdminButton type="submit" form={formId} variant="primary" pending={pending} disabled={invalidExclusions}>
             Save resource group
           </AdminButton>
         </>
@@ -468,13 +492,18 @@ function GroupEditorDrawer({ model, record, onDone }: { model: GroupsModel; reco
           </fieldset>
           <fieldset className="pt-fieldset">
             <legend>Excluded resources</legend>
-            <ResourceChoices resources={resources} selected={excluded} onChange={setExcluded} disabled={pending} label="Filter excluded resources" />
+            <ResourceChoices resources={resources} selected={excluded} onChange={setExcluded} disabled={pending} label="Filter excluded resources" purpose="exclude" savedSelection={savedExclusions} />
             <p className="pt-prose wb-small">
               Exclusions apply in every context, even for disabled resources. They win across all groups selected within a grant or token restriction.
             </p>
+            <Button size="sm" variant="ghost" icon="refresh" pending={refreshingTypes} disabled={pending || refreshingTypes} onClick={() => void refreshTypes()}>
+              Refresh resource types
+            </Button>
           </fieldset>
         </div>
         <p className="pt-prose wb-small">Membership changes affect existing grants and tokens. Empty groups provide no access.</p>
+        {invalidExclusions ? <Banner tone="danger" slim>Some newly added exclusions are not supported by the loaded resource types. Remove those additions or refresh resource types before saving.</Banner> : null}
+        {typeRefreshFailed ? <Banner tone="warning" slim>Couldn’t refresh resource types. Existing selections are preserved and the broker validates them when saving.</Banner> : null}
         <CatalogMutationError error={error} />
       </AdminForm>
     </Drawer>

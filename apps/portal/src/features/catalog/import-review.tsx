@@ -1,5 +1,5 @@
 import { useSession } from "../../app/session";
-import { canWriteAdmin } from "../../lib/capabilities";
+import { canViewAdmin, canWriteAdmin } from "../../lib/capabilities";
 import { AdminButton } from "../../components/admin-access";
 // Reviewing a discovery preview: choose tools, operations or command actions
 // to accept, name them, classify their effects, choose the Broker type IDs of
@@ -131,6 +131,7 @@ function ResourcesCheckedBy({ definition, types, caveatId }: { definition: Impor
  */
 export function ImportErrorAlert({ error }: { error: unknown }) {
   const types = useResourceTypes();
+  const catalogLinks = canViewAdmin(useSession().session);
   if (!error) return null;
   const blocked = error instanceof ApiError ? error.blocked : undefined;
   if (!blocked) {
@@ -165,6 +166,12 @@ export function ImportErrorAlert({ error }: { error: unknown }) {
           </ul>
         </>
       ) : null}
+      {blocked.resourceGroups.length ? (
+        <>
+          These proposed resource type changes would disable exclusions. Remove the listed exclusions from these groups, then refresh the preview:
+          <ResourceGroupBlockers groups={blocked.resourceGroups} />
+        </>
+      ) : null}
       {resources.size ? (
         <>
           Stored resources no longer fit these resource type changes. Edit or delete them, or refresh the preview:
@@ -175,9 +182,7 @@ export function ImportErrorAlert({ error }: { error: unknown }) {
                 {entries.map((id, index) => (
                   <Fragment key={id}>
                     {index ? ", " : null}
-                    <AppLink href={paths.resources(id)} className="wb-link wb-mono">
-                      {id}
-                    </AppLink>
+                    {catalogLinks ? <AppLink href={paths.resources(id)} className="wb-link wb-mono">{id}</AppLink> : <span className="wb-mono">{id}</span>}
                   </Fragment>
                 ))}
                 {entries.length >= 100 ? " and possibly more" : null}
@@ -212,18 +217,36 @@ function ClassificationChanges({ changes }: { changes: ImportClassificationChang
 const TYPE_CHANGE_TONE: Record<ImportResourceTypeChange["outcome"], Tone> = { applied: "info", needs_new_id: "warning", retained: "warning", dropped: "neutral" };
 
 /** Resource IDs from a preview list, which names at most 100; `total` when the full count is known. */
-function ResourceIds({ ids, total }: { ids: string[]; total?: number | undefined }) {
+function ResourceIds({ ids, total, link = false }: { ids: string[]; total?: number | undefined; link?: boolean }) {
+  const catalogLinks = canViewAdmin(useSession().session);
   const more = total !== undefined ? total - ids.length : ids.length >= 100 ? null : 0;
   return (
     <>
       {ids.map((id, index) => (
         <Fragment key={id}>
           {index ? ", " : null}
-          <span className="wb-mono">{id}</span>
+          {link && catalogLinks ? <AppLink href={paths.resources(id)} className="wb-link wb-mono">{id}</AppLink> : <span className="wb-mono">{id}</span>}
         </Fragment>
       ))}
       {more === null ? " and more" : more > 0 ? ` and ${more} more` : null}
     </>
+  );
+}
+
+/** Exclusion blockers identify memberships to remove, rather than resources to delete. */
+function ResourceGroupBlockers({ groups }: { groups: Array<{ id: string; resourceIds: string[]; type?: string }> }) {
+  const catalogLinks = canViewAdmin(useSession().session);
+  return (
+    <ul className="pt-catalog-error-list" aria-label="Blocking resource groups">
+      {groups.map((group) => (
+        <li key={`${group.type ?? ""}:${group.id}`}>
+          {catalogLinks ? <AppLink href={paths.resourceGroups(group.id)} className="wb-link wb-mono">{group.id}</AppLink> : <span className="wb-mono">{group.id}</span>}
+          {group.type ? <> (<span className="wb-mono">{group.type}</span>)</> : null}
+          {": excludes "}<ResourceIds ids={group.resourceIds} link />
+        </li>
+      ))}
+      {groups.length >= 100 ? <li>Additional blocking groups may exist.</li> : null}
+    </ul>
   );
 }
 
@@ -266,6 +289,7 @@ function ResourceTypeReview({
       {declared && change?.change !== "removed" ? (
         <p className="pt-catalog-op">
           Example <span className="wb-mono">{declared.example}</span>
+          {` · exclusions ${declared.supportsExclusions === false ? "not supported (inclusions only)" : "supported"}`}
           {declared.attributes.length ? ` · private attributes: ${declared.attributes.map((attribute) => `${attribute.label}${attribute.required ? " (required)" : ""}`).join(", ")}` : null}
         </p>
       ) : null}
@@ -273,6 +297,12 @@ function ResourceTypeReview({
         <>
           {change.details.length ? <p className="pt-prose wb-small">Changed: {typeChangeDetails(change)}.</p> : null}
           <p className="pt-prose wb-small">{typeChangeOutcome(change)}</p>
+          {change.blockingGroups.length ? (
+            <div className="pt-catalog-warn">
+              Accepting is rejected until you remove the listed exclusions from these groups, then refresh the preview:
+              <ResourceGroupBlockers groups={change.blockingGroups} />
+            </div>
+          ) : null}
           {change.blocked && change.blockingResources.length ? (
             <p className="pt-catalog-warn">
               Accepting is rejected until you edit or delete: <ResourceIds ids={change.blockingResources} />.

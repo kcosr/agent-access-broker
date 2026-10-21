@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ResourceAttributeField } from "../src/features/catalog/resource-attributes";
 import { grantResourceChoices } from "../src/lib/grant-resources";
-import { indexResourceTypes, namespaceCoverage, resourceTypeLabel, selectorPlaceholder } from "../src/lib/resource-types";
+import { indexResourceTypes, namespaceCoverage, resourceTypeLabel, selectorPlaceholder, supportsResourceExclusions } from "../src/lib/resource-types";
 import { resourceLabel, selectorLabel } from "../src/lib/resource-labels";
 import type { PolicyServiceCatalog, ResourceDefinition, ResourceRecord, ResourceTypeMetadata } from "../src/types";
 import conformance from "./conformance.fixture.json";
@@ -33,6 +33,14 @@ describe("a backend the portal was not written for", () => {
       allowedExecutionContexts: ["internal"], enabled: true, version: 1
     };
     expect(resourceLabel(types, shelf)).toBe("Items under shelf-one");
+  });
+
+  test("honors exclusion capabilities supplied by an unfamiliar backend", () => {
+    const registered = indexResourceTypes([resourceType, endpointType]);
+    expect(resourceType.supportsExclusions).toBe(true);
+    expect(endpointType.supportsExclusions).toBe(false);
+    expect(supportsResourceExclusions(registered, resourceType.id)).toBe(true);
+    expect(supportsResourceExclusions(registered, endpointType.id)).toBe(false);
   });
 
   test("offers only its own resources when granting its actions", () => {

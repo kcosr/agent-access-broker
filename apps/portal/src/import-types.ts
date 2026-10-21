@@ -53,6 +53,8 @@ export type ImportResourceTypeDeclaration = {
   brokerType: string;
   /** No longer declared, but kept registered for its remaining resources; it accepts no new ones. */
   removed: boolean;
+  /** Omission in stored metadata means true. */
+  supportsExclusions?: boolean;
   label: string;
   pluralLabel: string;
   pattern: string;
@@ -110,7 +112,9 @@ export type ImportResourceTypeChangeDetail =
   | "max_length"
   | "attribute_added_required"
   | "attribute_made_required"
-  | "attribute_pattern";
+  | "attribute_pattern"
+  | "exclusions_supported"
+  | "exclusions_unsupported";
 /** The preview's decision for one changed resource type, with the stored resources it depends on. */
 export type ImportResourceTypeChange = {
   id: string;
@@ -121,6 +125,8 @@ export type ImportResourceTypeChange = {
   resourceCount: number;
   /** Resources that keep the type in its accepted form, or that prevent the change or drop (at most 100). */
   blockingResources: string[];
+  /** Groups whose exclusions prevent this change (at most 100 groups and resource IDs per group). */
+  blockingGroups: Array<{ id: string; resourceIds: string[] }>;
   /** Resources whose removed attributes' values acceptance deletes (at most 100). */
   affectedResources: string[];
   /** An added type's Broker type ID can still be chosen. */
@@ -129,15 +135,15 @@ export type ImportResourceTypeChange = {
   blocked: boolean;
 };
 /**
- * Why an import change was refused (`target.affectedGrants`, `target.resources`):
- * retained grants it would leave invalid, with the policy validation code and
- * message, and stored resources (at most 100 per type) its resource type
- * changes no longer fit.
+ * Why an import change was refused: retained grants it would leave invalid,
+ * resources its type changes no longer fit, and excluded group memberships
+ * that prevent an opt-out (`target.affectedGrants`, `.resources`, `.resourceGroups`).
  */
 export type ImportChangeBlocked = {
   /** Each grant once: `id` is its managed grant ID or `toml:<index>` (empty when unattributed); `reason` joins its subjects' messages. */
   affectedGrants: Array<{ id: string; reasonCode: string; reason: string }>;
   resources: Array<{ type: string; id: string }>;
+  resourceGroups: Array<{ type: string; id: string; resourceIds: string[] }>;
 };
 /** An action's effects class: read-only identity access reaches only reads. */
 export type ImportClassification = "read" | "write";

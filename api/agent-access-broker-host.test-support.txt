@@ -957,6 +957,7 @@ pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::max_l
 pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::pattern: alloc::string::String
 pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::plural_label: alloc::string::String
 pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::removed: bool
+pub agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::supports_exclusions: bool
 impl core::clone::Clone for agent_access_core::imports::metadata::ImportedResourceTypeDeclaration
 pub fn agent_access_core::imports::metadata::ImportedResourceTypeDeclaration::clone(&self) -> agent_access_core::imports::metadata::ImportedResourceTypeDeclaration
 impl core::cmp::Eq for agent_access_core::imports::metadata::ImportedResourceTypeDeclaration
@@ -1314,9 +1315,31 @@ impl core::marker::Unpin for agent_access_core::managed_store::ImportBlockingRes
 impl core::marker::UnsafeUnpin for agent_access_core::managed_store::ImportBlockingResource
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::ImportBlockingResource
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::ImportBlockingResource
+#[non_exhaustive] pub struct agent_access_core::managed_store::ImportBlockingResourceGroup
+pub agent_access_core::managed_store::ImportBlockingResourceGroup::id: alloc::string::String
+pub agent_access_core::managed_store::ImportBlockingResourceGroup::resource_ids: alloc::vec::Vec<alloc::string::String>
+pub agent_access_core::managed_store::ImportBlockingResourceGroup::resource_type: alloc::string::String
+impl core::clone::Clone for agent_access_core::managed_store::ImportBlockingResourceGroup
+pub fn agent_access_core::managed_store::ImportBlockingResourceGroup::clone(&self) -> agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::cmp::Eq for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::cmp::PartialEq for agent_access_core::managed_store::ImportBlockingResourceGroup
+pub fn agent_access_core::managed_store::ImportBlockingResourceGroup::eq(&self, &agent_access_core::managed_store::ImportBlockingResourceGroup) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::ImportBlockingResourceGroup
+pub fn agent_access_core::managed_store::ImportBlockingResourceGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl serde_core::ser::Serialize for agent_access_core::managed_store::ImportBlockingResourceGroup
+pub fn agent_access_core::managed_store::ImportBlockingResourceGroup::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::marker::Send for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::marker::Sync for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::marker::Unpin for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::ImportBlockingResourceGroup
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::ImportBlockingResourceGroup
 #[non_exhaustive] pub struct agent_access_core::managed_store::ImportChangeBlocked
 pub agent_access_core::managed_store::ImportChangeBlocked::affected_grants: alloc::vec::Vec<agent_access_core::managed_store::ImportBlockingGrant>
 pub agent_access_core::managed_store::ImportChangeBlocked::message: alloc::string::String
+pub agent_access_core::managed_store::ImportChangeBlocked::resource_groups: alloc::vec::Vec<agent_access_core::managed_store::ImportBlockingResourceGroup>
 pub agent_access_core::managed_store::ImportChangeBlocked::resources: alloc::vec::Vec<agent_access_core::managed_store::ImportBlockingResource>
 impl core::clone::Clone for agent_access_core::managed_store::ImportChangeBlocked
 pub fn agent_access_core::managed_store::ImportChangeBlocked::clone(&self) -> agent_access_core::managed_store::ImportChangeBlocked
@@ -1714,6 +1737,7 @@ struct agent_access_core::imports::metadata::ImportedServiceMetadata: named fiel
 struct agent_access_core::imports::registration::ImportedAdapterRegistration: named fields, private fields
 struct agent_access_core::managed_store::ImportBlockingGrant: named fields, non-exhaustive
 struct agent_access_core::managed_store::ImportBlockingResource: named fields, non-exhaustive
+struct agent_access_core::managed_store::ImportBlockingResourceGroup: named fields, non-exhaustive
 struct agent_access_core::managed_store::ImportChangeBlocked: named fields, non-exhaustive
 struct agent_access_core::managed_store::ManagedPolicyGrantRecord: named fields
 struct agent_access_core::managed_store::PolicyValidationIssue: named fields

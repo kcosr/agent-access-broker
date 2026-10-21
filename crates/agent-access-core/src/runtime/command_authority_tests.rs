@@ -336,6 +336,7 @@ fn record(
                 id: "project".into(),
                 broker_type: PROJECT_TYPE.into(),
                 removed: false,
+                supports_exclusions: true,
                 label: "Project".into(),
                 plural_label: "Projects".into(),
                 pattern: "[A-Z][A-Z0-9]{1,9}".into(),

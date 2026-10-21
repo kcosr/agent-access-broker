@@ -47,6 +47,7 @@ pub(crate) struct Manifest {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResourceType {
     pub id: String,
+    pub supports_exclusions: bool,
     pub label: String,
     pub plural_label: String,
     pub pattern: String,
@@ -188,6 +189,7 @@ fn resource_type(value: &Value, index: usize) -> Result<ResourceType, String> {
             "id",
             "label",
             "pluralLabel",
+            "supportsExclusions",
             "pattern",
             "maxLength",
             "example",
@@ -248,8 +250,15 @@ fn resource_type(value: &Value, index: usize) -> Result<ResourceType, String> {
             attributes
         }
     };
+    let supports_exclusions = match object.get("supportsExclusions") {
+        None => true,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("{label}.supportsExclusions must be a boolean"))?,
+    };
     Ok(ResourceType {
         id,
+        supports_exclusions,
         label: text(
             object.get("label"),
             &format!("{label}.label"),
@@ -630,6 +639,27 @@ pub(crate) mod tests {
 
     fn parse_value(value: &Value) -> Result<Manifest, String> {
         parse(&serde_json::to_vec(value).unwrap())
+    }
+
+    #[test]
+    fn resource_exclusions_default_true_and_require_boolean_when_present() {
+        assert!(parse_value(&sample()).unwrap().resource_types[0].supports_exclusions);
+        for supported in [true, false] {
+            let mut value = sample();
+            value["resourceTypes"][0]["supportsExclusions"] = json!(supported);
+            assert_eq!(
+                parse_value(&value).unwrap().resource_types[0].supports_exclusions,
+                supported
+            );
+        }
+        for invalid in [Value::Null, json!("false"), json!(0), json!([]), json!({})] {
+            let mut value = sample();
+            value["resourceTypes"][0]["supportsExclusions"] = invalid;
+            assert_eq!(
+                parse_value(&value).unwrap_err(),
+                "resourceTypes[0].supportsExclusions must be a boolean"
+            );
+        }
     }
 
     #[test]

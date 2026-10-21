@@ -282,7 +282,7 @@ fn resource_type_change_properties() -> Value {
         "outcome":{"enum":["applied","needs_new_id","retained","dropped"]},
         "details":{"type":"array","items":{"enum":["label","plural_label","example","attribute_added",
             "attribute_made_optional","attribute_text","attribute_order","attribute_removed","pattern",
-            "max_length","attribute_added_required","attribute_made_required","attribute_pattern"]}}
+            "max_length","attribute_added_required","attribute_made_required","attribute_pattern","exclusions_unsupported","exclusions_supported"]}}
     })
 }
 /// A preview's decision for one resource type, as recorded with the preview.
@@ -297,11 +297,14 @@ fn resource_type_change_status() -> Value {
     let ids = json!({"type":"array","maxItems":crate::imports::IMPORT_TYPE_RESOURCE_SAMPLE,"items":{"type":"string"}});
     properties["resourceCount"] = json!({"type":"integer","minimum":0});
     properties["blockingResources"] = ids.clone();
+    properties["blockingGroups"] = json!({"type":"array","maxItems":crate::imports::IMPORT_TYPE_RESOURCE_SAMPLE,
+        "items":{"type":"object","additionalProperties":false,"required":["id","resourceIds"],
+        "properties":{"id":{"type":"string"},"resourceIds":ids.clone()}}});
     properties["affectedResources"] = ids;
     properties["editable"] = json!({"type":"boolean"});
     properties["blocked"] = json!({"type":"boolean"});
     json!({"type":"array","items":{"type":"object","additionalProperties":false,
-        "required":["id","brokerType","change","outcome","details","resourceCount","blockingResources","affectedResources","editable","blocked"],
+        "required":["id","brokerType","change","outcome","details","resourceCount","blockingResources","blockingGroups","affectedResources","editable","blocked"],
         "properties":properties}})
 }
 /// A managed policy revision: its generation and who advanced it, when.
@@ -339,7 +342,7 @@ fn accepted_metadata() -> Value {
         "verify":{"type":"boolean"},
         "resourceTypes":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["id","brokerType","removed","label","pluralLabel","pattern","maxLength","example","attributes"],"properties":{
-                "id":{"type":"string"},"brokerType":{"type":"string"},"removed":{"type":"boolean"},"label":{"type":"string"},"pluralLabel":{"type":"string"},
+                "id":{"type":"string"},"brokerType":{"type":"string"},"removed":{"type":"boolean"},"supportsExclusions":{"type":"boolean","default":true},"label":{"type":"string"},"pluralLabel":{"type":"string"},
                 "pattern":{"type":"string"},"maxLength":{"type":"integer","minimum":1},"example":{"type":"string"},
                 "attributes":{"type":"array","items":attribute}
             }}}

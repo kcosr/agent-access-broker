@@ -25,6 +25,8 @@ export type ResourceTypeMetadata = {
   pluralLabel: string;
   example: string;
   selectors: string[];
+  /** Whether resources of this type may be excluded by resource groups. */
+  supportsExclusions: boolean;
   attributes?: ResourceAttributeMetadata[];
   /** Present only when the type accepts namespace selectors. */
   namespace?: { label: string; membersLabel: string; example: string };

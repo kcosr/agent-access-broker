@@ -20,7 +20,9 @@ labels clients show; a service descriptor binds each of its resource scopes to
 one registered type. The broker publishes the registry, in registration order,
 at `GET /v1/resource-types` (any authenticated caller, no execution context) and
 as `resourceTypes` in the runtime catalog (`/v1/spec/catalog`);
-`agent-access admin policy resources types` prints it. This build registers:
+`agent-access admin policy resources types` prints it. Each type exposes
+`supportsExclusions`, which defaults to `true`. A type with `false` permits
+inclusion but cannot be used as an excluded group member. This build registers:
 
 - `git_repository` supports `exact`, `namespace`, and `all` selectors.
 - `jira_project` supports `exact` and `all` selectors.
@@ -218,6 +220,14 @@ from any selected group wins within that grant, even over a direct resource
 selection. A separate eligible grant can still authorize the repository; these
 are not global deny rules. An entry may appear in both membership lists; its
 exclusion wins, including when that leaves the selection empty.
+
+A resource whose type declares `supportsExclusions: false` cannot appear in a
+group's exclusions, regardless of selector kind, enabled state, execution
+context, or whether any grant or token uses the group. It remains available for
+inclusion. A mixed-type group can exclude resources of other types that support
+exclusions. The portal hides unsupported exclusion choices; an invalid selection
+already in an open editor remains visible so it can be removed. Backend
+validation rejects invalid memberships instead of ignoring them.
 
 An exclusion uses its resource's selector even when that entry is disabled or
 does not allow the request context. Disabling an entry must not accidentally

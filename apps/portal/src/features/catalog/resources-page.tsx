@@ -445,13 +445,14 @@ function ResourceDetailDrawer({ model, resource, onEdit }: { model: ResourcesMod
           items={[
             { label: "Resource ID", value: <span className="wb-num">{resource.id}</span> },
             { label: "Type", value: resourceTypeLabel(types, resource.resourceType) },
+            { label: "Group exclusions", value: types.get(resource.resourceType)?.supportsExclusions === false ? "Not supported" : types.has(resource.resourceType) ? "Supported" : "Type metadata unavailable" },
             { label: "Coverage", value: <span className="wb-mono">{selectorLabel(types, resource.resourceType, resource.selector)}</span> },
             { label: "Display name", value: resource.displayName?.trim() || <span className="wb-muted">Defaults to the coverage</span> },
             { label: "Contexts", value: <span className="wb-mono">{resource.allowedExecutionContexts.join(", ")}</span> },
             { label: "Version", value: <span className="wb-num">{resource.version}</span> }
           ]}
         />
-        {!resource.enabled ? <p className="pt-prose wb-small">Disabled resources grant nothing, but still apply when excluded by a group.</p> : null}
+        {!resource.enabled ? <p className="pt-prose wb-small">Disabled resources grant nothing{types.get(resource.resourceType)?.supportsExclusions ? ", but still apply when excluded by a group" : ""}.</p> : null}
       </DrawerSection>
       {fields.length ? (
         <DrawerSection title="Private attributes" count={`${configured.length}/${fields.length}`}>
