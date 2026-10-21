@@ -556,6 +556,12 @@ async fn response_json(
         // Atlassian answers an expired, revoked or reused refresh token
         // with HTTP 403 and `invalid_grant`.
         (_, Some("invalid_grant")) => OAuthDialectError::GrantInvalid,
+        // At the token endpoint, HTTP 401 means client authentication
+        // failed (RFC 6749 section 5.2), whatever the error code: Atlassian's
+        // authorization server answers a wrong client secret with 401
+        // `access_denied`. The grant was not read, and only the operator
+        // can correct the application credential.
+        (Endpoint::Token, _) if status == 401 => OAuthDialectError::ClientRejected,
         (_, Some("invalid_client" | "unauthorized_client")) => OAuthDialectError::ClientRejected,
         (_, Some("invalid_scope" | "access_denied")) => OAuthDialectError::PermissionRejected,
         (Endpoint::Token, Some("invalid_request")) => OAuthDialectError::RequestRejected,

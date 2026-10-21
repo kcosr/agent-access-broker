@@ -675,10 +675,35 @@ fn token_responses_are_bounded_and_typed() {
 
 /// Only explicit OAuth errors and throttling claim the grant was not
 /// consumed; every token request is sent once. Atlassian answers a
-/// revoked, expired or reused refresh token with 403 `invalid_grant`.
+/// revoked, expired or reused refresh token with 403 `invalid_grant`, and
+/// a wrong client secret with 401 `access_denied`: at the token endpoint a
+/// 401 rejects the client, never the person's permission.
 #[tokio::test]
 async fn token_errors_classify_without_assuming_the_grant_was_kept() {
     for (response, expected) in [
+        (
+            ResponseTemplate::new(401).set_body_json(
+                json!({"error": "access_denied", "error_description": "Unauthorized"}),
+            ),
+            OAuthDialectError::ClientRejected,
+        ),
+        (
+            ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_scope"})),
+            OAuthDialectError::ClientRejected,
+        ),
+        (
+            ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_request"})),
+            OAuthDialectError::ClientRejected,
+        ),
+        (ResponseTemplate::new(401), OAuthDialectError::ClientRejected),
+        (
+            ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_grant"})),
+            OAuthDialectError::GrantInvalid,
+        ),
+        (
+            ResponseTemplate::new(400).set_body_json(json!({"error": "invalid_scope"})),
+            OAuthDialectError::PermissionRejected,
+        ),
         (
             ResponseTemplate::new(403).set_body_json(
                 json!({"error": "invalid_grant", "error_description": "Unknown or invalid refresh token."}),
@@ -755,6 +780,17 @@ async fn token_errors_classify_without_assuming_the_grant_was_kept() {
     assert_eq!(
         atlassian.exchange().await.err(),
         Some(OAuthDialectError::GrantInvalid)
+    );
+    let atlassian = Atlassian::start().await;
+    atlassian
+        .token_responds(
+            "authorization_code",
+            ResponseTemplate::new(401).set_body_json(json!({"error": "access_denied"})),
+        )
+        .await;
+    assert_eq!(
+        atlassian.exchange().await.err(),
+        Some(OAuthDialectError::ClientRejected)
     );
 }
 

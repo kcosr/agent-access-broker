@@ -645,6 +645,15 @@ registered and shared separately, and each has its own
   together. Atlassian answers a revoked, expired or reused refresh token with
   HTTP 403 `invalid_grant`, which also requires reconnect, and HTTP 429 holds
   refresh until its `Retry-After` wait.
+- The token endpoint answering HTTP 401, with any error other than
+  `invalid_grant`, rejects the registration's client credentials: Atlassian
+  answers a wrong client secret with 401 `access_denied`. A connection whose
+  refresh gets it keeps its refresh token and reports
+  `operator_action_required` with reason `oauth_application_credential` until
+  an administrator corrects the client secret and reloads. Reconnecting cannot
+  help: a consent fails with the same reason. `access_denied` or
+  `invalid_scope` with another status remains the person's permission
+  rejection.
 - Leases carry the profile's cloud ID and the `api.atlassian.com` audience,
   which Jira and Confluence pin before each gateway request.
 
