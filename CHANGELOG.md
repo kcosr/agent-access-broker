@@ -66,12 +66,13 @@ All notable changes to this project are documented in this file.
   upgrading, especially service-mode grants on shared credentials. To exclude
   personal spaces, select exact team spaces.
   ([#23](https://github.com/kcosr/agent-access-broker/pull/23))
-- **Issued continuations are rejected after the upgrade.** These are now bound
-  to the credential method: GitLab page tokens, Jira and Confluence search
-  continuations and list tokens, and Confluence draft handles. Any issued
-  before the upgrade are rejected. Repeat the search or listing, or create the
-  draft again. OAuth consent flows pending at the upgrade are discarded.
-  ([#6](https://github.com/kcosr/agent-access-broker/pull/6), [#7](https://github.com/kcosr/agent-access-broker/pull/7), [#28](https://github.com/kcosr/agent-access-broker/pull/28), [#30](https://github.com/kcosr/agent-access-broker/pull/30))
+- **Issued continuations are rejected after the upgrade.** Gmail
+  `message.search` page tokens are now Broker-signed, and GitLab page tokens,
+  Jira and Confluence search continuations and list tokens, and Confluence
+  draft handles are now bound to the credential method. Any issued before the
+  upgrade are rejected. Repeat the search or listing, or create the draft
+  again. OAuth consent flows pending at the upgrade are discarded.
+  ([#5](https://github.com/kcosr/agent-access-broker/pull/5), [#6](https://github.com/kcosr/agent-access-broker/pull/6), [#7](https://github.com/kcosr/agent-access-broker/pull/7), [#28](https://github.com/kcosr/agent-access-broker/pull/28), [#30](https://github.com/kcosr/agent-access-broker/pull/30))
 - **The personal credential API and CLI are keyed by connection.**
   `GET /v1/credentials` returns `{connections, retained}`.
   `/v1/credentials/connections/{connection}`, with `/verify` and
