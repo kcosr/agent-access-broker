@@ -17,7 +17,7 @@ use agent_access_provider::test_support::{
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
@@ -130,6 +130,14 @@ fn lease_failures() -> [ProviderError; 3] {
 /// Confluence on one site with the gateway enabled, its site route and
 /// gateway route both served by `server`.
 fn provider(server: &MockServer) -> ConfluenceProvider {
+    let config = site_config(server);
+    let backend = gateway_backend(server, config.clone());
+    ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend))
+}
+
+/// The configuration of Confluence on one site with the gateway enabled,
+/// allowing `server` beside the gateway.
+fn site_config(server: &MockServer) -> ConfluenceProviderConfig {
     let mut config: ConfluenceProviderConfig = serde_json::from_value(json!({
         "tenant_host": "example.atlassian.net",
         "cloud_id": CLOUD_ID,
@@ -140,14 +148,19 @@ fn provider(server: &MockServer) -> ConfluenceProvider {
     }))
     .unwrap();
     config.content.page_formats = vec!["storage".to_string()];
-    let backend = HttpConfluenceBackend::new_with_api_base(
-        config.clone(),
+    config
+}
+
+/// Confluence's backend for `config`, its site route and gateway route both
+/// served by `server`.
+fn gateway_backend(server: &MockServer, config: ConfluenceProviderConfig) -> HttpConfluenceBackend {
+    HttpConfluenceBackend::new_with_api_base(
+        config,
         ProviderLimits::default(),
         Url::parse(&format!("{}{SITE}/rest/api/", server.uri())).unwrap(),
     )
     .with_gateway_origin(&server.uri(), &TestHost::default())
-    .unwrap();
-    ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend))
+    .unwrap()
 }
 
 fn space_scopes(key: &str) -> ResourceScopes {
@@ -845,4 +858,370 @@ async fn attachment_downloads_revalidate_access_before_each_hop() {
         );
         assert!(lease.rejected().is_empty());
     }
+}
+
+/// OAuth access on the gateway route, pinned to the site's cloud ID.
+fn gateway_access() -> AtlassianCredential {
+    AtlassianCredential::delegated(
+        delegated_credential(Lease::new(CLOUD_ID)),
+        Some(Arc::from(CLOUD_ID)),
+    )
+}
+
+/// A v2 list page of `results`, with its `next` link in the body's
+/// `_links.next`, in a `Link` header, or both, as Confluence sends them.
+fn list_page(
+    results: Value,
+    body_next: Option<&str>,
+    header_next: Option<&str>,
+) -> ResponseTemplate {
+    let mut body = json!({ "results": results, "_links": {} });
+    if let Some(next) = body_next {
+        body["_links"]["next"] = json!(next);
+    }
+    let mut response = ResponseTemplate::new(200);
+    if let Some(next) = header_next {
+        response = response.insert_header("Link", format!("<{next}>; rel=\"next\""));
+    }
+    response.set_body_json(body)
+}
+
+/// Every comment collection a `next` link pages: a page's footer and inline
+/// comments, and a footer and an inline comment's replies.
+const COMMENT_COLLECTIONS: [&str; 4] = [
+    "pages/123456/footer-comments",
+    "pages/123456/inline-comments",
+    "footer-comments/5001/children",
+    "inline-comments/6001/children",
+];
+
+/// Reads the first page of comment `collection` and returns the cursor of
+/// its `next` link.
+async fn next_comment_cursor(
+    backend: &HttpConfluenceBackend,
+    collection: &str,
+    credential: &AtlassianCredential,
+) -> Result<Option<String>, ConfluenceBackendError> {
+    let kind = if collection.contains("footer") {
+        ConfluenceCommentKind::Footer
+    } else {
+        ConfluenceCommentKind::Inline
+    };
+    let response = match collection.split('/').collect::<Vec<_>>()[..] {
+        ["pages", page_id, _] => {
+            backend
+                .comments_page(
+                    ConfluenceCommentListRequest {
+                        kind,
+                        container_type: ConfluenceCommentContainerType::Page,
+                        container_id: page_id.to_string(),
+                        body_format: None,
+                        resolution_status: None,
+                        sort: None,
+                        max_results: 2,
+                        cursor: None,
+                    },
+                    credential,
+                )
+                .await
+        }
+        [_, comment_id, "children"] => {
+            backend
+                .comment_replies_page(kind, comment_id, None, 2, None, credential)
+                .await
+        }
+        _ => unreachable!("{collection}"),
+    }?;
+    Ok(response.value.next_cursor)
+}
+
+/// Through the gateway, Confluence writes a list's `next` link from its site
+/// root, `/wiki/api/v2/...`, in the body or a `Link` header. Comment and
+/// reply lists read it as naming their collection below the route's
+/// `/ex/confluence/<cloud_id>/` path, for OAuth access and bearer tokens.
+#[tokio::test]
+async fn comment_and_reply_lists_read_site_relative_next_links_on_the_gateway() {
+    let server = MockServer::start().await;
+    for credential in [
+        gateway_access(),
+        AtlassianCredential::from_static(bearer_credential("service-token")),
+    ] {
+        for collection in COMMENT_COLLECTIONS {
+            let route = format!("{GATEWAY}/api/v2/{collection}");
+            let next = format!("/wiki/api/v2/{collection}?cursor=abc&limit=2");
+            for (body_next, header_next) in [
+                (Some(next.as_str()), None),
+                (None, Some(next.as_str())),
+                (Some(next.as_str()), Some(next.as_str())),
+            ] {
+                server.reset().await;
+                Mock::given(method("GET"))
+                    .and(path(route.as_str()))
+                    .respond_with(list_page(json!([]), body_next, header_next))
+                    .mount(&server)
+                    .await;
+                let backend = gateway_backend(&server, site_config(&server));
+                assert_eq!(
+                    next_comment_cursor(&backend, collection, &credential)
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some("abc"),
+                    "{collection}: body {body_next:?}, header {header_next:?}"
+                );
+                assert_eq!(requests(&server).await.len(), 1);
+                assert!(requests(&server).await[0].starts_with(&format!("GET {route} Bearer ")));
+            }
+        }
+    }
+}
+
+/// A `next` link that names anything but the collection on this route fails
+/// the list, from the body or a `Link` header: another resource, the
+/// collection below another site's cloud ID, another origin, or the gateway
+/// origin without the site's path.
+#[tokio::test]
+async fn gateway_next_links_naming_another_collection_fail_the_list() {
+    let server = MockServer::start().await;
+    let origin = server.uri();
+    for collection in COMMENT_COLLECTIONS {
+        for (link, failure) in [
+            (
+                "/wiki/api/v2/pages/999999/footer-comments?cursor=abc".to_string(),
+                "changed resource",
+            ),
+            (
+                format!("/ex/confluence/{OTHER_CLOUD_ID}/wiki/api/v2/{collection}?cursor=abc"),
+                "changed resource",
+            ),
+            (
+                format!(
+                    "https://evil.example/ex/confluence/{CLOUD_ID}/wiki/api/v2/{collection}?cursor=abc"
+                ),
+                "changed origin",
+            ),
+            (
+                format!("{origin}/wiki/api/v2/pages/999999/footer-comments?cursor=abc"),
+                "changed resource",
+            ),
+        ] {
+            for (body_next, header_next) in
+                [(Some(link.as_str()), None), (None, Some(link.as_str()))]
+            {
+                server.reset().await;
+                Mock::given(method("GET"))
+                    .and(path(format!("{GATEWAY}/api/v2/{collection}")))
+                    .respond_with(list_page(json!([]), body_next, header_next))
+                    .mount(&server)
+                    .await;
+                let backend = gateway_backend(&server, site_config(&server));
+                assert_eq!(
+                    next_comment_cursor(&backend, collection, &gateway_access()).await,
+                    Err(ConfluenceBackendError::Protocol(format!(
+                        "Confluence comment pagination {failure}"
+                    ))),
+                    "{collection}: body {body_next:?}, header {header_next:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The method, path and query of each request `server` got.
+async fn request_urls(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| {
+            format!(
+                "{} {}?{}",
+                request.method,
+                request.url.path(),
+                request.url.query().unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
+/// A page's ancestors and its direct children, the read-back `page.move`
+/// checks its order with, page through site-relative `next` links on the
+/// gateway; a link below another site's cloud ID fails the read.
+#[tokio::test]
+async fn ancestor_and_direct_child_reads_page_through_the_gateway() {
+    let server = MockServer::start().await;
+    let ancestors = format!("{GATEWAY}/api/v2/pages/200/ancestors");
+    let children = format!("{GATEWAY}/api/v2/pages/55555/direct-children");
+    for (route, first, second) in [
+        (
+            &ancestors,
+            json!([{"id": "folder-abc", "type": "folder"}]),
+            json!([{"id": "55555", "type": "page"}]),
+        ),
+        (
+            &children,
+            json!([{"id": "100", "type": "page", "status": "current", "childPosition": 0}]),
+            json!([{"id": "200", "type": "page", "status": "current", "childPosition": 1}]),
+        ),
+    ] {
+        let next = route.replacen(GATEWAY, "/wiki", 1) + "?cursor=page-2&limit=250";
+        Mock::given(method("GET"))
+            .and(path(route.as_str()))
+            .and(query_param_is_missing("cursor"))
+            .and(header("authorization", "Bearer oauth-1"))
+            .respond_with(list_page(first, Some(&next), None))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(route.as_str()))
+            .and(query_param("cursor", "page-2"))
+            .and(header("authorization", "Bearer oauth-1"))
+            .respond_with(list_page(second, None, None))
+            .mount(&server)
+            .await;
+    }
+    let backend = gateway_backend(&server, site_config(&server));
+    let credential = gateway_access();
+
+    let read = backend.page_ancestors("200", &credential).await.unwrap();
+    assert_eq!(
+        read.value
+            .iter()
+            .map(|ancestor| ancestor.id.as_str())
+            .collect::<Vec<_>>(),
+        ["folder-abc", "55555"]
+    );
+    let read = backend
+        .page_direct_children("55555", &credential)
+        .await
+        .unwrap();
+    assert_eq!(
+        read.value
+            .iter()
+            .map(|child| (child.id.as_str(), child.child_position))
+            .collect::<Vec<_>>(),
+        [("100", 0), ("200", 1)]
+    );
+    assert_eq!(
+        request_urls(&server).await,
+        [
+            format!("GET {ancestors}?limit=250"),
+            format!("GET {ancestors}?limit=250&cursor=page-2"),
+            format!("GET {children}?limit=250"),
+            format!("GET {children}?limit=250&cursor=page-2"),
+        ]
+    );
+
+    server.reset().await;
+    for (route, resource) in [(&ancestors, "ancestor"), (&children, "direct-child")] {
+        let elsewhere = route.replacen(CLOUD_ID, OTHER_CLOUD_ID, 1) + "?cursor=page-2";
+        Mock::given(method("GET"))
+            .and(path(route.as_str()))
+            .respond_with(list_page(json!([]), Some(&elsewhere), None))
+            .mount(&server)
+            .await;
+        let error = if resource == "ancestor" {
+            backend.page_ancestors("200", &credential).await.err()
+        } else {
+            backend
+                .page_direct_children("55555", &credential)
+                .await
+                .err()
+        };
+        assert_eq!(
+            error,
+            Some(ConfluenceBackendError::Protocol(format!(
+                "Confluence {resource} pagination changed resource"
+            )))
+        );
+    }
+}
+
+fn footer_comment(id: &str) -> Value {
+    json!({
+        "id": id,
+        "pageId": "123456",
+        "status": "current",
+        "body": { "storage": { "value": "<p>comment</p>", "representation": "storage" } }
+    })
+}
+
+/// End to end through the gateway: a footer comment list's site-relative
+/// `next` link becomes a continuation, which reads the second page on the
+/// same route with the connection's access.
+#[tokio::test]
+async fn oauth_comment_list_pages_through_the_gateway() {
+    let server = MockServer::start().await;
+    let page_route = format!("{GATEWAY}/rest/api/content/123456");
+    answer(
+        &server,
+        "GET",
+        &page_route,
+        "Bearer oauth-1",
+        200,
+        page("ENG"),
+    )
+    .await;
+    let route = format!("{GATEWAY}/api/v2/pages/123456/footer-comments");
+    let next =
+        "/wiki/api/v2/pages/123456/footer-comments?cursor=page-2&limit=1&body-format=storage";
+    Mock::given(method("GET"))
+        .and(path(route.as_str()))
+        .and(query_param_is_missing("cursor"))
+        .and(header("authorization", "Bearer oauth-1"))
+        .respond_with(list_page(
+            json!([footer_comment("5001")]),
+            Some(next),
+            Some(next),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(route.as_str()))
+        .and(query_param("cursor", "page-2"))
+        .and(header("authorization", "Bearer oauth-1"))
+        .respond_with(list_page(json!([footer_comment("5002")]), None, None))
+        .mount(&server)
+        .await;
+    let credential = delegated_credential(Lease::new(CLOUD_ID));
+    let provider = provider(&server);
+    let inputs = json!({ "pageId": "123456", "maxResults": 1 });
+
+    let first = invoke(
+        &provider,
+        delegated_invocation(
+            "page.footer_comment.list",
+            inputs.clone(),
+            "ENG",
+            &credential,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.result["comments"][0]["commentId"], "5001");
+    assert_eq!(first.result["hasMore"], true);
+    let token = first.result["nextPageToken"].as_str().unwrap();
+    assert!(!token.contains("page-2"));
+
+    let mut inputs = inputs;
+    inputs["nextPageToken"] = json!(token);
+    let second = invoke(
+        &provider,
+        delegated_invocation("page.footer_comment.list", inputs, "ENG", &credential),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.result["comments"][0]["commentId"], "5002");
+    assert_eq!(second.result["hasMore"], false);
+    assert_eq!(second.result["nextPageToken"], Value::Null);
+    assert_eq!(
+        requests(&server).await,
+        [
+            format!("GET {page_route} Bearer oauth-1"),
+            format!("GET {route} Bearer oauth-1"),
+            format!("GET {page_route} Bearer oauth-1"),
+            format!("GET {route} Bearer oauth-1"),
+        ]
+    );
 }

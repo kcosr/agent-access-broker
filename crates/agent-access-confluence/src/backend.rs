@@ -1139,6 +1139,15 @@ impl HttpConfluenceBackend {
         Ok(self.client_for(credential)?.api_base.clone())
     }
 
+    /// The root of `credential`'s route's site, below which Confluence's
+    /// path-absolute links name their resources.
+    pub(crate) fn site_base(
+        &self,
+        credential: &AtlassianCredential,
+    ) -> Result<Url, ConfluenceBackendError> {
+        Ok(self.client_for(credential)?.site_base.clone())
+    }
+
     pub(crate) fn api_v2_base(
         &self,
         credential: &AtlassianCredential,
@@ -1354,8 +1363,9 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageAncestor>>, ConfluenceBackendError>
     {
-        let api_base = self.api_v2_base(credential)?;
-        let mut url = api_base
+        let site_base = self.site_base(credential)?;
+        let mut url = self
+            .api_v2_base(credential)?
             .join(&format!("pages/{page_id}/ancestors"))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
         url.query_pairs_mut().append_pair("limit", "250");
@@ -1388,7 +1398,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             };
             let cursor = next_page_cursor(
                 &url,
-                &api_base,
+                &site_base,
                 &next,
                 &self.config.allowed_upstream_hosts,
                 "ancestor",
@@ -1410,8 +1420,9 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         page_id: &str,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageChild>>, ConfluenceBackendError> {
-        let api_base = self.api_v2_base(credential)?;
-        let mut url = api_base
+        let site_base = self.site_base(credential)?;
+        let mut url = self
+            .api_v2_base(credential)?
             .join(&format!("pages/{page_id}/direct-children"))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
         url.query_pairs_mut().append_pair("limit", "250");
@@ -1444,7 +1455,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             };
             let cursor = next_page_cursor(
                 &url,
-                &api_base,
+                &site_base,
                 &next,
                 &self.config.allowed_upstream_hosts,
                 "direct-child",
@@ -2801,7 +2812,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 pairs.append_pair("cursor", cursor);
             }
         }
-        let api_base = self.api_v2_base(credential)?;
+        let site_base = self.site_base(credential)?;
         let started = Instant::now();
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
@@ -2820,7 +2831,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let page = comment_list_page_from_value(value, request.kind)?;
         let next_cursor = next_comment_page_cursor_from_sources(
             &url,
-            &api_base,
+            &site_base,
             page.next_cursor.as_deref(),
             &header_next_links,
             &self.config.allowed_upstream_hosts,
@@ -2858,7 +2869,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
                 pairs.append_pair("cursor", cursor);
             }
         }
-        let api_base = self.api_v2_base(credential)?;
+        let site_base = self.site_base(credential)?;
         let started = Instant::now();
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
@@ -2877,7 +2888,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let page = comment_list_page_from_value(value, kind)?;
         let next_cursor = next_comment_page_cursor_from_sources(
             &url,
-            &api_base,
+            &site_base,
             page.next_cursor.as_deref(),
             &header_next_links,
             &self.config.allowed_upstream_hosts,
@@ -3441,63 +3452,38 @@ pub(crate) fn decoded_attachment_next_position(
     Ok(allowed)
 }
 
+/// The cursor of a comment or reply list's `next` link; see
+/// [`next_page_cursor`] for the link rules.
 pub(crate) fn next_comment_page_cursor(
     current_url: &Url,
-    api_base: &Url,
+    site_base: &Url,
     raw_next: &str,
     allowed_upstream_hosts: &[String],
 ) -> Result<String, ConfluenceBackendError> {
-    let parsed = Url::parse(raw_next)
-        .or_else(|_| current_url.join(raw_next))
-        .or_else(|_| api_base.join(raw_next))
-        .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-    if !same_origin(&parsed, api_base) {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence comment pagination changed origin".to_string(),
-        ));
-    }
-    if parsed.path() != current_url.path() {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence comment pagination changed resource".to_string(),
-        ));
-    }
-    ensure_url_allowed(&parsed, allowed_upstream_hosts)?;
-    let Some(query) = parsed.query() else {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence comment pagination link is missing query".to_string(),
-        ));
-    };
-    let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
-    let mut cursor = None;
-    for (key, value) in pairs {
-        match key.as_ref() {
-            "cursor" => {
-                if cursor.is_some() || value.is_empty() {
-                    return Err(ConfluenceBackendError::Protocol(
-                        "Confluence comment pagination cursor is ambiguous".to_string(),
-                    ));
-                }
-                cursor = Some(value.into_owned());
-            }
-            "limit" | "body-format" | "resolution-status" | "sort" => {}
-            _ => {
-                return Err(ConfluenceBackendError::Protocol(
-                    "Confluence comment pagination link includes unsupported parameters"
-                        .to_string(),
-                ));
-            }
-        }
-    }
-    cursor.ok_or_else(|| {
-        ConfluenceBackendError::Protocol(
-            "Confluence comment pagination link is missing a cursor".to_string(),
-        )
-    })
+    next_page_cursor(
+        current_url,
+        site_base,
+        raw_next,
+        allowed_upstream_hosts,
+        "comment",
+        &["limit", "body-format", "resolution-status", "sort"],
+    )
 }
 
+/// The cursor of a v2 list's `next` link. The link must keep the route's
+/// origin and name the collection `current_url` read, exactly:
+///
+/// - resolved against `current_url`, it has the same path; or
+/// - it is path-absolute (`/wiki/api/v2/...`) and names that path below the
+///   route's site root `site_base`. Confluence writes these links from its
+///   site root, which on the Atlassian gateway is
+///   `/ex/confluence/<cloud_id>/`, not the origin's root.
+///
+/// The URL the link names on the route must be allowlisted, and its query
+/// must carry exactly one cursor and only the `allowed_echo_parameters`.
 pub(crate) fn next_page_cursor(
     current_url: &Url,
-    api_base: &Url,
+    site_base: &Url,
     raw_next: &str,
     allowed_upstream_hosts: &[String],
     resource_name: &str,
@@ -3505,19 +3491,27 @@ pub(crate) fn next_page_cursor(
 ) -> Result<String, ConfluenceBackendError> {
     let parsed = Url::parse(raw_next)
         .or_else(|_| current_url.join(raw_next))
-        .or_else(|_| api_base.join(raw_next))
         .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-    if !same_origin(&parsed, api_base) {
+    if !same_origin(&parsed, site_base) {
         return Err(ConfluenceBackendError::Protocol(format!(
             "Confluence {resource_name} pagination changed origin"
         )));
     }
-    if parsed.path() != current_url.path() {
+    let names_current_path = parsed.path() == current_url.path()
+        || (is_path_absolute_reference(raw_next)
+            && site_base
+                .path()
+                .strip_suffix('/')
+                .and_then(|root| current_url.path().strip_prefix(root))
+                == Some(parsed.path()));
+    if !names_current_path {
         return Err(ConfluenceBackendError::Protocol(format!(
             "Confluence {resource_name} pagination changed resource"
         )));
     }
-    ensure_url_allowed(&parsed, allowed_upstream_hosts)?;
+    let mut next_url = current_url.clone();
+    next_url.set_query(parsed.query());
+    ensure_url_allowed(&next_url, allowed_upstream_hosts)?;
     let Some(query) = parsed.query() else {
         return Err(ConfluenceBackendError::Protocol(format!(
             "Confluence {resource_name} pagination link is missing query"
@@ -3545,9 +3539,17 @@ pub(crate) fn next_page_cursor(
     })
 }
 
+/// Whether `reference` is a path-absolute URL reference: one leading `/`,
+/// not `//` or `/\`, which name another authority.
+fn is_path_absolute_reference(reference: &str) -> bool {
+    reference
+        .strip_prefix('/')
+        .is_some_and(|rest| !rest.starts_with(['/', '\\']))
+}
+
 pub(crate) fn next_comment_page_cursor_from_sources(
     current_url: &Url,
-    api_base: &Url,
+    site_base: &Url,
     body_next: Option<&str>,
     header_next_links: &[String],
     allowed_upstream_hosts: &[String],
@@ -3558,7 +3560,7 @@ pub(crate) fn next_comment_page_cursor_from_sources(
         .chain(header_next_links.iter().map(String::as_str))
     {
         let next_cursor =
-            next_comment_page_cursor(current_url, api_base, raw_next, allowed_upstream_hosts)?;
+            next_comment_page_cursor(current_url, site_base, raw_next, allowed_upstream_hosts)?;
         if cursor
             .as_ref()
             .is_some_and(|existing| existing != &next_cursor)

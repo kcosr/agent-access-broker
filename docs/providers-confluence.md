@@ -1150,11 +1150,14 @@ parent comment for reply lists, requested filters and effective `maxResults`,
 authorized space, execution context, principal and whether it authenticated,
 credential mode, [credential binding](#continuation-credential-binding) and
 the Confluence route configuration, like [attachment list tokens](#attachments). Upstream next links are accepted only when
-they remain on the same Confluence v2 comment collection and contain no
-unsupported query parameters. Pagination may come from `_links.next`, `next`, or
-an RFC `Link` header with `rel="next"`; multiple next links, changed resources,
-unsupported query parameters, or disagreement between body and header next links
-fail closed.
+they name the same Confluence v2 comment collection on the request's route and
+contain no unsupported query parameters. Confluence writes them from its site
+root (`/wiki/api/v2/...`), which on the Atlassian gateway is
+`/ex/confluence/<cloud_id>/`, so such a link names the collection below that
+root. Pagination may come from `_links.next`, `next`, or an RFC `Link` header
+with `rel="next"`; multiple next links, changed origins or resources, including
+another cloud ID's gateway path, unsupported query parameters, or disagreement
+between body and header next links fail closed.
 
 List results return `{ comments, count, hasMore, nextPageToken }`, where each
 comment includes `commentId`, `kind`, `containerType`, `pageId` or `blogId`,
