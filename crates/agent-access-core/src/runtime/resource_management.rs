@@ -434,14 +434,17 @@ mod tests {
         toml_config.policy.authority = "toml".into();
         toml_config.policy.resources = vec![resource.clone()];
         toml_config.policy.resource_groups = vec![group.clone()];
-        let error = validate_broker_config(&toml_config)
-            .unwrap_err()
-            .to_string();
+        let ConfigError::Invalid { errors } = validate_broker_config(&toml_config).unwrap_err()
+        else {
+            panic!("expected resource catalog validation errors");
+        };
         assert!(
-            error.contains("unused")
-                && error.contains("restricted")
-                && error.contains("inclusion_only"),
-            "{error}"
+            errors.iter().any(|error| {
+                error.contains("unused")
+                    && error.contains("restricted")
+                    && error.contains("inclusion_only")
+            }),
+            "{errors:?}"
         );
         let runtime = BrokerRuntime::new(config.clone()).unwrap();
         let store = runtime.managed_store.as_ref().unwrap();
@@ -472,15 +475,18 @@ mod tests {
             )
             .unwrap();
         let before = store.load_policy_export().unwrap();
-        let error = match BrokerRuntime::new(config) {
+        let errors = match BrokerRuntime::new(config) {
+            Err(RuntimeError::Config(ConfigError::Invalid { errors })) => errors,
+            Err(error) => panic!("expected resource catalog validation errors, got {error:?}"),
             Ok(_) => panic!("invalid managed catalog must not start"),
-            Err(error) => error.to_string(),
         };
         assert!(
-            error.contains("unused")
-                && error.contains("restricted")
-                && error.contains("inclusion_only"),
-            "{error}"
+            errors.iter().any(|error| {
+                error.contains("unused")
+                    && error.contains("restricted")
+                    && error.contains("inclusion_only")
+            }),
+            "{errors:?}"
         );
         assert_eq!(store.load_policy_export().unwrap(), before);
     }
