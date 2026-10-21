@@ -2087,31 +2087,44 @@ fn ineligibility<'a>(
     }
 }
 
+/// What [`loggable_target_value`] logs instead of a value it cannot show.
+const REDACTED_TARGET_VALUE: &str = "[redacted]";
+
 /// `value`, a target ID or audience, as a log may show it. Neither is a
-/// secret, but a dialect may discover, and a profile may configure, a URL
-/// whose userinfo, query or fragment carries one: a URL loses them. Any
-/// other value, such as an Atlassian cloud ID, is shown as it is, up to a
-/// `?` or `#`. Stored values and authority comparisons are unchanged.
+/// secret, but a dialect may discover, and a profile may configure, a value
+/// carrying one. Only two shapes are shown: a URL with a host, without its
+/// userinfo, query and fragment; and, up to any `?` or `#`, a plain
+/// identifier of ASCII letters, digits and `-._~:`, such as an Atlassian
+/// cloud ID or a URN. Anything else, including a URL that does not parse,
+/// is [`REDACTED_TARGET_VALUE`]. Stored values and authority comparisons are
+/// unchanged.
 fn loggable_target_value(value: &str) -> Cow<'_, str> {
-    let Ok(mut url) = Url::parse(value) else {
-        return match value.find(['?', '#']) {
-            Some(end) => Cow::Borrowed(&value[..end]),
-            None => Cow::Borrowed(value),
-        };
-    };
-    if url.username().is_empty()
-        && url.password().is_none()
-        && url.query().is_none()
-        && url.fragment().is_none()
+    if let Ok(mut url) = Url::parse(value)
+        && url.has_host()
     {
-        return Cow::Borrowed(value);
+        if url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+        {
+            return Cow::Borrowed(value);
+        }
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        return Cow::Owned(url.into());
     }
-    // A URL without an authority has no userinfo to clear.
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    url.set_query(None);
-    url.set_fragment(None);
-    Cow::Owned(url.into())
+    let identifier = value.split(['?', '#']).next().unwrap_or_default();
+    if !identifier.is_empty()
+        && identifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~' | ':'))
+    {
+        Cow::Borrowed(identifier)
+    } else {
+        Cow::Borrowed(REDACTED_TARGET_VALUE)
+    }
 }
 
 /// Records why `profile` is not eligible where that is decided: at
@@ -5424,6 +5437,19 @@ pub(crate) mod tests {
             ),
             ("workspace?token=synthetic-secret", "workspace"),
             ("workspace#synthetic-fragment", "workspace"),
+            // Values that are neither are redacted whole.
+            (
+                "https://user:synthetic-secret@service.example:invalid/resource",
+                "[redacted]",
+            ),
+            (
+                "//user:synthetic-secret@service.example/resource",
+                "[redacted]",
+            ),
+            ("user:synthetic-secret@service.example", "[redacted]"),
+            ("workspace/one", "[redacted]"),
+            ("two words", "[redacted]"),
+            ("?token=synthetic-secret", "[redacted]"),
         ] {
             assert_eq!(loggable_target_value(value), logged, "{value}");
         }
@@ -5431,7 +5457,8 @@ pub(crate) mod tests {
 
     /// The ineligibility event never carries a credential that a discovered
     /// target ID, or the profile's target or audience, holds in a URL's
-    /// userinfo, query or fragment.
+    /// userinfo, query or fragment, including a URL that does not parse,
+    /// such as one with an invalid port or no scheme.
     #[tokio::test]
     async fn ineligible_events_strip_credentials_from_target_urls() {
         let (_dir, _store, _ring, manager, server) = fixture().await;
@@ -5449,7 +5476,11 @@ pub(crate) mod tests {
                 {"id": "https://service.example/resource?access_token=synthetic-query-secret#synthetic-fragment",
                  "name": "Query", "audience": "records-api", "scopes": ["records.read"]},
                 {"id": "https://synthetic-user:synthetic-userinfo-secret@service.example/other",
-                 "name": "Userinfo", "audience": "records-api", "scopes": ["records.read"]}
+                 "name": "Userinfo", "audience": "records-api", "scopes": ["records.read"]},
+                {"id": "https://synthetic-user:synthetic-port-secret@service.example:invalid/resource",
+                 "name": "Invalid port", "audience": "records-api", "scopes": ["records.read"]},
+                {"id": "//synthetic-user:synthetic-relative-secret@service.example/resource",
+                 "name": "Scheme-relative", "audience": "records-api", "scopes": ["records.read"]}
             ]})))
             .mount(&server)
             .await;
@@ -5496,7 +5527,9 @@ pub(crate) mod tests {
         assert_eq!(logged.len(), 2, "{logged:?}");
         assert_eq!(
             logged[0].get("discovered_targets").map(String::as_str),
-            Some(r#"["https://service.example/resource", "https://service.example/other"]"#)
+            Some(
+                r#"["https://service.example/resource", "https://service.example/other", "[redacted]", "[redacted]"]"#
+            )
         );
         assert_eq!(
             logged[1].get("profile_target").map(String::as_str),
@@ -5509,6 +5542,8 @@ pub(crate) mod tests {
         events.assert_free_of(&[
             "synthetic-query-secret",
             "synthetic-userinfo-secret",
+            "synthetic-port-secret",
+            "synthetic-relative-secret",
             "synthetic-profile-secret",
             "synthetic-audience-secret",
             "synthetic-user",

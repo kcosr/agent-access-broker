@@ -1078,8 +1078,10 @@ which stores nothing) and at target revalidation after a refresh (`phase`
 (`target_discovered`), the requested scopes other than `offline_access` that
 the token lacks (`missing_token_scopes`) and that the profile's target lacks
 (`missing_target_scopes`, all of them when it was not discovered), and every
-discovered target ID (`discovered_targets`). Lease checks that deny the
-connection afterwards do not repeat it, and `outcome` is
+discovered target ID (`discovered_targets`). Target IDs and audiences appear
+as a URL without its userinfo, query and fragment, or as a plain identifier
+such as a cloud ID; any other value appears as `[redacted]`. Lease checks that
+deny the connection afterwards do not repeat it, and `outcome` is
 `oauth_permission_denied`, the reason the person and the connection metadata
 see.
 
