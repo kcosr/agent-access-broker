@@ -16,6 +16,7 @@ use chrono::Utc;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -2086,9 +2087,37 @@ fn ineligibility<'a>(
     }
 }
 
+/// `value`, a target ID or audience, as a log may show it. Neither is a
+/// secret, but a dialect may discover, and a profile may configure, a URL
+/// whose userinfo, query or fragment carries one: a URL loses them. Any
+/// other value, such as an Atlassian cloud ID, is shown as it is, up to a
+/// `?` or `#`. Stored values and authority comparisons are unchanged.
+fn loggable_target_value(value: &str) -> Cow<'_, str> {
+    let Ok(mut url) = Url::parse(value) else {
+        return match value.find(['?', '#']) {
+            Some(end) => Cow::Borrowed(&value[..end]),
+            None => Cow::Borrowed(value),
+        };
+    };
+    if url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+    {
+        return Cow::Borrowed(value);
+    }
+    // A URL without an authority has no userinfo to clear.
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    Cow::Owned(url.into())
+}
+
 /// Records why `profile` is not eligible where that is decided: at
 /// install and at target revalidation. It names the registration, profile,
-/// target and scopes only; never a token, code or secret.
+/// target and scopes only, with target IDs and audiences reduced by
+/// [`loggable_target_value`]; never a token, code or secret.
 fn log_ineligible(
     at: IneligibleAt,
     owner: &str,
@@ -2099,6 +2128,11 @@ fn log_ineligible(
     targets: &[OAuthTarget],
 ) {
     let gap = ineligibility(profile, token_scopes, targets);
+    let discovered_targets = gap
+        .discovered_targets
+        .iter()
+        .map(|id| loggable_target_value(id))
+        .collect::<Vec<_>>();
     tracing::warn!(
         target: "agent_access_core::oauth",
         event = "permission_ineligible",
@@ -2107,12 +2141,12 @@ fn log_ineligible(
         registration = %binding.registration,
         permission_profile = %binding.permission_profile,
         connection_id,
-        profile_target = %profile.target,
-        profile_audience = %profile.audience,
+        profile_target = %loggable_target_value(&profile.target),
+        profile_audience = %loggable_target_value(&profile.audience),
         target_discovered = gap.target_discovered,
         missing_token_scopes = ?gap.missing_token_scopes,
         missing_target_scopes = ?gap.missing_target_scopes,
-        discovered_targets = ?gap.discovered_targets,
+        discovered_targets = ?discovered_targets,
         outcome = OAuthError::Permission.code(),
     );
 }
@@ -5358,6 +5392,132 @@ pub(crate) mod tests {
                 state.as_str(),
             ]);
         }
+    }
+
+    /// Target IDs and audiences are logged without a URL's userinfo, query
+    /// or fragment; other values, such as cloud IDs, are logged as they are.
+    #[test]
+    fn target_values_are_logged_without_url_credentials_query_or_fragment() {
+        for (value, logged) in [
+            (
+                "11111111-2222-4333-8444-555555555555",
+                "11111111-2222-4333-8444-555555555555",
+            ),
+            ("workspace-one", "workspace-one"),
+            ("api.atlassian.com", "api.atlassian.com"),
+            ("https://gitlab.example.com", "https://gitlab.example.com"),
+            (
+                "https://service.example/resource?access_token=synthetic-secret#synthetic-fragment",
+                "https://service.example/resource",
+            ),
+            (
+                "https://user:synthetic-password@service.example/resource",
+                "https://service.example/resource",
+            ),
+            (
+                "https://synthetic-user@service.example:8443/resource?key=synthetic-secret",
+                "https://service.example:8443/resource",
+            ),
+            (
+                "urn:example:resource?key=synthetic-secret",
+                "urn:example:resource",
+            ),
+            ("workspace?token=synthetic-secret", "workspace"),
+            ("workspace#synthetic-fragment", "workspace"),
+        ] {
+            assert_eq!(loggable_target_value(value), logged, "{value}");
+        }
+    }
+
+    /// The ineligibility event never carries a credential that a discovered
+    /// target ID, or the profile's target or audience, holds in a URL's
+    /// userinfo, query or fragment.
+    #[tokio::test]
+    async fn ineligible_events_strip_credentials_from_target_urls() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        Mock::given(method("GET"))
+            .and(path("/me"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id":"alice","name":"Alice"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/targets"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"targets": [
+                {"id": "https://service.example/resource?access_token=synthetic-query-secret#synthetic-fragment",
+                 "name": "Query", "audience": "records-api", "scopes": ["records.read"]},
+                {"id": "https://synthetic-user:synthetic-userinfo-secret@service.example/other",
+                 "name": "Userinfo", "audience": "records-api", "scopes": ["records.read"]}
+            ]})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(token(0)))
+            .mount(&server)
+            .await;
+        let events = OAuthEvents::default();
+        let _guard = events.install();
+        let state = start(&manager, OAuthConnectIntent::Connect).await;
+        assert_eq!(
+            manager
+                .complete(
+                    "user",
+                    "session",
+                    "stub",
+                    &state,
+                    "one-use-code",
+                    runtime(&manager)
+                )
+                .await
+                .unwrap_err(),
+            OAuthError::Permission
+        );
+        // The profile's own target and audience, logged directly.
+        let profile = OAuthPermissionProfile {
+            scope_mode: OAuthScopeMode::Explicit,
+            scopes: Some(vec!["records.read".into()]),
+            audience: "https://synthetic-user:synthetic-audience-secret@service.example/api#synthetic-fragment"
+                .into(),
+            target: "https://service.example/workspace?token=synthetic-profile-secret".into(),
+        };
+        log_ineligible(
+            IneligibleAt::TargetRevalidation,
+            "user",
+            &binding(),
+            Some("connection-1"),
+            &profile,
+            &BTreeSet::new(),
+            &[],
+        );
+        let logged = events.named("permission_ineligible");
+        assert_eq!(logged.len(), 2, "{logged:?}");
+        assert_eq!(
+            logged[0].get("discovered_targets").map(String::as_str),
+            Some(r#"["https://service.example/resource", "https://service.example/other"]"#)
+        );
+        assert_eq!(
+            logged[1].get("profile_target").map(String::as_str),
+            Some("https://service.example/workspace")
+        );
+        assert_eq!(
+            logged[1].get("profile_audience").map(String::as_str),
+            Some("https://service.example/api")
+        );
+        events.assert_free_of(&[
+            "synthetic-query-secret",
+            "synthetic-userinfo-secret",
+            "synthetic-profile-secret",
+            "synthetic-audience-secret",
+            "synthetic-user",
+            "synthetic-fragment",
+            "protected-access-0",
+            "protected-refresh-0",
+            "application-secret",
+            state.as_str(),
+        ]);
     }
 
     /// Target revalidation after a refresh that leaves the connection
