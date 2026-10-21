@@ -21,10 +21,19 @@ All notable changes to this project are documented in this file.
   optional `oauth = { registration, profile }`. Each service's
   `[credentials.per_user.<service>]` selects one with `type = "connection"`
   and `connection = "<id>"`. The per-user types `managed_store` and `oauth`
-  are removed, as are the `credential_name` and `profile` keys. A connection
-  with the same ID and profile as an earlier per-service credential reads its
-  stored tokens unchanged. Rewrite the configuration before upgrading, using
-  the [credential connections](docs/operator-guide.md#credential-connections)
+  are removed, as are the `credential_name` and `profile` keys. The caller's
+  principal kind selects the method, with no fallback between token and OAuth:
+  people use OAuth when the connection configures it and a stored token
+  otherwise; service accounts and `system` principals use tokens; callers
+  without an active managed principal, including static principals whose ID
+  names none, have no method. Translating the configuration alone can
+  therefore leave existing static callers unable to use their stored
+  credentials. Only tokens stored under the name `default`, with the
+  connection's ID and profile, are kept. Tokens under other names become
+  retained rows and must be stored again. Credential rights now apply to the
+  connection and `default`, so grant the affected rights there. Rewrite the
+  configuration before upgrading, using the
+  [credential connections](docs/operator-guide.md#credential-connections)
   table.
 - **Jira and Confluence use Atlassian token profiles.** Configure
   `atlassian-api-token` (an account email and API token). Through the
@@ -64,7 +73,12 @@ All notable changes to this project are documented in this file.
   `registration`. The CLI commands `credentials inspect|put|delete|verify`
   take a connection instead of a service and a name. `admin credentials list`
   takes a principal, and `admin credentials list-stored` lists stored rows.
-  See the [HTTP API](docs/http-api.md) and [CLI](docs/cli.md) references.
+  Management audit targets are `{principal, connection}` for connections,
+  `{principal, credentialId}` for retained-row deletes and `{registration}`
+  for OAuth. Connection records list the consuming services in
+  `providerAudit.management.targetServices`; `targetService` is set only when
+  a single service uses the connection. See the [HTTP API](docs/http-api.md)
+  and [CLI](docs/cli.md) references.
 - **Import administration responses** replace `oauthRegistrations` with
   `importAuthentication`. It has one entry per import kind with an OAuth
   companion, each with `importKind`, `dialectId` and `registrations`.
@@ -79,7 +93,8 @@ All notable changes to this project are documented in this file.
 - **Log targets.** Broker host events log under `agent_access_broker_host::…`
   instead of `agent_access_broker::…`. Lifecycle events log under
   `agent_access_broker_host::lifecycle`. Update module-level `RUST_LOG`
-  directives.
+  directives. The OIDC diagnostic target `agent_access_broker::handlers::oidc`
+  is unchanged.
 - **CLI identity bindings.** `admin principals identity-bindings enable` and
   `disable` are removed. Use `identity-bindings update PRINCIPAL BINDING_ID
   --enabled BOOL --expected-version N` instead.
@@ -98,6 +113,11 @@ All notable changes to this project are documented in this file.
     `UpstreamAuthorization` on the upstream call and receive the admitted
     `CredentialMode` and `InvocationAuthority`. Live invocation and credential
     values can no longer be serialized.
+  - `DelegatedLease` implementations add the required
+    `binding_identity() -> DelegatedBindingId`, which stays stable across
+    routine refresh. Struct literals of the exhaustive
+    `OAuthRegistrationConfig` supply `login_binding` (`None` for existing
+    registrations).
   - Native searches declare `native_search` and receive normalized
     `SearchAuthorizationScope` clauses. This replaces `search_contained`.
   - Host networking left the SDK. Build clients with
@@ -208,16 +228,30 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- **Write outcomes are reported consistently.** Failed writes carry a
-  `mutationStatus` in GitLab, Jira, Confluence, Gmail, CloudBees CI
-  `build.trigger`, Teams notifications and imported MCP and OpenAPI services:
+- **Write outcomes are reported consistently.** Write failures in GitLab,
+  Jira, Confluence, Gmail, CloudBees CI `build.trigger`, Teams notifications
+  and imported MCP and OpenAPI services carry a `mutationStatus`, with the
+  exceptions below:
   - `not_applied`, with `retrySafe: true`, when the request was provably not
     sent;
-  - `unknown`, with `retrySafe: false`, when the write may have applied;
-  - `applied_unverified` when the upstream accepted the write but its response
-    or read-back failed.
+  - `unknown`, with `retrySafe: false`, when the write may have applied, such
+    as after no response, a redirect or a 5xx;
+  - `applied_unverified`, with `retrySafe: false`, when the write may have
+    applied and was not confirmed. Usually the upstream answered with success
+    and its response or read-back then failed. A CloudBees CI trigger that
+    times out, fails in transport without a response or gets a 5xx, and an
+    uncertain GitLab write with a verification contract, also report it, so it
+    does not prove acceptance. CloudBees CI's existing `applied_unverified`
+    outcomes are unchanged.
 
-  Reason codes are unchanged.
+  Upstream rejections or throttling of the write itself, and some failures
+  before dispatch, carry no receipt. Reason code changes: a provably unsent
+  GitLab write with a verification contract fails with
+  `upstream_connection_failed` or `upstream_timeout` instead of
+  `mutation_verification_failed`, and a Jira issue create that Jira places
+  under a renamed project's current key reports `scope_unresolved` instead of
+  `upstream_protocol_failed`, keeping its `applied_unverified` receipt. See
+  also the GitLab write receipts fix.
 - **Agent token issuance** moved to its own portal page. It selects actions
   and resources per service and shows a live access preview. The shared
   action selector uses a wider grid.
@@ -261,9 +295,13 @@ All notable changes to this project are documented in this file.
   operation.
 - **Download limit.** The Broker enforces `limits.max_download_bytes` on every
   raw download.
-- **GitLab write receipts.** A webhook write whose read-back fails reports
-  `applied_unverified` with the webhook ID. A write that was never sent no
-  longer reports `applied_unverified`.
+- **GitLab write receipts.** A webhook write whose read-back fails, including
+  with a 4xx or beyond the content bounds, reports
+  `mutation_verification_failed` with an `applied_unverified` receipt and the
+  webhook ID instead of a plain error. A write with a verification contract
+  that the Broker could not prepare keeps its cause's reason, such as
+  `upstream_protocol_failed`, without a receipt, instead of
+  `mutation_verification_failed`.
 - **GitLab webhook destinations** that differ only by a nondefault port are no
   longer rejected as duplicates.
 - **Management decisions.** Credential verification and import discovery
