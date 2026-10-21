@@ -944,9 +944,12 @@ async fn next_comment_cursor(
 #[tokio::test]
 async fn comment_and_reply_lists_read_site_relative_next_links_on_the_gateway() {
     let server = MockServer::start().await;
-    for credential in [
-        gateway_access(),
-        AtlassianCredential::from_static(bearer_credential("service-token")),
+    for (credential, presented) in [
+        (gateway_access(), "Bearer oauth-1"),
+        (
+            AtlassianCredential::from_static(bearer_credential("service-token")),
+            "Bearer service-token",
+        ),
     ] {
         for collection in COMMENT_COLLECTIONS {
             let route = format!("{GATEWAY}/api/v2/{collection}");
@@ -971,8 +974,10 @@ async fn comment_and_reply_lists_read_site_relative_next_links_on_the_gateway() 
                     Some("abc"),
                     "{collection}: body {body_next:?}, header {header_next:?}"
                 );
-                assert_eq!(requests(&server).await.len(), 1);
-                assert!(requests(&server).await[0].starts_with(&format!("GET {route} Bearer ")));
+                assert_eq!(
+                    requests(&server).await,
+                    [format!("GET {route} {presented}")]
+                );
             }
         }
     }
