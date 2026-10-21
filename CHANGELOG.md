@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.2.0] - 2026-10-21
+
+### Breaking Changes
+
 - **Upgrade as a set and back up first.** Upgrade the Broker, CLI and portal
   together. Follow [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
   Managed-store migrations `027_command_imports` through
