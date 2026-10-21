@@ -47,7 +47,9 @@ All notable changes to this project are documented in this file.
   that the binary includes: `jira`, `confluence`, `gitlab`, `cloudbees_ci`,
   `gmail`, `teams`, `oauth_stub` or `fake`. A credential connection may not be
   named `broker`. It also may not use the name of a configured service, gateway
-  or imported service, unless that service uses the connection.
+  or imported service, unless that service uses the connection. Provider
+  authors: a native provider registration with kind `broker` is rejected when
+  the binary's registry is built, even if it is never configured.
 - **OAuth loopback exceptions need a literal loopback address.** Use
   `http://127.0.0.1` or `http://[::1]` with `allow_insecure_loopback = true`.
   `http://localhost` is rejected. `https://localhost` and other host names now
@@ -244,8 +246,10 @@ All notable changes to this project are documented in this file.
     does not prove acceptance. CloudBees CI's existing `applied_unverified`
     outcomes are unchanged.
 
-  Upstream rejections or throttling of the write itself, and some failures
-  before dispatch, carry no receipt. Reason code changes: a provably unsent
+  For native providers, upstream rejections or throttling of the write itself,
+  and some failures before dispatch, carry no receipt. Dispatched imported MCP
+  and OpenAPI write failures, including rejections and throttling, keep
+  `mutationStatus: "unknown"` with `retrySafe: false`. Reason code changes: a provably unsent
   GitLab write with a verification contract fails with
   `upstream_connection_failed` or `upstream_timeout` instead of
   `mutation_verification_failed`, and a Jira issue create that Jira places
