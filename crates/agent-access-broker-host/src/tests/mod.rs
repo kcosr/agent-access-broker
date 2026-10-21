@@ -70,6 +70,7 @@ mod confluence_read_presentation;
 mod conformance;
 pub(crate) mod conformance_import;
 mod credential_connections;
+mod credential_token_types;
 mod discovery;
 mod domain_reasons;
 mod gitlab_moved_projects;
@@ -7404,7 +7405,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "gitlab"
     );
     assert_eq!(
-        cookie_credential_targets[0]["inputSchema"]["fields"][0]["name"],
+        cookie_credential_targets[0]["tokenProfiles"][0]["inputSchema"]["fields"][0]["name"],
         "token"
     );
 
@@ -8795,8 +8796,9 @@ async fn managed_store_admin_and_user_token_smoke() {
     let gitlab = &list_body["result"]["connections"][0];
     assert_eq!(gitlab["connection"], "gitlab");
     assert_eq!(gitlab["method"], "token");
-    assert_eq!(gitlab["profile"], "gitlab-access-token");
+    assert_eq!(gitlab["tokenProfiles"][0]["profile"], "gitlab-access-token");
     assert_eq!(gitlab["credential"]["connection"], "gitlab");
+    assert_eq!(gitlab["credential"]["profile"], "gitlab-access-token");
     assert_eq!(
         gitlab["credential"]["verificationStatus"],
         "upstream_verified"
@@ -18758,7 +18760,8 @@ pub(crate) fn use_token_connection(
         connection.to_string(),
         agent_access_core::ConnectionConfig {
             display_name: None,
-            token_profile: Some(profile.to_string()),
+            user_token_profiles: Some(vec![profile.to_string()]),
+            service_account_token_profiles: Some(vec![profile.to_string()]),
             oauth: None,
         },
     );

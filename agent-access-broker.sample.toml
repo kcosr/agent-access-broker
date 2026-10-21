@@ -230,6 +230,10 @@ default_context = "default"
 type = "basic_api_token"
 username_ref = "env:JIRA_SERVICE_USERNAME"
 token_ref = "env:JIRA_SERVICE_API_TOKEN"
+# Optional: the token profile the provider receives this credential as, one
+# the service declares with this type's kind. Without it the provider uses
+# its default for the kind.
+# profile = "atlassian-api-token"
 
 # Optional per-user Jira execution credentials use the same local secret-store
 # shape as Confluence. Per-user-only lookup-backed Jira policy can run without
@@ -257,17 +261,21 @@ token_ref = "env:JIRA_SERVICE_API_TOKEN"
 # Alternative managed-store per-user credential: a credential connection.
 # Each managed principal's token for it is stored in the managed store; users
 # and system principals provide their own, and administrators provision
-# service accounts'. Connections need managed_store and credential_encryption.
+# service accounts'. user_token_profiles lists the token profiles people may
+# store, and service_account_token_profiles those of service accounts and
+# system principals; with several in a list, the saver picks one.
+# Connections need managed_store and credential_encryption.
 # One Atlassian connection serves Jira and Confluence on this site: each
 # principal stores one account email and classic API token for both (see
 # [credentials.per_user.confluence] below), and grants stay per service.
 # Through the Atlassian gateway (cloud_id and api.atlassian.com allowed),
-# connections use token_profile = "atlassian-bearer-token" instead, usually
-# one per product for service accounts' scoped tokens.
+# connections list "atlassian-bearer-token" instead, usually one per product
+# for service accounts' scoped tokens.
 #
 # [credentials.connections.atlassian]
 # display_name = "Atlassian"
-# token_profile = "atlassian-api-token"
+# user_token_profiles = ["atlassian-api-token"]
+# service_account_token_profiles = ["atlassian-api-token"]
 #
 # [credentials.per_user.jira]
 # type = "connection"
@@ -320,7 +328,8 @@ read_only = true
 #
 # [credentials.connections.gitlab]
 # display_name = "GitLab"
-# token_profile = "gitlab-access-token"
+# user_token_profiles = ["gitlab-access-token"]
+# service_account_token_profiles = ["gitlab-access-token"]
 #
 # [credentials.per_user.gitlab]
 # type = "connection"
@@ -343,7 +352,8 @@ read_only = true
 # GitLab OAuth: people connect their GitLab account once for GitLab REST and
 # the Git gateway, while service accounts keep administrator-provisioned
 # tokens. Add oauth = { registration = "gitlab", profile = "default" } to
-# [credentials.connections.gitlab] above. A GitLab administrator creates an
+# [credentials.connections.gitlab] above and remove its user_token_profiles:
+# people then use OAuth. A GitLab administrator creates an
 # instance-wide confidential application (Admin area > Applications) with the
 # redirect URI and scopes below, and may mark it trusted to skip consent.
 # Requires managed identity/store/encryption, browser auth and management; the
@@ -378,9 +388,10 @@ read_only = true
 # Confluence, which act through the Atlassian gateway; service accounts keep
 # administrator-provisioned scoped tokens (atlassian-bearer-token). OAuth
 # requires the gateway on both providers (cloud_id set and api.atlassian.com
-# in allowed_upstream_hosts), and a connection with oauth uses
-# atlassian-bearer-token or no token_profile: atlassian-api-token beside
-# oauth is rejected. Through the gateway, [credentials.service.*] and
+# in allowed_upstream_hosts), and a connection with oauth lists only
+# atlassian-bearer-token for service accounts, or no token profile:
+# atlassian-api-token beside oauth is rejected. Through the gateway,
+# [credentials.service.*] and
 # [credentials.lookup.*] for Jira and Confluence are bearer_token too.
 # Create an OAuth 2.0 integration in the Atlassian developer console with
 # this callback URL and the Jira, Confluence and User Identity APIs, and
@@ -414,12 +425,12 @@ read_only = true
 # display name of the first by connection ID, so give them the same name:
 # [credentials.connections.jira]
 # display_name = "Atlassian"
-# token_profile = "atlassian-bearer-token"
+# service_account_token_profiles = ["atlassian-bearer-token"]
 # oauth = { registration = "atlassian", profile = "default" }
 #
 # [credentials.connections.confluence]
 # display_name = "Atlassian"
-# token_profile = "atlassian-bearer-token"
+# service_account_token_profiles = ["atlassian-bearer-token"]
 # oauth = { registration = "atlassian", profile = "default" }
 #
 # [credentials.per_user.jira]

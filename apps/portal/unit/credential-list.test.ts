@@ -35,7 +35,7 @@ const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerifica
 const metrics = { service: "metrics", displayName: "Metrics", credentialVerificationInputs: [] };
 const token = { credentialId: "credential-ci", ownerPrincipal: "viewer", ownerKind: "user", connection: "ci", profile: "ci-token", credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
 const credentials: CredentialList = {
-  connections: [{ connection: "ci", displayName: "CI", method: "token", consumers: [], otherConsumers: 0, profile: "ci-token", credentialKind: "bearer_token", registration: null, remoteRevocation: null, credential: token }],
+  connections: [{ connection: "ci", displayName: "CI", method: "token", consumers: [], otherConsumers: 0, tokenProfiles: [{ profile: "ci-token", label: null, credentialKind: "bearer_token", inputSchema: { connection: "ci", profile: "ci-token", credentialKind: "bearer_token", fields: [] } }], registration: null, remoteRevocation: null, credential: token }],
   retained: []
 };
 type Connection = NonNullable<OAuthConnectionTarget["connection"]>;

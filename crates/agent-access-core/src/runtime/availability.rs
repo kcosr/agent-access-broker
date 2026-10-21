@@ -404,7 +404,7 @@ impl BrokerRuntime {
                     .check_credential(&identity.principal, &oauth.binding())
                     .map_err(UnavailableCredential::from_oauth)
             }
-            crate::Selection::Token(profile) => {
+            crate::Selection::Token(profiles) => {
                 let (true, Some(store), Some(ring)) = (
                     identity.authenticated,
                     self.managed_store.as_ref(),
@@ -418,7 +418,7 @@ impl BrokerRuntime {
                         &identity.principal,
                         connection.id,
                         crate::CONNECTION_CREDENTIAL_NAME,
-                        profile,
+                        profiles,
                     )
                     .map_err(provider_error_from_managed_store)
                     .map_err(UnavailableCredential::from_provider)

@@ -83,13 +83,15 @@ principal_id = "admin"
 initial_password = "${ADMIN_PASSWORD}"
 [credentials.connections.jira]
 display_name = "Jira"
-token_profile = "atlassian-api-token"
+user_token_profiles = ["atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
 [credentials.per_user.jira]
 type = "connection"
 connection = "jira"
 [credentials.connections.gitlab_git]
 display_name = "GitLab Git"
-token_profile = "git-bearer-token"
+user_token_profiles = ["git-bearer-token"]
+service_account_token_profiles = ["git-bearer-token"]
 [credentials.per_user.gitlab_git]
 type = "connection"
 connection = "gitlab_git"

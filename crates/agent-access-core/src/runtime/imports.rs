@@ -480,10 +480,11 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
 /// The single-consumer credential connection an import's supported,
 /// allowed personal binding publishes under the imported service ID. It
 /// mirrors that binding and never adds a second method: an approved OAuth
-/// binding gives OAuth only, and a static binding gives the profile the
-/// accepted declaration fixes (`token`, or `username-token` for command
-/// imports that declare it). Service and system principals therefore select
-/// nothing for an OAuth import, and command imports never offer OAuth.
+/// binding gives OAuth only, and a static binding lists, for people and for
+/// service accounts alike, the one profile the accepted declaration fixes
+/// (`token`, or `username-token` for command imports that declare it).
+/// Service and system principals therefore select nothing for an OAuth
+/// import, and command imports never offer OAuth.
 fn personal_connection(
     record: &ImportedServiceRecord,
     binding: &ImportedCredentialBinding,
@@ -492,7 +493,8 @@ fn personal_connection(
     if binding.mechanism == ImportedAuthMechanism::Oauth {
         crate::ConnectionConfig {
             display_name,
-            token_profile: None,
+            user_token_profiles: None,
+            service_account_token_profiles: None,
             oauth: binding
                 .registration_id
                 .clone()
@@ -503,9 +505,11 @@ fn personal_connection(
                 }),
         }
     } else {
+        let profile = execution_credential_kind(record).personal_profile();
         crate::ConnectionConfig {
             display_name,
-            token_profile: Some(execution_credential_kind(record).personal_profile().into()),
+            user_token_profiles: Some(vec![profile.into()]),
+            service_account_token_profiles: Some(vec![profile.into()]),
             oauth: None,
         }
     }

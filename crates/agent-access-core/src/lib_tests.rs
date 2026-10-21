@@ -3120,7 +3120,7 @@ fn accepts_a_shared_gitlab_connection_for_rest_and_the_git_gateway() {
     assert_eq!(connection.id, "gitlab");
     assert_eq!(
         connection.select(Some(crate::PrincipalKind::User)),
-        crate::Selection::Token("gitlab-access-token")
+        crate::Selection::Token(&["gitlab-access-token".to_string()])
     );
     assert!(config.credentials.personal_connection("jira").is_none());
 }
@@ -3185,7 +3185,7 @@ fn accepts_one_atlassian_connection_for_jira_and_confluence_on_the_site_route() 
         ] {
             assert_eq!(
                 connection.select(Some(kind)),
-                crate::Selection::Token("atlassian-api-token"),
+                crate::Selection::Token(&["atlassian-api-token".to_string()]),
                 "{service}"
             );
         }
@@ -3235,7 +3235,7 @@ fn rejects_retired_atlassian_product_profiles() {
             assert_contains(
                 &errors,
                 &format!(
-                    "credentials.connections.atlassian.token_profile {retired} is unsupported for service {service}, which accepts atlassian-api-token"
+                    "credentials.connections.atlassian.user_token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token"
                 ),
             );
         }
@@ -3254,7 +3254,7 @@ fn rejects_retired_atlassian_product_profiles() {
         assert_contains(
             &errors,
             &format!(
-                "credentials.connections.{service}.token_profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-bearer-token"
+                "credentials.connections.{service}.user_token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-bearer-token"
             ),
         );
     }
@@ -3277,7 +3277,7 @@ fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.connections.atlassian.token_profile atlassian-bearer-token is unsupported for service confluence, which accepts atlassian-api-token",
+        "credentials.connections.atlassian.user_token_profiles profile atlassian-bearer-token is unsupported for service confluence, which accepts atlassian-api-token",
     );
     assert!(
         !errors
@@ -3332,7 +3332,7 @@ fn rejects_a_gateway_connection_profile_it_cannot_present() {
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.connections.repositories.token_profile not-declared-anywhere is not a token or basic profile the gateway gitlab_git can present",
+        "credentials.connections.repositories.user_token_profiles profile not-declared-anywhere is not a token or basic profile the gateway gitlab_git can present",
     );
 }
 
@@ -3345,7 +3345,8 @@ fn rejects_connections_without_a_method_or_with_dangling_references() {
         "empty",
         ConnectionConfig {
             display_name: Some(" ".to_string()),
-            token_profile: None,
+            user_token_profiles: None,
+            service_account_token_profiles: None,
             oauth: None,
         },
         &[],
@@ -3373,7 +3374,7 @@ fn rejects_connections_without_a_method_or_with_dangling_references() {
 
     let errors = validation_errors(validate_broker_config(&config));
     for needle in [
-        "credentials.connections.empty must set token_profile, oauth, or both",
+        "credentials.connections.empty must set oauth, user_token_profiles or service_account_token_profiles",
         "credentials.connections.empty.display_name must not be empty",
         "credentials.per_user.jira.connection missing must name a configured credentials.connections entry",
         "credentials.per_user.unconfigured uses a credential connection, but unconfigured is not a configured service",
@@ -3383,6 +3384,136 @@ fn rejects_connections_without_a_method_or_with_dangling_references() {
     ] {
         assert_contains(&errors, needle);
     }
+}
+
+/// A connection's token lists: people's beside OAuth is dead configuration,
+/// each list is non-empty without duplicates, and every entry follows the
+/// per-profile rules once.
+#[test]
+fn connection_token_lists_are_checked_entry_by_entry() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let oauth = ConnectionOAuthConfig {
+        registration: "atlassian".to_string(),
+        profile: "default".to_string(),
+    };
+    use_connection(
+        &mut config,
+        "jira",
+        ConnectionConfig {
+            display_name: None,
+            user_token_profiles: Some(vec!["atlassian-api-token".to_string()]),
+            service_account_token_profiles: Some(vec![
+                "atlassian-api-token".to_string(),
+                "unknown-token".to_string(),
+                "atlassian-api-token".to_string(),
+            ]),
+            oauth: Some(oauth),
+        },
+        &["jira"],
+    );
+    use_connection(
+        &mut config,
+        "confluence",
+        ConnectionConfig {
+            display_name: None,
+            user_token_profiles: Some(vec![]),
+            service_account_token_profiles: None,
+            oauth: None,
+        },
+        &["confluence"],
+    );
+    use_connection(
+        &mut config,
+        "gitlab",
+        token_connection("unknown-token"),
+        &["gitlab"],
+    );
+    let errors = validation_errors(validate_broker_config(&config));
+    for needle in [
+        "credentials.connections.jira.user_token_profiles cannot be set beside oauth: people use the connection's OAuth",
+        "credentials.connections.jira.service_account_token_profiles lists atlassian-api-token more than once",
+        "credentials.connections.jira.service_account_token_profiles profile unknown-token is unsupported for service jira, which accepts atlassian-api-token",
+        "credentials.connections.confluence.user_token_profiles must not be empty",
+    ] {
+        assert_contains(&errors, needle);
+    }
+    // A profile in both lists is checked once, under the first.
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.contains("unsupported for service gitlab"))
+            .collect::<Vec<_>>(),
+        [
+            "credentials.connections.gitlab.user_token_profiles profile unknown-token is unsupported for service gitlab, which accepts gitlab-access-token"
+        ]
+    );
+}
+
+/// A Git gateway accepts a list mixing basic and bearer profiles, so service
+/// accounts may store either type for one connection.
+#[test]
+fn accepts_a_git_gateway_connection_mixing_token_kinds() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "repositories",
+        ConnectionConfig {
+            display_name: None,
+            user_token_profiles: Some(vec!["git-bearer-token".to_string()]),
+            service_account_token_profiles: Some(vec![
+                "git-bearer-token".to_string(),
+                "git-basic-api-token".to_string(),
+            ]),
+            oauth: None,
+        },
+        &["gitlab_git"],
+    );
+
+    validate_broker_config(&config).unwrap();
+    let connection = config
+        .credentials
+        .personal_connection("gitlab_git")
+        .unwrap();
+    assert_eq!(
+        connection.select(Some(crate::PrincipalKind::System)),
+        crate::Selection::Token(&[
+            "git-bearer-token".to_string(),
+            "git-basic-api-token".to_string()
+        ])
+    );
+}
+
+/// The shared-upstream check applies to a connection whose only token list
+/// is the service accounts'.
+#[test]
+fn rejects_a_service_account_token_connection_across_upstreams() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    gateway.upstream_base_url = "https://git.other.example".to_string();
+    gateway.allowed_upstream_hosts = vec!["https://git.other.example/**".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab",
+        service_account_connection("gitlab-access-token"),
+        &["gitlab", "gitlab_git"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert!(
+        errors.iter().any(
+            |error| error.starts_with("credentials.connections.gitlab: ")
+                && error.ends_with("a token connection's consumers must act on one upstream")
+        ),
+        "{errors:?}"
+    );
 }
 
 #[test]
@@ -3446,7 +3577,8 @@ fn rejects_oauth_connections_consumers_cannot_use() {
         "gitlab",
         ConnectionConfig {
             display_name: None,
-            token_profile: Some("gitlab-access-token".to_string()),
+            user_token_profiles: None,
+            service_account_token_profiles: Some(vec!["gitlab-access-token".to_string()]),
             oauth: Some(oauth("default")),
         },
         &["gitlab", "gitlab_git"],
@@ -3456,7 +3588,8 @@ fn rejects_oauth_connections_consumers_cannot_use() {
         "gitlab_projects",
         ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            user_token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(oauth("projects")),
         },
         &[],
@@ -3515,14 +3648,15 @@ fn backend_validation_resolves_connection_token_profiles() {
                 registration: "atlassian".to_string(),
                 profile: "default".to_string(),
             }),
-            ..token_connection("atlassian-api-token")
+            ..service_account_connection("atlassian-api-token")
         },
     );
     config.credentials.connections.insert(
         "oauth_only".to_string(),
         ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            user_token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(ConnectionOAuthConfig {
                 registration: "atlassian".to_string(),
                 profile: "default".to_string(),
@@ -3573,7 +3707,7 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
                 registration: "atlassian".to_string(),
                 profile: "default".to_string(),
             }),
-            ..token_connection("atlassian-bearer-token")
+            ..service_account_connection("atlassian-bearer-token")
         },
         &["jira"],
     );
@@ -3595,7 +3729,7 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
         .connections
         .get_mut("jira")
         .unwrap()
-        .token_profile = Some("atlassian-api-token".to_string());
+        .service_account_token_profiles = Some(vec!["atlassian-api-token".to_string()]);
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
@@ -3690,7 +3824,8 @@ fn atlassian_gateway_holds_the_lookup_credential_to_its_route() {
             service,
             ConnectionConfig {
                 display_name: None,
-                token_profile: None,
+                user_token_profiles: None,
+                service_account_token_profiles: None,
                 oauth: Some(ConnectionOAuthConfig {
                     registration: "atlassian".to_string(),
                     profile: "default".to_string(),
@@ -5788,11 +5923,22 @@ fn per_user_profile_kinds(
         .collect()
 }
 
+/// A connection accepting `profile` from people and service accounts alike.
 fn token_connection(profile: &str) -> ConnectionConfig {
     ConnectionConfig {
         display_name: None,
-        token_profile: Some(profile.to_string()),
+        user_token_profiles: Some(vec![profile.to_string()]),
+        service_account_token_profiles: Some(vec![profile.to_string()]),
         oauth: None,
+    }
+}
+
+/// A connection accepting `profile` from service accounts only, as beside
+/// OAuth for people.
+fn service_account_connection(profile: &str) -> ConnectionConfig {
+    ConnectionConfig {
+        user_token_profiles: None,
+        ..token_connection(profile)
     }
 }
 
@@ -6375,7 +6521,8 @@ fn oauth_connections_need_consumers_that_accept_delegation() {
         "records".to_string(),
         ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            user_token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(ConnectionOAuthConfig {
                 registration: "missing".to_string(),
                 profile: "read".to_string(),

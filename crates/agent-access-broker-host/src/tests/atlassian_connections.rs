@@ -384,8 +384,15 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
     assert_eq!(targets.len(), 1, "{targets:?}");
     let target = &targets[0];
     assert_eq!(target["connection"], "atlassian");
-    assert_eq!(target["profile"], "atlassian-api-token");
-    assert_eq!(target["credentialKind"], "basic_api_token");
+    assert_eq!(
+        target["tokenProfiles"],
+        json!([{
+            "profile": "atlassian-api-token",
+            "label": null,
+            "credentialKind": "basic_api_token",
+            "inputSchema": target["tokenProfiles"][0]["inputSchema"]
+        }])
+    );
     let consumers = target["consumers"]
         .as_array()
         .unwrap()
@@ -463,7 +470,13 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
         assert_eq!(
             fixture
                 .store
-                .resolve_user_credential(&fixture.ring, "alice", service, "default", profile)
+                .resolve_user_credential(
+                    &fixture.ring,
+                    "alice",
+                    service,
+                    "default",
+                    &[profile.to_string()],
+                )
                 .unwrap(),
             credential_with_profile(basic_credential("alice@example.com", token), profile),
             "{service}"

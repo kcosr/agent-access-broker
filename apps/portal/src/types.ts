@@ -218,15 +218,23 @@ export type CredentialInputSchema = {
   fields: CredentialInputField[];
 };
 
+/** A token profile a connection accepts from the principal, with its input form. */
+export type CredentialTokenProfile = {
+  profile: string;
+  /** The name a consuming service declares; show the profile when null. */
+  label: string | null;
+  credentialKind: string;
+  inputSchema: CredentialInputSchema;
+};
+
 /** A credential connection whose token the principal can store now. */
 export type CredentialTarget = {
   connection: string;
   displayName: string;
   consumers: ConnectionConsumer[];
   otherConsumers: number;
-  profile: string;
-  credentialKind: string;
-  inputSchema: CredentialInputSchema;
+  /** The token profiles the principal may store, in configuration order; never empty. */
+  tokenProfiles: CredentialTokenProfile[];
 };
 
 /** Lifecycle and verification fields every stored credential has. */
@@ -235,6 +243,8 @@ export type CredentialState = {
   ownerPrincipal: string;
   ownerKind: string;
   profile: string;
+  /** The stored profile's label, when a consumer of its connection declares one. */
+  label?: string | null;
   credentialKind: string;
   metadata: Record<string, unknown>;
   status: string;
@@ -268,8 +278,8 @@ export type CredentialConnection = {
   method: CredentialMethod;
   consumers: ConnectionConsumer[];
   otherConsumers: number;
-  profile: string | null;
-  credentialKind: string | null;
+  /** The token profiles the principal may store, for the token method; empty otherwise. */
+  tokenProfiles: CredentialTokenProfile[];
   registration: string | null;
   /** For the OAuth method, as `GET /v1/oauth/connections` reports it. */
   remoteRevocation: RemoteRevocation | null;

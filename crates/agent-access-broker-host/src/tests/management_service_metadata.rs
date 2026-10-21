@@ -262,8 +262,11 @@ fn assert_credential_target_metadata(targets: &Value) {
             "credentialVerificationInputs": ["repository"]}])
     );
     assert_eq!(git["otherConsumers"], 0);
-    assert_eq!(git["profile"], "git-bearer-token");
-    assert_eq!(git["inputSchema"]["connection"], "gitlab_git");
+    assert_eq!(git["tokenProfiles"][0]["profile"], "git-bearer-token");
+    assert_eq!(
+        git["tokenProfiles"][0]["inputSchema"]["connection"],
+        "gitlab_git"
+    );
     let jira = entry(targets, "connection", "jira");
     assert_eq!(jira["displayName"], "jira");
     // Always serialized, empty when verification needs no input.
@@ -271,7 +274,7 @@ fn assert_credential_target_metadata(targets: &Value) {
         jira["consumers"][0]["credentialVerificationInputs"],
         json!([])
     );
-    assert_eq!(jira["profile"], "atlassian-api-token");
+    assert_eq!(jira["tokenProfiles"][0]["profile"], "atlassian-api-token");
 }
 
 #[tokio::test]

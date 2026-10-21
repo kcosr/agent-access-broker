@@ -28,6 +28,7 @@ mod lookup_access;
 mod mcp_views;
 mod owned;
 mod personal_credentials;
+pub use personal_credentials::ConnectionTokenProfile;
 #[cfg(test)]
 mod provider_contract_tests;
 #[cfg(test)]

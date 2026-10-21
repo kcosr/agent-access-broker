@@ -335,7 +335,7 @@ fn self_service_disablement_blocks_transactional_writes_without_changing_invocat
     );
     assert!(
         store
-            .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
+            .resolve_user_credential(&ring, "alice", "jira", "default", &["jira-cloud-api-token".to_string()])
             .is_ok()
     );
     create_alice(&store); // profile synchronization does not reset disabled self-service
@@ -515,9 +515,8 @@ fn principal_access_administrative_token_and_credential_cleanup_remain_available
             "alice",
             "jira",
             "tuple",
-            "jira-cloud-api-token",
-            CredentialManagementPurpose::Administrative,
-        )
+            &["jira-cloud-api-token".to_string()],
+            CredentialManagementPurpose::Administrative)
         .unwrap();
     store.set_principal_enabled("alice", false).unwrap();
     assert!(matches!(
@@ -592,7 +591,7 @@ fn principal_access_administrative_token_and_credential_cleanup_remain_available
             "alice",
             "jira",
             "tuple",
-            "jira-cloud-api-token",
+            &["jira-cloud-api-token".to_string()],
             CredentialManagementPurpose::Administrative
         ),
         Err(ManagedStoreError::PrincipalDisabled)

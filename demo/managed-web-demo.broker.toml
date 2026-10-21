@@ -113,7 +113,8 @@ read_only = true
 # email and classic API token per principal serves both products on the site.
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-token_profile = "atlassian-api-token"
+user_token_profiles = ["atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.jira]
 type = "connection"
@@ -145,7 +146,8 @@ read_only = true
 
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
+user_token_profiles = ["gitlab-access-token"]
+service_account_token_profiles = ["gitlab-access-token"]
 
 [credentials.per_user.gitlab]
 type = "connection"

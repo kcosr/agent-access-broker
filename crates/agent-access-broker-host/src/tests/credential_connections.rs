@@ -461,8 +461,12 @@ async fn first_provisioning_lists_entitled_consumers_from_an_empty_store() {
     let jira = connection_row(&list, "jira");
     assert_eq!(jira["method"], "token");
     assert_eq!(jira["credential"], Value::Null);
-    assert_eq!(jira["profile"], JIRA_PROFILE);
-    assert_eq!(jira["credentialKind"], "basic_api_token");
+    assert_eq!(jira["tokenProfiles"].as_array().unwrap().len(), 1);
+    assert_eq!(jira["tokenProfiles"][0]["profile"], JIRA_PROFILE);
+    assert_eq!(
+        jira["tokenProfiles"][0]["credentialKind"],
+        "basic_api_token"
+    );
     let gitlab = connection_row(&list, "gitlab");
     assert_eq!(
         gitlab["consumers"],
@@ -568,7 +572,7 @@ async fn hidden_consumers_never_name_a_shared_connection() {
             None,
         )
         .await;
-    assert_eq!(schema, gitlab["inputSchema"]);
+    assert_eq!(schema, gitlab["tokenProfiles"][0]["inputSchema"]);
     for field in schema["fields"].as_array().unwrap() {
         assert!(
             field["prompt"].as_str().unwrap().starts_with("gitlab "),

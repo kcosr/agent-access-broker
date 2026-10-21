@@ -4467,8 +4467,8 @@ impl<'a> BackendCredentials<'a> {
                 .map(|connection| {
                     connection
                         .config
-                        .token_profile
-                        .iter()
+                        .token_profiles()
+                        .into_iter()
                         .filter_map(|profile| descriptor.credential_profile(profile).cloned())
                         .collect()
                 })

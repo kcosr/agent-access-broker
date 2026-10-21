@@ -172,7 +172,7 @@ impl BrokerRuntime {
                             principal,
                             service,
                             "default",
-                            "token",
+                            &["token".to_string()],
                             crate::CredentialManagementPurpose::Administrative,
                         )?;
                         if versions.get(&format!("user:{principal}"))

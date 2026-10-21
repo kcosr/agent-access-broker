@@ -723,8 +723,9 @@ fn product_connections(
 ) -> String {
     ["jira", "confluence"]
         .map(|product| {
+            // People use OAuth; the profile serves service accounts.
             let token = token_profile
-                .map(|profile| format!("token_profile = \"{profile}\"\n"))
+                .map(|profile| format!("service_account_token_profiles = [\"{profile}\"]\n"))
                 .unwrap_or_default();
             format!(
                 "[credentials.connections.{product}]\n{token}oauth = {{ registration = \"{}\", profile = \"default\" }}\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n",
@@ -736,8 +737,16 @@ fn product_connections(
 
 /// One `atlassian` connection both products consume.
 fn shared_connection(token_profile: Option<&str>, oauth: bool) -> String {
+    // Beside OAuth the profile serves service accounts only.
     let token = token_profile
-        .map(|profile| format!("token_profile = \"{profile}\"\n"))
+        .map(|profile| {
+            let people = if oauth {
+                String::new()
+            } else {
+                format!("user_token_profiles = [\"{profile}\"]\n")
+            };
+            format!("{people}service_account_token_profiles = [\"{profile}\"]\n")
+        })
         .unwrap_or_default();
     let oauth = if oauth {
         "oauth = { registration = \"atlassian\", profile = \"default\" }\n"
@@ -786,7 +795,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
     let bearer_tokens = ["jira", "confluence"]
         .map(|product| {
             format!(
-                "[credentials.connections.{product}]\ntoken_profile = \"atlassian-bearer-token\"\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n"
+                "[credentials.connections.{product}]\nuser_token_profiles = [\"atlassian-bearer-token\"]\nservice_account_token_profiles = [\"atlassian-bearer-token\"]\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n"
             )
         })
         .join("\n");

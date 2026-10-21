@@ -3060,7 +3060,8 @@ public_url = "http://127.0.0.1:${port}/mcp"
 
 [credentials.connections.jira]
 display_name = "Jira"
-token_profile = "atlassian-api-token"
+user_token_profiles = ["atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.jira]
 type = "connection"

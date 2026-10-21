@@ -66,12 +66,40 @@ impl PrincipalKind {
 pub struct ConnectionConfig {
     /// The name management shows for the connection; its ID when unset.
     pub display_name: Option<String>,
-    /// The stored token form: self-service for users when `oauth` is unset
-    /// and for system principals, administrator-provisioned for service
-    /// accounts.
-    pub token_profile: Option<String>,
+    /// The token profiles a person (`User` principal) may store, in the
+    /// order a picker offers them. Exclusive with `oauth`: people then use
+    /// OAuth.
+    pub user_token_profiles: Option<Vec<String>>,
+    /// The token profiles a service account or system principal may store,
+    /// in picker order: administrator-provisioned for service accounts,
+    /// self-service for system principals.
+    pub service_account_token_profiles: Option<Vec<String>>,
     /// OAuth for user principals, who then never store a token.
     pub oauth: Option<ConnectionOAuthConfig>,
+}
+
+impl ConnectionConfig {
+    /// Every token profile either list names, each once, the people's list
+    /// first, in configuration order.
+    pub fn token_profiles(&self) -> Vec<&str> {
+        let mut profiles = Vec::new();
+        for profile in self
+            .user_token_profiles
+            .iter()
+            .chain(&self.service_account_token_profiles)
+            .flatten()
+        {
+            if !profiles.contains(&profile.as_str()) {
+                profiles.push(profile.as_str());
+            }
+        }
+        profiles
+    }
+
+    /// Whether either token list is configured.
+    pub fn has_token_profiles(&self) -> bool {
+        self.user_token_profiles.is_some() || self.service_account_token_profiles.is_some()
+    }
 }
 
 /// `oauth = { registration, profile }` of a connection: a configured OAuth
@@ -96,9 +124,10 @@ impl ConnectionOAuthConfig {
 /// A principal's method for one connection, from configuration alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selection<'a> {
-    /// The principal's stored token row for the connection, which must have
-    /// this profile.
-    Token(&'a str),
+    /// The principal's stored token row for the connection, whose stored
+    /// profile must be one of these, in picker order. The row is presented
+    /// as its own profile.
+    Token(&'a [String]),
     /// The principal's OAuth connection for this registration and profile;
     /// a stored token row is never read.
     OAuth(&'a ConnectionOAuthConfig),
@@ -109,25 +138,33 @@ pub enum Selection<'a> {
 /// The method `principal_kind` uses for `connection`. It never reads stored
 /// rows or OAuth slots, and there is no fallback between methods:
 ///
-/// | Principal | Connection has `oauth` | `token_profile` only |
+/// | Principal | Connection has `oauth` | No `oauth` |
 /// | --- | --- | --- |
-/// | `User` | `OAuth` | `Token` |
-/// | `ServiceAccount` | `Token` if `token_profile` is set, otherwise `Unavailable` | `Token` |
-/// | `System` | `Token` if `token_profile` is set, otherwise `Unavailable` | `Token` |
+/// | `User` | `OAuth` | `Token(user_token_profiles)` if set, otherwise `Unavailable` |
+/// | `ServiceAccount`, `System` | `Token(service_account_token_profiles)` if set, otherwise `Unavailable` | Same |
 /// | `None` (no active managed principal) | `Unavailable` | `Unavailable` |
+///
+/// Service accounts and system principals share one list, so changing a
+/// principal between those kinds never strands its stored token.
 pub fn select(
     connection: &ConnectionConfig,
     principal_kind: Option<PrincipalKind>,
 ) -> Selection<'_> {
-    match (
-        principal_kind,
-        connection.oauth.as_ref(),
-        connection.token_profile.as_deref(),
-    ) {
-        (None, _, _) => Selection::Unavailable,
-        (Some(PrincipalKind::User), Some(oauth), _) => Selection::OAuth(oauth),
-        (Some(_), _, Some(profile)) => Selection::Token(profile),
-        (Some(_), _, None) => Selection::Unavailable,
+    fn token(profiles: &Option<Vec<String>>) -> Selection<'_> {
+        match profiles.as_deref() {
+            Some(profiles) if !profiles.is_empty() => Selection::Token(profiles),
+            _ => Selection::Unavailable,
+        }
+    }
+    match principal_kind {
+        None => Selection::Unavailable,
+        Some(PrincipalKind::User) => match &connection.oauth {
+            Some(oauth) => Selection::OAuth(oauth),
+            None => token(&connection.user_token_profiles),
+        },
+        Some(PrincipalKind::ServiceAccount | PrincipalKind::System) => {
+            token(&connection.service_account_token_profiles)
+        }
     }
 }
 
@@ -192,19 +229,15 @@ fn declared_profile_kind<'a>(
     Ok(kind)
 }
 
-/// The kind of a connection's token profile as its consumers declare it,
-/// when they agree; `None` when the profile is unset, undeclared or
-/// declared with different kinds, which validation rejects.
-pub(crate) fn connection_token_kind(
+/// The kind `connection`'s consumers declare for `profile`, when they
+/// agree; `None` when it is undeclared or declared with different kinds,
+/// which validation rejects.
+pub(crate) fn connection_profile_kind(
     credentials: &CredentialsConfig,
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
     connection: &str,
+    profile: &str,
 ) -> Option<&'static str> {
-    let profile = credentials
-        .connections
-        .get(connection)?
-        .token_profile
-        .as_deref()?;
     declared_profile_kind(
         profile,
         credentials
@@ -214,6 +247,24 @@ pub(crate) fn connection_token_kind(
     .ok()
     .flatten()
 }
+
+/// The label `connection`'s consumers declare for `profile`: the first one
+/// in service ID order that declares a label.
+pub(crate) fn connection_profile_label(
+    credentials: &CredentialsConfig,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    connection: &str,
+    profile: &str,
+) -> Option<String> {
+    credentials
+        .connection_consumers(connection)
+        .filter_map(|service| services.get(service))
+        .find_map(|descriptor| descriptor.credential_profile(profile)?.label.clone())
+}
+
+/// The configuration keys of a connection's token lists.
+const USER_TOKEN_PROFILES: &str = "user_token_profiles";
+const SERVICE_ACCOUNT_TOKEN_PROFILES: &str = "service_account_token_profiles";
 
 /// Checks `[credentials.connections]` against the configured services: the
 /// ID namespace, at least one method, every consumer's profile and
@@ -247,15 +298,44 @@ pub(crate) fn validate_connections(
         {
             errors.push(format!("{label}.display_name must not be empty"));
         }
-        if connection.token_profile.is_none() && connection.oauth.is_none() {
-            errors.push(format!("{label} must set token_profile, oauth, or both"));
+        if !connection.has_token_profiles() && connection.oauth.is_none() {
+            errors.push(format!(
+                "{label} must set oauth, {USER_TOKEN_PROFILES} or {SERVICE_ACCOUNT_TOKEN_PROFILES}"
+            ));
+        }
+        if connection.user_token_profiles.is_some() && connection.oauth.is_some() {
+            errors.push(format!(
+                "{label}.{USER_TOKEN_PROFILES} cannot be set beside oauth: people use the connection's OAuth"
+            ));
         }
         let descriptors = consumers
             .iter()
             .filter_map(|service| services.get(*service).map(|d| (*service, d.as_ref())))
             .collect::<Vec<_>>();
-        if let Some(profile) = connection.token_profile.as_deref() {
-            validate_token_profile(config, &label, profile, &descriptors, errors);
+        let mut validated = Vec::new();
+        for (key, profiles) in [
+            (USER_TOKEN_PROFILES, &connection.user_token_profiles),
+            (
+                SERVICE_ACCOUNT_TOKEN_PROFILES,
+                &connection.service_account_token_profiles,
+            ),
+        ] {
+            let Some(profiles) = profiles else {
+                continue;
+            };
+            let list = format!("{label}.{key}");
+            if profiles.is_empty() {
+                errors.push(format!("{list} must not be empty"));
+            }
+            for (index, profile) in profiles.iter().enumerate() {
+                if profiles[..index].contains(profile) {
+                    errors.push(format!("{list} lists {profile} more than once"));
+                } else if !validated.contains(&profile) {
+                    // A profile in both lists is checked once.
+                    validated.push(profile);
+                    validate_token_profile(config, &list, profile, &descriptors, errors);
+                }
+            }
         }
         if let Some(oauth) = &connection.oauth {
             validate_connection_oauth(config, &label, oauth, &descriptors, errors);
@@ -312,8 +392,9 @@ pub(crate) fn shared_registration_errors(credentials: &CredentialsConfig) -> Vec
 }
 
 /// Whether each connection's consumers act on one upstream (design: the
-/// upstream authority contract). A token method requires every consumer of
-/// a shared connection to declare an authority naming the same instance:
+/// upstream authority contract). A token method (either list) requires every
+/// consumer of a shared connection to declare an authority naming the same
+/// instance:
 /// one origin and instance path. An OAuth method requires the
 /// registration's dialect to accept each consumer's authority. Connections
 /// whose OAuth registration or profile is missing are reported elsewhere.
@@ -332,7 +413,7 @@ pub(crate) fn connection_authority_errors(
             .connection_consumers(id)
             .filter_map(|service| services.get(service).map(|d| (service, d.as_ref())))
             .collect::<Vec<_>>();
-        if connection.token_profile.is_some() && consumers.len() > 1 {
+        if connection.has_token_profiles() && consumers.len() > 1 {
             let mut first: Option<(&str, &agent_access_provider::UpstreamAuthority)> = None;
             for (service, descriptor) in &consumers {
                 let Some(authority) = descriptor.upstream_authority.as_ref() else {
@@ -382,13 +463,14 @@ pub(crate) fn connection_authority_errors(
     errors
 }
 
-/// Every consumer declares `profile` with one kind, except that a Git
-/// gateway accepts any token- or basic-kind profile another consumer or the
-/// gateway itself declares, unless a consumer marks it route-bound: only
-/// its declaring provider may present such a profile.
+/// Every consumer declares `profile`, an entry of the token list `list`,
+/// with one kind, except that a Git gateway accepts any token- or
+/// basic-kind profile another consumer or the gateway itself declares,
+/// unless a consumer marks it route-bound: only its declaring provider may
+/// present such a profile.
 fn validate_token_profile(
     config: &BrokerConfig,
-    label: &str,
+    list: &str,
     profile: &str,
     consumers: &[(&str, &ServiceDescriptor)],
     errors: &mut Vec<String>,
@@ -397,7 +479,7 @@ fn validate_token_profile(
         Ok(kind) => kind,
         Err(()) => {
             errors.push(format!(
-                "{label}.token_profile {profile} is declared with different credential kinds by its consumers"
+                "{list} profile {profile} is declared with different credential kinds by its consumers"
             ));
             return;
         }
@@ -411,16 +493,16 @@ fn validate_token_profile(
         if config.gateways.contains_key(*service) {
             if route_bound {
                 errors.push(format!(
-                    "{label}.token_profile {profile} is route-bound: only the provider declaring it may present it, so the gateway {service} cannot consume this connection"
+                    "{list} profile {profile} is route-bound: only the provider declaring it may present it, so the gateway {service} cannot consume this connection"
                 ));
             } else if !matches!(kind, Some("bearer_token" | "basic_api_token")) {
                 errors.push(format!(
-                    "{label}.token_profile {profile} is not a token or basic profile the gateway {service} can present"
+                    "{list} profile {profile} is not a token or basic profile the gateway {service} can present"
                 ));
             }
         } else if descriptor.credential_profile_kind(profile).is_none() {
             errors.push(format!(
-                "{label}.token_profile {profile} is unsupported for service {service}, which accepts {}",
+                "{list} profile {profile} is unsupported for service {service}, which accepts {}",
                 accepted_profiles(descriptor)
             ));
         }
@@ -480,15 +562,32 @@ fn validate_connection_oauth(
 mod tests {
     use super::*;
 
-    fn connection(token_profile: Option<&str>, oauth: bool) -> ConnectionConfig {
+    fn profiles(names: &[&str]) -> Option<Vec<String>> {
+        Some(names.iter().map(|name| (*name).to_owned()).collect())
+    }
+
+    /// A connection with the people's list `user`, the service-account list
+    /// `service_account` and optionally OAuth.
+    fn lists(
+        user: Option<&[&str]>,
+        service_account: Option<&[&str]>,
+        oauth: bool,
+    ) -> ConnectionConfig {
         ConnectionConfig {
             display_name: None,
-            token_profile: token_profile.map(str::to_owned),
+            user_token_profiles: user.and_then(profiles),
+            service_account_token_profiles: service_account.and_then(profiles),
             oauth: oauth.then(|| ConnectionOAuthConfig {
                 registration: "gitlab".into(),
                 profile: "default".into(),
             }),
         }
+    }
+
+    /// One token profile for everyone, or none, beside optional OAuth.
+    fn connection(token_profile: Option<&str>, oauth: bool) -> ConnectionConfig {
+        let list = token_profile.map(|profile| vec![profile]);
+        lists(list.as_deref().filter(|_| !oauth), list.as_deref(), oauth)
     }
 
     #[test]
@@ -513,27 +612,78 @@ mod tests {
     #[test]
     fn select_follows_the_principal_method_table() {
         use PrincipalKind::{ServiceAccount, System, User};
-        let token_only = connection(Some("gitlab-access-token"), false);
-        let oauth_only = connection(None, true);
-        let both = connection(Some("gitlab-access-token"), true);
-        let oauth = both.oauth.as_ref().unwrap();
-        let token = Selection::Token("gitlab-access-token");
-
-        assert_eq!(select(&both, Some(User)), Selection::OAuth(oauth));
-        assert_eq!(
-            select(&oauth_only, Some(User)),
-            Selection::OAuth(oauth_only.oauth.as_ref().unwrap())
+        let people = ["gitlab-access-token".to_string()];
+        let machines = [
+            "gitlab-access-token".to_string(),
+            "gitlab-deploy-token".to_string(),
+        ];
+        let oauth_and_machines = lists(
+            None,
+            Some(&["gitlab-access-token", "gitlab-deploy-token"]),
+            true,
         );
-        assert_eq!(select(&token_only, Some(User)), token);
+        let oauth = oauth_and_machines.oauth.as_ref().unwrap();
+        let oauth_only = lists(None, None, true);
+        let both_lists = lists(
+            Some(&["gitlab-access-token"]),
+            Some(&["gitlab-access-token", "gitlab-deploy-token"]),
+            false,
+        );
+        let people_only = lists(Some(&["gitlab-access-token"]), None, false);
+        let machines_only = lists(
+            None,
+            Some(&["gitlab-access-token", "gitlab-deploy-token"]),
+            false,
+        );
+        // Lists validation rejects as empty select nothing.
+        let empty = lists(Some(&[]), Some(&[]), false);
 
-        for kind in [ServiceAccount, System] {
-            assert_eq!(select(&both, Some(kind)), token);
-            assert_eq!(select(&oauth_only, Some(kind)), Selection::Unavailable);
-            assert_eq!(select(&token_only, Some(kind)), token);
-        }
-        for configured in [&token_only, &oauth_only, &both] {
+        for (configured, user, machine) in [
+            (
+                &oauth_and_machines,
+                Selection::OAuth(oauth),
+                Selection::Token(&machines[..]),
+            ),
+            (
+                &oauth_only,
+                Selection::OAuth(oauth_only.oauth.as_ref().unwrap()),
+                Selection::Unavailable,
+            ),
+            (
+                &both_lists,
+                Selection::Token(&people[..]),
+                Selection::Token(&machines[..]),
+            ),
+            (
+                &people_only,
+                Selection::Token(&people[..]),
+                Selection::Unavailable,
+            ),
+            (
+                &machines_only,
+                Selection::Unavailable,
+                Selection::Token(&machines[..]),
+            ),
+            (&empty, Selection::Unavailable, Selection::Unavailable),
+        ] {
+            assert_eq!(select(configured, Some(User)), user, "{configured:?}");
+            // Service accounts and system principals share one list.
+            for kind in [ServiceAccount, System] {
+                assert_eq!(select(configured, Some(kind)), machine, "{configured:?}");
+            }
             assert_eq!(select(configured, None), Selection::Unavailable);
         }
+    }
+
+    #[test]
+    fn token_profiles_name_each_listed_profile_once_people_first() {
+        assert_eq!(
+            lists(Some(&["b", "a"]), Some(&["a", "c"]), false).token_profiles(),
+            ["b", "a", "c"]
+        );
+        assert!(lists(None, None, true).token_profiles().is_empty());
+        assert!(!lists(None, None, true).has_token_profiles());
+        assert!(lists(None, Some(&[]), false).has_token_profiles());
     }
 
     fn consumers(authorities: &[(&str, Option<&str>)]) -> BTreeMap<String, Arc<ServiceDescriptor>> {

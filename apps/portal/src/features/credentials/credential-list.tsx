@@ -165,6 +165,11 @@ function isSettable(row: CredentialRow) {
   return row.kind === "token" || row.kind === "oauth";
 }
 
+/** A token connection's profile: its stored token's, else the first it accepts. */
+function tokenProfile(connection: CredentialConnection) {
+  return connection.credential?.profile ?? connection.tokenProfiles[0]?.profile ?? "";
+}
+
 function isMissing(row: CredentialRow) {
   if (row.kind === "token") return !row.connection.credential;
   if (row.kind === "oauth") return !oauthConnected(row.oauth);
@@ -174,7 +179,7 @@ function isMissing(row: CredentialRow) {
 /** The text the filter matches: the row key, name, consumers, and its profile or OAuth registration and connections. */
 function rowSearchText(row: CredentialRow) {
   const detail =
-    row.kind === "token" ? row.connection.profile ?? "" : row.kind === "retained" ? row.credential.profile : row.kind === "administered-oauth" ? row.oauth.connections.join(" ") : "";
+    row.kind === "token" ? tokenProfile(row.connection) : row.kind === "retained" ? row.credential.profile : row.kind === "administered-oauth" ? row.oauth.connections.join(" ") : "";
   return `${row.key} ${rowName(row)} ${rowConsumers(row)} ${detail}`.toLowerCase();
 }
 
@@ -324,7 +329,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         minWidth: "10ch",
         className: "wb-cell-muted",
         cell: (row) => {
-          if (row.kind === "token") return row.connection.profile;
+          if (row.kind === "token") return tokenProfile(row.connection);
           if (row.kind === "retained") return row.credential.profile;
           if (row.kind === "oauth") {
             return (
@@ -482,7 +487,7 @@ export function CredentialDrawer({ model }: { model: CredentialListModel }) {
       meta={
         <>
           <StatePill tone={state.tone}>{state.label}</StatePill>
-          {open.kind === "token" && open.connection.profile ? <span>{open.connection.profile}</span> : null}
+          {open.kind === "token" && tokenProfile(open.connection) ? <span>{tokenProfile(open.connection)}</span> : null}
           {open.kind === "retained" ? <span>{open.credential.profile}</span> : null}
         </>
       }
@@ -705,12 +710,14 @@ function RepositoryVerification({ connection, onVerify }: { connection: Credenti
 
 /** Secret entry for one connection's token; values never leave this form except in the save request. */
 function CredentialForm({ target, replacing, onSave }: { target: CredentialTarget; replacing: boolean; onSave: (values: Record<string, string>) => Promise<void> }) {
-  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(target.inputSchema.fields.map((field) => [field.name, ""])));
+  // The form offers the connection's first accepted token profile.
+  const { inputSchema } = target.tokenProfiles[0];
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(inputSchema.fields.map((field) => [field.name, ""])));
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dirty = Object.values(values).some(Boolean);
-  const missing = target.inputSchema.fields.some((field) => field.required && !values[field.name]);
+  const missing = inputSchema.fields.some((field) => field.required && !values[field.name]);
   return (
     <form
       className="wb-form-stack"
@@ -722,7 +729,7 @@ function CredentialForm({ target, replacing, onSave }: { target: CredentialTarge
         setError(null);
         try {
           await onSave(values);
-          setValues(Object.fromEntries(target.inputSchema.fields.map((field) => [field.name, ""])));
+          setValues(Object.fromEntries(inputSchema.fields.map((field) => [field.name, ""])));
         } catch (failure) {
           setError(errorMessage(failure));
         } finally {
@@ -730,7 +737,7 @@ function CredentialForm({ target, replacing, onSave }: { target: CredentialTarge
         }
       }}
     >
-      {target.inputSchema.fields.map((field) => {
+      {inputSchema.fields.map((field) => {
         const hidden = field.secret && !visible[field.name];
         return (
           <Field key={field.name} label={field.prompt} hint={field.description} optional={!field.required}>

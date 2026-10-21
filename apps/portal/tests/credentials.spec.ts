@@ -20,16 +20,17 @@ const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerifica
 const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationInputs: ["repository"] };
 const mail = { service: "gmail", displayName: "Gmail", credentialVerificationInputs: [] };
 const fields = [{ name: "token", required: true, secret: true, prompt: "GitLab bearer token", inputMethods: ["prompt", "env", "file", "stdin"] }];
-const target = {
-  connection: "gitlab", displayName: "GitLab", consumers: [rest, git], otherConsumers: 1, profile: "gitlab-access-token", credentialKind: "bearer_token",
+const gitlabProfile = {
+  profile: "gitlab-access-token", label: null, credentialKind: "bearer_token",
   inputSchema: { connection: "gitlab", profile: "gitlab-access-token", credentialKind: "bearer_token", fields }
 };
+const target = { connection: "gitlab", displayName: "GitLab", consumers: [rest, git], otherConsumers: 1, tokenProfiles: [gitlabProfile] };
 const token = { credentialId: "credential-gitlab", ownerPrincipal: "viewer", ownerKind: "user", connection: "gitlab", profile: "gitlab-access-token", credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
 const retained = { credentialId: "credential-old-git", ownerPrincipal: "viewer", ownerKind: "user", service: "gitlab_git", name: "default", profile: "git-basic-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", ...stamp };
 const credentials = {
   connections: [
-    { connection: "gitlab", displayName: "GitLab", method: "token", consumers: [rest, git], otherConsumers: 1, profile: "gitlab-access-token", credentialKind: "bearer_token", registration: null, remoteRevocation: null, credential: token },
-    { connection: "gmail", displayName: "Gmail", method: "oauth", consumers: [mail], otherConsumers: 0, profile: null, credentialKind: null, registration: "google", remoteRevocation: "not_requested", credential: null }
+    { connection: "gitlab", displayName: "GitLab", method: "token", consumers: [rest, git], otherConsumers: 1, tokenProfiles: [gitlabProfile], registration: null, remoteRevocation: null, credential: token },
+    { connection: "gmail", displayName: "Gmail", method: "oauth", consumers: [mail], otherConsumers: 0, tokenProfiles: [], registration: "google", remoteRevocation: "not_requested", credential: null }
   ],
   retained: [retained]
 };
@@ -108,7 +109,7 @@ async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", 
 const bot = { principalId: "bot", kind: "service_account", role: "user", selfServiceEnabled: false, displayName: "Build bot", groups: [], status: "active", ...stamp, signInMethods: { localPassword: "absent", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] };
 const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
 const botCredentials = {
-  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, profile: "atlassian-api-token", credentialKind: "basic_api_token", registration: null, credential: botToken }],
+  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, tokenProfiles: [{ profile: "atlassian-api-token", label: null, credentialKind: "basic_api_token", inputSchema: { connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", fields: [] } }], registration: null, credential: botToken }],
   retained: []
 };
 
@@ -117,7 +118,7 @@ const botCredentials = {
 // failed, so it stays listed for the provider-side cleanup.
 const morgan = { ...bot, principalId: "morgan", kind: "user", selfServiceEnabled: true, displayName: "Morgan" };
 const oauthRow = (connection: string, displayName: string, registration: string, consumers: (typeof rest)[], otherConsumers: number, remoteRevocation: string) =>
-  ({ connection, displayName, method: "oauth", consumers, otherConsumers, profile: null, credentialKind: null, registration, remoteRevocation, credential: null });
+  ({ connection, displayName, method: "oauth", consumers, otherConsumers, tokenProfiles: [], registration, remoteRevocation, credential: null });
 const morganCredentials = {
   connections: [
     oauthRow("gitlab", "GitLab", "gitlab", [rest, git], 0, "unconfirmed"),

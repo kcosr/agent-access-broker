@@ -127,7 +127,7 @@ export function entityPaletteSources(data: PaletteEntities, go: Go): PaletteSour
       const credential = connection.credential!;
       return {
         id: `credential-${credential.credentialId}`, label: connection.displayName, icon: "lock",
-        hint: `${connection.profile ?? credential.profile} · ${credentialStatus(credential)}`,
+        hint: `${credential.profile} · ${credentialStatus(credential)}`,
         // Never index opaque metadata, credential values, or verification error details.
         keywords: [credential.credentialId, connection.connection, ...connection.consumers.flatMap((consumer) => [consumer.service, consumer.displayName]), credential.profile, credential.credentialKind, credential.status, credentialStatus(credential), "credential"],
         onSelect: go(paths.credentials(connection.connection))

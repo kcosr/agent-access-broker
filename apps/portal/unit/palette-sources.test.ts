@@ -21,7 +21,7 @@ const credential: ConnectionCredential = {
 };
 const connection: CredentialConnection = {
   connection: "tracker", displayName: "Issue Tracker", method: "token", consumers: [{ service: "jira", displayName: "Issue Tracker", credentialVerificationInputs: [] }],
-  otherConsumers: 0, profile: "standard", credentialKind: "token", registration: null, remoteRevocation: null, credential
+  otherConsumers: 0, tokenProfiles: [{ profile: "standard", label: null, credentialKind: "token", inputSchema: { connection: "tracker", profile: "standard", credentialKind: "token", fields: [] } }], registration: null, remoteRevocation: null, credential
 };
 function fixture(session = admin): PaletteEntities {
   return {

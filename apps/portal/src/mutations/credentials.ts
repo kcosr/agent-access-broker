@@ -27,11 +27,13 @@ export function useCredentialActions(subject: AccountSubject) {
     }
 
     async function save(target: CredentialTarget, values: Record<string, string>) {
-      const secret = Object.fromEntries(target.inputSchema.fields.map((field) => [field.name, values[field.name] ?? ""]));
+      // The form offers the connection's first accepted token profile.
+      const [{ profile, inputSchema }] = target.tokenProfiles;
+      const secret = Object.fromEntries(inputSchema.fields.map((field) => [field.name, values[field.name] ?? ""]));
       await attempt((current) =>
         administered
-          ? brokerApi.adminPrincipalSaveCredential(current, principalId, target.connection, target.profile, secret)
-          : brokerApi.saveCredential(current, target.connection, target.profile, secret)
+          ? brokerApi.adminPrincipalSaveCredential(current, principalId, target.connection, profile, secret)
+          : brokerApi.saveCredential(current, target.connection, profile, secret)
       );
       toast("Credential saved", { tone: "success" });
       refresh();

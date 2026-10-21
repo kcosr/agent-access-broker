@@ -143,7 +143,7 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
     store.check_ready(Some(&ring)).unwrap();
     for golden in &GOLDEN_STORED_CREDENTIALS {
         let credential = store
-            .resolve_user_credential(&ring, "alice", golden.service, "default", golden.profile)
+            .resolve_user_credential(&ring, "alice", golden.service, "default", &[golden.profile.to_string()])
             .unwrap();
         assert_eq!(
             credential.kind().as_str(),
@@ -168,7 +168,7 @@ fn imported_username_token_row_from_baseline_resolves_for_a_command() {
     let (_temp, store) = store_with_golden_stored_credentials();
     let ring = key_ring("k1");
     let credential = store
-        .resolve_user_command_credential(&ring, "alice", "ticketing", "default", "username-token")
+        .resolve_user_command_credential(&ring, "alice", "ticketing", "default", &["username-token".to_string()])
         .unwrap();
     assert_eq!(
         credential.kind(),
@@ -301,7 +301,7 @@ fn vendor_atlassian_rows_resolve_beside_the_product_profile_row() {
     store.check_ready(Some(&ring)).unwrap();
     for golden in &GOLDEN_ATLASSIAN_STORED_CREDENTIALS {
         let credential = store
-            .resolve_user_credential(&ring, "alice", golden.service, "default", golden.profile)
+            .resolve_user_credential(&ring, "alice", golden.service, "default", &[golden.profile.to_string()])
             .unwrap();
         assert_eq!(
             credential.kind().as_str(),
@@ -321,13 +321,13 @@ fn vendor_atlassian_rows_resolve_beside_the_product_profile_row() {
     let product = &GOLDEN_STORED_CREDENTIALS[0];
     assert_eq!(
         store
-            .resolve_user_credential(&ring, "alice", "jira", "default", product.profile)
+            .resolve_user_credential(&ring, "alice", "jira", "default", &[product.profile.to_string()])
             .unwrap(),
         expected_golden_credential(product)
     );
     for profile in ["atlassian-api-token", "atlassian-bearer-token"] {
         let error = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", profile)
+            .resolve_user_credential(&ring, "alice", "jira", "default", &[profile.to_string()])
             .unwrap_err();
         assert!(
             matches!(error, ManagedStoreError::CredentialInvalid(_)),
@@ -387,7 +387,7 @@ fn rewrap_covers_product_and_vendor_atlassian_rows() {
                     "alice",
                     golden.service,
                     "default",
-                    golden.profile
+                    &[golden.profile.to_string()]
                 )
                 .unwrap(),
             expected_golden_credential(golden),
