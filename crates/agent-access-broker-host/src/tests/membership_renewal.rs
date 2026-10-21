@@ -2408,3 +2408,32 @@ async fn renewal_waits_hold_per_principal_capacity() {
     }
     assert_eq!(f.provider.refresh_arrivals(), 1);
 }
+
+/// The durable attempt time is read once the attempt start holds the
+/// mutation and store locks: a start that waited for them records when it
+/// ran, so the attempt interval counts from the real start.
+#[tokio::test]
+async fn the_attempt_time_is_read_after_the_start_waits_for_its_locks() {
+    let f = fixture().await;
+    let method = f.person.method.clone();
+    f.clock.advance_seconds(61);
+    f.expires_in(&method, 3600);
+    let state = f.state();
+    let held = state.policy_mutation_lock.lock().await;
+    assert_eq!(
+        f.invoke("renewal-start-blocked").await.status(),
+        StatusCode::OK
+    );
+    // The flight waits for the mutation lock while time passes.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(f.renewal(&method).unwrap().last_attempt_at, None);
+    f.clock.advance_seconds(20);
+    let started_at = chrono::DateTime::<chrono::Utc>::from_timestamp(f.clock.now_timestamp(), 0)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    drop(held);
+    state.membership_renewals.wait_idle().await;
+    let row = f.renewal(&method).unwrap();
+    assert_eq!(row.last_attempt_at.as_deref(), Some(started_at.as_str()));
+    assert_eq!(f.renewal_audit("renewal-start-blocked")["action"], RENEWED);
+}

@@ -549,15 +549,18 @@ impl MembershipRenewals {
         let request = OidcMembershipRenewalAttemptRequest {
             login_method_id: flight.login_method_id.clone(),
             config_generation,
-            now: timestamp(provider.clock().now()),
         };
         let start_ring = key_ring.clone();
+        // The attempt's time is read inside the store transaction, after the
+        // mutation lock and the store's write lock: a start that waited for
+        // them records when it ran, so the attempt interval holds.
+        let clock = provider.clock_arc();
         let attempt = state
             .token_store_call_from_snapshot(Arc::clone(&snapshot), move |runtime| {
                 runtime
                     .managed_store()
                     .ok_or_else(|| ManagedStoreError::Unavailable("managed store".into()))?
-                    .start_oidc_membership_renewal(&start_ring, &request)
+                    .start_oidc_membership_renewal(&start_ring, &request, || clock.now())
             })
             .await;
         let start = match attempt {

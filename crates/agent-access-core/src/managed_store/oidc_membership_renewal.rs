@@ -259,8 +259,6 @@ pub struct MembershipRenewalHint {
 pub struct OidcMembershipRenewalAttemptRequest {
     pub login_method_id: String,
     pub config_generation: u64,
-    /// The attempt's time, normalized RFC 3339.
-    pub now: String,
 }
 
 /// What an attempt's outcome write must still find (design §8.8): the same
@@ -1361,17 +1359,22 @@ impl ManagedStore {
     /// the evidence inside the renewal window `ttl / 4`. It then records the
     /// attempt's start, which nothing clears, and returns the decrypted
     /// payload with the fence its outcome must still find.
+    ///
+    /// `now` is read once the store and the transaction's write lock are
+    /// held, so a start that waited for them records when it actually ran.
     pub fn start_oidc_membership_renewal(
         &self,
         key_ring: &CredentialKeyRing,
         request: &OidcMembershipRenewalAttemptRequest,
+        now: impl FnOnce() -> DateTime<Utc>,
     ) -> Result<OidcMembershipRenewalAttempt, ManagedStoreError> {
-        let now_time = parse_time(&request.now)?;
-        let now = normalized_timestamp(now_time);
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
+        let now_time = DateTime::<Utc>::from_timestamp(now().timestamp(), 0)
+            .ok_or_else(|| input_invalid("membership renewal time is invalid"))?;
+        let now = normalized_timestamp(now_time);
         let skip = |tx: rusqlite::Transaction<'_>, reason| {
             tx.commit().map_err(sql_unavailable)?;
             Ok(OidcMembershipRenewalAttempt::Skipped(reason))

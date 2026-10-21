@@ -1756,8 +1756,8 @@ impl Fixture {
                 &OidcMembershipRenewalAttemptRequest {
                     login_method_id: method.into(),
                     config_generation,
-                    now: at(self, offset),
                 },
+                || DateTime::<Utc>::from_timestamp(self.now + offset, 0).unwrap(),
             )
             .unwrap()
     }
