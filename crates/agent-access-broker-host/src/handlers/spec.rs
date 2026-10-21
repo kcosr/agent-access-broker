@@ -1,8 +1,7 @@
-use crate::handlers::auth::resolve_browser_cookie_identity_blocking;
 use crate::handlers::common::{
     CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
     check_auth_source_rate_guard, discovery_unavailable_envelope, envelope_response,
-    request_id_from_headers, resolve_identity_blocking,
+    request_id_from_headers, resolve_request_identity_pending,
 };
 use crate::handlers::management::common::{
     effective_management_authority, management_admin_authorized,
@@ -224,6 +223,36 @@ async fn spec_document_response(
     raw_spec_json_response(&context.snapshot, document)
 }
 
+/// A spec request's identity failure: the source's authentication budget is
+/// charged, then the identity error is returned.
+async fn spec_identity_failure(
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+    request_id: &str,
+    document: &str,
+    source: &SourceContext,
+    failure: agent_access_core::IdentityFailure,
+) -> Box<axum::response::Response> {
+    if let Err(response) = check_auth_source_rate_guard(
+        state,
+        snapshot,
+        request_id,
+        "spec".to_string(),
+        document.to_string(),
+        source,
+    )
+    .await
+    {
+        return Box::new(envelope_response(*response).into_response());
+    }
+    let response = snapshot.runtime.identity_error_response(
+        request_id.to_string(),
+        new_broker_request_id(),
+        failure,
+    );
+    Box::new(envelope_response(response).into_response())
+}
+
 async fn spec_context(
     state: &AppState,
     remote_addr: SocketAddr,
@@ -247,64 +276,49 @@ async fn spec_context(
     .await
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
 
-    let identity_result = if !snapshot.runtime.has_configured_identity_header(headers) {
-        match resolve_browser_cookie_identity_blocking(state, snapshot.clone(), headers.clone())
-            .await
-        {
-            Ok(Some(cookie_identity)) => {
-                if cookie_identity.password_change_required {
-                    return Err(Box::new(
-                        envelope_response(spec_error_envelope(
-                            request_id,
-                            new_broker_request_id(),
-                            document,
-                            ReasonCode::PasswordChangeRequired,
-                            "password change is required before reading specs",
-                        ))
-                        .into_response(),
-                    ));
-                }
-                Ok(cookie_identity.identity)
+    let pending =
+        match resolve_request_identity_pending(state, snapshot.clone(), headers.clone()).await {
+            Ok(pending) => pending,
+            Err(failure) => {
+                return Err(spec_identity_failure(
+                    state,
+                    &snapshot,
+                    &request_id,
+                    document,
+                    &source,
+                    failure,
+                )
+                .await);
             }
-            Ok(None) => resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await,
-            Err(failure) => Err(failure),
-        }
-    } else {
-        resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await
+        };
+    let password_change_required = |request_id: String| {
+        Box::new(
+            envelope_response(spec_error_envelope(
+                request_id,
+                new_broker_request_id(),
+                document,
+                ReasonCode::PasswordChangeRequired,
+                "password change is required before reading specs",
+            ))
+            .into_response(),
+        )
     };
-
-    if !matches!(&identity_result, Ok(identity) if identity.authenticated) {
-        check_auth_source_rate_guard(
+    if pending.value().password_change_required {
+        return Err(password_change_required(request_id));
+    }
+    if !pending.value().identity.authenticated {
+        return Err(spec_identity_failure(
             state,
             &snapshot,
             &request_id,
-            "spec".to_string(),
-            document.to_string(),
+            document,
             &source,
+            agent_access_core::IdentityFailure::Required,
         )
-        .await
-        .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
+        .await);
     }
-    let identity = match identity_result {
-        Ok(identity) if identity.authenticated => identity,
-        Ok(_) => {
-            let response = snapshot.runtime.identity_error_response(
-                request_id,
-                new_broker_request_id(),
-                agent_access_core::IdentityFailure::Required,
-            );
-            return Err(Box::new(envelope_response(response).into_response()));
-        }
-        Err(failure) => {
-            let response = snapshot.runtime.identity_error_response(
-                request_id,
-                new_broker_request_id(),
-                failure,
-            );
-            return Err(Box::new(envelope_response(response).into_response()));
-        }
-    };
-    observability::record_principal(&identity.principal);
+    observability::record_principal(&pending.value().identity.principal);
+    // A membership renewal wait holds the caller's capacity.
     let principal_permit = acquire_caller_guard(
         state,
         &snapshot,
@@ -313,11 +327,28 @@ async fn spec_context(
         document.to_string(),
         &source,
         CallerAdmission {
-            identity: &identity,
+            identity: &pending.value().identity,
         },
     )
     .await
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
+    let identity = match pending.admit(state, &snapshot, headers).await {
+        Ok(resolved) if resolved.password_change_required => {
+            return Err(password_change_required(request_id));
+        }
+        Ok(resolved) => resolved.identity,
+        Err(failure) => {
+            return Err(spec_identity_failure(
+                state,
+                &snapshot,
+                &request_id,
+                document,
+                &source,
+                failure,
+            )
+            .await);
+        }
+    };
 
     Ok(SpecContext {
         snapshot,

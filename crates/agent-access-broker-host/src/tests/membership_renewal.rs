@@ -69,10 +69,17 @@ async fn fixture() -> Fixture {
     fixture_with(Duration::from_secs(30)).await
 }
 
-/// The fixture, with the person's evidence expired. The provider's clock
-/// starts at the Broker's and only moves forward; a renewal's token is
-/// issued at the provider's clock.
 async fn fixture_with(shutdown_timeout: Duration) -> Fixture {
+    fixture_configured(shutdown_timeout, |_| {}).await
+}
+
+/// The fixture, with `edit` applied to its configuration and the person's
+/// evidence expired. The provider's clock starts at the Broker's and only
+/// moves forward; a renewal's token is issued at the provider's clock.
+async fn fixture_configured(
+    shutdown_timeout: Duration,
+    edit: impl FnOnce(&mut BrokerConfig),
+) -> Fixture {
     let store_path = temp_path("membership-renewal.sqlite");
     let audit_path = temp_path("membership-renewal.audit.jsonl");
     let secret = |name: &str, value: String| {
@@ -201,6 +208,7 @@ async fn fixture_with(shutdown_timeout: Duration) -> Fixture {
             connection: None,
         },
     );
+    edit(&mut config);
 
     let store = ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
@@ -2289,4 +2297,114 @@ async fn me_reports_the_window_of_a_renewal_it_waited_for() {
     assert_eq!(membership["renewal"]["state"], "active");
     assert!(membership["renewal"]["lastRenewedAt"].is_string());
     assert_eq!(f.renewal_audit("renewal-me-renews")["action"], RENEWED);
+}
+
+/// A renewal wait holds the caller's per-principal capacity: while one
+/// person's requests wait for a slow renewal, their excess requests are
+/// refused on HTTP, MCP and Git, and another person keeps their capacity.
+#[tokio::test]
+async fn renewal_waits_hold_per_principal_capacity() {
+    let f = fixture_configured(Duration::from_secs(30), |config| {
+        config.limits.max_concurrent_requests_per_principal = 3;
+        config.mcp.max_control_requests_per_principal = 2;
+    })
+    .await;
+    let mut claims = FakeTokenClaims::valid(f.clock.now_timestamp());
+    claims.user_object_id = OTHER_USER_OBJECT_ID.to_string();
+    claims.subject = "other-microsoft-subject".to_string();
+    let other = f.sign_in_person(claims).await;
+    f.expires_in(&other.method, 7 * 3600);
+    // Sessions opened while the person's evidence is current.
+    f.expires_in(&f.person.method, 7 * 3600);
+    let session = f.mcp_session().await;
+    f.clock.advance_seconds(61);
+    f.expire(&f.person.method);
+
+    let gate = gate();
+    let first = while_redeeming(
+        &f,
+        &gate,
+        invoke_request(&f.app, Fixture::bearer(&f.person), "renewal-capacity-0"),
+    )
+    .await;
+    let mut waiting = vec![first];
+    for index in 1..3 {
+        waiting.push(tokio::spawn(invoke_request(
+            &f.app,
+            Fixture::bearer(&f.person),
+            &format!("renewal-capacity-{index}"),
+        )));
+    }
+    // Two MCP requests of the same person wait too, on their own intake
+    // capacity.
+    let mcp_request = |request_id: &str| {
+        let app = f.app.clone();
+        let request = f
+            .request(Method::POST, "/mcp", request_id)
+            .header(ACCEPT, "application/json, text/event-stream")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", f.person.agent_token))
+            .header("mcp-session-id", &session)
+            .header("mcp-protocol-version", "2025-11-25")
+            .body(Body::from(
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}).to_string(),
+            ))
+            .unwrap();
+        async move { app.oneshot(request).await.unwrap() }
+    };
+    let mcp_waiting = (0..2)
+        .map(|index| tokio::spawn(mcp_request(&format!("renewal-capacity-mcp-{index}"))))
+        .collect::<Vec<_>>();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(waiting.iter().all(|request| !request.is_finished()));
+    assert!(mcp_waiting.iter().all(|request| !request.is_finished()));
+
+    // The person's excess requests are refused at once.
+    let response = f.invoke("renewal-capacity-excess").await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response_json(response).await["reasonCode"],
+        "concurrency_limited"
+    );
+    let response = f
+        .git_fetch(
+            &Fixture::git_basic(&f.person),
+            "renewal-capacity-git-excess",
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let response = mcp_request("renewal-capacity-mcp-excess").await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // Another person keeps their capacity on every path.
+    assert_eq!(
+        f.invoke_with(&Fixture::bearer(&other), "renewal-capacity-other")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_git_allowed(
+        &f.git_fetch(&Fixture::git_basic(&other), "renewal-capacity-other-git")
+            .await,
+        "other person",
+    );
+
+    gate.add_permits(1);
+    for request in waiting {
+        assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+    }
+    for request in mcp_waiting {
+        let response = request.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let listing = rpc_body(response).await;
+        assert!(
+            listing["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == echo_tool()),
+            "{listing}"
+        );
+    }
+    assert_eq!(f.provider.refresh_arrivals(), 1);
 }

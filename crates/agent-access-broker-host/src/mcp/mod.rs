@@ -623,6 +623,20 @@ pub(crate) async fn handle(
         admission: ingress.clone(),
         proof: resolved.proof,
     };
+    // The caller's intake capacity is taken before any renewal wait, so a
+    // waiting principal holds its own share rather than the global one.
+    let intake_principal = match endpoint.0.control.try_principal_concurrency(
+        &identity.principal,
+        config.max_control_requests_per_principal,
+    ) {
+        Ok(permit) => permit,
+        Err(_) => {
+            return failure(
+                StatusCode::TOO_MANY_REQUESTS,
+                "MCP caller capacity exhausted",
+            );
+        }
+    };
     // Membership renewal admission, after intake resolution and before
     // protocol handling. After a wait the pin is checked once more: the same
     // credential, or the original proof and caller-security epoch.
@@ -712,18 +726,6 @@ pub(crate) async fn handle(
             .insert("allow", HeaderValue::from_static("POST, DELETE"));
         return r;
     }
-    let intake_principal = match endpoint.0.control.try_principal_concurrency(
-        &identity.principal,
-        config.max_control_requests_per_principal,
-    ) {
-        Ok(permit) => permit,
-        Err(_) => {
-            return failure(
-                StatusCode::TOO_MANY_REQUESTS,
-                "MCP caller capacity exhausted",
-            );
-        }
-    };
     let intake = Arc::new(ProtocolPermits {
         _global: intake_global,
         _principal: intake_principal,

@@ -1,3 +1,4 @@
+use crate::handlers::common::PendingIdentity;
 use crate::handlers::management::audit_actions::{
     AUTH_LOCAL_LOGIN, AUTH_LOCAL_PASSWORD_CHANGE, AUTH_LOGOUT, AUTH_SESSION,
 };
@@ -419,11 +420,20 @@ pub(crate) async fn auth_password_change(
     if let Err((status, reason_code, message)) = auth_preflight(&snapshot, &headers) {
         return auth_error_response(response_context, None, status, reason_code, message).await;
     }
-    let cookie_identity =
-        match resolve_browser_cookie_identity_blocking(&state, snapshot.clone(), headers.clone())
-            .await
-        {
-            Ok(Some(cookie_identity)) => cookie_identity,
+    let session_failure = |failure: IdentityFailure| async move {
+        let reason_code = failure.reason_code();
+        auth_error_response(
+            response_context,
+            None,
+            StatusCode::from_u16(reason_code.http_status()).unwrap_or(StatusCode::UNAUTHORIZED),
+            reason_code,
+            failure.message(),
+        )
+        .await
+    };
+    let pending =
+        match resolve_browser_cookie_identity_pending(snapshot.clone(), headers.clone()).await {
+            Ok(Some(pending)) => pending,
             Ok(None) => {
                 return auth_error_response(
                     response_context,
@@ -434,29 +444,23 @@ pub(crate) async fn auth_password_change(
                 )
                 .await;
             }
-            Err(failure) => {
-                let reason_code = failure.reason_code();
-                return auth_error_response(
-                    response_context,
-                    None,
-                    StatusCode::from_u16(reason_code.http_status())
-                        .unwrap_or(StatusCode::UNAUTHORIZED),
-                    reason_code,
-                    failure.message(),
-                )
-                .await;
-            }
+            Err(failure) => return session_failure(failure).await,
         };
+    // A membership renewal wait holds the principal's capacity.
     let _principal_permit = match acquire_auth_principal_guard(
         &state,
         response_context,
-        &cookie_identity.identity.principal,
+        &pending.value().identity.principal,
         true,
     )
     .await
     {
         Ok(permit) => permit,
         Err(response) => return *response,
+    };
+    let cookie_identity = match pending.admit(&state, &snapshot, &headers).await {
+        Ok(cookie_identity) => cookie_identity,
+        Err(failure) => return session_failure(failure).await,
     };
     if !csrf_header_valid(&snapshot, &headers, &cookie_identity.token_id) {
         return auth_error_response(
@@ -883,31 +887,38 @@ fn principal_rate_key_is_safe(principal: &str) -> bool {
 }
 
 /// Resolves the request's browser session, then admits Microsoft membership
-/// renewal for it. After a wait the session is resolved again from the same
-/// cookie, so a session revoked meanwhile fails.
+/// renewal for it, for a route without per-principal capacity. After a wait
+/// the session is resolved again from the same cookie, so a session revoked
+/// meanwhile fails.
 pub(crate) async fn resolve_browser_cookie_identity_blocking(
     state: &AppState,
     snapshot: Arc<RuntimeSnapshot>,
     headers: HeaderMap,
 ) -> Result<Option<BrowserCookieIdentity>, IdentityFailure> {
+    match resolve_browser_cookie_identity_pending(snapshot.clone(), headers.clone()).await? {
+        Some(pending) => pending.admit(state, &snapshot, &headers).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Resolves the request's browser session for membership renewal
+/// admission; after a wait it is resolved again from the same cookie.
+pub(crate) async fn resolve_browser_cookie_identity_pending(
+    snapshot: Arc<RuntimeSnapshot>,
+    headers: HeaderMap,
+) -> Result<Option<PendingIdentity<BrowserCookieIdentity, IdentityFailure>>, IdentityFailure> {
     let Some(cookie) =
         resolve_browser_cookie_identity_without_renewal(snapshot.clone(), headers.clone()).await?
     else {
         return Ok(None);
     };
-    match crate::membership_renewal::admit_membership_renewal(
-        &state.reloadable,
-        &snapshot,
-        cookie.membership_renewal.as_ref(),
-        &headers,
-    )
-    .await
-    {
-        crate::membership_renewal::RenewalAdmission::Proceed => Ok(Some(cookie)),
-        crate::membership_renewal::RenewalAdmission::Waited => {
-            resolve_browser_cookie_identity_without_renewal(snapshot, headers).await
-        }
-    }
+    let hint = cookie.membership_renewal.clone();
+    let recheck = async move {
+        resolve_browser_cookie_identity_without_renewal(snapshot, headers)
+            .await?
+            .ok_or(IdentityFailure::Invalid)
+    };
+    Ok(Some(PendingIdentity::new(cookie, hint, recheck)))
 }
 
 /// Resolves the request's browser session without membership renewal, as

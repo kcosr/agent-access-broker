@@ -1,5 +1,5 @@
 use crate::handlers::common::{
-    CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
+    CallerAdmission, PendingIdentity, acquire_caller_guard, acquire_global_concurrency_guard,
     admit_service_invocation, check_auth_source_rate_guard, envelope_response,
     response_retry_after_header,
 };
@@ -12,7 +12,7 @@ use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     BrokerResponse, BrokerRuntime, ExecutionContext, GatewayConfig, GatewayGitConfig,
     GovernedOperationContext, IdentityContext, IdentityFailure, OperationContext,
-    PreparedGatewayOperation, REASON_CODE_HEADER, new_broker_request_id,
+    PreparedGatewayOperation, REASON_CODE_HEADER, SourceContext, new_broker_request_id,
 };
 use agent_access_provider::{
     BROKER_REQUEST_ID_HEADER, ProviderError, REQUEST_ID_HEADER, ReasonCode, ReasonCodeId,
@@ -651,50 +651,27 @@ async fn gateway_context(
     .await
     .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
 
-    let identity = match gateway_basic_identity(
-        state,
-        &snapshot,
-        headers,
-        matched_gateway,
-        &admission,
-    )
-    .await
-    {
-        Ok(identity) => identity,
-        Err(error) => {
-            check_auth_source_rate_guard(
-                state,
-                &snapshot,
-                &agent_request_id,
-                classified.service.clone(),
-                classified.action.clone(),
-                &source,
-            )
-            .await
-            .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
-            let response = snapshot
-                .runtime
-                .governed_operation_error_response(
-                    GovernedOperationContext {
-                        operation: OperationContext {
-                            agent_request_id,
-                            broker_request_id,
-                            identity: IdentityContext::anonymous(),
-                            service: classified.service.clone(),
-                            action: classified.action.clone(),
-                            source,
-                        },
-                        execution_context,
-                    },
+    let failure_context = || GatewayIdentityFailure {
+        agent_request_id: agent_request_id.clone(),
+        broker_request_id: broker_request_id.clone(),
+        source: source.clone(),
+        execution_context: execution_context.clone(),
+    };
+    let pending =
+        match gateway_identity(state, &snapshot, headers, matched_gateway, &admission).await {
+            Ok(pending) => pending,
+            Err(error) => {
+                return Err(gateway_identity_failure(
+                    state,
+                    &snapshot,
+                    classified,
+                    failure_context(),
                     error,
                 )
-                .await;
-            return Err(Box::new(gateway_runtime_response_with_basic_challenge(
-                response,
-            )));
-        }
-    };
-
+                .await);
+            }
+        };
+    // A membership renewal wait holds the caller's capacity.
     let principal_permit = acquire_caller_guard(
         state,
         &snapshot,
@@ -703,11 +680,24 @@ async fn gateway_context(
         classified.action.clone(),
         &source,
         CallerAdmission {
-            identity: &identity,
+            identity: pending.value(),
         },
     )
     .await
     .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
+    let identity = match pending.admit(state, &snapshot, headers).await {
+        Ok(identity) => identity,
+        Err(error) => {
+            return Err(gateway_identity_failure(
+                state,
+                &snapshot,
+                classified,
+                failure_context(),
+                error,
+            )
+            .await);
+        }
+    };
 
     // Only pack transfers invoke the service; ref discovery is not counted.
     let (identity, source, execution_context) = if classified.git_request_kind.is_pack_post() {
@@ -808,27 +798,83 @@ async fn gateway_preclass_auth_rate_response(
     Some(gateway_runtime_response(response))
 }
 
-/// The Git request's identity: a forwarded identity, or a Basic broker
-/// token. Both branches then admit Microsoft membership renewal; after a
-/// wait, the forwarded identity revalidates its original proof and
-/// caller-security epoch, and the Basic token is resolved again.
-async fn gateway_basic_identity(
+/// What a Git request's identity failure reports.
+struct GatewayIdentityFailure {
+    agent_request_id: String,
+    broker_request_id: String,
+    source: SourceContext,
+    execution_context: ExecutionContext,
+}
+
+/// A Git request's identity failure: the source's authentication budget is
+/// charged, then the failure is finalized with a Basic challenge.
+async fn gateway_identity_failure(
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+    classified: &ClassifiedGatewayRequest,
+    context: GatewayIdentityFailure,
+    error: ProviderError,
+) -> Box<Response<Body>> {
+    let GatewayIdentityFailure {
+        agent_request_id,
+        broker_request_id,
+        source,
+        execution_context,
+    } = context;
+    if let Err(response) = check_auth_source_rate_guard(
+        state,
+        snapshot,
+        &agent_request_id,
+        classified.service.clone(),
+        classified.action.clone(),
+        &source,
+    )
+    .await
+    {
+        return Box::new(gateway_runtime_response(*response));
+    }
+    let response = snapshot
+        .runtime
+        .governed_operation_error_response(
+            GovernedOperationContext {
+                operation: OperationContext {
+                    agent_request_id,
+                    broker_request_id,
+                    identity: IdentityContext::anonymous(),
+                    service: classified.service.clone(),
+                    action: classified.action.clone(),
+                    source,
+                },
+                execution_context,
+            },
+            error,
+        )
+        .await;
+    Box::new(gateway_runtime_response_with_basic_challenge(response))
+}
+
+fn gateway_identity_invalid(_: IdentityFailure) -> ProviderError {
+    ProviderError::deny(
+        ReasonCode::GatewayAuthInvalid,
+        "gateway identity is invalid",
+    )
+}
+
+/// The Git request's identity for membership renewal admission: a
+/// forwarded identity, or a Basic broker token. After a wait the forwarded
+/// identity revalidates its original proof and caller-security epoch, and
+/// the Basic token is resolved again.
+async fn gateway_identity(
     state: &AppState,
     snapshot: &Arc<RuntimeSnapshot>,
     headers: &HeaderMap,
     matched_gateway: &MatchedGateway,
     admission: &agent_access_core::IngressAdmission,
-) -> Result<IdentityContext, ProviderError> {
+) -> Result<PendingIdentity<IdentityContext, ProviderError>, ProviderError> {
     if !headers.contains_key(AUTHORIZATION)
         && matched_gateway.config.allow_forwarded_identity
         && headers.contains_key("x-aw-identity-token-sha256")
     {
-        let invalid = |_| {
-            ProviderError::deny(
-                ReasonCode::GatewayAuthInvalid,
-                "gateway identity is invalid",
-            )
-        };
         let runtime = snapshot.runtime.clone();
         let forwarded = admission.clone();
         let resolved = tokio::task::spawn_blocking(move || {
@@ -836,32 +882,24 @@ async fn gateway_basic_identity(
         })
         .await
         .unwrap_or(Err(IdentityFailure::Invalid))
-        .map_err(invalid)?;
-        return match crate::membership_renewal::admit_membership_renewal(
-            &state.reloadable,
-            snapshot,
-            resolved.membership_renewal.as_ref(),
-            headers,
-        )
-        .await
-        {
-            crate::membership_renewal::RenewalAdmission::Proceed => Ok(resolved.identity),
-            crate::membership_renewal::RenewalAdmission::Waited => crate::mcp::IdentityPin {
-                caller_security_epoch: admission
-                    .caller_id()
-                    .map(|_| snapshot.caller_security_epoch),
-                admission: admission.clone(),
-                proof: resolved.proof,
-            }
-            .revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
-            .await
-            .map_err(invalid),
+        .map_err(gateway_identity_invalid)?;
+        let pin = crate::mcp::IdentityPin {
+            caller_security_epoch: admission
+                .caller_id()
+                .map(|_| snapshot.caller_security_epoch),
+            admission: admission.clone(),
+            proof: resolved.proof,
         };
+        let reloadable = state.reloadable.clone();
+        let current = snapshot.clone();
+        let credential = headers.clone();
+        let recheck = async move { pin.revalidate(reloadable, current, credential).await };
+        return Ok(
+            PendingIdentity::new(resolved.identity, resolved.membership_renewal, recheck)
+                .map_err(gateway_identity_invalid),
+        );
     }
-    let token = match basic_broker_token(headers, matched_gateway) {
-        Ok(token) => token,
-        Err(error) => return Err(error),
-    };
+    let token = basic_broker_token(headers, matched_gateway)?;
     let resolve = |token: String| {
         let runtime = snapshot.runtime.clone();
         let caller_id = admission.caller_id().map(str::to_owned);
@@ -879,19 +917,12 @@ async fn gateway_basic_identity(
         }
     };
     let resolved = resolve(token.clone()).await?;
-    match crate::membership_renewal::admit_membership_renewal(
-        &state.reloadable,
-        snapshot,
-        resolved.membership_renewal.as_ref(),
-        headers,
-    )
-    .await
-    {
-        crate::membership_renewal::RenewalAdmission::Proceed => Ok(resolved.identity),
-        crate::membership_renewal::RenewalAdmission::Waited => {
-            resolve(token).await.map(|resolved| resolved.identity)
-        }
-    }
+    let recheck = resolve(token);
+    Ok(PendingIdentity::new(
+        resolved.identity,
+        resolved.membership_renewal,
+        async move { recheck.await.map(|resolved| resolved.identity) },
+    ))
 }
 
 fn basic_broker_token(
