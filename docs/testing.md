@@ -2010,8 +2010,16 @@ gateway on the configured site and refused for another site, static tokens
 routed by kind, one recovery across the lookups and execution, a second 401 as
 `credential_invalid` with reconnect, read-back failures after an accepted write
 reported applied but unverified and failures before it passed through
-unchanged, and, for Jira, uploads and downloads repeated once after a 401; for
-Confluence, a personal-space (`~key`) page read and search through the gateway.
+unchanged. For Jira, they also cover uploads and downloads repeated once after
+a 401, a renamed project key resolved and read through the gateway, a moved
+issue denied after the gateway recheck before any read or write, and
+`issue.view`'s embedded links disclosed with universal reach. For Confluence,
+they cover a personal-space (`~key`) page read and search, a page read by its
+space alias and a search keeping aliased links on the site, and comment, reply,
+ancestor and direct-child lists following Confluence's site-relative `next`
+links below the gateway's site path, including a two-page comment list, while
+links naming another resource, cloud ID or origin fail closed. Browser links
+in every result name the site, never `api.atlassian.com`.
 
 The Broker host's `tests::oauth::atlassian_dialect` drives browser consent and
 a delegated lease through the OAuth manager with a test consumer that acts

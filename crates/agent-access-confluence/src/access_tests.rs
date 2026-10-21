@@ -5,7 +5,9 @@
 //! connection stopped. Static tokens keep their routes. Attachment
 //! downloads present either only within the configured site, revalidating
 //! delegated access before each authorized redirect hop. Personal spaces
-//! (`~key`) read and search through the gateway like any other.
+//! (`~key`) and spaces with a URL alias read and search through the gateway
+//! like any other, with browser links on the site. List pagination reads
+//! Confluence's site-relative `next` links below the gateway's site path.
 use super::*;
 use agent_access_atlassian::ATLASSIAN_OAUTH_AUDIENCE;
 use agent_access_provider::host::{
@@ -1223,5 +1225,166 @@ async fn oauth_comment_list_pages_through_the_gateway() {
             format!("GET {page_route} Bearer oauth-1"),
             format!("GET {route} Bearer oauth-1"),
         ]
+    );
+}
+
+const ALIASED_PAGE_ID: &str = "70000000046";
+const ALIASED_PAGE_LINK: &str = "/spaces/VECTOR/pages/70000000046/Deployment+Notes";
+
+/// Page `id` in space `ROCKET`, whose URL alias is `VECTOR`, as the v1 API
+/// returns it through the gateway: browser links relative to the site and
+/// REST `self` links naming `api.atlassian.com`.
+fn aliased_page(id: &str, title: &str, link: &str) -> Value {
+    json!({
+        "id": id,
+        "type": "page",
+        "status": "current",
+        "title": title,
+        "space": {
+            "key": "ROCKET",
+            "_links": {
+                "webui": "/spaces/VECTOR",
+                "self": format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/space/ROCKET")
+            }
+        },
+        "version": { "number": 3 },
+        "body": { "storage": { "value": "<p>body</p>" } },
+        "_links": {
+            "webui": link,
+            "self": format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/content/{id}")
+        }
+    })
+}
+
+/// A space whose URL alias differs from its key, read with OAuth: a site
+/// link naming the alias resolves through the gateway to the space key,
+/// which policy admits, and the view's links name the alias on the site,
+/// never the gateway. A link naming another space fails closed.
+#[tokio::test]
+async fn oauth_reads_a_page_by_its_space_alias_through_the_gateway() {
+    let server = MockServer::start().await;
+    let route = format!("{GATEWAY}/rest/api/content/{ALIASED_PAGE_ID}");
+    answer(
+        &server,
+        "GET",
+        &route,
+        "Bearer oauth-1",
+        200,
+        aliased_page(ALIASED_PAGE_ID, "Deployment Notes", ALIASED_PAGE_LINK),
+    )
+    .await;
+    let credential = delegated_credential(Lease::new(CLOUD_ID));
+    let provider = provider(&server);
+    let aliased_url = format!("https://example.atlassian.net/wiki{ALIASED_PAGE_LINK}");
+    let inputs = json!({ "url": aliased_url });
+
+    let resolution = resolve(&provider, "page.view", inputs.clone(), &credential)
+        .await
+        .unwrap();
+    assert_eq!(resolution.scopes(), &space_scopes("ROCKET"));
+    let result = invoke(
+        &provider,
+        delegated_invocation("page.view", inputs, "ROCKET", &credential),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.result["space"], "ROCKET", "{}", result.result);
+    assert_eq!(result.result["webUrl"], aliased_url);
+    assert_eq!(
+        result.result["spaceUrl"],
+        "https://example.atlassian.net/wiki/spaces/VECTOR"
+    );
+    assert!(
+        !result.result.to_string().contains("api.atlassian.com"),
+        "{}",
+        result.result
+    );
+
+    let foreign = json!({
+        "url": format!("https://example.atlassian.net/wiki/spaces/OTHER/pages/{ALIASED_PAGE_ID}/Deployment+Notes")
+    });
+    let error = resolve(&provider, "page.view", foreign, &credential)
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert_eq!(
+        error.message,
+        "Confluence page URL space is neither the page's space key nor its URL alias"
+    );
+    // The lookup before policy, the read at execution and the refused
+    // lookup, each with the connection's access on the gateway.
+    assert_eq!(
+        requests(&server).await,
+        vec![format!("GET {route} Bearer oauth-1"); 3]
+    );
+}
+
+/// A search through the gateway with OAuth keeps an aliased page's browser
+/// links on the site. A browser link naming the gateway instead is replaced
+/// by one the Broker builds on the site, and audited by its shape only.
+#[tokio::test]
+async fn oauth_search_keeps_aliased_links_on_the_site_through_the_gateway() {
+    let server = MockServer::start().await;
+    let route = format!("{GATEWAY}/rest/api/content/search");
+    let gateway_link = format!(
+        "https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/spaces/VECTOR/pages/70000000047/Gateway+Notes"
+    );
+    answer(
+        &server,
+        "GET",
+        &route,
+        "Bearer oauth-1",
+        200,
+        json!({
+            "results": [
+                { "content": aliased_page(ALIASED_PAGE_ID, "Deployment Notes", ALIASED_PAGE_LINK) },
+                { "content": aliased_page("70000000047", "Gateway Notes", &gateway_link) },
+            ]
+        }),
+    )
+    .await;
+    let credential = delegated_credential(Lease::new(CLOUD_ID));
+    let request = InvocationBuilder::from(delegated_invocation(
+        "search",
+        json!({ "query": { "type": "cql", "value": "text ~ \"launch\"" }, "maxResults": 2 }),
+        "ROCKET",
+        &credential,
+    ))
+    .search(SearchAuthorization::new(
+        "space".to_string(),
+        SearchAuthorizationScope::from_exact_values(vec!["ROCKET".to_string()]),
+    ))
+    .build();
+    let result = invoke(&provider(&server), request).await.unwrap();
+
+    let pages = &result.result["pages"];
+    assert_eq!(pages[0]["space"], "ROCKET", "{}", result.result);
+    assert_eq!(
+        pages[0]["webUrl"],
+        format!("https://example.atlassian.net/wiki{ALIASED_PAGE_LINK}")
+    );
+    assert_eq!(
+        pages[0]["spaceUrl"],
+        "https://example.atlassian.net/wiki/spaces/VECTOR"
+    );
+    assert_eq!(
+        pages[1]["webUrl"],
+        "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=70000000047"
+    );
+    assert!(
+        !result.result.to_string().contains("api.atlassian.com"),
+        "{}",
+        result.result
+    );
+    let audit = result.audit.as_ref().unwrap();
+    assert_eq!(audit["browserUrlFallbacks"]["count"], 1);
+    assert_eq!(
+        audit["browserUrlFallbacks"]["entries"][0]["rule"],
+        "authority_mismatch"
+    );
+    assert!(!audit.to_string().contains("api.atlassian.com"));
+    assert_eq!(
+        requests(&server).await,
+        [format!("GET {route} Bearer oauth-1")]
     );
 }
