@@ -658,8 +658,18 @@ Use these sections under `## [Unreleased]`:
 ### Rules
 
 - New entries always go under `## [Unreleased]`.
-- Append to existing subsections; do not create duplicate subsection headers.
+- Use the existing subsections; do not create duplicate subsection headers.
 - Do not edit already released version sections.
+- Write one entry per user-visible change: configuration, HTTP API, CLI,
+  portal, audit and log contracts, managed-store migrations, security-relevant
+  behavior, and the supported SDK surface for provider authors. Describe the
+  end state for operators relative to the last release.
+- While a change is unreleased, edit its existing entry in place instead of
+  appending a new one per PR. Fold later changes to an unreleased feature into
+  the entry they modify, and replace or remove an entry whose behavior changed
+  again before release.
+- Do not add internal, test-only or refactor-only entries. Implementation detail
+  belongs in PR descriptions and the documentation.
 
 ## Release Procedure
 
@@ -671,12 +681,11 @@ overrides and verify that Git's repository root matches the source checkout.
 
 ### Prepare
 
-The initial `0.1.0` release metadata is already prepared in this source tree;
-proceed to qualification after review and merge. Do not rerun `current` on an
-already prepared version. For later releases, start from a clean checkout on the
-preparation branch. Use `current` when `Cargo.toml` has the intended version but
-its release notes still need preparation, or select `major`, `minor`, `patch`,
-or an explicit semantic version:
+Start from a clean checkout on the preparation branch. Select `major`, `minor`,
+`patch`, or an explicit semantic version; on the 0.x line, use `minor` when
+`[Unreleased]` has breaking changes. Use `current` only when `Cargo.toml` has
+the intended version but its release notes still need preparation; do not rerun
+it on an already prepared version:
 
 ```bash
 node scripts/prepare-release.mjs current

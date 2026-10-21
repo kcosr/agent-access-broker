@@ -194,7 +194,8 @@ inventory, so every API change was regenerated and reviewed with the change that
 made it. It does not compare with an earlier release.
 
 `0.2.0` is the first released baseline. `0.1.0` predates the inventory; the
-changelog documents the intentional changes since then.
+changelog summarizes the porting changes since then, and this inventory and
+`docs/provider-sdk.md` document the supported surface in detail.
 
 Within a compatible release line, compare the candidate with the previous
 release's inventory, for example `git diff v0.2.0 -- api/`:
