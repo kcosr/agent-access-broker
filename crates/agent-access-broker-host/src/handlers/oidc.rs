@@ -8,15 +8,16 @@ use crate::state::{AppState, RuntimeSnapshot};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce as AeadNonce};
 use agent_access_core::microsoft_oidc::{
-    MICROSOFT_OIDC_MAX_ID_TOKEN_BYTES, MICROSOFT_OIDC_SCOPES, MicrosoftGroupClaimClassification,
-    MicrosoftOidcAdditionalClaims, MicrosoftOidcProviderMetadata, MicrosoftOidcRuntimeConfig,
-    ValidatedMicrosoftOidcIdentity, validate_microsoft_id_token_payload_syntax,
-    validate_microsoft_oidc_identity,
+    MICROSOFT_OIDC_MAX_ID_TOKEN_BYTES, MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES,
+    MicrosoftGroupClaimClassification, MicrosoftOidcAdditionalClaims,
+    MicrosoftOidcProviderMetadata, MicrosoftOidcRuntimeConfig, ValidatedMicrosoftOidcIdentity,
+    microsoft_id_token_audience_claim, microsoft_oidc_nonce_sha256,
+    validate_microsoft_id_token_payload_syntax, validate_microsoft_oidc_identity,
 };
 use agent_access_core::{
     AuditRecord, IdentityContext, ManagedStoreError, OidcCompleteLoginRequest,
-    OidcCompletionOutcome, OidcFlowClaimRequest, OidcFlowCreateRequest, SourceContext,
-    parse_ttl_seconds,
+    OidcCompletionOutcome, OidcFlowClaimRequest, OidcFlowCreateRequest,
+    OidcMembershipRenewalSignIn, OidcRenewalReference, SourceContext, parse_ttl_seconds,
 };
 use agent_access_provider::{Decision, ReasonCode, ResourceScopes};
 use axum::extract::{ConnectInfo, RawQuery, State};
@@ -31,8 +32,8 @@ use openidconnect::core::{
 };
 use openidconnect::{
     AccessTokenHash, AuthType, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IdToken,
-    JsonWebKey, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RequestTokenError,
-    Scope, TokenResponse,
+    JsonWebKey, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RefreshToken,
+    RequestTokenError, Scope, TokenResponse,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -364,10 +365,12 @@ pub(crate) async fn microsoft_oidc_start(
             || Nonce::new(nonce_secret),
         )
         .add_scopes(
-            MICROSOFT_OIDC_SCOPES
-                .iter()
-                .filter(|scope| **scope != "openid")
-                .map(|scope| Scope::new((*scope).to_string())),
+            provider
+                .config()
+                .sign_in_scopes()
+                .into_iter()
+                .filter(|scope| *scope != "openid")
+                .map(|scope| Scope::new(scope.to_string())),
         )
         .add_extra_param("response_mode", "query")
         .set_pkce_challenge(challenge)
@@ -662,6 +665,12 @@ pub(crate) async fn microsoft_oidc_callback(
         )
         .await;
     }
+    // Membership renewal keeps the `aud` claim exactly as issued, which the
+    // parsed claims normalize.
+    let renewal_audience = provider
+        .config()
+        .membership_renewal()
+        .then(|| microsoft_id_token_audience_claim(&raw_id_token));
     let (kid, algorithm) = match token_header(&raw_id_token) {
         Some(header) => header,
         None => {
@@ -749,6 +758,10 @@ pub(crate) async fn microsoft_oidc_callback(
         .id_token_verifier()
         .set_allowed_algs([CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256])
         .set_time_fn(move || clock.now());
+    let renewal_nonce_sha256 = provider
+        .config()
+        .membership_renewal()
+        .then(|| microsoft_oidc_nonce_sha256(&payload.nonce));
     let claims = match id_token.claims(&verifier, &Nonce::new(payload.nonce)) {
         Ok(claims) => claims,
         Err(_) => {
@@ -803,6 +816,45 @@ pub(crate) async fn microsoft_oidc_callback(
             .await;
         }
     };
+    // Microsoft's own clock orders this observation against renewals.
+    let issued_at = claims.issue_time().timestamp();
+    let renewal = match (renewal_audience, renewal_nonce_sha256) {
+        (Some(audience), Some(nonce_sha256)) => {
+            let reference = audience.ok().and_then(|audience| {
+                OidcRenewalReference::new(
+                    claims.subject().as_str().to_string(),
+                    audience,
+                    claims
+                        .authorized_party()
+                        .map(|authorized_party| authorized_party.as_str().to_string()),
+                    nonce_sha256,
+                    claims.auth_time().map(|auth_time| auth_time.timestamp()),
+                )
+                .ok()
+            });
+            let Some(reference) = reference else {
+                return oidc_callback_error(
+                    &snapshot,
+                    &request_id,
+                    &broker_request_id,
+                    operation,
+                    &source,
+                    ReasonCode::OidcIdentityInvalid,
+                    Some(flow.return_path.as_str()),
+                )
+                .await;
+            };
+            Some((
+                usable_refresh_token(
+                    token_response.refresh_token(),
+                    &request_id,
+                    &broker_request_id,
+                ),
+                reference,
+            ))
+        }
+        _ => None,
+    };
     let name = claims
         .name()
         .and_then(|value| value.get(None))
@@ -845,6 +897,7 @@ pub(crate) async fn microsoft_oidc_callback(
                     flow.flow_sequence,
                     provider_generation,
                     &observed_at,
+                    issued_at,
                 )
             })
             .await;
@@ -942,6 +995,21 @@ pub(crate) async fn microsoft_oidc_callback(
             let store = runtime.managed_store().ok_or_else(|| {
                 ManagedStoreError::Unavailable("managed store is unavailable".into())
             })?;
+            let membership_renewal = renewal
+                .map(|(refresh_token, reference)| {
+                    let ring = runtime.credential_key_ring().cloned().ok_or_else(|| {
+                        ManagedStoreError::EncryptionKeyMissing("credential key ring".into())
+                    })?;
+                    match refresh_token {
+                        Some(refresh_token) => OidcMembershipRenewalSignIn::issued(
+                            ring,
+                            refresh_token.into_secret(),
+                            reference,
+                        ),
+                        None => Ok(OidcMembershipRenewalSignIn::not_issued(ring)),
+                    }
+                })
+                .transpose()?;
             store.complete_oidc_login(
                 &token_hasher,
                 OidcCompleteLoginRequest {
@@ -957,6 +1025,8 @@ pub(crate) async fn microsoft_oidc_callback(
                     callback_now,
                     session_ttl_seconds,
                     created_by: "oidc-microsoft".to_string(),
+                    issued_at,
+                    membership_renewal,
                 },
             )
         })
@@ -1084,6 +1154,7 @@ pub(crate) async fn microsoft_oidc_callback(
             "jitCreated": jit_created,
             "autoEnrolledGroupIds": result.auto_enrolled_group_ids,
             "effectiveGroupCount": result.membership.groups.len(),
+            "membershipEvidence": result.membership_evidence.as_str(),
         }),
     )
     .await;
@@ -1305,6 +1376,31 @@ fn decrypt_flow_payload(
         return Err(());
     }
     Ok(payload)
+}
+
+/// The refresh token a sign-in with membership renewal enabled records, or
+/// `None` when Microsoft returned none it can store. An empty or oversized
+/// token counts as not issued; the warning names only its size.
+fn usable_refresh_token(
+    refresh_token: Option<&RefreshToken>,
+    request_id: &str,
+    broker_request_id: &str,
+) -> Option<RefreshToken> {
+    let refresh_token = refresh_token?;
+    let length = refresh_token.secret().len();
+    if length == 0 || length > MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES {
+        tracing::warn!(
+            target: "agent_access_broker::handlers::oidc",
+            event = "oidc_refresh_token_unusable",
+            agentRequestId = request_id,
+            brokerRequestId = broker_request_id,
+            tokenBytes = length,
+            maxTokenBytes = MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES,
+            "Microsoft returned a refresh token the Broker cannot store; membership renewal records it as not issued"
+        );
+        return None;
+    }
+    Some(refresh_token.clone())
 }
 
 fn token_header(raw_id_token: &str) -> Option<(String, String)> {

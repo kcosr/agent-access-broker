@@ -6253,6 +6253,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             enabled: true,
             config_fingerprint: "sha256:test-provider".to_string(),
             external_membership_ttl_seconds: 8 * 60 * 60,
+            membership_renewal: false,
             invalidate_existing_evidence: false,
             actor: "system".to_string(),
         })
@@ -6796,6 +6797,8 @@ async fn managed_store_admin_and_user_token_smoke() {
                 callback_now: observed_at,
                 session_ttl_seconds: 60 * 60,
                 created_by: "admin".to_string(),
+                issued_at: chrono::Utc::now().timestamp(),
+                membership_renewal: None,
             },
         )
         .unwrap();

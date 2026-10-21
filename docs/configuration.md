@@ -772,6 +772,7 @@ flow_ttl = "10m"                         # default; 2m..15m
 max_pending_flows = 10000                # default; 100..100000
 jit_provisioning = true                  # default
 external_membership_ttl = "8h"          # default; 15m..24h
+membership_renewal = false               # default
 ```
 
 - `public_origin`, when set, must be an `http` or `https` origin with no path,
@@ -854,6 +855,16 @@ secret references are not resolved.
   local membership once, when JIT creates the account after admission succeeds;
   it has no TOML option and does not change admission. See
   [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
+- `membership_renewal = true` makes sign-in also request `offline_access`, and
+  the broker stores the Microsoft refresh token it returns, encrypted under the
+  credential key ring, for each Microsoft login method, with the values of the
+  ID token it came with. A sign-in without a refresh token, or with one larger
+  than 16 KiB, records that none was issued. Changing the setting advances the
+  provider configuration generation, which restarts pending sign-ins without
+  affecting membership evidence. Turning it off deletes every stored refresh
+  token; turning it on stores nothing until each person's next sign-in. In a
+  tenant that restricts user consent, an administrator must grant
+  `offline_access` before enabling it, or Microsoft sign-in asks for consent.
 - Microsoft group claims that explicitly indicate overage, are distributed,
   contain more than 200 entries, or are malformed reject that login. The broker
   does not call Microsoft Graph to expand them. Microsoft groups can contribute
@@ -867,7 +878,7 @@ The following values are derived and cannot be overridden:
 | Issuer | `https://login.microsoftonline.com/{tenant_id}/v2.0` |
 | Discovery | `{issuer}/.well-known/openid-configuration` |
 | Redirect URI | `{public_origin}/v1/auth/oidc/microsoft/callback` |
-| Scopes | `openid profile email` |
+| Scopes | `openid profile email`, plus `offline_access` with `membership_renewal` |
 | Flow | authorization code in query mode with PKCE S256 |
 
 When Microsoft OIDC is enabled, `public_origin` must be an HTTPS root origin

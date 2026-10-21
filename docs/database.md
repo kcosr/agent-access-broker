@@ -60,7 +60,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
 `027_command_imports`, `028_oauth_revocations`,
-`029_identity_access_path_controls`, and `030_group_auto_enrollment` in order. The
+`029_identity_access_path_controls`, `030_group_auto_enrollment`, and
+`031_oidc_membership_renewal` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -578,14 +579,14 @@ Metadata-only store opening without a key ring performs structural checks and
 cannot establish cryptographic readiness.
 
 Key inventory and readiness also include all retained identity-token, OAuth,
-pending OAuth revocation, private-resource-attribute, and imported-service
-secret slots. Disabling a
+pending OAuth revocation, Microsoft membership-renewal, private-resource-attribute,
+and imported-service secret slots. Disabling a
 resource or imported service does not remove its key requirement.
 
 The admin rewrap operation decrypts active credentials and retained secret slots
 under a source key id and rewrites their encrypted material under a target key id.
-It does not change credential metadata, material versions, resource versions, or
-imported service/action revisions. Rewrap includes disabled resources and imports.
+It does not change credential metadata, material versions, resource versions,
+Microsoft membership-renewal token versions, or imported service/action revisions. Rewrap includes disabled resources and imports.
 Keep each old key until the used-key inventory confirms that no required material
 uses it, and preserve keys needed to decrypt retained backups.
 
@@ -814,6 +815,23 @@ check. Existing groups remain opted out and existing memberships are unchanged.
 Its structural validator checks the full schema and preserves the requirement
 for exactly one identity-token row per human introduced in `029`. Rollback
 requires a pre-migration backup; the previous binary refuses the newer ledger.
+
+Migration `031_oidc_membership_renewal`, appended after
+`030_group_auto_enrollment`, adds the `oidc_membership_renewals` table
+and changes no existing table or row; no row exists until a Microsoft sign-in
+with `membership_renewal` enabled. Each row belongs to one Microsoft login
+method (deleted with it) and holds the refresh token that sign-in returned,
+AES-256-GCM encrypted under the credential key ring's active key with the
+values of its ID token, or records that none was issued. The ciphertext's
+authenticated data binds the login method ID, its external subject, the
+provider's tenant and client IDs, the row's token version and the key ID.
+Rows join key readiness, the used-key inventory and `admin credentials
+rewrap`, which keeps their token version. Unlinking the method, disabling the
+principal, disabling Microsoft sign-in, changing its client ID and turning
+`membership_renewal` off delete rows. Its structural validator compares the
+whole schema with the catalog through `031`, including the `030` group setting,
+and still requires one identity-token row for every human. Rollback requires a
+pre-migration backup: an older binary refuses the newer ledger.
 
 ### Identity-token inventory
 

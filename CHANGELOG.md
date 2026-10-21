@@ -1053,6 +1053,20 @@ All notable changes to this project are documented in this file.
   identity-token record for every human without one, and creates it with every
   new human; rolling back across it needs a pre-migration backup. See
   [managed identity](docs/managed-identity.md#access-path-controls).
+- `browser_auth.oidc.microsoft.membership_renewal` (default `false`) makes
+  Microsoft sign-in also request `offline_access` and store the returned
+  refresh token, encrypted under the credential key ring with the values of
+  its ID token, for each Microsoft login method; a sign-in without a usable
+  token records that none was issued. Turning it off deletes every stored
+  token, as do unlinking the login method, disabling the principal, disabling
+  Microsoft sign-in and changing its client ID. While a login method has such
+  a record, a sign-in replaces its Microsoft group evidence only when its ID
+  token was issued after every token observed for the method, by Microsoft's
+  `iat`; a sign-in that keeps the evidence still signs in and records its
+  token. `oidc.login.succeeded` audit details report `membershipEvidence`
+  (`replaced` or `kept_newer`). Managed-store migration
+  `031_oidc_membership_renewal` adds the table without changing existing data;
+  rolling back across it needs a pre-migration backup.
 
 ### Changed
 

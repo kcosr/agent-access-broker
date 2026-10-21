@@ -1303,6 +1303,15 @@ the setting. Administrators enable it per group after upgrade; no TOML change or
 reload is needed. Rolling back across `030` requires the pre-migration backup,
 as the previous binary refuses the migrated store.
 
+Migration `031_oidc_membership_renewal` follows `030_group_auto_enrollment`.
+It adds an empty table for the Microsoft refresh tokens that sign-in stores when
+`browser_auth.oidc.microsoft.membership_renewal` is enabled, and changes no
+existing data; no operator action is needed beyond the usual forward-migration
+steps. The stored tokens are encrypted under the credential key ring and join
+key readiness and `admin credentials rewrap`. Rolling back across `031` needs the
+backup taken before it: the previous binary refuses the migrated store. Deleting
+the Broker's copy of a refresh token does not revoke it at Microsoft.
+
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
 fresh store at a new path, then reconstruct principals, credentials, resources,

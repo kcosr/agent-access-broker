@@ -958,6 +958,7 @@ fn disabled_microsoft_oidc_does_not_require_provider_fields_or_secrets() {
         max_pending_flows: 0,
         jit_provisioning: true,
         external_membership_ttl: "invalid".to_string(),
+        membership_renewal: false,
     };
     validate_broker_config(&config).unwrap();
 }

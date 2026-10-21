@@ -593,6 +593,7 @@ impl RuntimeSnapshot {
                 enabled: true,
                 config_fingerprint: config.config_fingerprint().to_string(),
                 external_membership_ttl_seconds: config.external_membership_ttl_seconds(),
+                membership_renewal: config.membership_renewal(),
                 invalidate_existing_evidence: false,
                 actor: "system".to_string(),
             })?;
@@ -609,6 +610,7 @@ impl RuntimeSnapshot {
                 enabled: false,
                 config_fingerprint: existing.config_fingerprint,
                 external_membership_ttl_seconds: existing.external_membership_ttl_seconds,
+                membership_renewal: false,
                 invalidate_existing_evidence: false,
                 actor: "system".to_string(),
             })?;

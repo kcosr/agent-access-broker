@@ -586,6 +586,7 @@ fn browser_auth_value(browser: &BrowserAuthConfig) -> Value {
         max_pending_flows,
         jit_provisioning,
         external_membership_ttl,
+        membership_renewal,
     } = microsoft;
     Fields::default()
         .put("enabled", *enabled)
@@ -620,6 +621,7 @@ fn browser_auth_value(browser: &BrowserAuthConfig) -> Value {
                         .int("max_pending_flows", *max_pending_flows)
                         .put("jit_provisioning", *jit_provisioning)
                         .put("external_membership_ttl", external_membership_ttl.as_str())
+                        .put("membership_renewal", *membership_renewal)
                         .value(),
                 )
                 .value(),

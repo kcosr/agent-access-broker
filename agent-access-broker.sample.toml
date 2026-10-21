@@ -188,6 +188,7 @@ default_context = "default"
 # max_pending_flows = 10000
 # jit_provisioning = true
 # external_membership_ttl = "8h"
+# membership_renewal = false
 #
 # The client-secret ref contains the nonempty value issued by Entra. The flow
 # key ref contains an independent unpadded base64url value that decodes to

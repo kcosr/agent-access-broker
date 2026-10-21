@@ -1466,6 +1466,19 @@ pub(super) fn validate_group_auto_enrollment_structure(
     validate_structure_through(conn, MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION)?;
     identity_access::check_identity_token_rows(conn)
 }
+/// The structure after `031_oidc_membership_renewal`: every migration
+/// through it, with exactly one identity-token row for every human and
+/// well-formed membership-renewal rows of Microsoft login methods; key
+/// readiness decrypts their payloads. Only the latest validator runs on
+/// admission, so it repeats the invariants of the 029 and 030 validators:
+/// the structure through 031 includes the group enrollment column.
+pub(super) fn validate_oidc_membership_renewal_structure(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION)?;
+    identity_access::check_identity_token_rows(conn)?;
+    oidc_membership_renewal::check_rows(conn)
+}
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
 fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {

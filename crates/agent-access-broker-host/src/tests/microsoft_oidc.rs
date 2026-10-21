@@ -1,13 +1,15 @@
 use super::{TestBroker, fake_config, response_json, temp_path};
+use crate::state::RuntimeSnapshot;
 use crate::state::{MicrosoftOidcTransport, MicrosoftOidcTransportError};
 use agent_access_core::microsoft_oidc::{
     MICROSOFT_OIDC_CALLBACK_PATH, MICROSOFT_OIDC_HOST, MicrosoftOidcClock,
-    MicrosoftOidcProviderMetadata,
+    MicrosoftOidcProviderMetadata, microsoft_oidc_nonce_sha256,
 };
 use agent_access_core::{
-    BrokerTokensConfig, ExternalGroupBindingCreateRequest, GroupWriteRequest, IdentityConfig,
-    IdentitySourceConfig, ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode, ManagementConfig,
-    MicrosoftOidcConfig,
+    BrokerConfig, BrokerRuntime, BrokerTokensConfig, CredentialKeyRing,
+    ExternalGroupBindingCreateRequest, GroupWriteRequest, IdentityConfig, IdentitySourceConfig,
+    ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode, ManagementConfig, MicrosoftOidcConfig,
+    OidcMembershipRenewalEndedReason, OidcMembershipRenewalState, StateLockSet,
 };
 use axum::Router;
 use axum::body::Body;
@@ -32,6 +34,7 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -130,6 +133,9 @@ struct FakeTokenClaims {
     nonce_override: Option<String>,
     duplicate_tenant_claim: bool,
     corrupt_signature: bool,
+    /// Issue a single audience as a string rather than a one-element array.
+    audience_as_string: bool,
+    auth_time: Option<i64>,
 }
 
 impl FakeTokenClaims {
@@ -151,8 +157,20 @@ impl FakeTokenClaims {
             nonce_override: None,
             duplicate_tenant_claim: false,
             corrupt_signature: false,
+            audience_as_string: false,
+            auth_time: None,
         }
     }
+}
+
+/// What the token endpoint returns for a grant that requested
+/// `offline_access`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FakeRefreshTokens {
+    #[default]
+    Issue,
+    Omit,
+    Oversized,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +180,7 @@ struct AuthorizationGrant {
     redirect_uri: String,
     claims: FakeTokenClaims,
     signing_key_id: String,
+    offline_access: bool,
 }
 
 #[derive(Debug, Default)]
@@ -177,6 +196,10 @@ struct FakeProviderState {
     discovery_outage: bool,
     jwks_outage: bool,
     token_outage: bool,
+    refresh_tokens: FakeRefreshTokens,
+    issued_refresh_tokens: Vec<String>,
+    requested_scopes: Vec<Vec<String>>,
+    nonces: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -226,6 +249,22 @@ impl FakeMicrosoftOidcProvider {
         self.state.lock().unwrap().jwks_outage = outage;
     }
 
+    fn set_refresh_tokens(&self, refresh_tokens: FakeRefreshTokens) {
+        self.state.lock().unwrap().refresh_tokens = refresh_tokens;
+    }
+
+    fn issued_refresh_tokens(&self) -> Vec<String> {
+        self.state.lock().unwrap().issued_refresh_tokens.clone()
+    }
+
+    fn requested_scopes(&self) -> Vec<Vec<String>> {
+        self.state.lock().unwrap().requested_scopes.clone()
+    }
+
+    fn nonces(&self) -> Vec<String> {
+        self.state.lock().unwrap().nonces.clone()
+    }
+
     fn rotate_signing_key(&self) {
         self.state.lock().unwrap().active_key_id = ROTATED_KEY_ID.to_string();
     }
@@ -261,10 +300,18 @@ impl FakeMicrosoftOidcProvider {
             .get("scope")
             .ok_or(FakeProviderError::InvalidAuthorizationRequest)?
             .split(' ')
+            .map(str::to_string)
             .collect::<Vec<_>>();
-        if scopes != ["openid", "profile", "email"] {
-            return Err(FakeProviderError::InvalidAuthorizationRequest);
-        }
+        let offline_access = match scopes
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            ["openid", "profile", "email"] => false,
+            ["openid", "profile", "email", "offline_access"] => true,
+            _ => return Err(FakeProviderError::InvalidAuthorizationRequest),
+        };
         let state_value = query
             .get("state")
             .filter(|value| !value.is_empty())
@@ -289,6 +336,8 @@ impl FakeMicrosoftOidcProvider {
             .clone();
 
         let mut provider = self.state.lock().unwrap();
+        provider.requested_scopes.push(scopes);
+        provider.nonces.push(nonce.clone());
         let code = format!("fake-code-{}", provider.next_code);
         provider.next_code += 1;
         let claims = provider
@@ -304,6 +353,7 @@ impl FakeMicrosoftOidcProvider {
                 redirect_uri: redirect_uri.clone(),
                 claims,
                 signing_key_id,
+                offline_access,
             },
         );
 
@@ -385,16 +435,35 @@ impl FakeMicrosoftOidcProvider {
             return Err(FakeProviderError::InvalidTokenRequest);
         }
         state.last_token_rejection = None;
+        let refresh_token = match (grant.offline_access, state.refresh_tokens) {
+            (false, _) | (true, FakeRefreshTokens::Omit) => None,
+            (true, FakeRefreshTokens::Issue) => Some(format!(
+                "fake-refresh-token-{}",
+                state.issued_refresh_tokens.len() + 1
+            )),
+            (true, FakeRefreshTokens::Oversized) => Some("r".repeat(16 * 1024 + 1)),
+        };
+        if let Some(refresh_token) = &refresh_token {
+            state.issued_refresh_tokens.push(refresh_token.clone());
+        }
         drop(state);
 
         let id_token = sign_id_token(&grant)?;
-        json_response(json!({
+        let mut response = json!({
             "access_token": "fake-access-token",
             "token_type": "Bearer",
             "expires_in": 300,
-            "scope": "openid profile email",
+            "scope": if grant.offline_access {
+                "openid profile email offline_access"
+            } else {
+                "openid profile email"
+            },
             "id_token": id_token,
-        }))
+        });
+        if let Some(refresh_token) = refresh_token {
+            response["refresh_token"] = Value::String(refresh_token);
+        }
+        json_response(response)
     }
 
     fn handle(&self, request: HttpRequest) -> Result<HttpResponse, FakeProviderError> {
@@ -563,7 +632,13 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
             "sub".to_string(),
             Value::String(grant.claims.subject.clone()),
         ),
-        ("aud".to_string(), json!(grant.claims.audience)),
+        (
+            "aud".to_string(),
+            match grant.claims.audience.as_slice() {
+                [audience] if grant.claims.audience_as_string => json!(audience),
+                audiences => json!(audiences),
+            },
+        ),
         ("exp".to_string(), json!(grant.claims.expires_at)),
         ("iat".to_string(), json!(grant.claims.issued_at)),
         (
@@ -602,6 +677,9 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
     }
     if let Some(not_before) = grant.claims.not_before {
         payload.insert("nbf".to_string(), json!(not_before));
+    }
+    if let Some(auth_time) = grant.claims.auth_time {
+        payload.insert("auth_time".to_string(), json!(auth_time));
     }
     match &grant.claims.groups {
         FakeGroupClaims::Complete(groups) => {
@@ -656,12 +734,13 @@ fn json_response(value: Value) -> Result<HttpResponse, FakeProviderError> {
 }
 
 struct OidcBrowserFixture {
-    _broker: TestBroker,
+    broker: TestBroker,
+    config: BrokerConfig,
+    audit_path: PathBuf,
     app: Router,
     provider: FakeMicrosoftOidcProvider,
     clock: TestClock,
     store: ManagedStore,
-    audit_path: std::path::PathBuf,
 }
 
 struct PendingBrowserLogin {
@@ -670,8 +749,16 @@ struct PendingBrowserLogin {
 }
 
 async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
-    oidc_browser_fixture_with_audit(
+    oidc_browser_fixture_with(discovery_outage, false).await
+}
+
+async fn oidc_browser_fixture_with(
+    discovery_outage: bool,
+    membership_renewal: bool,
+) -> OidcBrowserFixture {
+    oidc_browser_fixture_configured(
         discovery_outage,
+        membership_renewal,
         temp_path("microsoft-oidc-browser.audit.jsonl"),
     )
     .await
@@ -679,7 +766,15 @@ async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
 
 async fn oidc_browser_fixture_with_audit(
     discovery_outage: bool,
-    audit_path: std::path::PathBuf,
+    audit_path: PathBuf,
+) -> OidcBrowserFixture {
+    oidc_browser_fixture_configured(discovery_outage, false, audit_path).await
+}
+
+async fn oidc_browser_fixture_configured(
+    discovery_outage: bool,
+    membership_renewal: bool,
+    audit_path: PathBuf,
 ) -> OidcBrowserFixture {
     let store_path = temp_path("microsoft-oidc-browser.sqlite");
     let broker_hash_key_path = temp_path("microsoft-oidc-broker-hash-key");
@@ -743,6 +838,7 @@ async fn oidc_browser_fixture_with_audit(
         max_pending_flows: 100,
         jit_provisioning: true,
         external_membership_ttl: "8h".to_string(),
+        membership_renewal,
     };
 
     let store = ManagedStore::open(
@@ -777,11 +873,12 @@ async fn oidc_browser_fixture_with_audit(
     .await;
     OidcBrowserFixture {
         app: broker.app(),
-        _broker: broker,
+        broker,
+        config,
+        audit_path,
         provider,
         clock,
         store,
-        audit_path,
     }
 }
 
@@ -975,9 +1072,21 @@ async fn microsoft_oidc_browser_happy_path_binds_code_pkce_nonce_cookie_and_reje
         .effective_membership_at(&principal.principal_id, &fixture.clock.now().to_rfc3339())
         .unwrap();
     assert_eq!(membership.groups, ["microsoft-users"]);
+    let audit = login_success_audit(&fixture, "oidc-happy-callback");
+    assert_eq!(audit["autoEnrolledGroupIds"], json!([]));
+    assert_eq!(audit["membershipEvidence"], "replaced");
+    // Without membership renewal the sign-in asks for the base scopes only
+    // and stores no renewal row.
     assert_eq!(
-        login_success_audit(&fixture, "oidc-happy-callback")["autoEnrolledGroupIds"],
-        json!([])
+        fixture.provider.requested_scopes(),
+        [["openid", "profile", "email"]]
+    );
+    assert!(
+        fixture
+            .store
+            .oidc_membership_renewal(&methods[0].login_method_id)
+            .unwrap()
+            .is_none()
     );
 
     let replay = finish_browser_login(&fixture, &pending, "oidc-replay-callback").await;
@@ -1621,5 +1730,391 @@ fn fake_microsoft_authorization_and_token_exchange_enforce_pkce() {
     assert_eq!(
         provider.handle(request).unwrap_err(),
         FakeProviderError::InvalidTokenRequest
+    );
+}
+
+fn microsoft_method_id(fixture: &OidcBrowserFixture) -> String {
+    let principal = fixture.store.list_principals().unwrap().remove(0);
+    fixture
+        .store
+        .list_login_methods(&principal.principal_id)
+        .unwrap()
+        .into_iter()
+        .find(|method| method.method == "oidc")
+        .unwrap()
+        .login_method_id
+}
+
+fn credential_key_ring(fixture: &OidcBrowserFixture) -> CredentialKeyRing {
+    fixture
+        .broker
+        .runtime()
+        .credential_key_ring()
+        .unwrap()
+        .clone()
+}
+
+async fn sign_in(
+    fixture: &OidcBrowserFixture,
+    binding_cookie: Option<&str>,
+    claims: FakeTokenClaims,
+    request_id: &str,
+) -> (PendingBrowserLogin, axum::response::Response) {
+    fixture.provider.set_next_claims(claims);
+    let pending = start_browser_login(fixture, binding_cookie).await;
+    let response = finish_browser_login(fixture, &pending, request_id).await;
+    (pending, response)
+}
+
+fn assert_signed_in(response: &axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers().get(LOCATION).unwrap(), "/ui/settings");
+    assert!(session_cookie(response).is_some());
+}
+
+#[tokio::test]
+async fn microsoft_oidc_membership_renewal_requests_offline_access_and_records_the_refresh_token() {
+    let fixture = oidc_browser_fixture_with(false, true).await;
+    let mut claims = FakeTokenClaims::valid(FIXED_NOW);
+    claims.audience_as_string = true;
+    claims.authorized_party = Some(CLIENT_ID.to_string());
+    claims.auth_time = Some(FIXED_NOW - 30);
+    let (first, response) = sign_in(&fixture, None, claims, "oidc-renewal-first").await;
+    assert_signed_in(&response);
+    assert_eq!(
+        fixture.provider.requested_scopes(),
+        [["openid", "profile", "email", "offline_access"]]
+    );
+    let method = microsoft_method_id(&fixture);
+    let row = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, OidcMembershipRenewalState::Active);
+    assert_eq!(row.observation_iat, FIXED_NOW);
+    assert_eq!(row.last_attempt_at, None);
+    let ring = credential_key_ring(&fixture);
+    let issued = fixture.provider.issued_refresh_tokens();
+    let nonces = fixture.provider.nonces();
+    let material = fixture
+        .store
+        .oidc_membership_renewal_material(&ring, &method)
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.refresh_token(), issued[0]);
+    assert_eq!(material.token_version(), row.token_version);
+    let reference = material.reference();
+    assert_eq!(reference.subject(), "microsoft-subject");
+    // The audience exactly as issued: a string here.
+    assert_eq!(reference.audience(), &json!(CLIENT_ID));
+    assert_eq!(reference.azp(), Some(CLIENT_ID));
+    assert_eq!(
+        reference.nonce_sha256(),
+        microsoft_oidc_nonce_sha256(&nonces[0])
+    );
+    assert_eq!(reference.auth_time(), Some(FIXED_NOW - 30));
+    assert_eq!(
+        login_success_audit(&fixture, "oidc-renewal-first")["membershipEvidence"],
+        "replaced"
+    );
+
+    let (_, response) = sign_in(
+        &fixture,
+        Some(&first.binding_cookie),
+        FakeTokenClaims::valid(FIXED_NOW + 1),
+        "oidc-renewal-second",
+    )
+    .await;
+    assert_signed_in(&response);
+    let renewed = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+    assert_ne!(renewed.token_version, row.token_version);
+    assert_eq!(renewed.observation_iat, FIXED_NOW + 1);
+    let issued = fixture.provider.issued_refresh_tokens();
+    let material = fixture
+        .store
+        .oidc_membership_renewal_material(&ring, &method)
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.refresh_token(), issued[1]);
+    let reference = material.reference();
+    // An array audience stays an array; absent azp and auth_time stay absent.
+    assert_eq!(reference.audience(), &json!([CLIENT_ID]));
+    assert_eq!(reference.azp(), None);
+    assert_eq!(reference.auth_time(), None);
+    assert_eq!(
+        reference.nonce_sha256(),
+        microsoft_oidc_nonce_sha256(&fixture.provider.nonces()[1])
+    );
+    let audit = super::read_audit_text(&fixture.audit_path);
+    for token in issued {
+        assert!(!audit.contains(&token), "audit exposed a refresh token");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn microsoft_oidc_membership_renewal_records_missing_or_oversized_refresh_tokens_as_not_issued()
+ {
+    let captured = super::install_trace_capture().start();
+    let fixture = oidc_browser_fixture_with(false, true).await;
+    fixture.provider.set_refresh_tokens(FakeRefreshTokens::Omit);
+    fixture
+        .provider
+        .set_next_claims(FakeTokenClaims::valid(FIXED_NOW));
+    let omitted = start_browser_login(&fixture, None).await;
+    let response = captured
+        .run(finish_browser_login(
+            &fixture,
+            &omitted,
+            "oidc-renewal-omitted",
+        ))
+        .await;
+    assert_signed_in(&response);
+    let method = microsoft_method_id(&fixture);
+    let ring = credential_key_ring(&fixture);
+    let ended = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ended.state, OidcMembershipRenewalState::Ended);
+    assert_eq!(
+        ended.ended_reason,
+        Some(OidcMembershipRenewalEndedReason::NotIssued)
+    );
+    assert!(
+        fixture
+            .store
+            .oidc_membership_renewal_material(&ring, &method)
+            .unwrap()
+            .is_none()
+    );
+
+    fixture
+        .provider
+        .set_refresh_tokens(FakeRefreshTokens::Oversized);
+    fixture
+        .provider
+        .set_next_claims(FakeTokenClaims::valid(FIXED_NOW + 1));
+    let oversized = start_browser_login(&fixture, Some(&omitted.binding_cookie)).await;
+    let response = captured
+        .run(finish_browser_login(
+            &fixture,
+            &oversized,
+            "oidc-renewal-oversized",
+        ))
+        .await;
+    assert_signed_in(&response);
+    let still_ended = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+    assert_ne!(still_ended.token_version, ended.token_version);
+    assert_eq!(
+        still_ended.ended_reason,
+        Some(OidcMembershipRenewalEndedReason::NotIssued)
+    );
+    assert_eq!(still_ended.observation_iat, FIXED_NOW + 1);
+
+    let events = captured.take_events();
+    let warning = events
+        .iter()
+        .find(|event| {
+            event.get("event").and_then(Value::as_str) == Some("oidc_refresh_token_unusable")
+                && event.get("agentRequestId").and_then(Value::as_str)
+                    == Some("oidc-renewal-oversized")
+        })
+        .expect("an oversized refresh token is logged");
+    assert_eq!(warning["level"], "WARN");
+    assert_eq!(warning["tokenBytes"], 16 * 1024 + 1);
+    let oversized_token = fixture.provider.issued_refresh_tokens().remove(0);
+    let logs = serde_json::to_string(&events).unwrap();
+    assert!(
+        !logs.contains(&oversized_token[..64]),
+        "logs exposed the token"
+    );
+    assert!(!super::read_audit_text(&fixture.audit_path).contains(&oversized_token[..64]));
+}
+
+#[tokio::test]
+async fn microsoft_oidc_sign_in_keeps_evidence_newer_than_its_token_and_still_signs_in() {
+    let fixture = oidc_browser_fixture_with(false, true).await;
+    let (first, response) = sign_in(
+        &fixture,
+        None,
+        FakeTokenClaims::valid(FIXED_NOW),
+        "oidc-order-first",
+    )
+    .await;
+    assert_signed_in(&response);
+    let method = microsoft_method_id(&fixture);
+    let principal = fixture
+        .store
+        .list_principals()
+        .unwrap()
+        .remove(0)
+        .principal_id;
+    let groups = || {
+        fixture
+            .store
+            .effective_membership_at(&principal, &fixture.clock.now().to_rfc3339())
+            .unwrap()
+            .groups
+    };
+    assert_eq!(groups(), ["microsoft-users"]);
+    let initial = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+
+    // A trusted overage sign-in raises the watermark only.
+    let mut overage = FakeTokenClaims::valid(FIXED_NOW + 20);
+    overage.groups = FakeGroupClaims::Overage;
+    let (_, response) = sign_in(
+        &fixture,
+        Some(&first.binding_cookie),
+        overage,
+        "oidc-order-overage",
+    )
+    .await;
+    assert_callback_error(
+        &response,
+        "oidc_group_claims_incomplete",
+        "oidc-order-overage",
+    );
+    let raised = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+    assert_eq!(raised.observation_iat, FIXED_NOW + 20);
+    assert_eq!(raised.token_version, initial.token_version);
+
+    // An older complete sign-in keeps the evidence but signs in and records
+    // its token.
+    let mut older = FakeTokenClaims::valid(FIXED_NOW + 10);
+    older.groups = FakeGroupClaims::Empty;
+    let (_, response) = sign_in(
+        &fixture,
+        Some(&first.binding_cookie),
+        older,
+        "oidc-order-kept",
+    )
+    .await;
+    assert_signed_in(&response);
+    assert_eq!(groups(), ["microsoft-users"]);
+    assert_eq!(
+        login_success_audit(&fixture, "oidc-order-kept")["membershipEvidence"],
+        "kept_newer"
+    );
+    let kept = fixture
+        .store
+        .oidc_membership_renewal(&method)
+        .unwrap()
+        .unwrap();
+    assert_ne!(kept.token_version, raised.token_version);
+    assert_eq!(kept.observation_iat, FIXED_NOW + 20);
+
+    // A newer one replaces it.
+    let mut newer = FakeTokenClaims::valid(FIXED_NOW + 30);
+    newer.groups = FakeGroupClaims::Empty;
+    let (_, response) = sign_in(
+        &fixture,
+        Some(&first.binding_cookie),
+        newer,
+        "oidc-order-replaced",
+    )
+    .await;
+    assert_signed_in(&response);
+    assert!(groups().is_empty());
+    assert_eq!(
+        login_success_audit(&fixture, "oidc-order-replaced")["membershipEvidence"],
+        "replaced"
+    );
+}
+
+#[tokio::test]
+async fn microsoft_oidc_membership_renewal_turned_off_deletes_stored_tokens() {
+    let fixture = oidc_browser_fixture_with(false, true).await;
+    let (_, response) = sign_in(
+        &fixture,
+        None,
+        FakeTokenClaims::valid(FIXED_NOW),
+        "oidc-renewal-off",
+    )
+    .await;
+    assert_signed_in(&response);
+    let method = microsoft_method_id(&fixture);
+    assert!(
+        fixture
+            .store
+            .oidc_membership_renewal(&method)
+            .unwrap()
+            .is_some()
+    );
+    let before = fixture.store.oidc_provider_state().unwrap().unwrap();
+
+    // The reconciliation of a generation that turns renewal off. A reload
+    // requires an active administrator once principals exist.
+    fixture
+        .store
+        .create_principal(agent_access_core::PrincipalWriteRequest {
+            role: agent_access_core::PrincipalRole::Admin,
+            self_service_enabled: None,
+            principal_id: "admin".into(),
+            kind: "user".into(),
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    let mut config = fixture.config.clone();
+    config.browser_auth.oidc.microsoft.membership_renewal = false;
+    let runtime = BrokerRuntime::new_for_reload(config, &fixture.broker.runtime()).unwrap();
+    assert!(!runtime.microsoft_oidc().unwrap().membership_renewal());
+    let next = RuntimeSnapshot::new_microsoft_oidc_candidate_with_components(
+        2,
+        "renewal-off".to_string(),
+        runtime,
+        StateLockSet::empty(),
+        Some(Arc::new(fixture.provider.clone())),
+        Some(Arc::new(fixture.clock.clone())),
+    )
+    .await
+    .unwrap();
+    next.reconcile_microsoft_oidc_provider().unwrap();
+    assert!(
+        fixture
+            .store
+            .oidc_membership_renewal(&method)
+            .unwrap()
+            .is_none()
+    );
+    let after = fixture.store.oidc_provider_state().unwrap().unwrap();
+    assert!(after.config_generation > before.config_generation);
+    assert_ne!(after.config_fingerprint, before.config_fingerprint);
+    // Evidence is unaffected.
+    let principal = fixture
+        .store
+        .list_principals()
+        .unwrap()
+        .into_iter()
+        .find(|principal| principal.principal_id.starts_with("usr-"))
+        .unwrap()
+        .principal_id;
+    assert_eq!(
+        fixture
+            .store
+            .effective_membership_at(&principal, &fixture.clock.now().to_rfc3339())
+            .unwrap()
+            .groups,
+        ["microsoft-users"]
     );
 }

@@ -1010,6 +1010,10 @@ pub struct MicrosoftOidcConfig {
     pub jit_provisioning: bool,
     #[serde(default = "default_oidc_external_membership_ttl")]
     pub external_membership_ttl: String,
+    /// Sign-in also requests `offline_access`, and the Broker keeps the
+    /// returned Microsoft refresh token, encrypted, per login method.
+    #[serde(default)]
+    pub membership_renewal: bool,
 }
 
 impl Default for MicrosoftOidcConfig {
@@ -1024,6 +1028,7 @@ impl Default for MicrosoftOidcConfig {
             max_pending_flows: default_oidc_max_pending_flows(),
             jit_provisioning: default_oidc_jit_provisioning(),
             external_membership_ttl: default_oidc_external_membership_ttl(),
+            membership_renewal: false,
         }
     }
 }
