@@ -86,10 +86,11 @@ complete user handoff. OAuth connections use grant-based personal setup instead.
 
 ### OAuth connections
 
-People can connect their Atlassian account instead of storing a token. Give the
-connection an `oauth` registration of the [`atlassian` dialect](oauth.md#atlassian)
-for the site, beside `token_profile = "atlassian-bearer-token"` for service
-accounts or alone:
+People can connect their Atlassian account instead of storing a token. Give
+each product's connection an `oauth` registration of the
+[`atlassian` dialect](oauth.md#atlassian) for the site, beside
+`token_profile = "atlassian-bearer-token"` for service accounts or alone.
+Without Confluence, omit its entries:
 
 ```toml
 [providers.jira]
@@ -100,15 +101,28 @@ allowed_upstream_hosts = [
   "https://api.media.atlassian.com/**",
 ]
 
-[credentials.connections.atlassian]
+[credentials.connections.jira]
+display_name = "Atlassian"
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.connections.confluence]
 display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]
 type = "connection"
-connection = "atlassian"
+connection = "jira"
+
+[credentials.per_user.confluence]
+type = "connection"
+connection = "confluence"
 ```
+
+Both connections use one registration, so a person connects Atlassian once for
+both products. Service accounts keep a token per product: Atlassian does not
+document one service-account token holding both products' scopes.
 
 - **Route.** OAuth always goes through the Atlassian gateway,
   `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`, so `cloud_id`

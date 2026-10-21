@@ -95,10 +95,11 @@ before using a mutation. Confluence page create/update require an enabled native
 
 ### OAuth connections
 
-People can connect their Atlassian account instead of storing a token. Give the
-connection an `oauth` registration of the [`atlassian` dialect](oauth.md#atlassian)
-for the site, beside `token_profile = "atlassian-bearer-token"` for service
-accounts or alone; Jira can use the same connection:
+People can connect their Atlassian account instead of storing a token. Give
+each product's connection an `oauth` registration of the
+[`atlassian` dialect](oauth.md#atlassian) for the site, beside
+`token_profile = "atlassian-bearer-token"` for service accounts or alone.
+Without Jira, omit its entries:
 
 ```toml
 [providers.confluence]
@@ -109,15 +110,28 @@ allowed_upstream_hosts = [
   "https://api.media.atlassian.com/**",
 ]
 
-[credentials.connections.atlassian]
+[credentials.connections.jira]
 display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 
+[credentials.connections.confluence]
+display_name = "Atlassian"
+token_profile = "atlassian-bearer-token"
+oauth = { registration = "atlassian", profile = "default" }
+
+[credentials.per_user.jira]
+type = "connection"
+connection = "jira"
+
 [credentials.per_user.confluence]
 type = "connection"
-connection = "atlassian"
+connection = "confluence"
 ```
+
+Both connections use one registration, so a person connects Atlassian once for
+both products. Service accounts keep a token per product: Atlassian does not
+document one service-account token holding both products' scopes.
 
 - **Route.** OAuth always goes through the Atlassian gateway,
   `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/` and its
