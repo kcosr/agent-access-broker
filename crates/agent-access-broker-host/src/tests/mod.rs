@@ -90,6 +90,7 @@ mod management_service_metadata;
 mod mcp;
 mod mcp_managed;
 mod mcp_spans;
+mod membership_renewal;
 mod microsoft_oidc;
 mod oauth;
 mod principal_access;

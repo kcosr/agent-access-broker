@@ -1,6 +1,7 @@
 use super::{TestBroker, fake_config, response_json, temp_path};
 use crate::state::RuntimeSnapshot;
 use crate::state::{MicrosoftOidcTransport, MicrosoftOidcTransportError};
+use agent_access_core::microsoft_oidc::renewal::{TokenEndpointBody, TokenEndpointResponse};
 use agent_access_core::microsoft_oidc::{
     MICROSOFT_OIDC_CALLBACK_PATH, MICROSOFT_OIDC_HOST, MicrosoftOidcClock,
     MicrosoftOidcProviderMetadata, microsoft_oidc_nonce_sha256,
@@ -15,7 +16,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::header::{CACHE_CONTROL, LOCATION, SET_COOKIE};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{HeaderValue, Method, Request, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
@@ -41,14 +42,14 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 use url::Url;
 
-const TENANT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
-const CLIENT_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2";
-const USER_OBJECT_ID: &str = "cccccccc-cccc-4ccc-8ccc-ccccccccccc3";
-const GROUP_ID: &str = "dddddddd-dddd-4ddd-8ddd-ddddddddddd4";
-const CLIENT_SECRET: &str = "test-client-secret";
+pub(super) const TENANT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+pub(super) const CLIENT_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2";
+pub(super) const USER_OBJECT_ID: &str = "cccccccc-cccc-4ccc-8ccc-ccccccccccc3";
+pub(super) const GROUP_ID: &str = "dddddddd-dddd-4ddd-8ddd-ddddddddddd4";
+pub(super) const CLIENT_SECRET: &str = "test-client-secret";
 const INITIAL_KEY_ID: &str = "microsoft-test-key-1";
 const ROTATED_KEY_ID: &str = "microsoft-test-key-2";
-const FIXED_NOW: i64 = 1_893_456_000;
+pub(super) const FIXED_NOW: i64 = 1_893_456_000;
 
 // Public test vector from RFC 7520 via openidconnect-rs. It is never used by production code.
 const TEST_RSA_PRIVATE_KEY: &str = "-----BEGIN RSA PRIVATE KEY-----\n\
@@ -108,7 +109,7 @@ FhLLN2jKwUJYMo5q0kFboM6aPDJvvZNMivHWsdOdDiQdpV5/TyQs\n\
 -----END RSA PRIVATE KEY-----";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FakeGroupClaims {
+pub(super) enum FakeGroupClaims {
     Complete(Vec<String>),
     Empty,
     Overage,
@@ -116,30 +117,35 @@ enum FakeGroupClaims {
 }
 
 #[derive(Debug, Clone)]
-struct FakeTokenClaims {
-    tenant_id: String,
-    user_object_id: String,
-    audience: Vec<String>,
-    authorized_party: Option<String>,
-    groups: FakeGroupClaims,
-    expires_at: i64,
-    issued_at: i64,
-    not_before: Option<i64>,
-    issuer: String,
-    subject: String,
-    name: Option<String>,
-    preferred_username: Option<String>,
-    email: Option<String>,
-    nonce_override: Option<String>,
-    duplicate_tenant_claim: bool,
-    corrupt_signature: bool,
+pub(super) struct FakeTokenClaims {
+    pub(super) tenant_id: String,
+    pub(super) user_object_id: String,
+    pub(super) audience: Vec<String>,
+    pub(super) authorized_party: Option<String>,
+    pub(super) groups: FakeGroupClaims,
+    pub(super) expires_at: i64,
+    pub(super) issued_at: i64,
+    pub(super) not_before: Option<i64>,
+    pub(super) issuer: String,
+    pub(super) subject: String,
+    pub(super) name: Option<String>,
+    pub(super) preferred_username: Option<String>,
+    pub(super) email: Option<String>,
+    pub(super) nonce_override: Option<String>,
+    /// Issue no `nonce` claim, as a refreshed ID token normally has none.
+    pub(super) omit_nonce: bool,
+    pub(super) duplicate_tenant_claim: bool,
+    pub(super) corrupt_signature: bool,
+    /// Issue an unsigned token (`alg: none`, no key ID).
+    pub(super) unsigned: bool,
     /// Issue a single audience as a string rather than a one-element array.
-    audience_as_string: bool,
-    auth_time: Option<i64>,
+    pub(super) audience_as_string: bool,
+    pub(super) auth_time: Option<i64>,
+    pub(super) at_hash: Option<String>,
 }
 
 impl FakeTokenClaims {
-    fn valid(now: i64) -> Self {
+    pub(super) fn valid(now: i64) -> Self {
         Self {
             tenant_id: TENANT_ID.to_string(),
             user_object_id: USER_OBJECT_ID.to_string(),
@@ -155,18 +161,68 @@ impl FakeTokenClaims {
             preferred_username: Some("ada.lovelace@example.test".to_string()),
             email: Some("ada@example.test".to_string()),
             nonce_override: None,
+            omit_nonce: false,
             duplicate_tenant_claim: false,
             corrupt_signature: false,
+            unsigned: false,
             audience_as_string: false,
             auth_time: None,
+            at_hash: None,
         }
     }
+}
+
+/// A scripted response of the token endpoint to a refresh-token grant.
+pub(super) enum FakeRefresh {
+    /// A 200 with a token the closure adjusts from the default: the
+    /// sign-in's identity claims issued now, without a nonce, with a new
+    /// refresh token.
+    Token(Box<dyn FnOnce(&mut FakeRefreshToken) + Send>),
+    /// A response with this status, `Retry-After` and body.
+    Status {
+        status: u16,
+        retry_after: Option<String>,
+        body: FakeBody,
+    },
+    /// No response arrives.
+    NoResponse,
+    /// Waits for a permit of the gate, then answers with the next scripted
+    /// response.
+    Gate(Arc<tokio::sync::Semaphore>),
+}
+
+/// A scripted response body.
+pub(super) enum FakeBody {
+    Json(Value),
+    Raw(Vec<u8>),
+    /// The body fails after its headers.
+    Failed,
+    /// The body exceeds the size limit.
+    Oversized,
+}
+
+/// A 200 response to a refresh-token grant.
+pub(super) struct FakeRefreshToken {
+    pub(super) claims: FakeTokenClaims,
+    /// The refresh token returned, if any.
+    pub(super) refresh_token: Option<String>,
+    pub(super) access_token: Option<String>,
+    pub(super) signing_key_id: String,
+    /// Omit the ID token.
+    pub(super) omit_id_token: bool,
+}
+
+/// What a redemption repeats of the sign-in a refresh token came from.
+#[derive(Debug, Clone)]
+struct RefreshGrant {
+    claims: FakeTokenClaims,
+    nonce: String,
 }
 
 /// What the token endpoint returns for a grant that requested
 /// `offline_access`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum FakeRefreshTokens {
+pub(super) enum FakeRefreshTokens {
     #[default]
     Issue,
     Omit,
@@ -183,7 +239,7 @@ struct AuthorizationGrant {
     offline_access: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct FakeProviderState {
     active_key_id: String,
     next_claims: Option<FakeTokenClaims>,
@@ -200,10 +256,19 @@ struct FakeProviderState {
     issued_refresh_tokens: Vec<String>,
     requested_scopes: Vec<Vec<String>>,
     nonces: Vec<String>,
+    /// The sign-in each issued refresh token came from.
+    refresh_grants: HashMap<String, RefreshGrant>,
+    refresh_responses: std::collections::VecDeque<FakeRefresh>,
+    /// The groups redemptions report, when set; otherwise the sign-in's.
+    refresh_groups: Option<FakeGroupClaims>,
+    /// Each redemption's form parameters.
+    refresh_requests: Vec<BTreeMap<String, String>>,
+    /// Redemptions that arrived, answered or not.
+    refresh_arrivals: usize,
 }
 
 #[derive(Clone)]
-struct FakeMicrosoftOidcProvider {
+pub(super) struct FakeMicrosoftOidcProvider {
     state: Arc<Mutex<FakeProviderState>>,
     clock: TestClock,
 }
@@ -222,7 +287,7 @@ impl fmt::Debug for FakeMicrosoftOidcProvider {
 }
 
 impl FakeMicrosoftOidcProvider {
-    fn new(clock: TestClock) -> Self {
+    pub(super) fn new(clock: TestClock) -> Self {
         Self {
             state: Arc::new(Mutex::new(FakeProviderState {
                 active_key_id: INITIAL_KEY_ID.to_string(),
@@ -233,43 +298,181 @@ impl FakeMicrosoftOidcProvider {
         }
     }
 
-    fn set_next_claims(&self, claims: FakeTokenClaims) {
+    pub(super) fn set_next_claims(&self, claims: FakeTokenClaims) {
         self.state.lock().unwrap().next_claims = Some(claims);
     }
 
-    fn set_token_outage(&self, outage: bool) {
+    /// Answers the next redemption with `response`.
+    pub(super) fn push_refresh(&self, response: FakeRefresh) {
+        self.state
+            .lock()
+            .unwrap()
+            .refresh_responses
+            .push_back(response);
+    }
+
+    /// Reports `groups` in redemptions from now on.
+    pub(super) fn set_refresh_groups(&self, groups: FakeGroupClaims) {
+        self.state.lock().unwrap().refresh_groups = Some(groups);
+    }
+
+    /// How many redemptions arrived, including those a gate still holds.
+    pub(super) fn refresh_arrivals(&self) -> usize {
+        self.state.lock().unwrap().refresh_arrivals
+    }
+
+    /// How many redemptions were answered.
+    pub(super) fn refresh_count(&self) -> usize {
+        self.state.lock().unwrap().refresh_requests.len()
+    }
+
+    /// Each redemption's form parameters.
+    pub(super) fn refresh_requests(&self) -> Vec<BTreeMap<String, String>> {
+        self.state.lock().unwrap().refresh_requests.clone()
+    }
+
+    /// The response to one refresh-token grant.
+    fn refresh_response(
+        &self,
+        request: &HttpRequest,
+        scripted: Option<FakeRefresh>,
+    ) -> TokenEndpointResponse {
+        let form = form_parameters(request.body()).unwrap_or_default();
+        let mut state = self.state.lock().unwrap();
+        state.refresh_requests.push(form.clone());
+        let url = Url::parse(&request.uri().to_string()).unwrap();
+        assert_eq!(request.method(), Method::POST);
+        assert_eq!(url.host_str(), Some(MICROSOFT_OIDC_HOST));
+        assert_eq!(url.path(), format!("/{TENANT_ID}/oauth2/v2.0/token"));
+        for (name, expected) in [
+            ("grant_type", "refresh_token"),
+            ("client_id", CLIENT_ID),
+            ("client_secret", CLIENT_SECRET),
+            ("scope", "openid profile email offline_access"),
+        ] {
+            assert_eq!(form.get(name).map(String::as_str), Some(expected), "{name}");
+        }
+        let scripted = match scripted {
+            Some(FakeRefresh::Token(adjust)) => Some(adjust),
+            Some(FakeRefresh::Status {
+                status,
+                retry_after,
+                body,
+            }) => return fake_response(status, retry_after.as_deref(), body),
+            Some(FakeRefresh::NoResponse) => return TokenEndpointResponse::no_response(),
+            Some(FakeRefresh::Gate(_)) => unreachable!("gates are awaited first"),
+            None => None,
+        };
+        let Some(grant) = form
+            .get("refresh_token")
+            .and_then(|token| state.refresh_grants.get(token))
+            .cloned()
+        else {
+            return fake_response(
+                400,
+                None,
+                FakeBody::Json(json!({
+                    "error": "invalid_grant",
+                    "error_description": "AADSTS70000 SENTINEL-unknown-refresh-token",
+                    "error_codes": [70000],
+                })),
+            );
+        };
+        let now = self.clock.now_timestamp();
+        let mut claims = grant.claims.clone();
+        claims.issued_at = now;
+        claims.expires_at = now + 300;
+        claims.not_before = Some(now);
+        claims.omit_nonce = true;
+        claims.nonce_override = None;
+        if let Some(groups) = &state.refresh_groups {
+            claims.groups = groups.clone();
+        }
+        let refresh_token = format!(
+            "fake-refresh-token-{}-SENTINEL",
+            state.issued_refresh_tokens.len() + 1
+        );
+        let mut token = FakeRefreshToken {
+            claims,
+            refresh_token: Some(refresh_token),
+            access_token: Some("fake-access-token-SENTINEL".to_string()),
+            signing_key_id: state.active_key_id.clone(),
+            omit_id_token: false,
+        };
+        if let Some(adjust) = scripted {
+            adjust(&mut token);
+        }
+        if let Some(refresh_token) = &token.refresh_token {
+            state.issued_refresh_tokens.push(refresh_token.clone());
+            state.refresh_grants.insert(
+                refresh_token.clone(),
+                RefreshGrant {
+                    claims: grant.claims.clone(),
+                    nonce: grant.nonce.clone(),
+                },
+            );
+        }
+        drop(state);
+        let mut body = json!({
+            "token_type": "Bearer",
+            "expires_in": 300,
+            "scope": "openid profile email offline_access",
+        });
+        if !token.omit_id_token {
+            body["id_token"] = Value::String(
+                sign_id_token(&AuthorizationGrant {
+                    code_challenge: String::new(),
+                    nonce: grant.nonce.clone(),
+                    redirect_uri: String::new(),
+                    claims: token.claims,
+                    signing_key_id: token.signing_key_id,
+                    offline_access: true,
+                })
+                .unwrap(),
+            );
+        }
+        if let Some(refresh_token) = token.refresh_token {
+            body["refresh_token"] = Value::String(refresh_token);
+        }
+        if let Some(access_token) = token.access_token {
+            body["access_token"] = Value::String(access_token);
+        }
+        fake_response(200, None, FakeBody::Json(body))
+    }
+
+    pub(super) fn set_token_outage(&self, outage: bool) {
         self.state.lock().unwrap().token_outage = outage;
     }
 
-    fn set_discovery_outage(&self, outage: bool) {
+    pub(super) fn set_discovery_outage(&self, outage: bool) {
         self.state.lock().unwrap().discovery_outage = outage;
     }
 
-    fn set_jwks_outage(&self, outage: bool) {
+    pub(super) fn set_jwks_outage(&self, outage: bool) {
         self.state.lock().unwrap().jwks_outage = outage;
     }
 
-    fn set_refresh_tokens(&self, refresh_tokens: FakeRefreshTokens) {
+    pub(super) fn set_refresh_tokens(&self, refresh_tokens: FakeRefreshTokens) {
         self.state.lock().unwrap().refresh_tokens = refresh_tokens;
     }
 
-    fn issued_refresh_tokens(&self) -> Vec<String> {
+    pub(super) fn issued_refresh_tokens(&self) -> Vec<String> {
         self.state.lock().unwrap().issued_refresh_tokens.clone()
     }
 
-    fn requested_scopes(&self) -> Vec<Vec<String>> {
+    pub(super) fn requested_scopes(&self) -> Vec<Vec<String>> {
         self.state.lock().unwrap().requested_scopes.clone()
     }
 
-    fn nonces(&self) -> Vec<String> {
+    pub(super) fn nonces(&self) -> Vec<String> {
         self.state.lock().unwrap().nonces.clone()
     }
 
-    fn rotate_signing_key(&self) {
+    pub(super) fn rotate_signing_key(&self) {
         self.state.lock().unwrap().active_key_id = ROTATED_KEY_ID.to_string();
     }
 
-    fn request_counts(&self) -> (usize, usize, usize) {
+    pub(super) fn request_counts(&self) -> (usize, usize, usize) {
         let state = self.state.lock().unwrap();
         (
             state.discovery_requests,
@@ -278,11 +481,14 @@ impl FakeMicrosoftOidcProvider {
         )
     }
 
-    fn last_token_rejection(&self) -> Option<&'static str> {
+    pub(super) fn last_token_rejection(&self) -> Option<&'static str> {
         self.state.lock().unwrap().last_token_rejection
     }
 
-    fn authorize(&self, authorization_location: &str) -> Result<String, FakeProviderError> {
+    pub(super) fn authorize(
+        &self,
+        authorization_location: &str,
+    ) -> Result<String, FakeProviderError> {
         let url = Url::parse(authorization_location)
             .map_err(|_| FakeProviderError::InvalidAuthorizationRequest)?;
         if url.scheme() != "https"
@@ -445,6 +651,13 @@ impl FakeMicrosoftOidcProvider {
         };
         if let Some(refresh_token) = &refresh_token {
             state.issued_refresh_tokens.push(refresh_token.clone());
+            state.refresh_grants.insert(
+                refresh_token.clone(),
+                RefreshGrant {
+                    claims: grant.claims.clone(),
+                    nonce: grant.nonce.clone(),
+                },
+            );
         }
         drop(state);
 
@@ -520,25 +733,37 @@ impl MicrosoftOidcTransport for FakeMicrosoftOidcProvider {
         })
     }
 
-    /// Sign-in tests send no refresh-token grant.
     fn token_request<'a>(
         &'a self,
-        _: HttpRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async {
-            agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse::no_response()
+        request: HttpRequest,
+    ) -> Pin<Box<dyn Future<Output = TokenEndpointResponse> + Send + 'a>> {
+        Box::pin(async move {
+            self.state.lock().unwrap().refresh_arrivals += 1;
+            loop {
+                let scripted = self.state.lock().unwrap().refresh_responses.pop_front();
+                match scripted {
+                    Some(FakeRefresh::Gate(gate)) => gate.acquire().await.unwrap().forget(),
+                    scripted => return self.refresh_response(&request, scripted),
+                }
+            }
         })
     }
 }
 
+/// A token-endpoint response the fake scripts.
+fn fake_response(status: u16, retry_after: Option<&str>, body: FakeBody) -> TokenEndpointResponse {
+    let retry_after = retry_after.map(|value| HeaderValue::from_str(value).unwrap());
+    let body = match body {
+        FakeBody::Json(value) => TokenEndpointBody::Complete(serde_json::to_vec(&value).unwrap()),
+        FakeBody::Raw(bytes) => TokenEndpointBody::Complete(bytes),
+        FakeBody::Failed => TokenEndpointBody::Failed,
+        FakeBody::Oversized => TokenEndpointBody::Oversized,
+    };
+    TokenEndpointResponse::new(status, retry_after.as_ref(), body)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FakeProviderError {
+pub(super) enum FakeProviderError {
     ProviderUnavailable,
     UnexpectedRequest,
     InvalidAuthorizationRequest,
@@ -563,18 +788,18 @@ impl fmt::Display for FakeProviderError {
 impl Error for FakeProviderError {}
 
 #[derive(Debug, Clone)]
-struct TestClock(Arc<AtomicI64>);
+pub(super) struct TestClock(Arc<AtomicI64>);
 
 impl TestClock {
-    fn new(timestamp: i64) -> Self {
+    pub(super) fn new(timestamp: i64) -> Self {
         Self(Arc::new(AtomicI64::new(timestamp)))
     }
 
-    fn now_timestamp(&self) -> i64 {
+    pub(super) fn now_timestamp(&self) -> i64 {
         self.0.load(Ordering::SeqCst)
     }
 
-    fn advance_seconds(&self, seconds: i64) {
+    pub(super) fn advance_seconds(&self, seconds: i64) {
         self.0.fetch_add(seconds, Ordering::SeqCst);
     }
 }
@@ -665,7 +890,9 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
             "oid".to_string(),
             Value::String(grant.claims.user_object_id.clone()),
         ),
-        (
+    ]);
+    if !grant.claims.omit_nonce {
+        payload.insert(
             "nonce".to_string(),
             Value::String(
                 grant
@@ -674,8 +901,11 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
                     .clone()
                     .unwrap_or_else(|| grant.nonce.clone()),
             ),
-        ),
-    ]);
+        );
+    }
+    if let Some(at_hash) = &grant.claims.at_hash {
+        payload.insert("at_hash".to_string(), Value::String(at_hash.clone()));
+    }
     if let Some(authorized_party) = &grant.claims.authorized_party {
         payload.insert("azp".to_string(), Value::String(authorized_party.clone()));
     }
@@ -711,7 +941,11 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
             payload.insert("groups".to_string(), Value::String("invalid".to_string()));
         }
     }
-    let header = json!({"alg": "RS256", "kid": grant.signing_key_id, "typ": "JWT"});
+    let header = if grant.claims.unsigned {
+        json!({"alg": "none", "typ": "JWT"})
+    } else {
+        json!({"alg": "RS256", "kid": grant.signing_key_id, "typ": "JWT"})
+    };
     let header = URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&header).map_err(|_| FakeProviderError::SigningFailed)?);
     let mut payload =
@@ -721,6 +955,9 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
     }
     let payload = URL_SAFE_NO_PAD.encode(payload.as_bytes());
     let signing_input = format!("{header}.{payload}");
+    if grant.claims.unsigned {
+        return Ok(format!("{signing_input}."));
+    }
     let mut signature = signing_key(&grant.signing_key_id)
         .sign(
             &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -1005,7 +1242,7 @@ async fn finish_browser_login_with(
         .unwrap()
 }
 
-fn session_cookie(response: &axum::response::Response) -> Option<String> {
+pub(super) fn session_cookie(response: &axum::response::Response) -> Option<String> {
     response
         .headers()
         .get_all(SET_COOKIE)
