@@ -1187,7 +1187,18 @@ impl OAuthManager {
                 .discover_targets(&r.http, &client, &grant.access_token, &scopes)
                 .await?,
         )?;
-        eligible(profile, &scopes, &targets)?;
+        if let Err(error) = eligible(profile, &scopes, &targets) {
+            log_ineligible(
+                IneligibleAt::Install,
+                owner,
+                &binding,
+                None,
+                profile,
+                &scopes,
+                &targets,
+            );
+            return Err(error);
+        }
         let refresh_token = match &grant.refresh_token {
             IssuedRefreshToken::Issued(token) if bounded(token, 32768) => Some(token.clone()),
             IssuedRefreshToken::Absent if r.dialect.allows_access_without_refresh() => None,
@@ -1772,6 +1783,19 @@ impl OAuthManager {
         let c = current.connection.as_ref().ok_or(OAuthError::Stale)?;
         let eligibility = eligible(profile, &entry.scopes, &c.family.targets);
         tracing::info!(target:"agent_access_core::oauth",event="target_revalidation",owner,registration=%binding.registration,connection_id=%c.id,outcome=if eligibility.is_ok(){"admitted"}else{"permission_denied"});
+        if eligibility.is_err() {
+            // Discovery runs once per access version, so this records each
+            // decision that denies the connection, not every lease check.
+            log_ineligible(
+                IneligibleAt::TargetRevalidation,
+                owner,
+                binding,
+                Some(&c.id),
+                profile,
+                &entry.scopes,
+                &c.family.targets,
+            );
+        }
         eligibility?;
         Ok(make_lease(owner, binding, &current, c, entry, profile))
     }
@@ -2004,6 +2028,93 @@ fn eligible(
         }
     }
     Ok(())
+}
+/// Where a profile was found ineligible.
+#[derive(Debug, Clone, Copy)]
+enum IneligibleAt {
+    /// Consent: the connection is not installed.
+    Install,
+    /// Target discovery after a refresh: access is denied until the
+    /// connection qualifies again or the person reconnects.
+    TargetRevalidation,
+}
+
+impl IneligibleAt {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::TargetRevalidation => "target_revalidation",
+        }
+    }
+}
+
+/// Why [`eligible`] rejects a profile, by scope and target name only.
+struct Ineligibility<'a> {
+    /// Whether a discovered target has the profile's target ID and audience.
+    target_discovered: bool,
+    /// Requested scopes, other than `offline_access`, the token lacks.
+    missing_token_scopes: Vec<&'a str>,
+    /// Requested scopes, other than `offline_access`, the profile's target
+    /// lacks: every one when the target was not discovered.
+    missing_target_scopes: Vec<&'a str>,
+    /// Every discovered target's ID.
+    discovered_targets: Vec<&'a str>,
+}
+
+fn ineligibility<'a>(
+    profile: &'a OAuthPermissionProfile,
+    token_scopes: &BTreeSet<String>,
+    targets: &'a [OAuthTarget],
+) -> Ineligibility<'a> {
+    let target = targets
+        .iter()
+        .find(|t| t.id == profile.target && t.audience == profile.audience);
+    let requested = || {
+        profile
+            .requested_scopes()
+            .iter()
+            .map(String::as_str)
+            .filter(|s| *s != "offline_access")
+    };
+    Ineligibility {
+        target_discovered: target.is_some(),
+        missing_token_scopes: requested().filter(|s| !token_scopes.contains(*s)).collect(),
+        missing_target_scopes: requested()
+            .filter(|s| !target.is_some_and(|t| t.scopes.contains(*s)))
+            .collect(),
+        discovered_targets: targets.iter().map(|t| t.id.as_str()).collect(),
+    }
+}
+
+/// Records why `profile` is not eligible where that is decided: at
+/// install and at target revalidation. It names the registration, profile,
+/// target and scopes only; never a token, code or secret.
+fn log_ineligible(
+    at: IneligibleAt,
+    owner: &str,
+    binding: &OAuthBinding,
+    connection_id: Option<&str>,
+    profile: &OAuthPermissionProfile,
+    token_scopes: &BTreeSet<String>,
+    targets: &[OAuthTarget],
+) {
+    let gap = ineligibility(profile, token_scopes, targets);
+    tracing::warn!(
+        target: "agent_access_core::oauth",
+        event = "permission_ineligible",
+        phase = at.as_str(),
+        owner,
+        registration = %binding.registration,
+        permission_profile = %binding.permission_profile,
+        connection_id,
+        profile_target = %profile.target,
+        profile_audience = %profile.audience,
+        target_discovered = gap.target_discovered,
+        missing_token_scopes = ?gap.missing_token_scopes,
+        missing_target_scopes = ?gap.missing_target_scopes,
+        discovered_targets = ?gap.discovered_targets,
+        outcome = OAuthError::Permission.code(),
+    );
 }
 fn expired_without_refresh(connection: &ConnectionState) -> bool {
     connection.status == OAuthConnectionStatus::Ready
@@ -5081,6 +5192,234 @@ pub(crate) mod tests {
                 Some("oauth_permission_denied")
             );
         }
+    }
+
+    /// The `agent_access_core::oauth` events emitted while installed, each
+    /// as its fields.
+    #[derive(Clone, Default)]
+    struct OAuthEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+    impl OAuthEvents {
+        fn install(&self) -> tracing::subscriber::DefaultGuard {
+            use tracing_subscriber::layer::SubscriberExt;
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(self.clone()))
+        }
+
+        fn named(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event.get("event").map(String::as_str) == Some(name))
+                .cloned()
+                .collect()
+        }
+
+        /// Fails if any captured field contains one of `secrets`.
+        fn assert_free_of(&self, secrets: &[&str]) {
+            let events = self.0.lock().unwrap();
+            assert!(!events.is_empty());
+            for event in events.iter() {
+                for (field, value) in event {
+                    for secret in secrets {
+                        assert!(!value.contains(secret), "{field} carries {secret}");
+                    }
+                }
+            }
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for OAuthEvents {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() != "agent_access_core::oauth" {
+                return;
+            }
+            let mut fields =
+                BTreeMap::from([("level".to_owned(), event.metadata().level().to_string())]);
+            event.record(&mut EventFields(&mut fields));
+            self.0.lock().unwrap().push(fields);
+        }
+    }
+
+    struct EventFields<'a>(&'a mut BTreeMap<String, String>);
+
+    impl tracing::field::Visit for EventFields<'_> {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+    }
+
+    /// A consent whose discovered targets or token scopes do not cover the
+    /// profile installs nothing and records why, by scope and target name
+    /// only.
+    #[tokio::test]
+    async fn ineligible_installs_record_the_missing_target_and_scopes() {
+        let target = |id: &str, scopes: &[&str]| serde_json::json!({"targets": [{"id": id, "name": "One", "audience": "records-api", "scopes": scopes}]});
+        for (granted, targets, discovered, missing_token, missing_target, ids) in [
+            // Another workspace than the profile's target.
+            (
+                "records.read offline_access",
+                target("workspace-two", &["records.read"]),
+                "false",
+                "[]",
+                r#"["records.read"]"#,
+                r#"["workspace-two"]"#,
+            ),
+            // The profile's target, but neither the token nor the target
+            // carries the requested scope.
+            (
+                "records.audit offline_access",
+                target("workspace-one", &["records.audit"]),
+                "true",
+                r#"["records.read"]"#,
+                r#"["records.read"]"#,
+                r#"["workspace-one"]"#,
+            ),
+        ] {
+            let (_dir, _store, _ring, manager, server) = fixture().await;
+            Mock::given(method("GET"))
+                .and(path("/me"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"id":"alice","name":"Alice"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/targets"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(targets))
+                .mount(&server)
+                .await;
+            let mut response = token(0);
+            response["scope"] = serde_json::json!(granted);
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .mount(&server)
+                .await;
+            let events = OAuthEvents::default();
+            let _guard = events.install();
+            let state = start(&manager, OAuthConnectIntent::Connect).await;
+            assert_eq!(
+                manager
+                    .complete(
+                        "user",
+                        "session",
+                        "stub",
+                        &state,
+                        "one-use-code",
+                        runtime(&manager)
+                    )
+                    .await
+                    .unwrap_err(),
+                OAuthError::Permission
+            );
+            assert_eq!(
+                manager.status("user", "stub").unwrap().status,
+                OAuthConnectionStatus::Disconnected
+            );
+            let logged = events.named("permission_ineligible");
+            assert_eq!(logged.len(), 1, "{granted}");
+            let event = &logged[0];
+            for (field, value) in [
+                ("level", "WARN"),
+                ("phase", "install"),
+                ("owner", "user"),
+                ("registration", "stub"),
+                ("permission_profile", "read"),
+                ("profile_target", "workspace-one"),
+                ("profile_audience", "records-api"),
+                ("target_discovered", discovered),
+                ("missing_token_scopes", missing_token),
+                ("missing_target_scopes", missing_target),
+                ("discovered_targets", ids),
+                ("outcome", "oauth_permission_denied"),
+            ] {
+                assert_eq!(
+                    event.get(field).map(String::as_str),
+                    Some(value),
+                    "{field}: {event:?}"
+                );
+            }
+            // Nothing was installed, so there is no connection to name.
+            assert!(!event.contains_key("connection_id"), "{event:?}");
+            events.assert_free_of(&[
+                "protected-access-0",
+                "protected-refresh-0",
+                "one-use-code",
+                "application-secret",
+                state.as_str(),
+            ]);
+        }
+    }
+
+    /// Target revalidation after a refresh that leaves the connection
+    /// ineligible records why once: later lease checks deny it without
+    /// another event.
+    #[tokio::test]
+    async fn ineligible_revalidation_is_recorded_once_where_it_is_decided() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        expire(&manager);
+        server.reset().await;
+        let mut response = token(1);
+        response["scope"] = serde_json::json!("offline_access");
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        identity(&server).await;
+        let events = OAuthEvents::default();
+        let _guard = events.install();
+        for _ in 0..3 {
+            assert_eq!(
+                manager.acquire("user", &binding()).await.unwrap_err(),
+                OAuthError::Permission
+            );
+            assert_eq!(
+                manager.check_credential("user", &binding()),
+                Err(OAuthError::Permission)
+            );
+        }
+        let logged = events.named("permission_ineligible");
+        assert_eq!(logged.len(), 1, "{logged:?}");
+        let event = &logged[0];
+        let connection = manager.status("user", "stub").unwrap();
+        for (field, value) in [
+            ("phase", "target_revalidation"),
+            ("registration", "stub"),
+            ("permission_profile", "read"),
+            (
+                "connection_id",
+                connection.connection_id.as_deref().unwrap(),
+            ),
+            ("target_discovered", "true"),
+            ("missing_token_scopes", r#"["records.read"]"#),
+            ("missing_target_scopes", "[]"),
+            ("discovered_targets", r#"["workspace-one"]"#),
+        ] {
+            assert_eq!(
+                event.get(field).map(String::as_str),
+                Some(value),
+                "{field}: {event:?}"
+            );
+        }
+        events.assert_free_of(&[
+            "protected-access-0",
+            "protected-refresh-0",
+            "protected-access-1",
+            "protected-refresh-1",
+            "application-secret",
+        ]);
     }
 
     #[tokio::test]
