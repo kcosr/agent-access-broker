@@ -1372,8 +1372,8 @@ All notable changes to this project are documented in this file.
 - Confluence search, blog search, and page and blog reads failed with
   `upstream_protocol_failed` ("Confluence browser URL failed validation")
   whenever a result lived in a space whose URL an administrator had changed:
-  Confluence keeps the key, such as `RAILS`, in the API but links under the
-  alias, such as `/spaces/VLABS/pages/...`. One such result failed its whole
+  Confluence keeps the key, such as `ROCKET`, in the API but links under the
+  alias, such as `/spaces/VECTOR/pages/...`. One such result failed its whole
   search page. A link's space segment now matches the space key or the space's
   URL alias, taken from the v2 space object's `currentActiveAlias` where the
   Broker already reads it, otherwise from the space object's own
@@ -1385,9 +1385,9 @@ All notable changes to this project are documented in this file.
   rule it failed and a masked link shape.
 - Confluence search and blog search checked returned content against the space
   names the caller wrote rather than the authorization boundary. With
-  all-space access, `space = VLABS` in CQL, or `spaces: ["VLABS"]`, narrowed
-  the check to `VLABS`. A result that Confluence resolved to the space's key,
-  such as `RAILS`, then failed the whole search with `scope_unresolved`.
+  all-space access, `space = VECTOR` in CQL, or `spaces: ["VECTOR"]`, narrowed
+  the check to `VECTOR`. A result that Confluence resolved to the space's key,
+  such as `ROCKET`, then failed the whole search with `scope_unresolved`.
   Returned content is now checked against the granted space keys or all-except
   exclusions, as `docs/design.md` describes. A caller-written name still
   narrows the query, but cannot widen access or lift an exclusion.
