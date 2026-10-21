@@ -1418,11 +1418,10 @@ To upgrade:
    selects. They remain listed for their owners and administrators until
    deleted.
 
-Rolling back follows the store-version rule above. The previous binary must
-already run the store's schema, `027_command_imports` or, once GitLab remote
-revocation is deployed, `028_oauth_revocations`: the store refuses a binary
-whose schema predates the database's, so rolling back across `027`, `028` or
-any later migration needs the backup taken before that migration.
+Credential connections add no migration of their own, so rolling back follows
+the [general rollback rule](#upgrade-and-rollback): the store refuses a binary
+whose schema predates the database's, and rolling back across any migration
+needs the backup taken before it.
 
 - **Immediate rollback**, before anything is written under the new version, is
   the previous binary with its previous configuration. Tokens the new
