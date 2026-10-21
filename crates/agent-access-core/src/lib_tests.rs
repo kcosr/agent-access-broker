@@ -3336,6 +3336,45 @@ fn rejects_a_gateway_connection_profile_it_cannot_present() {
     );
 }
 
+/// Connection validation reads every declaration of a profile: a
+/// route-bound declaration repeated after an unrestricted one still keeps a
+/// Git gateway off the connection. (Descriptor validation rejects the
+/// repeat itself.)
+#[test]
+fn a_repeated_route_bound_declaration_keeps_a_git_gateway_off_its_connection() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "repositories",
+        token_connection("routed-token"),
+        &["routed", "gitlab_git"],
+    );
+    let mut services = configured_service_descriptors(&config);
+    let shadowed = ServiceDescriptor::new("routed", "Routed").with_credentials(
+        CredentialDescriptor::default()
+            .profile("routed-token", "bearer_token")
+            .with_profile(
+                agent_access_provider::CredentialProfile::new("routed-token", "bearer_token")
+                    .route_bound(),
+            ),
+    );
+    assert_eq!(
+        shadowed.validate().unwrap_err(),
+        ["service routed declares token profile routed-token more than once"]
+    );
+    services.insert("routed".to_string(), Arc::new(shadowed));
+    let mut errors = Vec::new();
+    crate::connections::validate_connections(&config, &services, &mut errors);
+    assert_contains(
+        &errors,
+        "credentials.connections.repositories.user_token_profiles profile routed-token is route-bound: only the provider declaring it may present it, so the gateway gitlab_git cannot consume this connection",
+    );
+}
+
 #[test]
 fn rejects_connections_without_a_method_or_with_dangling_references() {
     let mut config = sample_broker();

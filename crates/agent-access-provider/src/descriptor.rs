@@ -654,7 +654,17 @@ impl ServiceDescriptor {
                 "service {service} needs a delegated connection description of at most 512 bytes"
             ));
         }
+        let mut profiles = BTreeSet::new();
         for profile in &self.credentials.profiles {
+            // One declaration per name: lookups by name return the first,
+            // so a duplicate could not carry a different kind, label or
+            // route binding.
+            if !profiles.insert(profile.name.as_str()) {
+                errors.push(format!(
+                    "service {service} declares token profile {} more than once",
+                    profile.name
+                ));
+            }
             if profile
                 .label
                 .as_deref()
@@ -1065,6 +1075,52 @@ mod tests {
             assert_eq!(
                 with(description),
                 ["service example needs a delegated connection description of at most 512 bytes"]
+            );
+        }
+    }
+
+    #[test]
+    fn token_profiles_are_declared_once_with_bounded_labels() {
+        let with = |credentials: CredentialDescriptor| {
+            let mut service = service(vec![action("item.view")]);
+            service.credentials = credentials;
+            service.validate().err().unwrap_or_default()
+        };
+        assert_eq!(
+            with(
+                CredentialDescriptor::default()
+                    .profile("site-token", "basic_api_token")
+                    .with_profile(
+                        CredentialProfile::new("routed-token", "bearer_token")
+                            .with_label("Routed token")
+                            .route_bound()
+                    )
+            ),
+            Vec::<String>::new()
+        );
+        // A route-bound duplicate after an unrestricted declaration, or any
+        // other repeat, is rejected rather than shadowed.
+        for duplicate in [
+            CredentialProfile::new("routed-token", "bearer_token").route_bound(),
+            CredentialProfile::new("routed-token", "basic_api_token"),
+            CredentialProfile::new("routed-token", "bearer_token").with_label("Other"),
+        ] {
+            assert_eq!(
+                with(
+                    CredentialDescriptor::default()
+                        .profile("routed-token", "bearer_token")
+                        .with_profile(duplicate)
+                ),
+                ["service example declares token profile routed-token more than once"]
+            );
+        }
+        let too_long: &'static str = Box::leak("x".repeat(129).into_boxed_str());
+        for label in ["", " ", too_long] {
+            assert_eq!(
+                with(CredentialDescriptor::default().with_profile(
+                    CredentialProfile::new("site-token", "basic_api_token").with_label(label)
+                )),
+                ["service example token profile site-token needs a label of at most 128 bytes"]
             );
         }
     }

@@ -248,6 +248,22 @@ pub(crate) fn connection_profile_kind(
     .flatten()
 }
 
+/// How `descriptors` declare `profile`, over every declaration: `Some(true)`
+/// when any declaration marks it route-bound, `Some(false)` when some
+/// declare it and none does, `None` when none declares it. Descriptor
+/// validation rejects a repeated profile; this stays fail-closed even so.
+pub(crate) fn profile_route_binding<'a>(
+    descriptors: impl IntoIterator<Item = &'a ServiceDescriptor>,
+    profile: &str,
+) -> Option<bool> {
+    descriptors
+        .into_iter()
+        .flat_map(|descriptor| &descriptor.credentials.profiles)
+        .filter(|declared| declared.name == profile)
+        .map(|declared| declared.route_bound)
+        .reduce(|left, right| left || right)
+}
+
 /// The label `connection`'s consumers declare for `profile`: the first one
 /// in service ID order that declares a label.
 pub(crate) fn connection_profile_label(
@@ -484,11 +500,9 @@ fn validate_token_profile(
             return;
         }
     };
-    let route_bound = consumers.iter().any(|(_, descriptor)| {
-        descriptor
-            .credential_profile(profile)
-            .is_some_and(|declared| declared.route_bound)
-    });
+    let route_bound =
+        profile_route_binding(consumers.iter().map(|(_, descriptor)| *descriptor), profile)
+            == Some(true);
     for (service, descriptor) in consumers {
         if config.gateways.contains_key(*service) {
             if route_bound {

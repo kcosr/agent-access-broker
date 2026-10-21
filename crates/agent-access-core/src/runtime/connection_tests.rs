@@ -1059,35 +1059,41 @@ async fn the_git_gateway_refuses_route_bound_and_undeclared_token_profiles() {
         token("git-bearer-token")
     );
 
-    // A published fixture service marks the same profile route-bound.
-    let mut routed = runtime.clone();
-    let mut services = (*routed.services).clone();
-    services.insert(
-        "routed_fixture".into(),
-        Arc::new(
-            ServiceDescriptor::new("routed_fixture", "Routed fixture").with_credentials(
-                CredentialDescriptor::default().with_profile(
-                    agent_access_provider::CredentialProfile::new(
-                        "git-bearer-token",
-                        "bearer_token",
-                    )
-                    .route_bound(),
-                ),
-            ),
-        ),
-    );
-    routed.services = Arc::new(services);
+    // A published fixture service marks the same profile route-bound, alone
+    // or in a repeated declaration after an unrestricted one (which
+    // descriptor validation rejects; the guard stays fail-closed).
     const ROUTE_BOUND: &str = "the credential's token profile is route-bound: only the service declaring it may present it, so the Git gateway refuses it";
-    let refused = *prepare(routed.clone()).await.err().unwrap();
-    assert_eq!(refused.status, 403, "{:?}", refused.envelope);
-    assert_eq!(
-        refused.envelope.reason_code,
-        Some(ReasonCode::CredentialInvalid.into())
-    );
-    assert_eq!(refused.envelope.reason.as_deref(), Some(ROUTE_BOUND));
-    let refused = verify(routed, token("git-bearer-token")).await.unwrap_err();
-    assert_eq!(refused.reason_code(), ReasonCode::CredentialInvalid);
-    assert_eq!(refused.message, ROUTE_BOUND);
+    let route_bound = || {
+        agent_access_provider::CredentialProfile::new("git-bearer-token", "bearer_token")
+            .route_bound()
+    };
+    for credentials in [
+        CredentialDescriptor::default().with_profile(route_bound()),
+        CredentialDescriptor::default()
+            .profile("git-bearer-token", "bearer_token")
+            .with_profile(route_bound()),
+    ] {
+        let mut routed = runtime.clone();
+        let mut services = (*routed.services).clone();
+        services.insert(
+            "routed_fixture".into(),
+            Arc::new(
+                ServiceDescriptor::new("routed_fixture", "Routed fixture")
+                    .with_credentials(credentials),
+            ),
+        );
+        routed.services = Arc::new(services);
+        let refused = *prepare(routed.clone()).await.err().unwrap();
+        assert_eq!(refused.status, 403, "{:?}", refused.envelope);
+        assert_eq!(
+            refused.envelope.reason_code,
+            Some(ReasonCode::CredentialInvalid.into())
+        );
+        assert_eq!(refused.envelope.reason.as_deref(), Some(ROUTE_BOUND));
+        let refused = verify(routed, token("git-bearer-token")).await.unwrap_err();
+        assert_eq!(refused.reason_code(), ReasonCode::CredentialInvalid);
+        assert_eq!(refused.message, ROUTE_BOUND);
+    }
 
     // A profile no published service declares is refused the same way.
     const UNDECLARED: &str = "no configured service declares the credential's token profile, so the Git gateway refuses it";
@@ -1118,4 +1124,29 @@ async fn the_git_gateway_refuses_route_bound_and_undeclared_token_profiles() {
         .await
         .unwrap_err();
     assert_ne!(unprofiled.reason_code(), ReasonCode::CredentialInvalid);
+}
+
+/// Runtime admission validates every published descriptor, so one that
+/// repeats a token profile, such as an unrestricted declaration followed by
+/// a route-bound one, fails before any credential is presented.
+#[test]
+fn admission_rejects_a_descriptor_repeating_a_token_profile() {
+    let (config, _store) = connection_config("tracker");
+    let provider = LookupTraceProvider::default();
+    let descriptor = agent_access_provider::test_support::DescribedProvider::descriptor(&provider)
+        .with_credentials(
+            CredentialDescriptor::default()
+                .profile(PROFILE, "basic_api_token")
+                .with_profile(
+                    agent_access_provider::CredentialProfile::new(PROFILE, "basic_api_token")
+                        .route_bound(),
+                ),
+        );
+    assert_runtime_config_error_contains(
+        BrokerRuntime::with_providers(
+            config,
+            vec![ServiceProvider::new(descriptor, Arc::new(provider))],
+        ),
+        "service jira declares token profile atlassian-api-token more than once",
+    );
 }

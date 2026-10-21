@@ -167,7 +167,7 @@ impl BrokerRuntime {
 impl BrokerRuntime {
     /// Refuses a static credential a Git gateway must not present: one lent
     /// as a token profile that a service this generation publishes marks
-    /// route-bound (any one marking it is enough), or that no published
+    /// route-bound (any declaration marking it is enough), or that no published
     /// service declares. A credential without a profile is presented by its
     /// kind. Forwarding checks it before the upstream authorization is
     /// built, and Git verification before its probe.
@@ -178,7 +178,10 @@ impl BrokerRuntime {
         let Some(profile) = credential.profile() else {
             return Ok(());
         };
-        match profile_route_binding(self.services.values().map(AsRef::as_ref), profile) {
+        match crate::connections::profile_route_binding(
+            self.services.values().map(AsRef::as_ref),
+            profile,
+        ) {
             Some(false) => Ok(()),
             Some(true) => Err(ProviderError::deny(
                 ReasonCode::CredentialInvalid,
@@ -190,20 +193,6 @@ impl BrokerRuntime {
             )),
         }
     }
-}
-
-/// How `services` declare `profile`: `Some(true)` when any declares it
-/// route-bound, `Some(false)` when some declare it and none marks it, and
-/// `None` when none declares it.
-fn profile_route_binding<'a>(
-    services: impl IntoIterator<Item = &'a agent_access_provider::ServiceDescriptor>,
-    profile: &str,
-) -> Option<bool> {
-    services
-        .into_iter()
-        .filter_map(|descriptor| descriptor.credential_profile(profile))
-        .map(|declared| declared.route_bound)
-        .reduce(|left, right| left || right)
 }
 
 impl PreparedGatewayOperation {

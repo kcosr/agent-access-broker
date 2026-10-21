@@ -290,7 +290,8 @@ verification needs, and, with `.delegated(description)`, that per-user
 delegated OAuth credentials are accepted.
 
 Declare a token profile with `.profile(name, kind)`, or with
-`.with_profile(CredentialProfile::new(name, kind))` to add:
+`.with_profile(CredentialProfile::new(name, kind))` to add the options below.
+Declare each name once: descriptor validation rejects a repeated profile.
 
 - `.with_label(label)`, the name people see where they choose a token type
   (management falls back to the profile name);
