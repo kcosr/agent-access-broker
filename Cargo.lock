@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-broker",
  "agent-access-broker-host",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-atlassian"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-broker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-atlassian",
  "agent-access-broker-host",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-broker-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "agent-access-atlassian",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-cloudbees-ci"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-command-import"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-core",
  "agent-access-provider",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-confluence"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-atlassian",
  "agent-access-content",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-conformance"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-content"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "html5ever",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "agent-access-cloudbees-ci",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-fake"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-gitlab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-content",
  "agent-access-provider",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-gmail"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-jira"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-atlassian",
  "agent-access-content",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-mcp-upstream"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-core",
  "agent-access-provider",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-openapi-upstream"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-core",
  "agent-access-provider",
@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-provider"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "agent-access-teams"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
