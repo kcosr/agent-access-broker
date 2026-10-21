@@ -142,7 +142,7 @@ enrollment and setting-change audit details.
 Microsoft login method (`managed_store/oidc_membership_renewal.rs`, migration
 `031`). The record, its AAD inputs and its payload are durable contracts: it
 stays in key readiness, the used-key inventory and rewrap (which keeps its token
-version), and its golden vector freezes an earlier release's row; never
+version), and its golden vector freezes the stored row format; never
 regenerate it. While a record exists, sign-in and renewal order evidence by
 Microsoft's raw `iat` against `observation_iat`: only a strictly newer complete
 claim replaces evidence, and every trusted observation, complete or not, raises

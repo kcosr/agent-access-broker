@@ -804,8 +804,8 @@ group auto-enrollment), raw-`iat` evidence ordering in both completion orders wi
 incomplete and superseded observations, lifecycle deletions, key readiness,
 inventory and rewrap, corrupt payloads, the renewal hint, attempt-start
 eligibility, success and failure writes, and fence failures. Core protocol tests
-(`microsoft_oidc/renewal_tests.rs`) cover `Retry-After` in seconds and
-IMF-fixdate form, the bounded body reader, the classification precedence, the
+(`microsoft_oidc/renewal_tests.rs`) cover `Retry-After` in seconds and all
+three HTTP-date forms, the bounded body reader, the classification precedence, the
 logged `error` allowlist and code limit, stale `iat`, backoff and jitter, next
 attempts that never shorten `Retry-After`, the throttle default and the
 refresh request, the reference comparison and the nonce rule.

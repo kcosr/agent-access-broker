@@ -1504,7 +1504,7 @@ thresholds; raising invocation limits does not raise login budgets.
 | `mutation_verification_failed` | A GitLab review write may already have applied, but readback could not prove the final state. Do not retry automatically; refresh through the safe result locators and reconcile first. |
 | `oidc_unavailable` | Confirm Microsoft OIDC is enabled, both local secret refs resolve, outbound HTTPS to `login.microsoftonline.com` works, and Entra discovery/JWKS endpoints answer. The rest of the broker remains available; retry after the 30-second refresh throttle or reload after correcting local configuration. |
 | `oidc_flow_invalid` or `oidc_flow_expired` | Start a new Microsoft login. The flow may have expired, already been consumed, lost its binding cookie, or been invalidated by reload/config generation change. |
-| `oidc_provider_denied` | Review the Entra sign-in result, user/application assignment, consent, and tenant policy. Provider error details are intentionally not echoed as identity data. |
+| `oidc_provider_denied` | Review the Entra sign-in result, user/application assignment, consent, and tenant policy. Provider error details are intentionally not echoed as identity data. In an `oidc.membership.renewal_failed` record it means Microsoft rejected the renewal request itself (`request_rejected`); the service log's `error` and `errorCodes` identify the rejection. |
 | `oidc_identity_invalid` | Check the configured tenant/client IDs, exact redirect URI, app registration, and Entra signing-key availability. A token with the wrong issuer, tenant, audience, nonce, subject, signature, or time window is rejected. |
 | `oidc_group_claims_incomplete` | The ID token indicated group overage/distributed claims or contained malformed group IDs. Reduce the user's app-visible security-group memberships or adjust Entra assignment/claim configuration; the broker does not query Graph. |
 | `oidc_admission_denied` | For a first/JIT login, create an active mapping from one claimed Entra group Object ID to an active broker group, assign the user appropriately in Entra, or explicitly link the existing principal. Empty/unmapped claims are allowed only for an already linked identity. |
@@ -1846,8 +1846,15 @@ superseded are logged, not audited. Renewal events use the
   `capacity`, `audit_unavailable`, `attempt_interval`, `evidence_current`,
   `not_due` (logged at debug level when a request finds the renewal in its
   backoff), `not_renewable`, `provider_changed`, `snapshot_changed`,
-  `store_unavailable` or `shutdown`. Failures log at `warn`, `write_failed` at
-  `error`, the rest at `info`.
+  `store_unavailable` or `shutdown`. A completed renewal logs at `info`,
+  failures at `warn` and `write_failed` at `error`. Skips log at `debug`, except
+  `audit_unavailable` and `store_unavailable`, which log at `warn`; superseded
+  attempts log at `debug`.
+- `oidc_membership_renewal_throttled` (warn) reports, once each time a 429 starts
+  or extends the process-wide pause, the time until which no renewal starts.
+- `oidc_membership_renewal_queue_full` (warn) reports, at most once a minute, that
+  renewals are at capacity and requests with expired evidence proceed without
+  renewal.
 - `oidc_membership_renewal_audit_failed` (error) reports a committed outcome
   whose audit record could not be appended; the committed result stands.
 - `oidc_membership_renewal_unfinished` (error) names, at shutdown, each renewal

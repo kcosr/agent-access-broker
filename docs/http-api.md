@@ -2584,7 +2584,8 @@ for a renewal started before expiry):
 | `client_rejected` | `oidc_client_rejected` |
 | `groups_incomplete` | `oidc_group_claims_incomplete` |
 | `invalid_response`, `identity_mismatch` | `oidc_identity_invalid` |
-| `unavailable`, `throttled`, `request_rejected` | `oidc_unavailable` |
+| `request_rejected` | `oidc_provider_denied` |
+| `unavailable`, `throttled` | `oidc_unavailable` |
 
 `oidc_sign_in_required` and `oidc_client_rejected` appear only in these audit
 records; renewal never fails the request that triggered it. Superseded and
