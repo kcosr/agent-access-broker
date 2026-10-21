@@ -327,9 +327,10 @@ target's stored tokens. An administrator can store a token only for a
 connection that selects a token for that principal: service accounts' and
 `system` principals' tokens, and people's for connections without OAuth. That
 does not grant the target personal rights or complete the user's OAuth consent. The
-tab lists a person's OAuth connections read-only, one row per registration with
-its remote revocation, for administrators and auditors alike; only the person
-connects, reconnects or disconnects them. An `admin` bearer cannot call
+tab lists a person's OAuth connections read-only, one row per registration, for
+administrators and auditors alike; the row's drawer shows its remote revocation,
+and its status flags a failed or unconfirmed one. Only the person connects,
+reconnects or disconnects them. An `admin` bearer cannot call
 personal routes. Imported OAuth administrator discovery has a separate authority
 path described in [imported OAuth](imported-oauth.md).
 

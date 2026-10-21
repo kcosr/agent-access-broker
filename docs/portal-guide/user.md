@@ -115,19 +115,23 @@ administrator instead of your personal credential.
 For supported OAuth services, use the offered connection flow and upstream
 consent rather than pasting an OAuth access token into these fields. Each OAuth
 registration is one row of the same list, with **Connect account**,
-**Reconnect** and **Disconnect**. OAuth setup requires self-service, a credential
-connection with OAuth and a matching active `per_user` action grant on a service
-that uses it, for you or one of your current groups. An existing connection
-remains visible and disconnectable after grant removal; reconnect requires a
-matching grant. Disconnecting a GitLab connection also revokes its tokens in
-GitLab, as reconnecting or replacing the account does for the previous
-connection. The disconnect notice and the row show **Revoked at provider**,
-**Revocation pending** while the Broker retries, or **Revocation failed** or
-**Revocation unconfirmed**, which ask you to revoke the Broker application in
-GitLab, signed in to the account the ended connection used, under
-**Preferences**, **Applications**, **Authorized applications**. The row's
-badge concerns connections the Broker ended, never the current connection,
-whose own status shows beside it; revoking in GitLab also ends a current
+**Reconnect** and **Disconnect**. Open the row for the permissions connecting
+allows and the connected account; when **Connect** or **Reconnect** is
+unavailable, the drawer and the button's tooltip say why. OAuth setup requires
+self-service, a credential connection with OAuth and a matching active
+`per_user` action grant on a service that uses it, for you or one of your
+current groups. An existing connection remains visible and disconnectable after
+grant removal; reconnect requires a matching grant. Disconnecting a GitLab
+connection also revokes its tokens in GitLab, as reconnecting or replacing the
+account does for the previous connection. The disconnect notice and the row's
+drawer show **Revoked at provider**, **Revocation pending** while the Broker
+retries, or **Revocation failed** or **Revocation unconfirmed**, which ask you
+to revoke the Broker application in GitLab, signed in to the account the ended
+connection used, under **Preferences**, **Applications**, **Authorized
+applications**. The row's status also shows **Revocation failed** or
+**Revocation unconfirmed** beside the current connection's own status, with
+that explanation as its tooltip. These states concern connections the Broker
+ended, never the current connection; revoking in GitLab also ends a current
 connection of the same account. **Unconfirmed** means a token renewal's answer
 was lost, so GitLab may hold a token the Broker never received. A row stays
 listed while its revocation is pending, failed or unconfirmed, even after you

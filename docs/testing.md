@@ -107,9 +107,10 @@ broker sessions while allowing unrelated malformed cookies.
 responses: one row per credential connection naming its entitled services and
 counting the others, verification through a Git gateway service with a
 repository, one row per OAuth registration whose disconnect confirmation names
-the affected services, an administered user's OAuth registrations shown
-read-only to administrators and auditors with their remote revocation, and
-deletion of a retained stored credential by ID. The
+the affected services and whose status shows a failed or unconfirmed remote
+revocation beside the connection status, an administered user's OAuth
+registrations shown read-only to administrators and auditors with their remote
+revocation, and deletion of a retained stored credential by ID. The
 real-broker `portal.spec.ts` and `my-access-metadata.spec.ts` store, verify and
 delete connection tokens for a user and for an administered principal.
 
