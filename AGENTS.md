@@ -658,8 +658,23 @@ Use these sections under `## [Unreleased]`:
 ### Rules
 
 - New entries always go under `## [Unreleased]`.
-- Append to existing subsections; do not create duplicate subsection headers.
-- Do not edit already released version sections.
+- Use the existing subsections; do not create duplicate subsection headers.
+- Record user- and operator-visible changes: configuration, HTTP API, CLI,
+  portal, audit and log contracts, managed-store migrations, security-relevant
+  behavior, and the supported SDK surface for provider authors. Usually one to
+  three short bullets per PR is enough. Describe the resulting behavior and
+  required upgrade action relative to the last release, not the implementation
+  diary; leave internal, test-only and refactor-only changes, implementation
+  detail and test logs to the PR.
+- Consolidate related Unreleased entries as a feature evolves: edit the entry
+  a later PR changes instead of appending another, and replace or remove one
+  whose behavior changed again before release. Retain the consolidated entries'
+  PR references and only the current compatibility requirements.
+- Link the operator guide or other documentation for detailed contracts.
+- End each entry with an indented line of its PR links in ascending order, such
+  as `([#12](https://github.com/kcosr/agent-access-broker/pull/12))`. Add the
+  PR number or link after opening the PR and before merging.
+- Leave dated release sections unchanged; record corrections under Unreleased.
 
 ## Release Procedure
 
@@ -671,12 +686,11 @@ overrides and verify that Git's repository root matches the source checkout.
 
 ### Prepare
 
-The initial `0.1.0` release metadata is already prepared in this source tree;
-proceed to qualification after review and merge. Do not rerun `current` on an
-already prepared version. For later releases, start from a clean checkout on the
-preparation branch. Use `current` when `Cargo.toml` has the intended version but
-its release notes still need preparation, or select `major`, `minor`, `patch`,
-or an explicit semantic version:
+Start from a clean checkout on the preparation branch. Select `major`, `minor`,
+`patch`, or an explicit semantic version; on the 0.x line, use `minor` when
+`[Unreleased]` has breaking changes. Use `current` only when `Cargo.toml` has
+the intended version but its release notes still need preparation; do not rerun
+it on an already prepared version:
 
 ```bash
 node scripts/prepare-release.mjs current

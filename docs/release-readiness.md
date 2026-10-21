@@ -12,6 +12,14 @@ nonempty inherited Git location/index/object/configuration overrides, including
 before release work. Each entrypoint verifies that Git's actual repository root
 matches the source checkout it operates on.
 
+## Day-to-day changes
+
+Each PR with user- or operator-visible changes updates `CHANGELOG.md` under
+`Unreleased`, usually with one to three short bullets that describe the
+resulting behavior and required upgrade action and end with the PR link.
+Release preparation stamps these notes as the release notes. See the
+[changelog rules](../AGENTS.md#changelog).
+
 ## Select the release
 
 - Select a clean, reviewed commit and the intended workspace version. Ship the
@@ -27,18 +35,17 @@ matches the source checkout it operates on.
 
 ## Prepare release metadata
 
-The initial `0.1.0` release metadata is already prepared in this source tree.
-After review and merge, proceed to qualification; do not run `current` again
-for an already prepared version. For subsequent releases, start from a clean
-checkout on a preparation branch and select `current`, `major`, `minor`, `patch`,
-or an explicit version:
+Start from a clean checkout on a preparation branch and select `major`,
+`minor`, `patch`, or an explicit version. On the 0.x line, use `minor` when
+`[Unreleased]` has breaking changes:
 
 ```bash
 node scripts/prepare-release.mjs patch
 ```
 
 Use `current` only when the workspace already has the intended version and its
-release notes still need preparation. The script edits only `Cargo.toml`,
+release notes still need preparation; do not run it again for an already
+prepared version. The script edits only `Cargo.toml`,
 `Cargo.lock`, and `CHANGELOG.md`, stamps the release notes, and opens an empty
 `Unreleased` section in the same change. It validates locked Cargo metadata and
 restores the three files if preparation fails. Review and commit the change,
