@@ -628,7 +628,9 @@ async fn discovery_context(
         None
     };
     let identity_result = if !snapshot.runtime.has_configured_identity_header(&headers) {
-        match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
+        match resolve_browser_cookie_identity_blocking(state, snapshot.clone(), headers.clone())
+            .await
+        {
             Ok(Some(cookie_identity)) => {
                 if cookie_identity.password_change_required {
                     return Err(Box::new(
@@ -645,11 +647,11 @@ async fn discovery_context(
                 }
                 Ok(cookie_identity.identity)
             }
-            Ok(None) => resolve_identity_blocking(snapshot.clone(), headers.clone()).await,
+            Ok(None) => resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await,
             Err(failure) => Err(failure),
         }
     } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
+        resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await
     };
     if identity_result.is_err() {
         check_auth_source_rate_guard(
@@ -929,7 +931,7 @@ async fn admit_invoke_with_identity(
         pin.revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
             .await
     } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
+        resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await
     };
     let identity = match identity_result {
         Ok(identity) => {

@@ -1067,6 +1067,24 @@ All notable changes to this project are documented in this file.
   (`replaced` or `kept_newer`). Managed-store migration
   `031_oidc_membership_renewal` adds the table without changing existing data;
   rolling back across it needs a pre-migration backup.
+- With `membership_renewal` enabled, a request authenticated as a person whose
+  Microsoft group evidence has expired, or expires within a quarter of
+  `external_membership_ttl`, renews it on demand: the Broker redeems the stored
+  refresh token at Microsoft's token endpoint, validates the new ID token like
+  a sign-in and against the original token's `sub`, `aud`, `azp`, nonce and
+  `auth_time`, and replaces the evidence with its complete groups. Expired
+  evidence makes the request wait for the renewal once, for at most 15
+  seconds, then checks its identity again; evidence about to expire renews
+  while the request proceeds. One renewal runs per login method and at most
+  eight at once; attempts for one person are at least 60 seconds apart,
+  failures back off (30 seconds doubling to 15 minutes, never shorter than
+  Microsoft's `Retry-After`, hourly when blocked), and a 429 pauses every
+  renewal. A sign-in-required error or a token for another identity ends
+  renewal until the next sign-in; nothing extends expired evidence. Outcomes
+  are audited as `oidc.membership.renewed` and `oidc.membership.renewal_failed`,
+  with the new reason codes `oidc_sign_in_required` and `oidc_client_rejected`,
+  and logged as `oidc_membership_renewal` events without tokens or Microsoft's
+  error descriptions.
 
 ### Changed
 

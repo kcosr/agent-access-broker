@@ -1156,7 +1156,7 @@ async fn trusted_caller_browser_login_and_session_work_without_proxy_headers() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("host", "localhost".parse().unwrap());
     headers.insert("cookie", cookie.parse().unwrap());
-    let session = crate::handlers::auth::resolve_browser_cookie_identity_blocking(
+    let session = crate::handlers::auth::resolve_browser_cookie_identity_without_renewal(
         f.broker.as_ref().unwrap().state().current(),
         headers,
     )

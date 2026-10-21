@@ -651,42 +651,49 @@ async fn gateway_context(
     .await
     .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
 
-    let identity =
-        match gateway_basic_identity(&snapshot, headers, matched_gateway, &admission).await {
-            Ok(identity) => identity,
-            Err(error) => {
-                check_auth_source_rate_guard(
-                    state,
-                    &snapshot,
-                    &agent_request_id,
-                    classified.service.clone(),
-                    classified.action.clone(),
-                    &source,
-                )
-                .await
-                .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
-                let response = snapshot
-                    .runtime
-                    .governed_operation_error_response(
-                        GovernedOperationContext {
-                            operation: OperationContext {
-                                agent_request_id,
-                                broker_request_id,
-                                identity: IdentityContext::anonymous(),
-                                service: classified.service.clone(),
-                                action: classified.action.clone(),
-                                source,
-                            },
-                            execution_context,
+    let identity = match gateway_basic_identity(
+        state,
+        &snapshot,
+        headers,
+        matched_gateway,
+        &admission,
+    )
+    .await
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            check_auth_source_rate_guard(
+                state,
+                &snapshot,
+                &agent_request_id,
+                classified.service.clone(),
+                classified.action.clone(),
+                &source,
+            )
+            .await
+            .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
+            let response = snapshot
+                .runtime
+                .governed_operation_error_response(
+                    GovernedOperationContext {
+                        operation: OperationContext {
+                            agent_request_id,
+                            broker_request_id,
+                            identity: IdentityContext::anonymous(),
+                            service: classified.service.clone(),
+                            action: classified.action.clone(),
+                            source,
                         },
-                        error,
-                    )
-                    .await;
-                return Err(Box::new(gateway_runtime_response_with_basic_challenge(
-                    response,
-                )));
-            }
-        };
+                        execution_context,
+                    },
+                    error,
+                )
+                .await;
+            return Err(Box::new(gateway_runtime_response_with_basic_challenge(
+                response,
+            )));
+        }
+    };
 
     let principal_permit = acquire_caller_guard(
         state,
@@ -801,7 +808,12 @@ async fn gateway_preclass_auth_rate_response(
     Some(gateway_runtime_response(response))
 }
 
+/// The Git request's identity: a forwarded identity, or a Basic broker
+/// token. Both branches then admit Microsoft membership renewal; after a
+/// wait, the forwarded identity revalidates its original proof and
+/// caller-security epoch, and the Basic token is resolved again.
 async fn gateway_basic_identity(
+    state: &AppState,
     snapshot: &Arc<RuntimeSnapshot>,
     headers: &HeaderMap,
     matched_gateway: &MatchedGateway,
@@ -811,36 +823,75 @@ async fn gateway_basic_identity(
         && matched_gateway.config.allow_forwarded_identity
         && headers.contains_key("x-aw-identity-token-sha256")
     {
-        let runtime = snapshot.runtime.clone();
-        let admission = admission.clone();
-        return tokio::task::spawn_blocking(move || {
-            runtime
-                .resolve_forwarded_identity_with_proof(&admission)
-                .map(|resolved| resolved.identity)
-        })
-        .await
-        .unwrap_or(Err(IdentityFailure::Invalid))
-        .map_err(|_| {
+        let invalid = |_| {
             ProviderError::deny(
                 ReasonCode::GatewayAuthInvalid,
                 "gateway identity is invalid",
             )
-        });
+        };
+        let runtime = snapshot.runtime.clone();
+        let forwarded = admission.clone();
+        let resolved = tokio::task::spawn_blocking(move || {
+            runtime.resolve_forwarded_identity_with_proof(&forwarded)
+        })
+        .await
+        .unwrap_or(Err(IdentityFailure::Invalid))
+        .map_err(invalid)?;
+        return match crate::membership_renewal::admit_membership_renewal(
+            &state.reloadable,
+            snapshot,
+            resolved.membership_renewal.as_ref(),
+            headers,
+        )
+        .await
+        {
+            crate::membership_renewal::RenewalAdmission::Proceed => Ok(resolved.identity),
+            crate::membership_renewal::RenewalAdmission::Waited => crate::mcp::IdentityPin {
+                caller_security_epoch: admission
+                    .caller_id()
+                    .map(|_| snapshot.caller_security_epoch),
+                admission: admission.clone(),
+                proof: resolved.proof,
+            }
+            .revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
+            .await
+            .map_err(invalid),
+        };
     }
     let token = match basic_broker_token(headers, matched_gateway) {
         Ok(token) => token,
         Err(error) => return Err(error),
     };
-    let runtime = snapshot.runtime.clone();
-    let caller_id = admission.caller_id().map(str::to_owned);
-    tokio::task::spawn_blocking(move || {
-        let mut identity = runtime.resolve_gateway_basic_broker_token(&token)?.identity;
-        identity.caller_id = caller_id;
-        Ok(identity)
-    })
+    let resolve = |token: String| {
+        let runtime = snapshot.runtime.clone();
+        let caller_id = admission.caller_id().map(str::to_owned);
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut resolved = runtime.resolve_gateway_basic_broker_token(&token)?;
+                resolved.identity.caller_id = caller_id;
+                Ok(resolved)
+            })
+            .await
+            .unwrap_or(Err(IdentityFailure::Invalid))
+            .map_err(|_| {
+                ProviderError::deny(ReasonCode::GatewayAuthInvalid, "gateway auth is invalid")
+            })
+        }
+    };
+    let resolved = resolve(token.clone()).await?;
+    match crate::membership_renewal::admit_membership_renewal(
+        &state.reloadable,
+        snapshot,
+        resolved.membership_renewal.as_ref(),
+        headers,
+    )
     .await
-    .unwrap_or(Err(IdentityFailure::Invalid))
-    .map_err(|_| ProviderError::deny(ReasonCode::GatewayAuthInvalid, "gateway auth is invalid"))
+    {
+        crate::membership_renewal::RenewalAdmission::Proceed => Ok(resolved.identity),
+        crate::membership_renewal::RenewalAdmission::Waited => {
+            resolve(token).await.map(|resolved| resolved.identity)
+        }
+    }
 }
 
 fn basic_broker_token(

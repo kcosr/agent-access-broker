@@ -519,6 +519,22 @@ impl MicrosoftOidcTransport for FakeMicrosoftOidcProvider {
                 .map_err(|_| MicrosoftOidcTransportError)
         })
     }
+
+    /// Sign-in tests send no refresh-token grant.
+    fn token_request<'a>(
+        &'a self,
+        _: HttpRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async {
+            agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse::no_response()
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

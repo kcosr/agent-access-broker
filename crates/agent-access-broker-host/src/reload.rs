@@ -1308,13 +1308,24 @@ impl ReloadableState {
                             reload_timeout_failure(Some(candidate.config_hash.clone()))
                         })?;
                         let snapshot = &candidate.snapshot;
+                        // Host tests keep their Microsoft OIDC fakes across reloads.
+                        #[cfg(test)]
+                        let (transport, clock) =
+                            match self.microsoft_oidc_test_components.lock().unwrap().clone() {
+                                Some((transport, clock)) => (Some(transport), Some(clock)),
+                                None => (None, None),
+                            };
+                        #[cfg(not(test))]
+                        let (transport, clock) = (None, None);
                         let prepared = tokio::time::timeout(
                             remaining,
-                            RuntimeSnapshot::new_microsoft_oidc_candidate(
+                            RuntimeSnapshot::new_microsoft_oidc_candidate_with_components(
                                 snapshot.generation,
                                 snapshot.config_hash.clone(),
                                 snapshot.runtime.clone(),
                                 Arc::clone(&snapshot.state_locks),
+                                transport,
+                                clock,
                             ),
                         )
                         .await;

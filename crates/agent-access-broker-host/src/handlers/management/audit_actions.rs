@@ -17,6 +17,8 @@ pub(crate) const OIDC_LOGIN_STARTED: &str = "oidc.login.started";
 pub(crate) const OIDC_LOGIN_CALLBACK: &str = "oidc.login.callback";
 pub(crate) const OIDC_LOGIN_SUCCEEDED: &str = "oidc.login.succeeded";
 pub(crate) const OIDC_LOGIN_FAILED: &str = "oidc.login.failed";
+pub(crate) const OIDC_MEMBERSHIP_RENEWED: &str = "oidc.membership.renewed";
+pub(crate) const OIDC_MEMBERSHIP_RENEWAL_FAILED: &str = "oidc.membership.renewal_failed";
 pub(crate) const OAUTH_CONNECTIONS_CALLBACK: &str = "oauth.connections.callback";
 pub(crate) const ADMIN_TOKENS_ISSUE: &str = "admin.tokens.issue";
 pub(crate) const ADMIN_TOKENS_LIST_PRINCIPAL_AGENT: &str = "admin.tokens.list_principal_agent";
@@ -137,6 +139,8 @@ const NON_MANAGEMENT_ACTIONS: &[&str] = &[
     OIDC_LOGIN_CALLBACK,
     OIDC_LOGIN_SUCCEEDED,
     OIDC_LOGIN_FAILED,
+    OIDC_MEMBERSHIP_RENEWED,
+    OIDC_MEMBERSHIP_RENEWAL_FAILED,
     OAUTH_CONNECTIONS_CALLBACK,
 ];
 
@@ -232,5 +236,7 @@ mod tests {
                 .any(|action| action == "admin.principals.tokens.issue")
         );
         assert!(global.contains(&OIDC_LOGIN_SUCCEEDED.to_string()));
+        assert!(global.contains(&OIDC_MEMBERSHIP_RENEWED.to_string()));
+        assert!(global.contains(&OIDC_MEMBERSHIP_RENEWAL_FAILED.to_string()));
     }
 }

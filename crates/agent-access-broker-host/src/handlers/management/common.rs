@@ -633,16 +633,18 @@ pub(crate) async fn management_context(
     };
     let mut browser_password_change_required = false;
     let identity_result = if !snapshot.runtime.has_configured_identity_header(headers) {
-        match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
+        match resolve_browser_cookie_identity_blocking(state, snapshot.clone(), headers.clone())
+            .await
+        {
             Ok(Some(cookie_identity)) => {
                 browser_password_change_required = cookie_identity.password_change_required;
                 Ok(cookie_identity.identity)
             }
-            Ok(None) => resolve_identity_blocking(snapshot.clone(), headers.clone()).await,
+            Ok(None) => resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await,
             Err(failure) => Err(failure),
         }
     } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
+        resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await
     };
     if !matches!(&identity_result, Ok(identity) if identity.authenticated) {
         check_auth_source_rate_guard(

@@ -4,6 +4,7 @@ use crate::ingress::invocation_limits::InvocationLimiter;
 use crate::ingress::source::SourceResolver;
 use crate::ingress::spool::UploadSpoolBudgets;
 use crate::reload::ReloadAttemptSummary;
+use agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse;
 use agent_access_core::microsoft_oidc::{
     MicrosoftOidcClock, MicrosoftOidcHttpClient, MicrosoftOidcProviderMetadata,
     MicrosoftOidcRuntimeConfig, SystemMicrosoftOidcClock,
@@ -62,6 +63,12 @@ pub(crate) struct ReloadableState {
     pub(crate) last_reload_attempt: Mutex<Option<ReloadAttemptSummary>>,
     /// The OAuth revocation worker, while serving.
     pub(crate) oauth_revocations: crate::oauth_revocations::RevocationWorkerSlot,
+    /// Microsoft membership renewal flights, the provider throttle and their
+    /// tracked tasks; every generation shares them.
+    pub(crate) membership_renewals: Arc<crate::membership_renewal::MembershipRenewals>,
+    /// Host tests' Microsoft OIDC transport and clock, which reloads keep.
+    #[cfg(test)]
+    pub(crate) microsoft_oidc_test_components: Mutex<Option<MicrosoftOidcTestComponents>>,
     #[cfg(test)]
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
     #[cfg(test)]
@@ -111,7 +118,7 @@ impl McpBlockingBarrier {
         self.changed.notify_all();
     }
 
-    fn wait(&self) {
+    pub(crate) fn wait(&self) {
         self.reached.notify_one();
         let _released = self
             .changed
@@ -119,6 +126,11 @@ impl McpBlockingBarrier {
             .unwrap();
     }
 }
+
+/// Host tests' Microsoft OIDC transport and clock.
+#[cfg(test)]
+pub(crate) type MicrosoftOidcTestComponents =
+    (Arc<dyn MicrosoftOidcTransport>, Arc<dyn MicrosoftOidcClock>);
 
 #[derive(Clone)]
 pub(crate) struct RuntimeSnapshot {
@@ -156,10 +168,23 @@ pub(crate) trait MicrosoftOidcTransport: Send + Sync {
                 + 'a,
         >,
     >;
+
+    /// One membership-renewal token request. Its status and `Retry-After`
+    /// survive a body that fails or exceeds its bound.
+    fn token_request<'a>(
+        &'a self,
+        request: HttpRequest,
+    ) -> Pin<Box<dyn Future<Output = TokenEndpointResponse> + Send + 'a>>;
 }
 
 #[derive(Clone)]
 pub(crate) struct DynamicMicrosoftOidcTransport(Arc<dyn MicrosoftOidcTransport>);
+
+impl DynamicMicrosoftOidcTransport {
+    pub(crate) async fn token_request(&self, request: HttpRequest) -> TokenEndpointResponse {
+        self.0.token_request(request).await
+    }
+}
 
 impl<'a> AsyncHttpClient<'a> for DynamicMicrosoftOidcTransport {
     type Error = MicrosoftOidcTransportError;
@@ -200,6 +225,13 @@ impl MicrosoftOidcTransport for ProductionMicrosoftOidcTransport {
                 .await
                 .map_err(|_| MicrosoftOidcTransportError)
         })
+    }
+
+    fn token_request<'a>(
+        &'a self,
+        request: HttpRequest,
+    ) -> Pin<Box<dyn Future<Output = TokenEndpointResponse> + Send + 'a>> {
+        Box::pin(self.client.send_token_request(request))
     }
 }
 
@@ -652,6 +684,9 @@ impl ReloadableState {
             audit_registry,
             last_reload_attempt: Mutex::new(None),
             oauth_revocations: Default::default(),
+            membership_renewals: Arc::new(crate::membership_renewal::MembershipRenewals::new()),
+            #[cfg(test)]
+            microsoft_oidc_test_components: Mutex::new(None),
             #[cfg(test)]
             mcp_admission_barrier: Mutex::new(None),
             #[cfg(test)]

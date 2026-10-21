@@ -248,7 +248,9 @@ async fn spec_context(
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
 
     let identity_result = if !snapshot.runtime.has_configured_identity_header(headers) {
-        match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
+        match resolve_browser_cookie_identity_blocking(state, snapshot.clone(), headers.clone())
+            .await
+        {
             Ok(Some(cookie_identity)) => {
                 if cookie_identity.password_change_required {
                     return Err(Box::new(
@@ -264,11 +266,11 @@ async fn spec_context(
                 }
                 Ok(cookie_identity.identity)
             }
-            Ok(None) => resolve_identity_blocking(snapshot.clone(), headers.clone()).await,
+            Ok(None) => resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await,
             Err(failure) => Err(failure),
         }
     } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
+        resolve_identity_blocking(state, snapshot.clone(), headers.clone()).await
     };
 
     if !matches!(&identity_result, Ok(identity) if identity.authenticated) {

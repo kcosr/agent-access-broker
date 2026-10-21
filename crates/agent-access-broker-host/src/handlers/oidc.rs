@@ -4,15 +4,13 @@ use crate::handlers::auth::{
 use crate::ingress::guards::{IngressLimitError, IngressPermit};
 use crate::ingress::source::auth_source_key;
 use crate::observability;
+use crate::oidc_id_token::{IdTokenReference, IdTokenRejection, validate_microsoft_id_token};
 use crate::state::{AppState, RuntimeSnapshot};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce as AeadNonce};
 use agent_access_core::microsoft_oidc::{
-    MICROSOFT_OIDC_MAX_ID_TOKEN_BYTES, MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES,
-    MicrosoftGroupClaimClassification, MicrosoftOidcAdditionalClaims,
-    MicrosoftOidcProviderMetadata, MicrosoftOidcRuntimeConfig, ValidatedMicrosoftOidcIdentity,
-    microsoft_id_token_audience_claim, microsoft_oidc_nonce_sha256,
-    validate_microsoft_id_token_payload_syntax, validate_microsoft_oidc_identity,
+    MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES, MicrosoftGroupClaimClassification,
+    MicrosoftOidcRuntimeConfig, ValidatedMicrosoftOidcIdentity, microsoft_oidc_nonce_sha256,
 };
 use agent_access_core::{
     AuditRecord, IdentityContext, ManagedStoreError, OidcCompleteLoginRequest,
@@ -26,14 +24,10 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
-use openidconnect::core::{
-    CoreAuthenticationFlow, CoreClient, CoreGenderClaim, CoreJweContentEncryptionAlgorithm,
-    CoreJwsSigningAlgorithm,
-};
+use openidconnect::core::{CoreAuthenticationFlow, CoreClient};
 use openidconnect::{
-    AccessTokenHash, AuthType, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IdToken,
-    JsonWebKey, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RefreshToken,
-    RequestTokenError, Scope, TokenResponse,
+    AuthType, AuthorizationCode, ClientId, ClientSecret, CsrfToken, Nonce, OAuth2TokenResponse,
+    PkceCodeChallenge, PkceCodeVerifier, RefreshToken, RequestTokenError, Scope, TokenResponse,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -47,13 +41,6 @@ const OIDC_BINDING_COOKIE: &str = "__Host-aab_oidc_binding";
 const FLOW_AAD_PREFIX: &[u8] = b"aab:oidc:microsoft:flow:v1";
 const QUERY_LIMIT_BYTES: usize = 8 * 1024;
 const PARAM_LIMIT_BYTES: usize = 4 * 1024;
-
-type MicrosoftIdToken = IdToken<
-    MicrosoftOidcAdditionalClaims,
-    CoreGenderClaim,
-    CoreJweContentEncryptionAlgorithm,
-    CoreJwsSigningAlgorithm,
->;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct EncryptedFlowPayload {
@@ -651,176 +638,60 @@ pub(crate) async fn microsoft_oidc_callback(
         )
         .await;
     };
-    if raw_id_token.len() > MICROSOFT_OIDC_MAX_ID_TOKEN_BYTES
-        || validate_microsoft_id_token_payload_syntax(&raw_id_token).is_err()
+    let validated = match validate_microsoft_id_token(
+        provider,
+        metadata,
+        &raw_id_token,
+        Some(token_response.access_token()),
+        IdTokenReference::SignIn {
+            nonce: &payload.nonce,
+        },
+    )
+    .await
     {
-        return oidc_callback_error(
-            &snapshot,
-            &request_id,
-            &broker_request_id,
-            operation,
-            &source,
-            ReasonCode::OidcIdentityInvalid,
-            Some(flow.return_path.as_str()),
-        )
-        .await;
-    }
+        Ok(validated) => validated,
+        Err(IdTokenRejection::KeysUnavailable) => {
+            return oidc_callback_error(
+                &snapshot,
+                &request_id,
+                &broker_request_id,
+                operation,
+                &source,
+                ReasonCode::OidcUnavailable,
+                Some(flow.return_path.as_str()),
+            )
+            .await;
+        }
+        Err(IdTokenRejection::Invalid | IdTokenRejection::IdentityMismatch) => {
+            return oidc_callback_error(
+                &snapshot,
+                &request_id,
+                &broker_request_id,
+                operation,
+                &source,
+                ReasonCode::OidcIdentityInvalid,
+                Some(flow.return_path.as_str()),
+            )
+            .await;
+        }
+    };
+    let claims = &validated.claims;
+    let identity = validated.identity.clone();
     // Membership renewal keeps the `aud` claim exactly as issued, which the
-    // parsed claims normalize.
+    // parsed claims normalize, and the digest of the flow's nonce.
     let renewal_audience = provider
         .config()
         .membership_renewal()
-        .then(|| microsoft_id_token_audience_claim(&raw_id_token));
-    let (kid, algorithm) = match token_header(&raw_id_token) {
-        Some(header) => header,
-        None => {
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcIdentityInvalid,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-    };
-    if algorithm != "RS256" {
-        return oidc_callback_error(
-            &snapshot,
-            &request_id,
-            &broker_request_id,
-            operation,
-            &source,
-            ReasonCode::OidcIdentityInvalid,
-            Some(flow.return_path.as_str()),
-        )
-        .await;
-    }
-    let metadata = if metadata_has_kid(&metadata, &kid) {
-        metadata
-    } else {
-        match provider.refresh_unknown_key(&metadata).await {
-            Ok(refreshed) if metadata_has_kid(&refreshed, &kid) => refreshed,
-            Ok(_) => {
-                return oidc_callback_error(
-                    &snapshot,
-                    &request_id,
-                    &broker_request_id,
-                    operation,
-                    &source,
-                    ReasonCode::OidcIdentityInvalid,
-                    Some(flow.return_path.as_str()),
-                )
-                .await;
-            }
-            Err(_) => {
-                return oidc_callback_error(
-                    &snapshot,
-                    &request_id,
-                    &broker_request_id,
-                    operation,
-                    &source,
-                    ReasonCode::OidcUnavailable,
-                    Some(flow.return_path.as_str()),
-                )
-                .await;
-            }
-        }
-    };
-    let id_token: MicrosoftIdToken = match serde_json::from_value(Value::String(raw_id_token)) {
-        Ok(token) => token,
-        Err(_) => {
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcIdentityInvalid,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-    };
-    let clock = provider.clock_arc();
-    let verification_client = CoreClient::from_provider_metadata(
-        metadata.metadata().clone(),
-        ClientId::new(provider.config().client_id().to_string()),
-        Some(ClientSecret::new(
-            provider.config().secrets().client_secret().to_string(),
-        )),
-    )
-    .set_redirect_uri(provider.config().redirect_url().clone())
-    .set_auth_type(AuthType::RequestBody);
-    let verifier = verification_client
-        .id_token_verifier()
-        .set_allowed_algs([CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256])
-        .set_time_fn(move || clock.now());
+        .then(|| validated.audience.clone());
     let renewal_nonce_sha256 = provider
         .config()
         .membership_renewal()
         .then(|| microsoft_oidc_nonce_sha256(&payload.nonce));
-    let claims = match id_token.claims(&verifier, &Nonce::new(payload.nonce)) {
-        Ok(claims) => claims,
-        Err(_) => {
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcIdentityInvalid,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-    };
-    if let Some(expected_hash) = claims.access_token_hash() {
-        let actual_hash = (|| {
-            let algorithm = id_token.signing_alg().ok()?;
-            let key = id_token.signing_key(&verifier).ok()?;
-            AccessTokenHash::from_token(token_response.access_token(), algorithm, key).ok()
-        })();
-        if actual_hash.as_ref() != Some(expected_hash) {
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcIdentityInvalid,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-    }
-    let identity = match validate_microsoft_oidc_identity(
-        claims,
-        provider.config().tenant_id(),
-        provider.config().client_id(),
-        provider.clock(),
-    ) {
-        Ok(identity) => identity,
-        Err(_) => {
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcIdentityInvalid,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-    };
     // Microsoft's own clock orders this observation against renewals.
-    let issued_at = claims.issue_time().timestamp();
+    let issued_at = validated.issued_at;
     let renewal = match (renewal_audience, renewal_nonce_sha256) {
         (Some(audience), Some(nonce_sha256)) => {
-            let reference = audience.ok().and_then(|audience| {
+            let reference = audience.and_then(|audience| {
                 OidcRenewalReference::new(
                     claims.subject().as_str().to_string(),
                     audience,
@@ -1401,32 +1272,6 @@ fn usable_refresh_token(
         return None;
     }
     Some(refresh_token.clone())
-}
-
-fn token_header(raw_id_token: &str) -> Option<(String, String)> {
-    let header = raw_id_token.split('.').next()?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(header)
-        .ok()?;
-    if decoded.len() > 4096 {
-        return None;
-    }
-    let value: Value = serde_json::from_slice(&decoded).ok()?;
-    let object = value.as_object()?;
-    let kid = object.get("kid")?.as_str()?;
-    let algorithm = object.get("alg")?.as_str()?;
-    if kid.is_empty() || kid.len() > 256 {
-        return None;
-    }
-    Some((kid.to_string(), algorithm.to_string()))
-}
-
-fn metadata_has_kid(metadata: &MicrosoftOidcProviderMetadata, kid: &str) -> bool {
-    metadata
-        .jwks()
-        .keys()
-        .iter()
-        .any(|key| key.key_id().is_some_and(|key_id| key_id.as_str() == kid))
 }
 
 fn sanitized_profile_value(value: &str, max_bytes: usize) -> Option<String> {

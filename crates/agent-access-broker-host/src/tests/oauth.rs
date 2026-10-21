@@ -371,6 +371,22 @@ impl crate::state::MicrosoftOidcTransport for UnreachableMicrosoft {
     > {
         Box::pin(async { Err(crate::state::MicrosoftOidcTransportError) })
     }
+
+    fn token_request<'a>(
+        &'a self,
+        _: openidconnect::HttpRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async {
+            agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse::no_response()
+        })
+    }
 }
 
 impl OAuthFixture {

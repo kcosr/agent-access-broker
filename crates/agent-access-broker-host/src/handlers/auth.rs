@@ -64,6 +64,9 @@ struct AuthEnvelope {
 pub(crate) struct BrowserCookieIdentity {
     pub(crate) sign_in_methods: SignInMethods,
     pub(crate) identity: IdentityContext,
+    /// Read with the session's membership: whether membership renewal
+    /// applies.
+    pub(crate) membership_renewal: Option<agent_access_core::MembershipRenewalHint>,
     pub(crate) display_name: Option<String>,
     pub(crate) email: Option<String>,
     pub(crate) token_id: String,
@@ -139,7 +142,8 @@ pub(crate) async fn auth_session(
         )
         .await;
     }
-    match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
+    match resolve_browser_cookie_identity_blocking(&state, snapshot.clone(), headers.clone()).await
+    {
         Ok(Some(cookie_identity)) => {
             let result = session_result(&snapshot, &cookie_identity).await;
             auth_success_response(
@@ -416,7 +420,9 @@ pub(crate) async fn auth_password_change(
         return auth_error_response(response_context, None, status, reason_code, message).await;
     }
     let cookie_identity =
-        match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
+        match resolve_browser_cookie_identity_blocking(&state, snapshot.clone(), headers.clone())
+            .await
+        {
             Ok(Some(cookie_identity)) => cookie_identity,
             Ok(None) => {
                 return auth_error_response(
@@ -876,7 +882,37 @@ fn principal_rate_key_is_safe(principal: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '@' | '+' | '-'))
 }
 
+/// Resolves the request's browser session, then admits Microsoft membership
+/// renewal for it. After a wait the session is resolved again from the same
+/// cookie, so a session revoked meanwhile fails.
 pub(crate) async fn resolve_browser_cookie_identity_blocking(
+    state: &AppState,
+    snapshot: Arc<RuntimeSnapshot>,
+    headers: HeaderMap,
+) -> Result<Option<BrowserCookieIdentity>, IdentityFailure> {
+    let Some(cookie) =
+        resolve_browser_cookie_identity_without_renewal(snapshot.clone(), headers.clone()).await?
+    else {
+        return Ok(None);
+    };
+    match crate::membership_renewal::admit_membership_renewal(
+        &state.reloadable,
+        &snapshot,
+        cookie.membership_renewal.as_ref(),
+        &headers,
+    )
+    .await
+    {
+        crate::membership_renewal::RenewalAdmission::Proceed => Ok(Some(cookie)),
+        crate::membership_renewal::RenewalAdmission::Waited => {
+            resolve_browser_cookie_identity_without_renewal(snapshot, headers).await
+        }
+    }
+}
+
+/// Resolves the request's browser session without membership renewal, as
+/// body admission does before its handler's admission.
+pub(crate) async fn resolve_browser_cookie_identity_without_renewal(
     snapshot: Arc<RuntimeSnapshot>,
     headers: HeaderMap,
 ) -> Result<Option<BrowserCookieIdentity>, IdentityFailure> {
@@ -966,6 +1002,7 @@ fn resolve_browser_cookie_identity(
             }
         })?;
     let token_id = session.token_id.clone();
+    let membership_renewal = session.membership_renewal.clone();
     let mut identity = cookie_identity_from_session(
         &snapshot.runtime,
         session.principal_id,
@@ -978,6 +1015,7 @@ fn resolve_browser_cookie_identity(
     Ok(Some(BrowserCookieIdentity {
         sign_in_methods: session.sign_in_methods,
         identity,
+        membership_renewal,
         display_name: session.display_name,
         email: session.email,
         token_id,
