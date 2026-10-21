@@ -99,6 +99,7 @@ test("qualification uses required native/browser gates and fresh paths without p
   const publicApi = plan.find((entry) => entry.id === "public-api");
   assert.deepEqual(publicApi.command, [process.execPath, "scripts/public-api.mjs", "check"]);
   assert.equal(publicApi.cargo, undefined, "the inventory selects its own pinned nightly, not the release toolchain");
+  assert.deepEqual(plan.find((entry) => entry.id === "changelog").command, [process.execPath, "scripts/check-changelog.mjs"]);
   const downstream = plan.findIndex((entry) => entry.id === "downstream-consumer");
   assert.equal(downstream, plan.findIndex((entry) => entry.id === "rust-build") + 1);
   assert.deepEqual(plan[downstream].command, [process.execPath, "scripts/verify-downstream-consumer.mjs", "--commit", commit,

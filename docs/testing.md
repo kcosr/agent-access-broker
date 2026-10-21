@@ -226,6 +226,7 @@ python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
 python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 node scripts/check-doc-links.mjs
+node scripts/check-changelog.mjs
 ```
 
 Every workspace crate declares one role in its manifest:

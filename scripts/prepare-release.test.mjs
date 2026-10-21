@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { prepareRelease } from "./prepare-release.mjs";
-import { preparedRelease, workspaceVersion } from "./release-plan.mjs";
+import { preparedRelease, UNRELEASED_TEMPLATE } from "./changelog.mjs";
+import { workspaceVersion } from "./release-plan.mjs";
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "broker-release-prepare-test-"));
@@ -17,7 +18,7 @@ function fixture(t) {
   const files = {
     "Cargo.toml": '[workspace]\nmembers = []\n\n[workspace.package]\nedition = "2024"\nversion = "0.1.0"\n\n[workspace.dependencies]\nother = "2.0"\n',
     "Cargo.lock": 'version = 4\n\n[[package]]\nname = "broker"\nversion = "0.1.0"\n\n[[package]]\nname = "cli"\nversion = "0.1.0"\n\n[[package]]\nname = "broker"\nversion = "9.0.0"\nsource = "registry+https://example.test/index"\nchecksum = "keep"\n',
-    "CHANGELOG.md": "# Changelog\n\nSupported changes.\n\n## [Unreleased]\n\n### Added\n\n- Qualified releases.\n",
+    "CHANGELOG.md": "# Changelog\n\nSupported changes.\n\n## [Unreleased]\n\n### Breaking Changes\n\n### Added\n\n- Qualified releases.\n\n### Changed\n\n### Fixed\n\n### Removed\n",
   };
   for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
   git("add", ".");
@@ -40,7 +41,7 @@ function fixture(t) {
   return { root, files, head, git, calls, run };
 }
 
-test("preparation changes only release files, preserves dependency versions and leaves a reviewable uncommitted change", (t) => {
+test("preparation changes only release files, drops empty note headings, preserves dependency versions and leaves a reviewable uncommitted change", (t) => {
   const f = fixture(t);
   const result = prepareRelease("patch", { root: f.root, run: f.run, date: "2026-10-10" });
   assert.equal(result.version, "0.1.1");
@@ -48,7 +49,9 @@ test("preparation changes only release files, preserves dependency versions and 
   const lock = readFileSync(join(f.root, "Cargo.lock"), "utf8");
   assert.equal((lock.match(/version = "0.1.1"/g) ?? []).length, 2);
   assert.match(lock, /name = "broker"\nversion = "9.0.0"\nsource/);
-  assert.equal(preparedRelease(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), "0.1.1").notes, "### Added\n\n- Qualified releases.");
+  const changelog = readFileSync(join(f.root, "CHANGELOG.md"), "utf8");
+  assert.equal(changelog, `# Changelog\n\nSupported changes.\n\n${UNRELEASED_TEMPLATE}\n## [0.1.1] - 2026-10-10\n\n### Added\n\n- Qualified releases.\n`);
+  assert.equal(preparedRelease(changelog, "0.1.1").notes, "### Added\n\n- Qualified releases.");
   assert.equal(f.git("rev-parse", "HEAD"), f.head);
   assert.equal(f.git("branch", "--show-current").trim(), "feature");
   assert.deepEqual(f.git("diff", "--name-only").trim().split("\n").sort(), Object.keys(f.files).sort());
@@ -74,11 +77,29 @@ test("dirty, empty or already prepared candidates fail before writing or validat
   writeFileSync(join(f.root, "untracked"), "preserve");
   assert.throws(() => prepareRelease("current", { root: f.root, run: f.run }), /clean worktree/);
   rmSync(join(f.root, "untracked"));
-  writeFileSync(join(f.root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-10-10\n\n- Existing.\n");
+  writeFileSync(join(f.root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n### Added\n\n## [0.1.0] - 2026-10-10\n\n### Added\n\n- Existing.\n");
   f.git("add", "CHANGELOG.md");
   f.git("commit", "--message", "Prepared baseline");
   assert.throws(() => prepareRelease("current", { root: f.root, run: f.run }), /already contains a \[0.1.0\]/);
   assert.throws(() => prepareRelease("patch", { root: f.root, run: f.run }), /no release notes/);
+  assert.equal(f.calls.filter(([command]) => command === "cargo").length, 0);
+  assert.equal(f.git("status", "--porcelain"), "");
+});
+
+test("malformed changelogs and edited released notes fail before writing or validating Cargo", (t) => {
+  const f = fixture(t);
+  const commit = (content, message) => {
+    writeFileSync(join(f.root, "CHANGELOG.md"), content);
+    f.git("add", "CHANGELOG.md");
+    f.git("commit", "--message", message);
+  };
+  commit(f.files["CHANGELOG.md"].replace("### Changed", "### Maintenance"), "Unknown category");
+  assert.throws(() => prepareRelease("minor", { root: f.root, run: f.run }), /Unknown changelog category in Unreleased: ### Maintenance/);
+  const released = "## [0.1.0] - 2026-10-10\n\n### Added\n\n- Released.\n";
+  commit(`${f.files["CHANGELOG.md"]}\n${released}`, "Released baseline");
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  commit(`${f.files["CHANGELOG.md"]}\n${released.replace("Released.", "Rewritten.")}`, "Rewrite released notes");
+  assert.throws(() => prepareRelease("minor", { root: f.root, run: f.run }), /Released changelog notes for 0.1.0 changed/);
   assert.equal(f.calls.filter(([command]) => command === "cargo").length, 0);
   assert.equal(f.git("status", "--porcelain"), "");
 });

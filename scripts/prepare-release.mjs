@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nextCycleChangelog, prepareChangelog, preparedRelease, prepareVersionFiles, releaseVersion, workspaceVersion } from "./release-plan.mjs";
+import { checkChangelog, prepareChangelog, preparedRelease } from "./changelog.mjs";
+import { prepareVersionFiles, releaseVersion, workspaceVersion } from "./release-plan.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -38,9 +39,10 @@ export function prepareRelease(argument, {
   if (run("git", ["status", "--porcelain"]).trim()) throw new Error("Release preparation requires a clean worktree");
   const head = run("git", ["rev-parse", "HEAD"]).trim();
   const original = FILES.map((file) => readFileSync(join(root, file)));
+  checkChangelog(root, { text: original[2].toString(), env });
   const current = workspaceVersion(original[0].toString());
   const version = releaseVersion(current, argument);
-  const changelog = nextCycleChangelog(prepareChangelog(original[2].toString(), version, date).content);
+  const changelog = prepareChangelog(original[2].toString(), version, date).content;
   const release = preparedRelease(changelog, version);
   const names = workspacePackages(JSON.parse(run("cargo", METADATA)), current);
   const updated = prepareVersionFiles(original[0].toString(), original[1].toString(), names, version);
