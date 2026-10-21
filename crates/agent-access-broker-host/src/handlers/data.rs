@@ -107,12 +107,28 @@ pub(crate) async fn me(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    let microsoft_membership =
+        match me_microsoft_membership(&context.snapshot, &context.identity).await {
+            Ok(membership) => membership,
+            Err(error) => {
+                return envelope_response(discovery_error_envelope(
+                    request_id,
+                    new_broker_request_id(),
+                    String::new(),
+                    String::new(),
+                    error.reason_code(),
+                    "Microsoft membership is unavailable",
+                ))
+                .into_response();
+            }
+        };
     match me_service_limits(&context.snapshot, &context.identity, &request_headers).await {
         Ok(service_limits) => (
             StatusCode::OK,
             Json(MeResponse {
                 identity: context.identity.summary(),
                 service_limits,
+                microsoft_membership,
             }),
         )
             .into_response(),
@@ -136,6 +152,48 @@ struct MeResponse {
     #[serde(flatten)]
     identity: IdentitySummary,
     service_limits: Vec<SelfServiceLimit>,
+    /// Present for a caller whose principal has a Microsoft login method.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    microsoft_membership: Option<MeMicrosoftMembership>,
+}
+
+/// The caller's Microsoft group evidence window (`null` without evidence)
+/// and its membership renewal status (`null` without a renewal row). Read
+/// after renewal admission, so it reflects a renewal the request waited for.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeMicrosoftMembership {
+    valid_until: Option<String>,
+    renewal: Option<agent_access_core::OidcMembershipRenewalStatus>,
+}
+
+/// The caller's Microsoft membership, for a managed principal with a
+/// Microsoft login method.
+async fn me_microsoft_membership(
+    snapshot: &RuntimeSnapshot,
+    identity: &IdentityContext,
+) -> Result<Option<MeMicrosoftMembership>, agent_access_core::ManagedStoreError> {
+    let Some(store) = snapshot.runtime.managed_store().cloned() else {
+        return Ok(None);
+    };
+    if !identity.authenticated {
+        return Ok(None);
+    }
+    let principal = identity.principal.clone();
+    let membership = tokio::task::spawn_blocking(move || store.microsoft_membership(&principal))
+        .await
+        .map_err(|_| {
+            agent_access_core::ManagedStoreError::Unavailable(
+                "Microsoft membership read failed".into(),
+            )
+        })??;
+    Ok(membership.map(|membership| MeMicrosoftMembership {
+        valid_until: membership.valid_until,
+        renewal: membership
+            .renewal
+            .as_ref()
+            .map(agent_access_core::OidcMembershipRenewalRecord::status),
+    }))
 }
 
 /// One `serviceLimits` item. Deliberately omits whether the value is a

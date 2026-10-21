@@ -165,6 +165,79 @@ pub struct OidcMembershipRenewalRecord {
     pub updated_at: String,
 }
 
+impl OidcMembershipRenewalRecord {
+    /// The row's renewal status, as every API reports it.
+    pub fn status(&self) -> OidcMembershipRenewalStatus {
+        let state = match self.state {
+            OidcMembershipRenewalState::Active => OidcMembershipRenewalStatusState::Active,
+            OidcMembershipRenewalState::Retrying => OidcMembershipRenewalStatusState::Retrying,
+            OidcMembershipRenewalState::Blocked => OidcMembershipRenewalStatusState::Blocked,
+            // Rows are checked well formed when read, so an ended row has a
+            // reason; without one it reports that a sign-in is needed.
+            OidcMembershipRenewalState::Ended => match self.ended_reason {
+                Some(OidcMembershipRenewalEndedReason::NotIssued) => {
+                    OidcMembershipRenewalStatusState::NotIssued
+                }
+                Some(OidcMembershipRenewalEndedReason::IdentityMismatch) => {
+                    OidcMembershipRenewalStatusState::IdentityMismatch
+                }
+                Some(OidcMembershipRenewalEndedReason::SignInRequired) | None => {
+                    OidcMembershipRenewalStatusState::SignInRequired
+                }
+            },
+        };
+        OidcMembershipRenewalStatus {
+            state,
+            last_renewed_at: self.last_renewed_at.clone(),
+            next_attempt_after: self.next_attempt_after.clone(),
+            last_failure: self
+                .last_failure_code
+                .zip(self.last_failure_at.clone())
+                .map(|(code, at)| OidcMembershipRenewalLastFailure { code, at }),
+        }
+    }
+}
+
+/// A login method's membership renewal status (design §9.1): `{state,
+/// lastRenewedAt, nextAttemptAfter, lastFailure: {code, at} | null}`. An
+/// ended row reports its ended reason as its state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcMembershipRenewalStatus {
+    pub state: OidcMembershipRenewalStatusState,
+    pub last_renewed_at: Option<String>,
+    pub next_attempt_after: Option<String>,
+    pub last_failure: Option<OidcMembershipRenewalLastFailure>,
+}
+
+/// The state a renewal status reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OidcMembershipRenewalStatusState {
+    Active,
+    Retrying,
+    Blocked,
+    SignInRequired,
+    NotIssued,
+    IdentityMismatch,
+}
+
+/// A renewal status's latest failed attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OidcMembershipRenewalLastFailure {
+    pub code: OidcMembershipRenewalFailureCode,
+    pub at: String,
+}
+
+/// A principal's Microsoft login method, its evidence window (`None`
+/// without evidence) and its renewal row (`None` without one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicrosoftMembershipRecord {
+    pub login_method_id: String,
+    pub valid_until: Option<String>,
+    pub renewal: Option<OidcMembershipRenewalRecord>,
+}
+
 /// What identity resolution reads, in the same store call as the person's
 /// membership, for membership renewal to decide whether the request needs
 /// one: present only for an enabled `user` with an active Microsoft login
@@ -1525,6 +1598,37 @@ impl ManagedStore {
                 membership_changed,
             },
         )))
+    }
+
+    /// The evidence window of `login_method_id`: when its Microsoft group
+    /// evidence expires, or `None` when it has none.
+    pub fn oidc_membership_valid_until(
+        &self,
+        login_method_id: &str,
+    ) -> Result<Option<String>, ManagedStoreError> {
+        let conn = self.connection.lock().unwrap();
+        evidence_valid_until(&conn, login_method_id)
+    }
+
+    /// `principal_id`'s Microsoft login method with its evidence window and
+    /// renewal row, read together; `None` when it has no Microsoft method.
+    pub fn microsoft_membership(
+        &self,
+        principal_id: &str,
+    ) -> Result<Option<MicrosoftMembershipRecord>, ManagedStoreError> {
+        let conn = self.connection.lock().unwrap();
+        let Some(method) = oidc_login_method_for_principal(&conn, principal_id)? else {
+            return Ok(None);
+        };
+        let valid_until = evidence_valid_until(&conn, &method.login_method_id)?;
+        let renewal = row(&conn, &method.login_method_id)?
+            .map(|row| row.record())
+            .transpose()?;
+        Ok(Some(MicrosoftMembershipRecord {
+            login_method_id: method.login_method_id,
+            valid_until,
+            renewal,
+        }))
     }
 
     /// The membership-renewal row of `login_method_id`, without its payload.

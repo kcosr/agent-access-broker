@@ -2575,3 +2575,118 @@ fn sign_in_and_renewal_order_evidence_by_raw_iat() {
     assert_eq!(newer.membership_evidence, OidcMembershipEvidence::Replaced);
     assert_eq!(fixture.groups_at("alice", 0), ["team-a"]);
 }
+
+/// One renewal status shape serves every API: every key is present, an
+/// ended row reports its reason as its state, and the accessors read a
+/// method's evidence window and renewal row.
+#[test]
+fn renewal_status_and_microsoft_membership_report_each_state() {
+    let fixture = fixture(true);
+    let method = renewable_alice(&fixture, -10);
+    let valid_until = fixture
+        .store
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT valid_until FROM oidc_membership_refresh_state WHERE login_method_id = ?1",
+            [&method],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.store.oidc_membership_valid_until(&method).unwrap(),
+        Some(valid_until.clone())
+    );
+    let membership = fixture
+        .store
+        .microsoft_membership("alice")
+        .unwrap()
+        .unwrap();
+    assert_eq!(membership.login_method_id, method);
+    assert_eq!(membership.valid_until, Some(valid_until));
+    assert_eq!(membership.renewal, fixture.renewal(&method));
+    let status = |fixture: &Fixture| {
+        serde_json::to_value(fixture.renewal(&method).unwrap().status()).unwrap()
+    };
+    assert_eq!(
+        status(&fixture),
+        json!({"state": "active", "lastRenewedAt": null, "nextAttemptAfter": null, "lastFailure": null})
+    );
+    for state in ["retrying", "blocked"] {
+        sql(
+            &fixture.store,
+            &format!(
+                "UPDATE oidc_membership_renewals SET state='{state}',
+                   last_renewed_at='2026-10-20T00:30:00Z', last_failure_code='client_rejected',
+                   last_failure_at='2026-10-20T01:00:00Z', next_attempt_after='2026-10-20T02:00:00Z'
+                 WHERE login_method_id='{method}'"
+            ),
+        );
+        assert_eq!(
+            status(&fixture),
+            json!({
+                "state": state,
+                "lastRenewedAt": "2026-10-20T00:30:00Z",
+                "nextAttemptAfter": "2026-10-20T02:00:00Z",
+                "lastFailure": {"code": "client_rejected", "at": "2026-10-20T01:00:00Z"},
+            })
+        );
+    }
+    for reason in ["sign_in_required", "not_issued", "identity_mismatch"] {
+        sql(
+            &fixture.store,
+            &format!(
+                "UPDATE oidc_membership_renewals SET state='ended', ended_reason='{reason}',
+                   payload_version=NULL, key_id=NULL, nonce=NULL, ciphertext=NULL,
+                   last_failure_code=NULL, last_failure_at=NULL, next_attempt_after=NULL
+                 WHERE login_method_id='{method}'"
+            ),
+        );
+        assert_eq!(
+            status(&fixture),
+            json!({
+                "state": reason,
+                "lastRenewedAt": "2026-10-20T00:30:00Z",
+                "nextAttemptAfter": null,
+                "lastFailure": null,
+            })
+        );
+    }
+
+    // A method without a renewal row or evidence, and a principal without a
+    // Microsoft method.
+    let bob = succeeded(fixture.sign_in(OTHER_USER, "bob", &[GROUP_A], -10, None))
+        .login_method
+        .login_method_id;
+    sql(
+        &fixture.store,
+        &format!("DELETE FROM oidc_membership_refresh_state WHERE login_method_id='{bob}'"),
+    );
+    assert_eq!(
+        fixture.store.microsoft_membership("bob").unwrap(),
+        Some(MicrosoftMembershipRecord {
+            login_method_id: bob.clone(),
+            valid_until: None,
+            renewal: None,
+        })
+    );
+    assert_eq!(
+        fixture.store.oidc_membership_valid_until(&bob).unwrap(),
+        None
+    );
+    fixture
+        .store
+        .create_principal(PrincipalWriteRequest {
+            principal_id: "carol".into(),
+            kind: "user".into(),
+            role: PrincipalRole::User,
+            self_service_enabled: None,
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    assert_eq!(fixture.store.microsoft_membership("carol").unwrap(), None);
+}

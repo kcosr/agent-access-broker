@@ -6749,6 +6749,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             "provider": "microsoft",
             "tenantId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             "userObjectId": "12345678-1234-1234-1234-123456789abc",
+            "membershipRenewal": null,
         })
     );
     assert!(link_oidc_body["result"].get("externalSubject").is_none());
@@ -6768,6 +6769,10 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(
         login_methods_body["result"][0]["oidc"]["provider"],
         "microsoft"
+    );
+    assert_eq!(
+        login_methods_body["result"][0]["oidc"]["membershipRenewal"],
+        Value::Null
     );
     assert!(
         login_methods_body["result"][0]

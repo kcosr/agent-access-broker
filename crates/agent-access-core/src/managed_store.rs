@@ -22,13 +22,14 @@ pub(crate) mod oauth;
 pub(crate) mod oauth_revocation;
 mod oidc_membership_renewal;
 pub use oidc_membership_renewal::{
-    MembershipRenewalHint, OidcMembershipEvidence, OidcMembershipRenewalAttempt,
-    OidcMembershipRenewalAttemptRequest, OidcMembershipRenewalCommit,
+    MembershipRenewalHint, MicrosoftMembershipRecord, OidcMembershipEvidence,
+    OidcMembershipRenewalAttempt, OidcMembershipRenewalAttemptRequest, OidcMembershipRenewalCommit,
     OidcMembershipRenewalCommitRequest, OidcMembershipRenewalCommitted,
     OidcMembershipRenewalEndedReason, OidcMembershipRenewalFailureCode, OidcMembershipRenewalFence,
-    OidcMembershipRenewalMaterial, OidcMembershipRenewalRecord, OidcMembershipRenewalResult,
-    OidcMembershipRenewalRotation, OidcMembershipRenewalSignIn, OidcMembershipRenewalSkip,
-    OidcMembershipRenewalStart, OidcMembershipRenewalState, OidcRenewalReference,
+    OidcMembershipRenewalLastFailure, OidcMembershipRenewalMaterial, OidcMembershipRenewalRecord,
+    OidcMembershipRenewalResult, OidcMembershipRenewalRotation, OidcMembershipRenewalSignIn,
+    OidcMembershipRenewalSkip, OidcMembershipRenewalStart, OidcMembershipRenewalState,
+    OidcMembershipRenewalStatus, OidcMembershipRenewalStatusState, OidcRenewalReference,
 };
 mod principal_service_limits;
 mod resource_attributes;

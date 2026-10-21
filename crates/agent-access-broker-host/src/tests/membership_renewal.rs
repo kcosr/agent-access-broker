@@ -2097,3 +2097,196 @@ async fn renewals_apply_membership_changes_microsoft_reports() {
     assert_eq!(audit["groups"], json!(["microsoft-users"]));
     assert_eq!(audit["providerAudit"]["oidc"]["membershipChanged"], true);
 }
+
+impl Fixture {
+    /// An administrator's Broker token.
+    fn admin_token(&self) -> String {
+        self.store
+            .create_principal(agent_access_core::PrincipalWriteRequest {
+                role: agent_access_core::PrincipalRole::Admin,
+                self_service_enabled: None,
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            })
+            .unwrap();
+        self.store
+            .issue_broker_token(
+                &self.hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: "admin".into(),
+                    name: "renewal-admin".into(),
+                    token_class: BrokerTokenClass::Admin,
+                    scopes: json!({}),
+                    expires_at: None,
+                    created_by: "test".into(),
+                },
+            )
+            .unwrap()
+            .token
+    }
+
+    async fn get_json(&self, uri: &str, token: &str, request_id: &str) -> Value {
+        let response = self
+            .send(
+                &self.app,
+                self.request(Method::GET, uri, request_id)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        response_json(response).await
+    }
+
+    /// The Microsoft method's `oidc` object in the admin login-method list.
+    async fn admin_oidc(&self, admin: &str, request_id: &str) -> Value {
+        let listing = self
+            .get_json(
+                &format!(
+                    "/v1/admin/principals/{}/login-methods",
+                    self.person.principal
+                ),
+                admin,
+                request_id,
+            )
+            .await;
+        listing["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|method| method["method"] == "oidc")
+            .unwrap_or_else(|| panic!("{listing}"))["oidc"]
+            .clone()
+    }
+}
+
+/// `GET /v1/me` and the admin login-method listing report one renewal
+/// status shape in every state, `null` without a renewal row, and the
+/// evidence window; callers without a Microsoft method get no field, and
+/// an administrator's view never renews the person.
+#[tokio::test]
+async fn me_and_the_admin_listing_report_renewal_status_in_every_state() {
+    let f = fixture().await;
+    let method = f.person.method.clone();
+    let admin = f.admin_token();
+    // An administrator viewing an expired person does not renew them.
+    let oidc = f.admin_oidc(&admin, "renewal-admin-expired").await;
+    assert_eq!(oidc["provider"], "microsoft");
+    assert_eq!(oidc["userObjectId"], super::microsoft_oidc::USER_OBJECT_ID);
+    assert_eq!(oidc["membershipRenewal"]["state"], "active");
+    assert_eq!(f.provider.refresh_arrivals(), 0);
+
+    // Current evidence, so that /v1/me itself does not renew.
+    f.expires_in(&method, 7 * 3600);
+    let valid_until = f.valid_until(&method);
+    let set = |assignments: &str| {
+        f.sql(&format!(
+            "UPDATE oidc_membership_renewals SET {assignments} WHERE login_method_id = '{method}'"
+        ))
+    };
+    let failure = "last_renewed_at = '2026-10-20T00:30:00Z', last_failure_code = 'unavailable',
+        last_failure_at = '2026-10-20T01:00:00Z', next_attempt_after = '2026-10-20T02:00:00Z'";
+    let ended = |reason: &str| {
+        format!(
+            "state = 'ended', ended_reason = '{reason}', payload_version = NULL, key_id = NULL,
+             nonce = NULL, ciphertext = NULL, last_failure_code = NULL, last_failure_at = NULL,
+             next_attempt_after = NULL"
+        )
+    };
+    for (state, assignments) in [
+        ("active", String::new()),
+        ("retrying", format!("state = 'retrying', {failure}")),
+        (
+            "blocked",
+            format!(
+                "state = 'blocked', {}",
+                failure.replace("unavailable", "client_rejected")
+            ),
+        ),
+        ("sign_in_required", ended("sign_in_required")),
+        ("not_issued", ended("not_issued")),
+        ("identity_mismatch", ended("identity_mismatch")),
+    ] {
+        if !assignments.is_empty() {
+            set(&assignments);
+        }
+        let expected = serde_json::to_value(f.renewal(&method).unwrap().status()).unwrap();
+        assert_eq!(expected["state"], state);
+        let me = f
+            .get_json(
+                "/v1/me",
+                &f.person.agent_token,
+                &format!("renewal-me-{state}"),
+            )
+            .await;
+        assert_eq!(me["principal"], f.person.principal.as_str(), "{state}");
+        assert_eq!(
+            me["microsoftMembership"],
+            json!({"validUntil": valid_until, "renewal": expected}),
+            "{state}"
+        );
+        let oidc = f
+            .admin_oidc(&admin, &format!("renewal-admin-{state}"))
+            .await;
+        assert_eq!(oidc["membershipRenewal"], expected, "{state}");
+    }
+    let me = f
+        .get_json("/v1/me", &f.person.agent_token, "renewal-me-shape")
+        .await;
+    assert_eq!(
+        me["microsoftMembership"]["renewal"],
+        json!({
+            "state": "identity_mismatch",
+            "lastRenewedAt": "2026-10-20T00:30:00Z",
+            "nextAttemptAfter": null,
+            "lastFailure": null,
+        })
+    );
+    let ended = f.admin_oidc(&admin, "renewal-admin-shape").await;
+    assert_eq!(ended["membershipRenewal"]["lastFailure"], Value::Null);
+
+    // Without a renewal row or evidence: nulls.
+    f.sql(&format!(
+        "DELETE FROM oidc_membership_renewals WHERE login_method_id = '{method}';
+         DELETE FROM external_principal_groups WHERE login_method_id = '{method}';
+         DELETE FROM oidc_membership_refresh_state WHERE login_method_id = '{method}';"
+    ));
+    let me = f
+        .get_json("/v1/me", &f.person.agent_token, "renewal-me-none")
+        .await;
+    assert_eq!(
+        me["microsoftMembership"],
+        json!({"validUntil": null, "renewal": null})
+    );
+    let oidc = f.admin_oidc(&admin, "renewal-admin-none").await;
+    assert_eq!(oidc["membershipRenewal"], Value::Null);
+    // A caller without a Microsoft method has no field at all.
+    let me = f.get_json("/v1/me", &admin, "renewal-me-admin").await;
+    assert_eq!(me["principal"], "admin");
+    assert!(me.get("microsoftMembership").is_none(), "{me}");
+    assert_eq!(f.provider.refresh_arrivals(), 0);
+}
+
+/// `GET /v1/me` passes renewal admission: with expired evidence it waits
+/// for the renewal and reports the renewed window.
+#[tokio::test]
+async fn me_reports_the_window_of_a_renewal_it_waited_for() {
+    let f = fixture().await;
+    let method = f.person.method.clone();
+    f.clock.advance_seconds(61);
+    let me = f
+        .get_json("/v1/me", &f.person.agent_token, "renewal-me-renews")
+        .await;
+    assert_eq!(f.provider.refresh_count(), 1);
+    let membership = &me["microsoftMembership"];
+    assert_eq!(membership["validUntil"], f.valid_until(&method).as_str());
+    assert_ne!(membership["validUntil"], LONG_AGO);
+    assert_eq!(membership["renewal"]["state"], "active");
+    assert!(membership["renewal"]["lastRenewedAt"].is_string());
+    assert_eq!(f.renewal_audit("renewal-me-renews")["action"], RENEWED);
+}
