@@ -12,6 +12,14 @@ nonempty inherited Git location/index/object/configuration overrides, including
 before release work. Each entrypoint verifies that Git's actual repository root
 matches the source checkout it operates on.
 
+## Day-to-day changes
+
+Each PR with user- or operator-visible changes updates `CHANGELOG.md` under
+`Unreleased`, usually with one to three short bullets that describe the
+resulting behavior and required upgrade action and end with the PR link.
+Release preparation stamps these notes as the release notes. See the
+[changelog rules](../AGENTS.md#changelog).
+
 ## Select the release
 
 - Select a clean, reviewed commit and the intended workspace version. Ship the

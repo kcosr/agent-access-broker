@@ -659,17 +659,22 @@ Use these sections under `## [Unreleased]`:
 
 - New entries always go under `## [Unreleased]`.
 - Use the existing subsections; do not create duplicate subsection headers.
-- Do not edit already released version sections.
-- Write one entry per user-visible change: configuration, HTTP API, CLI,
+- Record user- and operator-visible changes: configuration, HTTP API, CLI,
   portal, audit and log contracts, managed-store migrations, security-relevant
-  behavior, and the supported SDK surface for provider authors. Describe the
-  end state for operators relative to the last release.
-- While a change is unreleased, edit its existing entry in place instead of
-  appending a new one per PR. Fold later changes to an unreleased feature into
-  the entry they modify, and replace or remove an entry whose behavior changed
-  again before release.
-- Do not add internal, test-only or refactor-only entries. Implementation detail
-  belongs in PR descriptions and the documentation.
+  behavior, and the supported SDK surface for provider authors. Usually one to
+  three short bullets per PR is enough. Describe the resulting behavior and
+  required upgrade action relative to the last release, not the implementation
+  diary; leave internal, test-only and refactor-only changes, implementation
+  detail and test logs to the PR.
+- Consolidate related Unreleased entries as a feature evolves: edit the entry
+  a later PR changes instead of appending another, and replace or remove one
+  whose behavior changed again before release. Retain the consolidated entries'
+  PR references and only the current compatibility requirements.
+- Link the operator guide or other documentation for detailed contracts.
+- End each entry with an indented line of its PR links in ascending order, such
+  as `([#12](https://github.com/kcosr/agent-access-broker/pull/12))`. Add the
+  PR number or link after opening the PR and before merging.
+- Leave dated release sections unchanged; record corrections under Unreleased.
 
 ## Release Procedure
 
