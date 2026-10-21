@@ -96,7 +96,7 @@ pub(super) fn display_name(runtime: &BrokerRuntime, connection: &str) -> String 
         .unwrap_or_else(|| connection.to_string())
 }
 
-/// The services consuming `connection`, in configured order.
+/// The services consuming `connection`, in service ID order.
 pub(super) fn consumers(runtime: &BrokerRuntime, connection: &str) -> Vec<String> {
     runtime
         .effective_credentials()
@@ -106,7 +106,7 @@ pub(super) fn consumers(runtime: &BrokerRuntime, connection: &str) -> Vec<String
 }
 
 /// The consumers of `connection` on which `identity` holds an active
-/// `per_user` grant, in configured order.
+/// `per_user` grant, in service ID order.
 pub(super) fn entitled_consumers(
     runtime: &BrokerRuntime,
     identity: &IdentityContext,

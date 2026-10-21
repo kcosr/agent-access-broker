@@ -1768,7 +1768,7 @@ async fn append_management_audit_with_details(
 }
 
 /// The services consuming the credential connection a management target
-/// names, in configured order, which its record lists as `targetServices`.
+/// names, in service ID order, which its record lists as `targetServices`.
 fn connection_target_services(
     snapshot: &RuntimeSnapshot,
     envelope: &ManagementEnvelope,

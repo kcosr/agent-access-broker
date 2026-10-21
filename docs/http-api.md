@@ -869,7 +869,7 @@ body `{"service": "…", "repository": "…"}`. Verification is authorized like
 storing the token, and its probe always runs as the credential owner, through a
 consumer the owner holds a `per_user` grant on; an administrator's own grants
 never authorize a probe. `service` names the consumer to probe. Without it, the
-broker probes the owner's entitled consumers in configured order, other than
+broker probes the owner's entitled consumers in service ID order, other than
 those needing a `repository`, until one whose backend has an identity probe
 answers (GitLab REST `/user`, Jira `myself`, Confluence `user/current`); when
 none has a probe, the token is checked locally only (`local_verified`). A
@@ -896,7 +896,7 @@ Credential management audit targets name `{"principal": …, "connection": …}`
 (verification adds `probeService`); retained-row deletes name
 `{"principal": …, "credentialId": …}`. Records of connection operations also
 list the connection's consuming services in
-`providerAudit.management.targetServices`, in configured order. An administrator
+`providerAudit.management.targetServices`, in service ID order. An administrator
 operation on a connection with exactly one consumer names it as `targetService`,
 its scope service; one on a connection several services share has no scope
 service, so no service policy manager sees it.

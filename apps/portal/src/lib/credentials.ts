@@ -14,9 +14,9 @@ export const EMPTY_CREDENTIAL_LIST: CredentialList = { connections: [], retained
  */
 export type AdministeredOAuth = {
   registration: string;
-  /** The first connection's display name, as the owner's row shows it. */
+  /** The first connection's display name by connection ID, as the owner's row shows it. */
   displayName: string;
-  /** The listed connections using the registration, in configured order. */
+  /** The listed connections using the registration, in connection ID order. */
   connections: string[];
   consumers: ConnectionConsumer[];
   otherConsumers: number;
