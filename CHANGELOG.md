@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
   lookup credential beside the gateway now fails `config validate`, and a
   bearer lookup credential requires the gateway. See
   [credential kinds](docs/configuration.md#credential-connections).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Added
 
@@ -22,9 +23,11 @@ All notable changes to this project are documented in this file.
   and the target lack and the targets the provider listed. URL credentials,
   queries and fragments are never logged. See
   [Atlassian connection failures](docs/oauth.md#atlassian-connection-failures).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 - **SDK: lookup credential kind.** `ServiceCredentialKinds` reports the kind of
   `credentials.lookup.<service>` (`lookup`, `with_lookup`), so provider
   validation can check it.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Changed
 
@@ -34,6 +37,7 @@ All notable changes to this project are documented in this file.
   why. A failed or unconfirmed remote revocation shows in the row's status
   beside the connection's own status. See the
   [portal user guide](docs/portal-guide/user.md).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
 
@@ -43,13 +47,16 @@ All notable changes to this project are documented in this file.
   page existed, and a move under a parent with more than 250 children was
   reported applied but unverified. Links naming another resource, cloud ID or
   origin are still refused.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 - **Atlassian token-endpoint 401.** A 401 from Atlassian's token endpoint is a
   rejected application credential (`operator_action_required`), not a
   permission denial asking people to reconnect.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 - **Atlassian cloud IDs in any UUID form.** A provider `cloud_id` written in
   upper case or another UUID form now matches the Atlassian OAuth registration
   `target`. Gateway continuations and draft handles issued under such a value
   before the upgrade are refused once.
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Removed
 
