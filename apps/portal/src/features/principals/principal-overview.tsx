@@ -10,6 +10,7 @@ import { LOCAL_SIGN_IN_EXPLANATION, LOCAL_SIGN_IN_ACKNOWLEDGMENT } from "./sign-
 import { useEffect, useState } from "react";
 import type { LoginMethodRecord, PrincipalDetail } from "../../types";
 import { errorMessage, microsoftLoginControl } from "../../lib/helpers";
+import { microsoftRenewalStatus } from "../../lib/microsoft-membership";
 import {
   Badge,
   Button,
@@ -24,6 +25,7 @@ import {
   SettingsRow,
   SettingsSection,
   SkeletonBlock,
+  StateCell,
   Time,
   useToast
 } from "../../workbench";
@@ -212,6 +214,7 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
   const localPassword = loginMethods.find((method) => method.method === "local_password");
   const microsoft = loginMethods.find((method) => method.method === "oidc" && method.oidc?.provider === "microsoft");
   const control = microsoftLoginControl(microsoft?.status, Boolean(session.loginOptions?.microsoft?.enabled));
+  const renewal = microsoftRenewalStatus(microsoft?.oidc?.membershipRenewal);
   const [objectId, setObjectId] = useState("");
   const [confirmId, setConfirmId] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
@@ -320,6 +323,7 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
               </>
             ) : null}
           </div>
+          {renewal ? <StateCell label={renewal.text} tone={renewal.tone} /> : null}
           {control === "link" ? (
             <AdminForm
               className="wb-form-stack"

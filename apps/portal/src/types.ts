@@ -435,6 +435,8 @@ export type LoginMethodRecord = {
     provider: "microsoft";
     tenantId: string;
     userObjectId: string;
+    /** Group renewal of this Microsoft method; null when it has no renewal record. */
+    membershipRenewal: MicrosoftMembershipRenewal | null;
   };
   status: string;
   passwordSetAt?: string | null;
@@ -478,6 +480,35 @@ export type SelfServiceLimit = {
 /** `GET /v1/me`: the caller's identity summary plus their per-service invocation limits. */
 export type MeResult = IdentitySummary & {
   serviceLimits: SelfServiceLimit[];
+  /** Present when the caller's principal has a Microsoft login method. */
+  microsoftMembership?: MicrosoftMembership;
+};
+
+/** A renewal record's state; an ended renewal reports why it ended. */
+export type MicrosoftMembershipRenewalState = "active" | "retrying" | "blocked" | "sign_in_required" | "not_issued" | "identity_mismatch";
+
+/** Why the latest renewal attempt of a `retrying` or `blocked` record failed. */
+export type MicrosoftMembershipRenewalFailureCode =
+  | "groups_incomplete"
+  | "client_rejected"
+  | "request_rejected"
+  | "invalid_response"
+  | "throttled"
+  | "unavailable";
+
+/** Renewal of one Microsoft login method's group evidence. */
+export type MicrosoftMembershipRenewal = {
+  state: MicrosoftMembershipRenewalState;
+  lastRenewedAt: string | null;
+  nextAttemptAfter: string | null;
+  lastFailure: { code: MicrosoftMembershipRenewalFailureCode; at: string } | null;
+};
+
+/** `/v1/me` `microsoftMembership`: the caller's Microsoft group evidence window and its renewal. */
+export type MicrosoftMembership = {
+  /** When the current Microsoft group evidence expires; null when there is none. */
+  validUntil: string | null;
+  renewal: MicrosoftMembershipRenewal | null;
 };
 
 /** Admin view of a principal's effective limit for one configured service. */

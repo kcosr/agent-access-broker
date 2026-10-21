@@ -4,6 +4,7 @@ import { canUseSelfService, ROLE_LABELS } from "../../lib/capabilities";
 import { SignInMethodBadges } from "../principals/sign-in-methods";
 import { useState } from "react";
 import { errorMessage } from "../../lib/helpers";
+import { ownMicrosoftMembershipStatus } from "../../lib/microsoft-membership";
 import { formatServiceLimit } from "../../lib/service-limits";
 import {
   Banner,
@@ -18,6 +19,7 @@ import {
   SettingsRow,
   SettingsSection,
   SkeletonBlock,
+  StateCell,
   Time,
   Toolbar,
   ToolbarRow,
@@ -28,7 +30,7 @@ import { FormError } from "../../components/form";
 import { PortalPage } from "../../app/top-bar";
 import { useSession } from "../../app/session";
 import { usePortalTheme } from "../../app/theme";
-import { useOwnServiceLimits } from "../../data/queries";
+import { useOwnMicrosoftMembership, useOwnServiceLimits } from "../../data/queries";
 import { useAuthActions } from "../../mutations/auth";
 
 export function AccountPage() {
@@ -37,6 +39,8 @@ export function AccountPage() {
   const locked = Boolean(session.authenticated && session.passwordChangeRequired);
   const passwordLogin = session.signInMethods?.localPassword === "active";
   const localSignInDisabled = session.loginOptions?.localPassword?.enabled === false;
+  const { membership } = useOwnMicrosoftMembership(!locked && session.signInMethods?.microsoft === "active");
+  const microsoftGroups = membership ? ownMicrosoftMembershipStatus(membership) : null;
   return (
     <PortalPage>
       <Main
@@ -63,6 +67,7 @@ export function AccountPage() {
                 { label: "Principal", value: <span className="wb-num">{session.principal}</span> },
                 session.email ? { label: "Email", value: session.email } : null,
                 { label: "Groups", value: session.groups?.length ? session.groups.join(", ") : <span className="wb-muted">None</span> },
+                microsoftGroups ? { label: "Microsoft groups", value: <StateCell label={microsoftGroups.text} tone={microsoftGroups.tone} /> } : null,
                 { label: "Role", value: session.role ? ROLE_LABELS[session.role] : "" },
                 { label: "Sign-in", value: session.loginMethod ?? "Browser session" },
                 session.signInMethods ? { label: "Sign-in methods", value: <SignInMethodBadges methods={session.signInMethods} /> } : null,
