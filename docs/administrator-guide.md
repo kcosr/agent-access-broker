@@ -506,7 +506,7 @@ method's renewal state, as does `oidc.membershipRenewal` in
 | --- | --- | --- |
 | Groups renew automatically | `active` | Renewal works; the line names the last renewal. |
 | Renewal retrying | `retrying` | Microsoft was unavailable or throttling; the Broker retries with backoff at the time shown. |
-| Renewal blocked: *reason* | `blocked` | Microsoft rejected the client credentials or the request, reported an incomplete group list, or returned a response the Broker rejected. It retries hourly; fix the cause (for example the client secret, or the person's group count). |
+| Renewal blocked: *reason* | `blocked` | Microsoft rejected the client credentials or the request, reported an incomplete group list, or returned a response the Broker rejected. The next request that needs renewal retries it at least an hour after the failure, possibly later because of Microsoft's `Retry-After` or throttling, so a fix does not guarantee recovery within an hour; fix the cause (for example the client secret, or the person's group count). |
 | Sign-in required to renew groups | `sign_in_required` | Microsoft no longer honours the refresh token. The person signs in with Microsoft again. |
 | Not available: Microsoft returned no refresh token | `not_issued` | The last sign-in produced no usable refresh token. The person signs in again after their groups expire. |
 | Sign-in required to renew groups: Microsoft returned a different identity | `identity_mismatch` | A renewal returned another identity and was refused. The person signs in again. |

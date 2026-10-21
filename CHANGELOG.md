@@ -1078,13 +1078,13 @@ All notable changes to this project are documented in this file.
   while the request proceeds. One renewal runs per login method and at most
   eight at once; attempts for one person are at least 60 seconds apart,
   failures back off (30 seconds doubling to 15 minutes, varied by up to 20%,
-  never shorter than Microsoft's `Retry-After`, hourly when blocked), and a 429
-  pauses every renewal. A sign-in-required error or a token for another
-  identity ends renewal until the next sign-in; nothing extends expired
-  evidence. Outcomes are audited as `oidc.membership.renewed` and
-  `oidc.membership.renewal_failed`, with the new reason codes
-  `oidc_sign_in_required` and `oidc_client_rejected`, and logged as
-  `oidc_membership_renewal` events without tokens or Microsoft's error
+  never shorter than Microsoft's `Retry-After`, at least an hour when
+  blocked), and a 429 pauses every renewal. A sign-in-required error or a
+  token for another identity ends renewal until the next sign-in; nothing
+  extends expired evidence. Outcomes are audited as
+  `oidc.membership.renewed` and `oidc.membership.renewal_failed`, with the new
+  reason codes `oidc_sign_in_required` and `oidc_client_rejected`, and logged
+  as `oidc_membership_renewal` events without tokens or Microsoft's error
   descriptions. Discovery requests renew too, since renewal is part of identity
   admission; they still never contact upstream services or refresh OAuth
   connections.

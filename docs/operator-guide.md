@@ -1509,7 +1509,7 @@ thresholds; raising invocation limits does not raise login budgets.
 | `oidc_group_claims_incomplete` | The ID token indicated group overage/distributed claims or contained malformed group IDs. Reduce the user's app-visible security-group memberships or adjust Entra assignment/claim configuration; the broker does not query Graph. |
 | `oidc_admission_denied` | For a first/JIT login, create an active mapping from one claimed Entra group Object ID to an active broker group, assign the user appropriately in Entra, or explicitly link the existing principal. Empty/unmapped claims are allowed only for an already linked identity. |
 | `oidc_login_method_conflict` | The Entra user Object ID is already linked elsewhere, the principal already has another Microsoft identity, or a tenant change conflicts with durable Microsoft bindings/login methods. Inspect and deliberately unlink or remove the conflicting object. |
-| `oidc.membership.renewal_failed` audit records | A [membership renewal](#microsoft-membership-renewal) failed; `providerAudit.oidc.classification` says why. `oidc_sign_in_required` means Microsoft no longer honours the person's refresh token (inactivity, revoked sessions, a disabled account, removed consent): renewal ended and the person signs in again. `oidc_client_rejected` means Microsoft rejected the client ID or secret: correct `client_secret_ref` and reload; blocked renewals retry within an hour. `oidc_unavailable`, `oidc_identity_invalid` and `oidc_group_claims_incomplete` keep renewal and retry as described there. |
+| `oidc.membership.renewal_failed` audit records | A [membership renewal](#microsoft-membership-renewal) failed; `providerAudit.oidc.classification` says why. `oidc_sign_in_required` means Microsoft no longer honours the person's refresh token (inactivity, revoked sessions, a disabled account, removed consent): renewal ended and the person signs in again. `oidc_client_rejected` means Microsoft rejected the client ID or secret: correct `client_secret_ref` and reload; a blocked renewal is eligible again at least one hour after its failure (later for a longer `Retry-After` or a provider-wide 429 pause), when a request next needs it, so recovery can take longer than an hour. `oidc_unavailable`, `oidc_identity_invalid` and `oidc_group_claims_incomplete` keep renewal and retry as described there. |
 | Microsoft sign-in asks for consent after enabling `membership_renewal` | Users cannot consent to `offline_access` in this tenant. Have an Entra administrator grant admin consent for it (see [Microsoft membership renewal](#microsoft-membership-renewal)), or turn `membership_renewal` off and reload. |
 | `external_group_binding_conflict` | The Entra group Object ID already has a binding, or deletion was attempted while the binding was active. Reuse the existing mapping, or disable it before deleting it. |
 | `local_login_locked` | The client's source (IPv4 address or IPv6 /64) reached `max_failed_attempts` for that principal. Only that source is locked, until `lockout_ttl` passes; the user can still sign in from other sources. If failures for the principal were already recorded from 256 other sources, further sources share one overflow counter, and its lockout blocks every source without a counter of its own, usually including the user's normal address. `admin principals password unlock <principal>` or the portal **Unlock** action (the user page's Overview tab) clears every source's lockout for the principal, including the overflow counter. Repeated lockouts from unfamiliar sources indicate password guessing. |
@@ -1789,22 +1789,25 @@ sign-in check and repeat the original sign-in token's `sub`, `aud`, `azp`
 | Microsoft's answer | Classification | Renewal afterwards | Next attempt |
 | --- | --- | --- | --- |
 | Valid ID token with complete groups | `renewed` | `active`; groups replace the evidence when the token is newer than every token observed for the method, otherwise the stored evidence is kept; a returned refresh token replaces the stored one | When the evidence is next within `ahead` |
-| Valid ID token whose group claim is incomplete (overage or malformed) | `groups_incomplete` | `blocked`; evidence unchanged; a returned refresh token is stored | 1 hour |
+| Valid ID token whose group claim is incomplete (overage or malformed) | `groups_incomplete` | `blocked`; evidence unchanged; a returned refresh token is stored | At least 1 hour, later for a longer `Retry-After` |
 | Valid ID token for another `sub` or user Object ID | `identity_mismatch` | Ended; token deleted | Next sign-in |
-| Missing, invalid or stale ID token, unusable body, or an unexpected status (1xx, 3xx, a 2xx other than 200) | `invalid_response` | `blocked`; token kept | 1 hour |
+| Missing, invalid or stale ID token, unusable body, or an unexpected status (1xx, 3xx, a 2xx other than 200) | `invalid_response` | `blocked`; token kept | At least 1 hour, later for a longer `Retry-After` |
 | 4xx `invalid_grant`, `interaction_required`, `consent_required` or `login_required` | `sign_in_required` | Ended; token deleted | Next sign-in |
-| 4xx `invalid_client` or `unauthorized_client` | `client_rejected` | `blocked`; token kept | 1 hour |
-| Any other 4xx, including an unreadable body | `request_rejected` | `blocked`; token kept | 1 hour |
+| 4xx `invalid_client` or `unauthorized_client` | `client_rejected` | `blocked`; token kept | At least 1 hour, later for a longer `Retry-After` |
+| Any other 4xx, including an unreadable body | `request_rejected` | `blocked`; token kept | At least 1 hour, later for a longer `Retry-After` |
 | HTTP 429 | `throttled` | `retrying`; token kept | Backoff, and never before `Retry-After` |
 | No response, a 5xx, a 4xx `server_error` or `temporarily_unavailable`, or Microsoft discovery or signing keys unavailable | `unavailable` | `retrying`; token kept | Backoff, and never before `Retry-After` |
 
 A stale ID token is one whose `iat` would leave its evidence already within
 `ahead`. The backoff starts at 30 seconds and doubles per consecutive failure to
 15 minutes, then varies by up to 20% either way, so it can reach 18 minutes. A
-`blocked` renewal retries hourly so that a corrected client secret or a reduced
-group count recovers without anyone signing in. No failure extends evidence:
-it expires on schedule, and group-derived access stops until a renewal or
-sign-in succeeds. A renewal whose result arrives after a sign-in, unlink,
+`blocked` renewal is eligible again at least one hour after the failure, or at
+Microsoft's `Retry-After` when that is later, so a corrected client secret or a
+reduced group count can recover without anyone signing in. Renewal still runs
+only when a request needs it, and a provider-wide 429 pause can delay it
+further, so fixing the cause does not guarantee recovery within an hour. No
+failure extends evidence: it expires on schedule, and group-derived access
+stops until a renewal or sign-in succeeds. A renewal whose result arrives after a sign-in, unlink,
 principal disable, provider change or reload has changed what it started from
 is discarded without writing anything.
 
