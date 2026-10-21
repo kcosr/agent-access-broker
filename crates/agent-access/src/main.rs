@@ -1250,6 +1250,9 @@ enum AdminGroupsCommand {
         display_name: Option<String>,
         #[arg(long)]
         description: Option<String>,
+        /// Add newly created Microsoft accounts to this group after admission.
+        #[arg(long)]
+        auto_enroll_new_microsoft_users: bool,
     },
     Update {
         group: String,
@@ -1261,6 +1264,9 @@ enum AdminGroupsCommand {
         description: Option<String>,
         #[arg(long)]
         clear_description: bool,
+        /// Enable or disable automatic local membership for new Microsoft accounts.
+        #[arg(long, action = clap::ArgAction::Set)]
+        auto_enroll_new_microsoft_users: Option<bool>,
     },
     Enable {
         group: String,
@@ -12592,11 +12598,13 @@ async fn run_admin_groups_command(
             group,
             display_name,
             description,
+            auto_enroll_new_microsoft_users,
         } => {
             let body = serde_json::json!({
                 "groupId": group,
                 "displayName": display_name,
                 "description": description,
+                "autoEnrollNewMicrosoftUsers": auto_enroll_new_microsoft_users,
             });
             run_broker_json_method(ctx, reqwest::Method::POST, "/v1/admin/groups", Some(body)).await
         }
@@ -12606,6 +12614,7 @@ async fn run_admin_groups_command(
             clear_display_name,
             description,
             clear_description,
+            auto_enroll_new_microsoft_users,
         } => {
             let mut body = serde_json::Map::new();
             if *clear_display_name {
@@ -12618,9 +12627,15 @@ async fn run_admin_groups_command(
             } else if let Some(description) = description {
                 body.insert("description".to_string(), serde_json::json!(description));
             }
+            if let Some(enabled) = auto_enroll_new_microsoft_users {
+                body.insert(
+                    "autoEnrollNewMicrosoftUsers".to_string(),
+                    serde_json::json!(enabled),
+                );
+            }
             if body.is_empty() {
                 require_cli_input::<()>(Err(anyhow::anyhow!(
-                    "admin groups update requires at least one of --display-name, --clear-display-name, --description, or --clear-description"
+                    "admin groups update requires at least one of --display-name, --clear-display-name, --description, --clear-description, or --auto-enroll-new-microsoft-users"
                 )));
             }
             run_broker_json_method(

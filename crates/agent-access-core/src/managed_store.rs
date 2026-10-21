@@ -69,7 +69,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION;
+const MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION: &str = "030_group_auto_enrollment";
 const MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION: &str =
     "029_identity_access_path_controls";
 const MANAGED_STORE_OAUTH_REVOCATIONS_VERSION: &str = "028_oauth_revocations";
@@ -238,6 +239,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/identity_access_path_controls.sql"),
         seed: None,
         structural_validation: imported_store::validate_identity_access_path_controls_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION,
+        checksum: "5b0222863d70f19d9669f8ae0ca811124eeb6040a3fb4ef91d60488fbb62316a",
+        sql: include_str!("managed_store/group_auto_enrollment.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_group_auto_enrollment_structure,
     },
 ];
 
@@ -559,6 +567,8 @@ pub struct ManagedStore {
     schema_checksum: String,
     latest_migration_checksum: String,
     applied_migrations_this_open: Arc<BTreeSet<String>>,
+    #[cfg(test)]
+    oidc_completion_transaction_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl std::fmt::Debug for ManagedStore {
@@ -651,6 +661,8 @@ impl ManagedStore {
             schema_checksum,
             latest_migration_checksum,
             applied_migrations_this_open: Arc::new(applied_migrations_this_open),
+            #[cfg(test)]
+            oidc_completion_transaction_hook: None,
         };
         restrict_sqlite_files(store.path())?;
         Ok(store)
@@ -1927,10 +1939,19 @@ impl ManagedStore {
         &self,
         request: GroupWriteRequest,
     ) -> Result<GroupRecord, ManagedStoreError> {
+        Ok(self.create_group_with_effect(request)?.group)
+    }
+
+    pub fn create_group_with_effect(
+        &self,
+        request: GroupWriteRequest,
+    ) -> Result<GroupMutationResult, ManagedStoreError> {
         validate_group_write_request(&request)?;
         let group_id = request.group_id.clone();
         let mut conn = self.connection.lock().unwrap();
-        let tx = conn.transaction().map_err(sql_unavailable)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
         if group_exists(&tx, &group_id)? {
             return Err(ManagedStoreError::VersionConflict);
         }
@@ -1938,33 +1959,67 @@ impl ManagedStore {
         tx.execute(
             "INSERT INTO groups
              (group_id, display_name, description, status, created_at, created_by, updated_at,
-              updated_by, disabled_at)
-             VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?4, ?5, NULL)",
+              updated_by, disabled_at, auto_enroll_new_microsoft_users)
+             VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?4, ?5, NULL, ?6)",
             params![
                 group_id,
                 normalize_optional_text(request.display_name),
                 normalize_optional_text(request.description),
                 now,
-                request.created_by
+                request.created_by,
+                request.auto_enroll_new_microsoft_users
             ],
         )
         .map_err(sql_unavailable)?;
         let group = group_by_id(&tx, &group_id)?;
         tx.commit().map_err(sql_unavailable)?;
-        Ok(group)
+        Ok(GroupMutationResult {
+            auto_enrollment_change: request.auto_enroll_new_microsoft_users.then_some(
+                GroupAutoEnrollmentChange {
+                    previous: false,
+                    current: true,
+                },
+            ),
+            group,
+        })
     }
 
     pub fn patch_group(
         &self,
         request: GroupPatchRequest,
     ) -> Result<GroupRecord, ManagedStoreError> {
+        Ok(self.patch_group_with_effect(request)?.group)
+    }
+
+    pub fn patch_group_with_effect(
+        &self,
+        request: GroupPatchRequest,
+    ) -> Result<GroupMutationResult, ManagedStoreError> {
         validate_group_patch_request(&request)?;
         let group_id = request.group_id.clone();
         let updated_by = request.updated_by.clone();
         let mut conn = self.connection.lock().unwrap();
-        let tx = conn.transaction().map_err(sql_unavailable)?;
-        group_by_id(&tx, &group_id)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let previous = group_by_id(&tx, &group_id)?;
+        let auto_enrollment_change = request
+            .auto_enroll_new_microsoft_users
+            .filter(|value| *value != previous.auto_enroll_new_microsoft_users)
+            .map(|current| GroupAutoEnrollmentChange {
+                previous: previous.auto_enroll_new_microsoft_users,
+                current,
+            });
         let now = normalized_now_string();
+        if let Some(change) = &auto_enrollment_change {
+            tx.execute(
+                "UPDATE groups
+                 SET auto_enroll_new_microsoft_users = ?2, updated_at = ?3, updated_by = ?4
+                 WHERE group_id = ?1",
+                params![group_id, change.current, now, updated_by],
+            )
+            .map_err(sql_unavailable)?;
+        }
         if let Some(display_name) = request.display_name {
             tx.execute(
                 "UPDATE groups
@@ -2005,7 +2060,10 @@ impl ManagedStore {
         }
         let group = group_by_id(&tx, &group_id)?;
         tx.commit().map_err(sql_unavailable)?;
-        Ok(group)
+        Ok(GroupMutationResult {
+            group,
+            auto_enrollment_change,
+        })
     }
 
     pub fn group(&self, group_id: &str) -> Result<GroupRecord, ManagedStoreError> {
@@ -2034,11 +2092,12 @@ impl ManagedStore {
                  )
                  SELECT g.group_id, g.display_name, g.description, g.status, g.created_at,
                         g.created_by, g.updated_at, g.updated_by, g.disabled_at,
-                        COUNT(e.principal_id) AS member_count
+                        COUNT(e.principal_id) AS member_count, g.auto_enroll_new_microsoft_users
                  FROM groups g
                  LEFT JOIN effective e ON e.group_id = g.group_id
                  GROUP BY g.group_id, g.display_name, g.description, g.status, g.created_at,
-                          g.created_by, g.updated_at, g.updated_by, g.disabled_at
+                          g.created_by, g.updated_at, g.updated_by, g.disabled_at,
+                          g.auto_enroll_new_microsoft_users
                  ORDER BY g.group_id",
             )
             .map_err(sql_unavailable)?;
@@ -2870,6 +2929,10 @@ impl ManagedStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
+        #[cfg(test)]
+        if let Some(hook) = &self.oidc_completion_transaction_hook {
+            hook();
+        }
         let provider = require_oidc_provider_generation(&tx, request.provider_generation)?;
         if !advance_oidc_subject_watermark_tx(
             &tx,
@@ -2938,6 +3001,7 @@ impl ManagedStore {
                 .to_string(),
             });
         }
+        let mut auto_enrolled_group_ids = Vec::new();
         if method.is_none() {
             tx.execute(
                 "INSERT INTO principals
@@ -2972,6 +3036,31 @@ impl ManagedStore {
             )
             .map_err(map_oidc_method_insert_error)?;
             method = Some(login_method_by_id(&tx, &login_method_id)?);
+            let mut statement = tx
+                .prepare(
+                    "SELECT group_id FROM groups
+                 WHERE status = 'active' AND auto_enroll_new_microsoft_users = 1
+                 ORDER BY group_id",
+                )
+                .map_err(sql_unavailable)?;
+            auto_enrolled_group_ids = collect_rows(
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(sql_unavailable)?,
+            )?;
+            for group_id in &auto_enrolled_group_ids {
+                tx.execute(
+                    "INSERT INTO principal_groups (principal_id, group_id, created_at, created_by)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        request.jit_principal_id,
+                        group_id,
+                        callback_now,
+                        request.created_by
+                    ],
+                )
+                .map_err(sql_unavailable)?;
+            }
         }
         let method = method.expect("OIDC method resolved or created");
         tx.execute(
@@ -3027,6 +3116,7 @@ impl ManagedStore {
             login_method: method,
             session,
             membership,
+            auto_enrolled_group_ids,
         };
         tx.commit().map_err(sql_unavailable)?;
         Ok(OidcCompletionOutcome::Succeeded {
@@ -5524,6 +5614,7 @@ pub struct GroupRecord {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub status: String,
+    pub auto_enroll_new_microsoft_users: bool,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
     pub updated_at: Option<String>,
@@ -5537,6 +5628,7 @@ pub struct GroupWriteRequest {
     pub group_id: String,
     pub display_name: Option<String>,
     pub description: Option<String>,
+    pub auto_enroll_new_microsoft_users: bool,
     pub created_by: String,
 }
 
@@ -5546,7 +5638,20 @@ pub struct GroupPatchRequest {
     pub display_name: Option<Option<String>>,
     pub description: Option<Option<String>>,
     pub status: Option<String>,
+    pub auto_enroll_new_microsoft_users: Option<bool>,
     pub updated_by: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupAutoEnrollmentChange {
+    pub previous: bool,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupMutationResult {
+    pub group: GroupRecord,
+    pub auto_enrollment_change: Option<GroupAutoEnrollmentChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -5905,6 +6010,7 @@ pub struct OidcCompleteLoginResult {
     pub login_method: LoginMethodRecord,
     pub session: IssuedBrowserSession,
     pub membership: EffectiveMembershipRecord,
+    pub auto_enrolled_group_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -6136,9 +6242,13 @@ fn validate_group_write_request(request: &GroupWriteRequest) -> Result<(), Manag
 fn validate_group_patch_request(request: &GroupPatchRequest) -> Result<(), ManagedStoreError> {
     validate_group_name(&request.group_id)?;
     validate_actor(&request.updated_by)?;
-    if request.display_name.is_none() && request.description.is_none() && request.status.is_none() {
+    if request.display_name.is_none()
+        && request.description.is_none()
+        && request.status.is_none()
+        && request.auto_enroll_new_microsoft_users.is_none()
+    {
         return Err(input_invalid(
-            "at least one of displayName, description, or status is required",
+            "at least one of displayName, description, status, or autoEnrollNewMicrosoftUsers is required",
         ));
     }
     validate_group_metadata(
@@ -7694,12 +7804,13 @@ fn group_by_id(conn: &Connection, group_id: &str) -> Result<GroupRecord, Managed
          )
          SELECT g.group_id, g.display_name, g.description, g.status, g.created_at,
                 g.created_by, g.updated_at, g.updated_by, g.disabled_at,
-                COUNT(e.principal_id) AS member_count
+                COUNT(e.principal_id) AS member_count, g.auto_enroll_new_microsoft_users
          FROM groups g
          LEFT JOIN effective e ON e.group_id = g.group_id
          WHERE g.group_id = ?1
          GROUP BY g.group_id, g.display_name, g.description, g.status, g.created_at,
-                  g.created_by, g.updated_at, g.updated_by, g.disabled_at",
+                  g.created_by, g.updated_at, g.updated_by, g.disabled_at,
+                  g.auto_enroll_new_microsoft_users",
         params![group_id, resolved_at],
         group_from_row,
     )
@@ -7733,6 +7844,7 @@ fn group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRecord> {
         updated_by: row.get(7)?,
         disabled_at: row.get(8)?,
         member_count: member_count as u64,
+        auto_enroll_new_microsoft_users: row.get(10)?,
     })
 }
 
@@ -9086,6 +9198,7 @@ mod tests {
     use agent_access_provider::test_support::{basic_credential, bearer_credential};
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
+    include!("managed_store/group_auto_enrollment_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
@@ -9226,6 +9339,7 @@ mod tests {
     fn create_test_group(store: &ManagedStore, group_id: &str) {
         store
             .create_group(GroupWriteRequest {
+                auto_enroll_new_microsoft_users: false,
                 group_id: group_id.to_string(),
                 display_name: None,
                 description: None,
@@ -9349,6 +9463,7 @@ mod tests {
 
         let group = store
             .create_group(GroupWriteRequest {
+                auto_enroll_new_microsoft_users: false,
                 group_id: "users".to_string(),
                 display_name: Some("Users".to_string()),
                 description: Some("Regular users".to_string()),
@@ -9363,6 +9478,7 @@ mod tests {
         assert!(matches!(
             store
                 .create_group(GroupWriteRequest {
+                    auto_enroll_new_microsoft_users: false,
                     group_id: "users".to_string(),
                     display_name: None,
                     description: None,
@@ -9403,6 +9519,7 @@ mod tests {
 
         let disabled = store
             .patch_group(GroupPatchRequest {
+                auto_enroll_new_microsoft_users: None,
                 group_id: "users".to_string(),
                 display_name: Some(None),
                 description: Some(Some("Disabled users".to_string())),
@@ -9458,6 +9575,7 @@ mod tests {
         create_alice(&store);
         store
             .create_group(GroupWriteRequest {
+                auto_enroll_new_microsoft_users: false,
                 group_id: "users".to_string(),
                 display_name: None,
                 description: None,
@@ -9499,6 +9617,7 @@ mod tests {
         assert!(matches!(
             store
                 .create_group(GroupWriteRequest {
+                    auto_enroll_new_microsoft_users: false,
                     group_id: "anonymous".to_string(),
                     display_name: None,
                     description: None,
@@ -9756,11 +9875,12 @@ mod tests {
         assert_eq!(rows[12].0, MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION);
         assert_eq!(rows[13].0, MANAGED_STORE_COMMAND_IMPORTS_VERSION);
         assert_eq!(rows[14].0, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION);
-        assert_eq!(rows[15].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(
             rows[15].0,
             MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION
         );
+        assert_eq!(rows[16].0, MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION);
+        assert_eq!(rows.last().unwrap().0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

@@ -75,6 +75,8 @@ policy-management assignment. Review the user's **Access** tab and the
 2. Enter a stable **Group ID**, a **Display name**, and a useful **Description**.
    For example, use `project-readers`, **Project Readers**, and a description
    explaining which project and operations members need.
+   Select **Automatically add new Microsoft users** only if new accounts
+   admitted through Microsoft should receive persistent local membership.
 3. Select **Create group**, then use **Members** to add existing accounts.
    Create a grant for that group before expecting it to provide service access.
 
@@ -84,6 +86,32 @@ policy-management assignment. Review the user's **Access** tab and the
 list. A new group starts without members or invocation grants unless you add
 them. Principal groups are distinct from **Catalog > Resource groups**:
 principal groups collect accounts; resource groups collect selectable scopes.
+
+## Automatically add new Microsoft users
+
+Open a group's **Overview** and enable **Automatically add new Microsoft users**.
+Repeat on each group new Microsoft accounts should join. The setting is also
+available in **Create group** and is off by default. It takes effect immediately
+without a broker configuration reload.
+
+This setting does not admit users: Microsoft sign-in must still meet the
+configured JIT requirements, including an active Entra group mapping. After
+admission, Broker adds the new account to every selected active group as a local
+member. It does so only when creating an account, never for an existing linked
+account or on a later sign-in. Removing a user's local membership stays
+effective; enabling this setting does not add existing users.
+
+Local membership persists after Microsoft group evidence expires or is removed.
+The **Microsoft** tab calls out this consequence when enrollment is enabled:
+users automatically added to a mapped group retain the local contribution when
+the Microsoft contribution ends. Such a membership can show both sources.
+
+A disabled group retains the setting and shows enrollment as paused. Re-enabling
+the group resumes enrollment for future accounts, without adding accounts
+created while it was disabled. Turning the setting off leaves existing local
+memberships intact. Use **Members** to review or remove them. See
+[Microsoft onboarding](../administrator-guide.md#microsoft-onboarding) for CLI
+commands and account-linking details.
 
 ## Onboard a workload account
 

@@ -30,6 +30,10 @@ the person's grants; see [managed workspace identity](docs/managed-identity.md).
 The portal supports local account sign-in or optional
 [Microsoft Entra ID sign-in](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation)
 through OpenID Connect (OIDC), with Entra group mappings for access management.
+Administrators can also [automatically add newly created Microsoft users to local
+groups](docs/administrator-guide.md#microsoft-onboarding). These memberships
+persist independently of Microsoft group evidence; the mapped-group admission
+requirement still applies.
 
 ## Supported integrations
 

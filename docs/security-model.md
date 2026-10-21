@@ -512,6 +512,16 @@ security-relevant properties are:
   hours by default).
   Effective groups combine current Microsoft evidence with explicit local
   memberships, but group mapping never assigns the DB `admin` role.
+- **Automatic local membership is durable.** Administrators may opt managed
+  groups into automatically adding new Microsoft JIT accounts after existing
+  mapped-group admission succeeds. This grants ordinary local membership, not
+  an account role, and never changes sign-in eligibility. A local contribution
+  survives Entra removal and evidence expiry even when that same group is also
+  mapped from Microsoft. Disabling enrollment affects future accounts; it does
+  not remove existing membership. Use local membership removal or principal
+  disable for the corresponding access removal, and review both contribution
+  sources. Enrollment is atomic with account creation; audited flag changes
+  and login records identify the setting and groups applied.
 - **Service policy management is bounded delegation.** With managed identity
   and policy authority, a global DB admin may assign an active account with role
   `service_policy_manager` to manage all otherwise-valid grants for one exact

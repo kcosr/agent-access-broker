@@ -8,6 +8,7 @@ import { errorMessage, identityDisplayName, principalIdentityLabel } from "../..
 import { urlParam, urlStateSearch, useUrlState } from "../../lib/url-state";
 import { sortRows } from "../../lib/table-sort";
 import { MembershipSource } from "./principal-groups";
+import { GroupEnrollmentCheckbox } from "./group-enrollment";
 import {
   Badge,
   Banner,
@@ -54,7 +55,7 @@ import {
   usePolicyStatus,
   writeAuthorities
 } from "../../data/queries";
-import { useGroupActions } from "../../mutations/groups";
+import { groupProfilePatch, useGroupActions } from "../../mutations/groups";
 import { GrantDrawer } from "../policies/policies-page";
 import { GrantReferences, GrantReferencesToolbar, referenceRows } from "./policy-references";
 
@@ -180,13 +181,16 @@ function OverviewTab(props: TabProps) {
   const { groupWritesEnabled, identityAuthority } = writeAuthorities(useConfigStatus().data);
   const [displayName, setDisplayName] = useState(group.displayName ?? "");
   const [description, setDescription] = useState(group.description ?? "");
+  const [autoEnrollNewMicrosoftUsers, setAutoEnrollNewMicrosoftUsers] = useState(group.autoEnrollNewMicrosoftUsers);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setDisplayName(group.displayName ?? "");
     setDescription(group.description ?? "");
-  }, [group.groupId, group.displayName, group.description]);
-  const dirty = displayName !== (group.displayName ?? "") || description !== (group.description ?? "");
+    setAutoEnrollNewMicrosoftUsers(group.autoEnrollNewMicrosoftUsers);
+  }, [group.groupId, group.displayName, group.description, group.autoEnrollNewMicrosoftUsers]);
+  const patch = groupProfilePatch(group, { displayName, description, autoEnrollNewMicrosoftUsers });
+  const dirty = Object.keys(patch).length > 0;
   return (
     <GroupFrame {...props} tint>
       <SettingsPage>
@@ -199,10 +203,11 @@ function OverviewTab(props: TabProps) {
           <AdminForm
             onSubmit={async (event) => {
               event.preventDefault();
+              if (!dirty) return;
               setPending(true);
               setError(null);
               try {
-                await groups.patch(group.groupId, { displayName: displayName || null, description: description || null });
+                await groups.patch(group.groupId, patch);
               } catch (failure) {
                 setError(errorMessage(failure));
               } finally {
@@ -218,6 +223,9 @@ function OverviewTab(props: TabProps) {
             </SettingsRow>
             <SettingsRow label="Description" alignTop>
               <Textarea className="flex-1" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} disabled={!groupWritesEnabled} />
+            </SettingsRow>
+            <SettingsRow label="Microsoft enrollment" group alignTop>
+              <GroupEnrollmentCheckbox checked={autoEnrollNewMicrosoftUsers} onChange={(event) => setAutoEnrollNewMicrosoftUsers(event.target.checked)} disabled={!groupWritesEnabled} paused={group.autoEnrollNewMicrosoftUsers && group.status !== "active"} />
             </SettingsRow>
             <FormError error={error} />
             <div className="wb-settings-actions">
@@ -460,6 +468,11 @@ function MicrosoftTab(props: TabProps) {
         <Banner tone="warning" slim>
           Enabling a mapping lets future eligible Microsoft sign-ins receive this broker group and its existing grants.
         </Banner>
+        {group.autoEnrollNewMicrosoftUsers && rows.length > 0 ? (
+          <Banner tone="warning" slim>
+            Automatic enrollment also gives newly created Microsoft accounts local membership in this group. That local membership survives loss or expiry of Microsoft group membership.
+          </Banner>
+        ) : null}
       </div>
       <List full>
         {identityAuthority !== "managed" ? (

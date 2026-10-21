@@ -279,6 +279,7 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
                 group_id: group.into(),
                 display_name: None,
                 description: None,
+                auto_enroll_new_microsoft_users: false,
                 created_by: "admin".into(),
             })
             .unwrap();

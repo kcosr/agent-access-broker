@@ -2568,6 +2568,7 @@ fn cli_admin_group_parity_commands_call_expected_routes() {
         assert_eq!(body["groupId"], "reviewers");
         assert_eq!(body["displayName"], "Reviewers");
         assert_eq!(body["description"], "Review queue");
+        assert_eq!(body["autoEnrollNewMicrosoftUsers"], true);
         write_json_response(
             &mut stream,
             200,
@@ -2659,6 +2660,7 @@ fn cli_admin_group_parity_commands_call_expected_routes() {
         assert_eq!(body["displayName"], "Review Board");
         assert_eq!(body["description"], serde_json::Value::Null);
         assert!(body.get("status").is_none());
+        assert_eq!(body["autoEnrollNewMicrosoftUsers"], false);
         write_json_response(
             &mut stream,
             200,
@@ -2795,6 +2797,7 @@ fn cli_admin_group_parity_commands_call_expected_routes() {
             "Reviewers",
             "--description",
             "Review queue",
+            "--auto-enroll-new-microsoft-users",
         ],
         vec!["admin", "groups", "inspect", "reviewers"],
         vec![
@@ -2805,6 +2808,8 @@ fn cli_admin_group_parity_commands_call_expected_routes() {
             "--display-name",
             "Review Board",
             "--clear-description",
+            "--auto-enroll-new-microsoft-users",
+            "false",
         ],
         vec!["admin", "groups", "disable", "reviewers"],
         vec!["admin", "groups", "enable", "reviewers"],
@@ -3187,6 +3192,82 @@ fn cli_admin_principals_update_rejects_conflicting_field_flags() {
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
             "unexpected stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn cli_admin_groups_auto_enrollment_flag_only_updates() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        for enabled in [true, false] {
+            let (mut stream, request) = accept_stub_request(&listener);
+            assert_eq!(request.method, "PATCH");
+            assert_eq!(request.path, "/v1/admin/groups/reviewers");
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({"autoEnrollNewMicrosoftUsers": enabled})
+            );
+            write_json_response(
+                &mut stream,
+                200,
+                serde_json::json!({
+                    "ok": true, "decision": "allow",
+                    "requestId": "auto-enrollment", "brokerRequestId": "auto-enrollment",
+                    "operation": "admin.groups.patch", "principal": "admin",
+                    "result": {"groupId": "reviewers", "autoEnrollNewMicrosoftUsers": enabled}
+                }),
+            );
+        }
+    });
+    let base_url = format!("http://{address}");
+    for enabled in ["true", "false"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+            .args([
+                "--url",
+                &base_url,
+                "--no-token",
+                "admin",
+                "groups",
+                "update",
+                "reviewers",
+                "--auto-enroll-new-microsoft-users",
+                enabled,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    server.join().unwrap();
+
+    for invalid in [None, Some("yes")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
+        command.args([
+            "--url",
+            "http://127.0.0.1:9",
+            "--no-token",
+            "admin",
+            "groups",
+            "update",
+            "reviewers",
+            "--auto-enroll-new-microsoft-users",
+        ]);
+        if let Some(value) = invalid {
+            command.arg(value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -5473,6 +5554,7 @@ fn group_record_response(group_id: &str) -> serde_json::Value {
         "displayName": "Reviewers",
         "description": "Review queue",
         "status": "active",
+        "autoEnrollNewMicrosoftUsers": false,
         "createdAt": "2026-01-01T00:00:00Z",
         "createdBy": "admin",
         "updatedAt": "2026-01-01T00:00:00Z",

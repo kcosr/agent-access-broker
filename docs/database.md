@@ -59,8 +59,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `021_local_password_failures`, `022_principal_service_limits`, and
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
-`027_command_imports`, `028_oauth_revocations`, and
-`029_identity_access_path_controls` in order. The
+`027_command_imports`, `028_oauth_revocations`,
+`029_identity_access_path_controls`, and `030_group_auto_enrollment` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -111,7 +111,7 @@ erDiagram
 | --- | --- | --- |
 | `schema_migrations` | Append-only catalog migration ledger. | `version`, per-migration `checksum`, `applied_at` |
 | `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `status`, `display_name`, `email`, `external_subject`, timestamps |
-| `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, timestamps, actor metadata |
+| `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, `auto_enroll_new_microsoft_users`, timestamps, actor metadata |
 | `principal_groups` | Group membership for managed principals. | `principal_id`, `group_id`, creator metadata |
 | `broker_tokens` | HMAC-hashed broker-issued tokens. | `token_id`, `token_hash`, `principal_id`, `token_class`, `scopes_json`, expiry/revocation fields |
 | `rights` | Self-service management rights. A credential connection's rights have its ID in `service` and `default` in `credential_name`. | `right_id`, `principal_id`, `right_name`, `service`, `credential_name`, `resource_scope_json`, expiry/revocation fields |
@@ -342,6 +342,17 @@ immutable, use the normal safe identifier syntax, and reserve `anonymous` for
 the virtual unauthenticated subject. `display_name` and `description` are
 metadata only; they never affect authorization.
 
+`auto_enroll_new_microsoft_users` is a non-null 0/1 column, checked by SQLite
+and defaulted to 0. When set to 1 on an active group, new Microsoft JIT
+principals receive ordinary local membership during account creation, after
+the existing mapped-group admission check. The setting is owned by the group
+row and is not projected from TOML. A disabled group keeps the flag but is
+excluded from enrollment; re-enabling resumes enrollment for future accounts.
+Neither changing the flag nor re-enabling a group backfills existing accounts.
+A flag-only update to the existing value writes nothing, including updater
+metadata. Group mutations capture actual flag changes inside the transaction
+for supplemental audit emission.
+
 `principal_groups` references both `principals.principal_id` and
 `groups.group_id`, so adding membership requires an existing principal and an
 existing group. Membership rows can be added to active or disabled principals;
@@ -483,6 +494,26 @@ revokes browser sessions backed by that OIDC login method and deletes its
 refresh and Microsoft-group rows, while leaving local group membership, the role,
 direct grants, and unrelated broker tokens intact.
 
+New JIT account creation also selects all active groups whose
+`auto_enroll_new_microsoft_users` flag is set and inserts local
+`principal_groups` rows. Their creation time is the callback time and their
+creator is the Microsoft sign-in source used for the principal. These are
+ordinary local memberships, with the same provenance and lifecycle as local
+memberships added by administrators. Later sign-ins do not enroll the account
+again, including after manual membership removal. Already-linked accounts,
+local-password login and account creation through administration do not run
+this step.
+
+The flag selection, local inserts, principal, login method, Microsoft evidence,
+subject watermark and browser session all commit in the same immediate
+transaction. Concurrent group edits serialize before or after that transaction;
+a failed local insert rolls it back in full. The commit is the once-only
+enrollment boundary even if later audit emission or cookie delivery fails.
+The store returns the sorted IDs actually enrolled from that transaction for
+the login audit's `autoEnrolledGroupIds`, including an empty array when no
+groups were enrolled. Audit records live in a separate store and are not
+crash-atomic with these writes.
+
 Effective membership is the deduplicated union of local `principal_groups` and
 unexpired Microsoft contributions whose provider, login method, and binding are
 active. Raw identity groups may retain membership in a disabled managed group,
@@ -492,6 +523,9 @@ provenance: local creator/time metadata plus each Microsoft binding, external
 group object ID, observation time, and expiry. Removing a local membership
 therefore does not necessarily remove effective membership when a current
 Microsoft contribution still supplies the same group.
+Conversely, an automatically enrolled local row remains effective after the
+same group's Microsoft contribution expires or is removed; while both sources
+are current its provenance is `local_and_microsoft`.
 
 ## Credential Encryption
 
@@ -772,6 +806,14 @@ human, in the creating transaction, and reject rows for other principals. From
 human; the validators of `026` through `028` still admit humans without one, so
 those stores upgrade. Rollback requires a pre-migration backup: an older binary
 refuses the newer ledger.
+
+Migration `030_group_auto_enrollment`, appended after
+`029_identity_access_path_controls`, adds
+`groups.auto_enroll_new_microsoft_users` with `NOT NULL DEFAULT 0` and a 0/1
+check. Existing groups remain opted out and existing memberships are unchanged.
+Its structural validator checks the full schema and preserves the requirement
+for exactly one identity-token row per human introduced in `029`. Rollback
+requires a pre-migration backup; the previous binary refuses the newer ledger.
 
 ### Identity-token inventory
 

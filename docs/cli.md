@@ -707,7 +707,7 @@ commands described below. All `admin` subcommands reject `--token-value`.
   the structured Microsoft login method; unlink revokes its browser sessions
   and external membership but leaves local identity state and independently
   issued broker tokens intact.
-- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
+- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
   List, inspect, and member-list work in both TOML and managed identity
   authority modes. Mutating group commands require managed identity authority;
   TOML groups are static config resources changed by editing TOML and
@@ -716,6 +716,14 @@ commands described below. All `admin` subcommands reject `--token-value`.
   membership operation. External-group binding commands configure Microsoft
   group Object IDs against existing managed broker groups. A binding must be
   disabled before deletion.
+  `create --auto-enroll-new-microsoft-users` enables automatic local membership
+  for new Microsoft JIT accounts; it defaults to off. On `update`, supply an
+  explicit `true` or `false`; omitting the option preserves the setting. Only
+  active groups enroll new accounts, after existing mapped-group admission.
+  Disabling a group pauses enrollment without clearing the setting. Existing
+  accounts are never backfilled or re-added on sign-in, and clearing the setting
+  leaves their local memberships intact. See
+  [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
 
 Microsoft user Object IDs, group Object IDs, and binding IDs are parsed as UUIDs
 by the CLI before any request is sent and are serialized as canonical lowercase

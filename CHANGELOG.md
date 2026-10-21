@@ -444,6 +444,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Managed groups can automatically add newly created Microsoft users through
+  the portal's **Automatically add new Microsoft users** setting, the
+  `autoEnrollNewMicrosoftUsers` API field, or the CLI's
+  `--auto-enroll-new-microsoft-users` option. Existing mapped-group JIT admission
+  still applies. Each enabled selected group receives a persistent local
+  membership in the account-creation transaction; existing accounts are not
+  backfilled or re-added on later sign-ins. Disabled groups retain the setting
+  and resume enrollment for future accounts when re-enabled. Migration
+  `030_group_auto_enrollment` defaults the setting to off for existing groups.
+  Audit records identify the enrolled groups and committed setting changes.
 - Jira `issue.view` can return embedded linked issue keys, summaries, issue
   types, relationship types, directions and labels when effective access to
   that action covers every project in the selected credential mode. The

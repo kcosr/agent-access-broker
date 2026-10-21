@@ -1,10 +1,10 @@
 use crate::handlers::management::common::{
     AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
-    admin_agent_token_issue_expires_at, agent_token_boundary_audit, agent_token_issue_scopes,
-    agent_token_list_query, append_management_audit_with_phase, credential_input_schema_query,
-    default_token_ttl_seconds, management_audit_unavailable_response,
-    management_committed_write_audit_completion, management_context,
-    management_context_error_response, management_pre_audited_success_response,
+    ManagementContext, admin_agent_token_issue_expires_at, agent_token_boundary_audit,
+    agent_token_issue_scopes, agent_token_list_query, append_management_audit_with_phase,
+    credential_input_schema_query, default_token_ttl_seconds,
+    management_audit_unavailable_response, management_committed_write_audit_completion,
+    management_context, management_context_error_response, management_pre_audited_success_response,
     management_response, management_store_call, management_store_error_response,
     management_success_envelope, management_success_response, management_token_store_call,
     management_write_audit_preflight, parse_and_validate_agent_token_issue_scopes,
@@ -31,11 +31,12 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use url::form_urlencoded;
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +92,8 @@ pub(crate) struct GroupCreateBody {
     group_id: String,
     display_name: Option<String>,
     description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    auto_enroll_new_microsoft_users: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +104,8 @@ pub(crate) struct GroupPatchBody {
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
     description: Option<Option<String>>,
     status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    auto_enroll_new_microsoft_users: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -451,6 +456,7 @@ fn toml_group_records(config: &BrokerConfig) -> Vec<GroupRecord> {
             display_name: None,
             description: None,
             status: group.status.clone(),
+            auto_enroll_new_microsoft_users: false,
             created_at: None,
             created_by: None,
             updated_at: None,
@@ -1006,6 +1012,76 @@ pub(crate) async fn admin_group_members_list(
     }
 }
 
+fn group_write_audit_target(group: &str, auto_enroll: Option<bool>) -> Value {
+    let mut target = json!({"group": group});
+    if let Some(value) = auto_enroll {
+        target["autoEnrollNewMicrosoftUsers"] = json!(value);
+    }
+    target
+}
+
+/// Keep the committed change and its supplemental audit in one owner task,
+/// even when the HTTP caller stops waiting after the managed-store commit.
+pub(crate) async fn committed_group_mutation<F>(
+    context: ManagementContext,
+    operation: &'static str,
+    target: Option<Value>,
+    mutate: F,
+) -> Response
+where
+    F: FnOnce(
+            agent_access_core::ManagedStore,
+        ) -> Result<agent_access_core::GroupMutationResult, ManagedStoreError>
+        + Send
+        + 'static,
+{
+    let context = Arc::new(context);
+    let owner_context = context.clone();
+    let owner_target = target.clone();
+    let owner = tokio::spawn(async move {
+        let context = owner_context;
+        match management_store_call(&context, mutate).await {
+            Ok(result) => {
+                if let Some(change) = result.auto_enrollment_change {
+                    management_committed_write_audit_completion(
+                        &context,
+                        operation,
+                        Some(json!({
+                            "group": result.group.group_id,
+                            "autoEnrollNewMicrosoftUsers": {
+                                "previous": change.previous,
+                                "current": change.current,
+                            },
+                        })),
+                    )
+                    .await;
+                }
+                management_pre_audited_success_response(
+                    &context,
+                    operation,
+                    owner_target,
+                    json!(result.group),
+                )
+            }
+            Err(error) => {
+                management_store_error_response(&context, operation, owner_target, error).await
+            }
+        }
+    });
+    match owner.await {
+        Ok(response) => response,
+        Err(_) => {
+            management_store_error_response(
+                &context,
+                operation,
+                target,
+                ManagedStoreError::Unavailable("group mutation owner failed".into()),
+            )
+            .await
+        }
+    }
+}
+
 pub(crate) async fn admin_groups_create(
     State(state): State<AppState>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -1025,7 +1101,10 @@ pub(crate) async fn admin_groups_create(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let target = Some(json!({"group": body.group_id}));
+    let target = Some(group_write_audit_target(
+        &body.group_id,
+        body.auto_enroll_new_microsoft_users,
+    ));
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await
     {
@@ -1043,21 +1122,16 @@ pub(crate) async fn admin_groups_create(
         .await;
     }
     let actor = context.identity.principal.clone();
-    match management_store_call(&context, move |store| {
-        store.create_group(GroupWriteRequest {
+    committed_group_mutation(context, operation, target, move |store| {
+        store.create_group_with_effect(GroupWriteRequest {
             group_id: body.group_id,
             display_name: body.display_name,
             description: body.description,
+            auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users.unwrap_or(false),
             created_by: actor,
         })
     })
     .await
-    {
-        Ok(group) => {
-            management_pre_audited_success_response(&context, operation, target, json!(group))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_groups_patch(
@@ -1080,7 +1154,10 @@ pub(crate) async fn admin_groups_patch(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let target = Some(json!({"group": group}));
+    let target = Some(group_write_audit_target(
+        &group,
+        body.auto_enroll_new_microsoft_users,
+    ));
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await
     {
@@ -1099,22 +1176,17 @@ pub(crate) async fn admin_groups_patch(
     }
     let actor = context.identity.principal.clone();
     let group_for_store = group.clone();
-    match management_store_call(&context, move |store| {
-        store.patch_group(GroupPatchRequest {
+    committed_group_mutation(context, operation, target, move |store| {
+        store.patch_group_with_effect(GroupPatchRequest {
             group_id: group_for_store,
             display_name: body.display_name,
             description: body.description,
             status: body.status,
+            auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users,
             updated_by: actor,
         })
     })
     .await
-    {
-        Ok(group) => {
-            management_pre_audited_success_response(&context, operation, target, json!(group))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_group_member_add(

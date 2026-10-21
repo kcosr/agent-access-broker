@@ -126,6 +126,44 @@ test("Auditor inspects managed grants, principals, tokens and system without adm
   expect(errors).toEqual([]);
 });
 
+for (const { role, identityAuthority } of [
+  { role: "auditor", identityAuthority: "managed" },
+  { role: "admin", identityAuthority: "toml" }
+] as const) {
+  test(`${role} cannot change Microsoft enrollment with ${identityAuthority} identity authority`, async ({ page }) => {
+    const model = await fixture(page, role, false);
+    await page.route("**/v1/admin/config/status", (route) => route.fulfill({ json: envelope({ ...config, identityAuthority }) }));
+    await page.route("**/v1/admin/groups/onboarding", (route) => route.fulfill({ json: envelope({
+      groupId: "onboarding", displayName: "Onboarding", status: "disabled", autoEnrollNewMicrosoftUsers: identityAuthority === "managed", memberCount: 0, members: [], policyReferenceSections: []
+    }) }));
+    await page.goto(`${baseUrl}/ui/admin/groups/onboarding`);
+    const enrollment = page.getByRole("checkbox", { name: "Automatically add new Microsoft users", exact: true });
+    await expect(enrollment).toBeDisabled();
+    if (identityAuthority === "managed") {
+      await expect(enrollment).toBeChecked();
+      await expect(page.getByText("Enrollment is paused while this group is disabled.", { exact: false })).toBeVisible();
+    } else {
+      await expect(enrollment).not.toBeChecked();
+      await expect(page.getByText("Group writes are unavailable while identity authority is toml.", { exact: true })).toBeVisible();
+    }
+    expect(model.mutations).toEqual([]);
+  });
+}
+
+test("mapped groups explain durable local membership when Microsoft enrollment is enabled", async ({ page }) => {
+  const model = await fixture(page, "admin", false);
+  await page.route("**/v1/auth/session", (route) => route.fulfill({ json: envelope({ ...model.session, loginOptions: { ...model.session.loginOptions, microsoft: { enabled: true } } }) }));
+  await page.route("**/v1/admin/groups/onboarding", (route) => route.fulfill({ json: envelope({
+    groupId: "onboarding", displayName: "Onboarding", status: "active", autoEnrollNewMicrosoftUsers: true, memberCount: 0, members: [], policyReferenceSections: []
+  }) }));
+  await page.route("**/v1/admin/groups/onboarding/external-group-bindings", (route) => route.fulfill({ json: envelope([
+    { bindingId: "mapping", externalGroupId: "00000000-0000-0000-0000-000000000123", groupId: "onboarding", status: "active", createdAt: "2026-10-20T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-20T00:00:00Z", updatedBy: "admin" }
+  ]) }));
+  await page.goto(`${baseUrl}/ui/admin/groups/onboarding/microsoft`);
+  await expect(page.getByText("That local membership survives loss or expiry of Microsoft group membership.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Microsoft group mappings", exact: true })).toContainText("00000000-0000-0000-0000-000000000123");
+});
+
 for (const role of ["admin", "auditor"] as const) {
   test(`${role} sees no human identity sections or requests for a system principal`, async ({ page }) => {
     const model = await fixture(page, role, false);

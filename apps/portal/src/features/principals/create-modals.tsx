@@ -10,6 +10,7 @@ import { FormError } from "../../components/form";
 import { useAdminGroups, useConfigStatus, writeAuthorities } from "../../data/queries";
 import { usePrincipalActions } from "../../mutations/principals";
 import { useGroupActions } from "../../mutations/groups";
+import { GroupEnrollmentCheckbox } from "./group-enrollment";
 
 export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "service_account"; onClose: () => void }) {
   const serviceAccount = kind === "service_account";
@@ -108,6 +109,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
   const [groupId, setGroupId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [autoEnrollNewMicrosoftUsers, setAutoEnrollNewMicrosoftUsers] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -121,7 +123,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         setPending(true);
         setError(null);
         try {
-          await groups.create({ groupId, displayName, description });
+          await groups.create({ groupId, displayName, description, autoEnrollNewMicrosoftUsers });
         } catch (failure) {
           setError(errorMessage(failure));
           setPending(false);
@@ -153,6 +155,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         <Field label="Description" optional>
           <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
         </Field>
+        <GroupEnrollmentCheckbox checked={autoEnrollNewMicrosoftUsers} onChange={(event) => setAutoEnrollNewMicrosoftUsers(event.target.checked)} disabled={!groupWritesEnabled} />
         <FormError error={error} />
       </div>
     </Modal>

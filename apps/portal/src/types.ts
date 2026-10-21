@@ -339,6 +339,7 @@ export type GroupRecord = {
   displayName?: string | null;
   description?: string | null;
   status: string;
+  autoEnrollNewMicrosoftUsers: boolean;
   createdAt?: string | null;
   createdBy?: string | null;
   updatedAt?: string | null;

@@ -76,6 +76,7 @@ mod gitlab_moved_projects;
 mod gitlab_uploads;
 mod gitlab_webhooks;
 mod gmail;
+mod group_enrollment;
 mod identity_management;
 mod identity_path_controls;
 mod imports_foundation;
@@ -6217,6 +6218,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             group_id: "users".to_string(),
             display_name: Some("Users".to_string()),
             description: Some("Policy users".to_string()),
+            auto_enroll_new_microsoft_users: false,
             created_by: "system".to_string(),
         })
         .unwrap();
@@ -17114,6 +17116,7 @@ async fn token_context_fixture() -> TokenContextFixture {
             group_id: "operators".to_string(),
             display_name: None,
             description: None,
+            auto_enroll_new_microsoft_users: false,
             created_by: "test".to_string(),
         })
         .unwrap();
@@ -17325,6 +17328,7 @@ async fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
             group_id: "agents".to_string(),
             display_name: Some("Agents".to_string()),
             description: None,
+            auto_enroll_new_microsoft_users: false,
             created_by: "test".to_string(),
         })
         .unwrap();
@@ -17458,6 +17462,7 @@ async fn service_policy_management_fixture_with_policy_authority(
             group_id: "service-managers".to_string(),
             display_name: Some("Service Managers".to_string()),
             description: None,
+            auto_enroll_new_microsoft_users: false,
             created_by: "test".to_string(),
         })
         .unwrap();

@@ -129,6 +129,11 @@ late successor joins its family's revocation whenever its refresh reports,
 even after another process presumed it lost; each token keeps its own retry
 deadline.
 
+Microsoft group auto-enrollment adds local membership only in the new JIT
+principal's creation transaction after mapped-group admission; preserve the
+disabled-group pause, no-backfill/no-re-add semantics, and transaction-captured
+enrollment and setting-change audit details.
+
 ## Build Service
 
 Rust/Cargo commands work locally with the checked-in `rust-toolchain.toml` and

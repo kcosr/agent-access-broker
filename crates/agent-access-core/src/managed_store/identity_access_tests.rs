@@ -1055,10 +1055,12 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
         let upgraded = migration_rows(&path);
         assert_eq!(upgraded[..ledger.len()], ledger[..], "{version}");
         assert_eq!(upgraded.len(), MANAGED_STORE_MIGRATIONS.len(), "{version}");
+        let identity_path_migration = upgraded.iter().find(|row|
+            row.0 == MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION).unwrap();
         assert_eq!(
             (
-                upgraded.last().unwrap().0.as_str(),
-                upgraded.last().unwrap().1.as_str()
+                identity_path_migration.0.as_str(),
+                identity_path_migration.1.as_str()
             ),
             (
                 MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION,
@@ -1137,9 +1139,8 @@ fn identity_latest_readiness_and_admission_reject_a_missing_token_row() {
     {
         let conn = store.connection.lock().unwrap();
         identity_access::check_integrity(&conn).unwrap();
-        assert!(identity_test_missing_row(
-            imported_store::validate_identity_access_path_controls_structure(&conn)
-        ));
+        let validate_latest = production_migration_catalog().latest().unwrap().structural_validation;
+        assert!(identity_test_missing_row(validate_latest(&conn)));
     }
     drop(store);
     let config = store_config(&temp.path().join("store.sqlite"));
@@ -1852,7 +1853,9 @@ fn identity_path_controls_failed_migration_restores_the_old_schema_and_ledger() 
         .unwrap();
     drop(previous);
     let ledger = migration_rows(&path);
-    let mut failing = MANAGED_STORE_MIGRATIONS.to_vec();
+    let mut failing = identity_test_catalog_through(MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION)
+        .migrations
+        .to_vec();
     failing.last_mut().unwrap().structural_validation = identity_test_rejected_validation;
     assert!(matches!(
         ManagedStore::open_with_catalog(

@@ -661,6 +661,7 @@ struct OidcBrowserFixture {
     provider: FakeMicrosoftOidcProvider,
     clock: TestClock,
     store: ManagedStore,
+    audit_path: std::path::PathBuf,
 }
 
 struct PendingBrowserLogin {
@@ -669,8 +670,18 @@ struct PendingBrowserLogin {
 }
 
 async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
+    oidc_browser_fixture_with_audit(
+        discovery_outage,
+        temp_path("microsoft-oidc-browser.audit.jsonl"),
+    )
+    .await
+}
+
+async fn oidc_browser_fixture_with_audit(
+    discovery_outage: bool,
+    audit_path: std::path::PathBuf,
+) -> OidcBrowserFixture {
     let store_path = temp_path("microsoft-oidc-browser.sqlite");
-    let audit_path = temp_path("microsoft-oidc-browser.audit.jsonl");
     let broker_hash_key_path = temp_path("microsoft-oidc-broker-hash-key");
     let csrf_key_path = temp_path("microsoft-oidc-csrf-key");
     let password_pepper_path = temp_path("microsoft-oidc-password-pepper");
@@ -744,6 +755,7 @@ async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
             group_id: "microsoft-users".to_string(),
             display_name: Some("Microsoft users".to_string()),
             description: None,
+            auto_enroll_new_microsoft_users: false,
             created_by: "test".to_string(),
         })
         .unwrap();
@@ -769,6 +781,7 @@ async fn oidc_browser_fixture(discovery_outage: bool) -> OidcBrowserFixture {
         provider,
         clock,
         store,
+        audit_path,
     }
 }
 
@@ -962,10 +975,220 @@ async fn microsoft_oidc_browser_happy_path_binds_code_pkce_nonce_cookie_and_reje
         .effective_membership_at(&principal.principal_id, &fixture.clock.now().to_rfc3339())
         .unwrap();
     assert_eq!(membership.groups, ["microsoft-users"]);
+    assert_eq!(
+        login_success_audit(&fixture, "oidc-happy-callback")["autoEnrolledGroupIds"],
+        json!([])
+    );
 
     let replay = finish_browser_login(&fixture, &pending, "oidc-replay-callback").await;
     assert_callback_error(&replay, "oidc_flow_invalid", "oidc-replay-callback");
     assert_eq!(fixture.provider.request_counts(), (1, 1, 1));
+}
+
+fn login_success_audit(fixture: &OidcBrowserFixture, request_id: &str) -> Value {
+    let records = super::read_audit_records(&fixture.audit_path);
+    let record = records
+        .iter()
+        .find(|record| {
+            record["agentRequestId"] == request_id
+                && record["action"]
+                    == crate::handlers::management::audit_actions::OIDC_LOGIN_SUCCEEDED
+        })
+        .expect("successful login audit");
+    record["providerAudit"]["oidc"].clone()
+}
+
+#[tokio::test]
+async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_memberships() {
+    let fixture = oidc_browser_fixture(false).await;
+    for group in ["baseline", "paused"] {
+        fixture
+            .store
+            .create_group(GroupWriteRequest {
+                group_id: group.into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: true,
+                created_by: "test".into(),
+            })
+            .unwrap();
+    }
+    fixture
+        .store
+        .patch_group(agent_access_core::GroupPatchRequest {
+            group_id: "paused".into(),
+            display_name: None,
+            description: None,
+            status: Some("disabled".into()),
+            auto_enroll_new_microsoft_users: None,
+            updated_by: "test".into(),
+        })
+        .unwrap();
+    fixture
+        .store
+        .patch_group(agent_access_core::GroupPatchRequest {
+            group_id: "microsoft-users".into(),
+            display_name: None,
+            description: None,
+            status: None,
+            auto_enroll_new_microsoft_users: Some(true),
+            updated_by: "test".into(),
+        })
+        .unwrap();
+    let pending = start_browser_login(&fixture, None).await;
+    let response = finish_browser_login(&fixture, &pending, "oidc-enrollment-new").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(session_cookie(&response).is_some());
+    let principal_id = fixture.store.list_principals().unwrap()[0]
+        .principal_id
+        .clone();
+    let membership = fixture
+        .store
+        .effective_membership_at(&principal_id, &fixture.clock.now().to_rfc3339())
+        .unwrap();
+    assert_eq!(membership.groups, ["baseline", "microsoft-users"]);
+    assert_eq!(
+        membership
+            .details
+            .iter()
+            .find(|group| group.group_id == "baseline")
+            .unwrap()
+            .source,
+        "local"
+    );
+    assert_eq!(
+        membership
+            .details
+            .iter()
+            .find(|group| group.group_id == "microsoft-users")
+            .unwrap()
+            .source,
+        "local_and_microsoft"
+    );
+    for group in &membership.details {
+        assert_eq!(group.local.as_ref().unwrap().added_by, "oidc-microsoft");
+    }
+    let audit = login_success_audit(&fixture, "oidc-enrollment-new");
+    assert_eq!(audit["jitCreated"], true);
+    assert_eq!(
+        audit["autoEnrolledGroupIds"],
+        json!(["baseline", "microsoft-users"])
+    );
+
+    fixture.clock.advance_seconds(8 * 60 * 60 + 1);
+    let membership = fixture
+        .store
+        .effective_membership_at(&principal_id, &fixture.clock.now().to_rfc3339())
+        .unwrap();
+    assert_eq!(membership.groups, ["baseline", "microsoft-users"]);
+    fixture
+        .store
+        .remove_group(&principal_id, "baseline")
+        .unwrap();
+    fixture
+        .store
+        .create_group(GroupWriteRequest {
+            group_id: "later-default".into(),
+            display_name: None,
+            description: None,
+            auto_enroll_new_microsoft_users: true,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    // Authoritative empty Microsoft evidence removes its contribution. New
+    // defaults and manually removed local memberships do not reappear.
+    let mut claims = FakeTokenClaims::valid(fixture.clock.now().timestamp());
+    claims.groups = FakeGroupClaims::Empty;
+    fixture.provider.set_next_claims(claims);
+    let returning = start_browser_login(&fixture, Some(&pending.binding_cookie)).await;
+    let response = finish_browser_login(&fixture, &returning, "oidc-enrollment-returning").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(session_cookie(&response).is_some());
+    let membership = fixture
+        .store
+        .effective_membership_at(&principal_id, &fixture.clock.now().to_rfc3339())
+        .unwrap();
+    assert_eq!(membership.groups, ["microsoft-users"]);
+    assert_eq!(membership.details[0].source, "local");
+    let audit = login_success_audit(&fixture, "oidc-enrollment-returning");
+    assert_eq!(audit["jitCreated"], false);
+    assert_eq!(audit["autoEnrolledGroupIds"], json!([]));
+}
+
+#[tokio::test]
+async fn microsoft_oidc_browser_audit_failure_does_not_repeat_committed_enrollment() {
+    let fixture =
+        oidc_browser_fixture_with_audit(false, temp_path("microsoft-enrollment.audit.sqlite"))
+            .await;
+    fixture
+        .store
+        .create_group(GroupWriteRequest {
+            group_id: "baseline".into(),
+            display_name: None,
+            description: None,
+            auto_enroll_new_microsoft_users: true,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    let connection = rusqlite::Connection::open(&fixture.audit_path).unwrap();
+    connection.execute_batch(&format!(
+        "CREATE TRIGGER fail_login_success_audit BEFORE INSERT ON audit_events WHEN NEW.action = '{}' BEGIN SELECT RAISE(ABORT, 'injected-audit-failure'); END;",
+        crate::handlers::management::audit_actions::OIDC_LOGIN_SUCCEEDED,
+    )).unwrap();
+    let pending = start_browser_login(&fixture, None).await;
+    let response = finish_browser_login(&fixture, &pending, "oidc-enrollment-audit-failure").await;
+    assert_callback_error(
+        &response,
+        "audit_unavailable",
+        "oidc-enrollment-audit-failure",
+    );
+    let principals = fixture.store.list_principals().unwrap();
+    assert_eq!(principals.len(), 1);
+    let principal_id = &principals[0].principal_id;
+    assert_eq!(fixture.store.group_members("baseline").unwrap().len(), 1);
+    // Administrative removal after creation is respected even though the
+    // first login never delivered a browser session cookie.
+    fixture
+        .store
+        .remove_group(principal_id, "baseline")
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER fail_login_success_audit;")
+        .unwrap();
+    fixture.clock.advance_seconds(1);
+    let returning = start_browser_login(&fixture, Some(&pending.binding_cookie)).await;
+    let response =
+        finish_browser_login(&fixture, &returning, "oidc-enrollment-after-failure").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(session_cookie(&response).is_some());
+    assert_eq!(fixture.store.list_principals().unwrap().len(), 1);
+    assert!(fixture.store.group_members("baseline").unwrap().is_empty());
+    let audit = login_success_audit(&fixture, "oidc-enrollment-after-failure");
+    assert_eq!(audit["jitCreated"], false);
+    assert_eq!(audit["autoEnrolledGroupIds"], json!([]));
+}
+
+#[tokio::test]
+async fn microsoft_oidc_browser_default_group_does_not_bypass_mapped_group_admission() {
+    let fixture = oidc_browser_fixture(false).await;
+    fixture
+        .store
+        .create_group(GroupWriteRequest {
+            group_id: "baseline".into(),
+            display_name: None,
+            description: None,
+            auto_enroll_new_microsoft_users: true,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    let mut claims = FakeTokenClaims::valid(FIXED_NOW);
+    claims.groups = FakeGroupClaims::Empty;
+    fixture.provider.set_next_claims(claims);
+    let pending = start_browser_login(&fixture, None).await;
+    let response = finish_browser_login(&fixture, &pending, "oidc-enrollment-denied").await;
+    assert_callback_error(&response, "oidc_admission_denied", "oidc-enrollment-denied");
+    assert!(fixture.store.list_principals().unwrap().is_empty());
+    assert!(fixture.store.group_members("baseline").unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
