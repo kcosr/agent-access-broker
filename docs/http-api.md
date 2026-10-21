@@ -1194,7 +1194,9 @@ The six Microsoft management operations are:
   structured login-method record. The server supplies the configured tenant.
   One Microsoft object can belong to only one broker principal, and a principal
   can have only one Microsoft login method; a conflicting link returns
-  `oidc_login_method_conflict`.
+  `oidc_login_method_conflict`. Repeating the link for the identity already
+  linked succeeds and keeps the method's renewal record, whose status the
+  response reports as the listing below does.
 - `DELETE /v1/admin/principals/{principal}/login-methods/oidc/microsoft` accepts
   no body and returns `{"unlinked":true}`. It revokes browser sessions backed
   by that login method and removes its Microsoft membership evidence and any
@@ -1223,10 +1225,11 @@ Microsoft object already linked to the principal also return
 `oidc_unavailable`.
 
 OIDC entries returned by
-`GET /v1/admin/principals/{principal}/login-methods` do not expose the internal
-encoded external subject. They contain an `oidc` projection instead, whose
-`membershipRenewal` is the method's [renewal status](#microsoft-membership-renewal),
-or `null` when it has no renewal record:
+`GET /v1/admin/principals/{principal}/login-methods` and by the Microsoft link
+do not expose the internal encoded external subject. They contain an `oidc`
+projection instead, whose `membershipRenewal` is the method's
+[renewal status](#microsoft-membership-renewal), or `null` when it has no
+renewal record:
 
 ```json
 {

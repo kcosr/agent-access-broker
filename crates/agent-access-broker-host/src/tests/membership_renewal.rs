@@ -2307,6 +2307,70 @@ async fn me_and_the_admin_listing_report_renewal_status_in_every_state() {
     assert_eq!(f.provider.refresh_arrivals(), 0);
 }
 
+/// Linking the Microsoft identity a principal already has keeps the method's
+/// renewal record, and the link response reports its status as the listing
+/// does.
+#[tokio::test]
+async fn relinking_a_linked_method_reports_its_renewal_status() {
+    let f = fixture().await;
+    let method = f.person.method.clone();
+    let admin = f.admin_token();
+    let link = |request_id: &str| {
+        f.send(
+            &f.app,
+            f.request(
+                Method::PUT,
+                &format!(
+                    "/v1/admin/principals/{}/login-methods/oidc/microsoft",
+                    f.person.principal
+                ),
+                request_id,
+            )
+            .header(AUTHORIZATION, format!("Bearer {admin}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"userObjectId": super::microsoft_oidc::USER_OBJECT_ID}).to_string(),
+            ))
+            .unwrap(),
+        )
+    };
+    for (state, assignments) in [
+        ("active", None),
+        (
+            "blocked",
+            Some(
+                "state = 'blocked', last_failure_code = 'client_rejected',
+                 last_failure_at = '2026-10-20T01:00:00Z', next_attempt_after = '2026-10-20T02:00:00Z'",
+            ),
+        ),
+    ] {
+        if let Some(assignments) = assignments {
+            f.sql(&format!(
+                "UPDATE oidc_membership_renewals SET {assignments} WHERE login_method_id = '{method}'"
+            ));
+        }
+        let record = f.renewal(&method).unwrap();
+        let expected = serde_json::to_value(record.status()).unwrap();
+        assert_eq!(expected["state"], state);
+        let response = link(&format!("renewal-relink-{state}")).await;
+        assert_eq!(response.status(), StatusCode::OK, "{state}");
+        let linked = response_json(response).await;
+        assert_eq!(linked["result"]["loginMethodId"], method.as_str(), "{state}");
+        assert_eq!(
+            linked["result"]["oidc"]["membershipRenewal"], expected,
+            "{state}"
+        );
+        assert_eq!(
+            f.admin_oidc(&admin, &format!("renewal-relink-list-{state}"))
+                .await["membershipRenewal"],
+            expected,
+            "{state}"
+        );
+        assert_eq!(f.renewal(&method).unwrap(), record, "{state}");
+    }
+    assert_eq!(f.provider.refresh_arrivals(), 0);
+}
+
 /// `GET /v1/me` passes renewal admission: with expired evidence it waits
 /// for the renewal and reports the renewed window.
 #[tokio::test]

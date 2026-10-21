@@ -2097,20 +2097,22 @@ pub(crate) async fn admin_principal_microsoft_oidc_link(
     }
     let actor = context.identity.principal.clone();
     match management_store_call(&context, move |store| {
-        store.link_oidc_login_method(OidcLoginMethodLinkRequest {
+        let method = store.link_oidc_login_method(OidcLoginMethodLinkRequest {
             principal_id: principal,
             user_object_id: body.user_object_id,
             actor,
-        })
+        })?;
+        // Linking an identity that is already linked keeps its renewal row.
+        let renewal = store.oidc_membership_renewal(&method.login_method_id)?;
+        Ok((method, renewal))
     })
     .await
     {
-        Ok(method) => management_pre_audited_success_response(
+        Ok((method, renewal)) => management_pre_audited_success_response(
             &context,
             operation,
             target,
-            // A newly linked method has no renewal row yet.
-            login_method_projection(method, None),
+            login_method_projection(method, renewal),
         ),
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
