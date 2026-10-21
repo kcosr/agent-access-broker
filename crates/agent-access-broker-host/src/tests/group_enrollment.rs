@@ -484,3 +484,138 @@ async fn group_enrollment_mutation_owner_completes_audit_after_waiter_cancellati
     .unwrap();
     assert_change(&fixture, "enrollment-cancelled", false, true);
 }
+
+#[tokio::test]
+async fn group_enrollment_toml_projection_is_false_and_flag_writes_are_rejected() {
+    let token_path = temp_path("group-enrollment-toml-admin-token");
+    let store_path = temp_path("group-enrollment-toml-store.sqlite");
+    let audit_path = temp_path("group-enrollment-toml.audit.sqlite");
+    std::fs::write(&token_path, "synthetic-admin-token").unwrap();
+    let mut config = fake_config(audit_path.to_str().unwrap());
+    config.identity = IdentityConfig {
+        trusted_callers: Default::default(),
+        mode: "required".into(),
+        authority: "toml".into(),
+        sources: vec![IdentitySourceConfig {
+            name: "admin".into(),
+            kind: "static_principals".into(),
+            header: "Authorization".into(),
+            scheme: "Bearer".into(),
+            principals: vec![StaticPrincipalConfig {
+                principal: "admin".into(),
+                token_refs: vec![format!("file:{}", token_path.display())],
+            }],
+        }],
+        groups: vec![IdentityGroupConfig {
+            id: "onboarding".into(),
+            status: "active".into(),
+            members: vec!["admin".into()],
+        }],
+    };
+    config.management = agent_access_core::ManagementConfig {
+        enabled: true,
+        admin_principals: vec!["admin".into()],
+        allow_classless_admin_identities: true,
+        ..Default::default()
+    };
+    config.managed_store = Some(agent_access_core::ManagedStoreConfig {
+        kind: "sqlite".into(),
+        path: store_path.display().to_string(),
+        require_registered_principal_for_invocation: false,
+        auto_migrate: true,
+    });
+    let broker = TestBroker::start_config(&config).await;
+    let snapshot = broker.state().current();
+    let store = snapshot.runtime.managed_store().unwrap();
+    store
+        .create_group(GroupWriteRequest {
+            group_id: "onboarding".into(),
+            display_name: None,
+            description: None,
+            auto_enroll_new_microsoft_users: false,
+            created_by: "test".into(),
+        })
+        .unwrap();
+    for (path, is_list) in [
+        ("/v1/admin/groups", true),
+        ("/v1/admin/groups/onboarding", false),
+    ] {
+        let response = authed_json_request(
+            broker.app(),
+            Method::GET,
+            path,
+            "enrollment-toml-read",
+            "Authorization",
+            "Bearer synthetic-admin-token",
+            None,
+        )
+        .await;
+        let status = response.status();
+        let response = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        let group = if is_list {
+            assert_eq!(response["result"].as_array().unwrap().len(), 1);
+            &response["result"][0]
+        } else {
+            &response["result"]
+        };
+        assert_eq!(group["groupId"], "onboarding");
+        assert_eq!(group["autoEnrollNewMicrosoftUsers"], false);
+        assert_eq!(group["memberCount"], 1, "project the TOML membership");
+    }
+    for (method, path, body, request_id, group_id) in [
+        (
+            Method::POST,
+            "/v1/admin/groups",
+            r#"{"groupId":"new-default","autoEnrollNewMicrosoftUsers":true}"#,
+            "enrollment-toml-create",
+            "new-default",
+        ),
+        (
+            Method::PATCH,
+            "/v1/admin/groups/onboarding",
+            r#"{"autoEnrollNewMicrosoftUsers":true}"#,
+            "enrollment-toml-patch",
+            "onboarding",
+        ),
+    ] {
+        let response = authed_json_request(
+            broker.app(),
+            method,
+            path,
+            request_id,
+            "Authorization",
+            "Bearer synthetic-admin-token",
+            Some(body),
+        )
+        .await;
+        let status = response.status();
+        let response = response_json(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+        assert_eq!(response["reasonCode"], "input_invalid");
+        let audit: Vec<_> = read_audit_records(&audit_path)
+            .into_iter()
+            .filter(|record| record["agentRequestId"] == request_id)
+            .collect();
+        let preflight = audit
+            .iter()
+            .find(|record| record["providerAudit"]["management"]["phase"] == "preflight")
+            .expect("attempted change retains mandatory preflight");
+        assert_eq!(
+            preflight["providerAudit"]["management"]["target"],
+            json!({"group":group_id,"autoEnrollNewMicrosoftUsers":true})
+        );
+        assert!(
+            audit
+                .iter()
+                .all(|record| { record["providerAudit"]["management"]["phase"] != "success" })
+        );
+    }
+    assert!(store.group("new-default").is_err());
+    assert!(
+        !store
+            .group("onboarding")
+            .unwrap()
+            .auto_enroll_new_microsoft_users
+    );
+}

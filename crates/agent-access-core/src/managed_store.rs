@@ -567,6 +567,8 @@ pub struct ManagedStore {
     schema_checksum: String,
     latest_migration_checksum: String,
     applied_migrations_this_open: Arc<BTreeSet<String>>,
+    #[cfg(test)]
+    oidc_completion_transaction_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl std::fmt::Debug for ManagedStore {
@@ -659,6 +661,8 @@ impl ManagedStore {
             schema_checksum,
             latest_migration_checksum,
             applied_migrations_this_open: Arc::new(applied_migrations_this_open),
+            #[cfg(test)]
+            oidc_completion_transaction_hook: None,
         };
         restrict_sqlite_files(store.path())?;
         Ok(store)
@@ -2925,6 +2929,10 @@ impl ManagedStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
+        #[cfg(test)]
+        if let Some(hook) = &self.oidc_completion_transaction_hook {
+            hook();
+        }
         let provider = require_oidc_provider_generation(&tx, request.provider_generation)?;
         if !advance_oidc_subject_watermark_tx(
             &tx,
@@ -9867,11 +9875,12 @@ mod tests {
         assert_eq!(rows[12].0, MANAGED_STORE_TRUSTED_USER_IDENTITY_VERSION);
         assert_eq!(rows[13].0, MANAGED_STORE_COMMAND_IMPORTS_VERSION);
         assert_eq!(rows[14].0, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION);
-        assert_eq!(rows[15].0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(
             rows[15].0,
             MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION
         );
+        assert_eq!(rows[16].0, MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION);
+        assert_eq!(rows.last().unwrap().0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
         for table in ["resources", "resource_groups", "resource_group_members"] {

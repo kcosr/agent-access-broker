@@ -249,6 +249,117 @@ fn group_auto_enrollment_serializes_with_a_pending_admin_setting_change() {
 }
 
 #[test]
+fn group_auto_enrollment_creation_precedes_a_waiting_admin_setting_change() {
+    use std::cell::RefCell;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    thread_local! {
+        static ENROLLMENT_ADMIN_WRITE_WAIT: RefCell<Option<(Sender<()>, Receiver<()>)>> = const { RefCell::new(None) };
+    }
+    for initially_enabled in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let config = store_config(&temp.path().join("store.sqlite"));
+        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let provider = enrollment_fixture(&store);
+        store
+            .create_group(enrollment_group_request("default", initially_enabled))
+            .unwrap();
+        let admin_store = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+
+        let (began, transaction_started) = channel();
+        let (finish_completion, completion_may_finish) = channel();
+        let completion_may_finish = Mutex::new(completion_may_finish);
+        let mut completion_store = store.clone();
+        completion_store.oidc_completion_transaction_hook = Some(Arc::new(move || {
+            began.send(()).unwrap();
+            completion_may_finish
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+        }));
+        let completion = thread::spawn(move || {
+            completion_store.complete_oidc_login(
+                &broker_token_hasher_for_test(81),
+                test_oidc_completion_request(
+                    1,
+                    provider.config_generation,
+                    TEST_OIDC_USER,
+                    "new-user",
+                    &[TEST_EXTERNAL_GROUP_A],
+                    &normalized_now_string(),
+                ),
+            )
+        });
+        // The production completion path now owns BEGIN IMMEDIATE. Start the
+        // actual admin mutation only after that lock is known to be held.
+        transaction_started
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        let (blocked, admin_is_waiting) = channel();
+        let (resume_admin, admin_may_continue) = channel();
+        let admin = thread::spawn(move || {
+            ENROLLMENT_ADMIN_WRITE_WAIT
+                .with(|slot| *slot.borrow_mut() = Some((blocked, admin_may_continue)));
+            admin_store
+                .connection
+                .lock()
+                .unwrap()
+                .busy_handler(Some(|_| {
+                    ENROLLMENT_ADMIN_WRITE_WAIT.with(|slot| {
+                        let Some((blocked, released)) = slot.borrow_mut().take() else {
+                            return false;
+                        };
+                        blocked.send(()).is_ok()
+                            && released
+                                .recv_timeout(std::time::Duration::from_secs(10))
+                                .is_ok()
+                    })
+                }))
+                .unwrap();
+            admin_store.patch_group_with_effect(enrollment_group_patch(
+                "default",
+                Some(!initially_enabled),
+            ))
+        });
+        admin_is_waiting
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        finish_completion.send(()).unwrap();
+        let result = enrollment_succeeded(completion.join().unwrap().unwrap(), true);
+        resume_admin.send(()).unwrap();
+        let changed = admin.join().unwrap().unwrap();
+
+        let expected: Vec<&str> = if initially_enabled {
+            vec!["default"]
+        } else {
+            vec![]
+        };
+        assert_eq!(result.auto_enrolled_group_ids, expected);
+        assert_eq!(
+            changed.auto_enrollment_change,
+            Some(GroupAutoEnrollmentChange {
+                previous: initially_enabled,
+                current: !initially_enabled,
+            })
+        );
+        assert_eq!(
+            changed.group.auto_enroll_new_microsoft_users,
+            !initially_enabled
+        );
+        assert_eq!(
+            store.group_members("default").unwrap().len(),
+            usize::from(initially_enabled)
+        );
+        assert!(
+            store
+                .groups("new-user")
+                .unwrap()
+                .contains(&"mapped".to_string())
+        );
+    }
+}
+
+#[test]
 fn group_auto_enrollment_migration_defaults_existing_groups_to_false_and_preserves_state() {
     for version in [MANAGED_STORE_COMMAND_IMPORTS_VERSION, MANAGED_STORE_OAUTH_REVOCATIONS_VERSION,
         MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION] {

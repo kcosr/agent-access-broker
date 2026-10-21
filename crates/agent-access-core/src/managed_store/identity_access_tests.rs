@@ -1139,9 +1139,8 @@ fn identity_latest_readiness_and_admission_reject_a_missing_token_row() {
     {
         let conn = store.connection.lock().unwrap();
         identity_access::check_integrity(&conn).unwrap();
-        assert!(identity_test_missing_row(
-            imported_store::validate_identity_access_path_controls_structure(&conn)
-        ));
+        let validate_latest = production_migration_catalog().latest().unwrap().structural_validation;
+        assert!(identity_test_missing_row(validate_latest(&conn)));
     }
     drop(store);
     let config = store_config(&temp.path().join("store.sqlite"));
@@ -1854,7 +1853,9 @@ fn identity_path_controls_failed_migration_restores_the_old_schema_and_ledger() 
         .unwrap();
     drop(previous);
     let ledger = migration_rows(&path);
-    let mut failing = MANAGED_STORE_MIGRATIONS.to_vec();
+    let mut failing = identity_test_catalog_through(MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION)
+        .migrations
+        .to_vec();
     failing.last_mut().unwrap().structural_validation = identity_test_rejected_validation;
     assert!(matches!(
         ManagedStore::open_with_catalog(
