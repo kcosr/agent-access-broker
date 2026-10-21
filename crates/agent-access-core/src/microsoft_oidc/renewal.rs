@@ -299,22 +299,17 @@ pub fn classify_token_endpoint_response(
     let Some(status) = status else {
         return (TokenEndpointClass::Unavailable, diagnostics);
     };
-    if status == 429 {
-        return (TokenEndpointClass::Throttled, diagnostics);
-    }
-    if (500..=599).contains(&status) {
-        return (TokenEndpointClass::Unavailable, diagnostics);
-    }
     let body = match body {
         TokenEndpointBody::Complete(body) => Some(body),
         TokenEndpointBody::Failed | TokenEndpointBody::Oversized => None,
     };
-    if status == 200 {
-        let tokens = body
-            .as_deref()
+    let object = || {
+        body.as_deref()
             .and_then(|body| serde_json::from_slice::<Value>(body).ok())
             .filter(Value::is_object)
-            .and_then(|body| serde_json::from_value::<TokenFields>(body).ok());
+    };
+    if status == 200 {
+        let tokens = object().and_then(|body| serde_json::from_value::<TokenFields>(body).ok());
         return match tokens {
             Some(tokens) => (
                 TokenEndpointClass::Issued(RefreshedTokens {
@@ -327,14 +322,9 @@ pub fn classify_token_endpoint_response(
             None => (TokenEndpointClass::InvalidResponse, diagnostics),
         };
     }
-    if !(400..=499).contains(&status) {
-        return (TokenEndpointClass::InvalidResponse, diagnostics);
-    }
-    let fields = body
-        .as_deref()
-        .and_then(|body| serde_json::from_slice::<Value>(body).ok())
-        .filter(Value::is_object)
-        .and_then(|body| serde_json::from_value::<ErrorFields>(body).ok());
+    // Every other complete JSON body contributes its sanitized diagnostics,
+    // whatever the status; only a 4xx is classified by its `error`.
+    let fields = object().and_then(|body| serde_json::from_value::<ErrorFields>(body).ok());
     let error = fields.as_ref().and_then(|fields| fields.error.as_deref());
     diagnostics.error = error.map(logged_error);
     diagnostics.error_codes = fields
@@ -348,13 +338,21 @@ pub fn classify_token_endpoint_response(
                 .collect()
         })
         .unwrap_or_default();
-    let class = match error {
-        Some("server_error" | "temporarily_unavailable") => TokenEndpointClass::Unavailable,
-        Some("invalid_grant" | "interaction_required" | "consent_required" | "login_required") => {
-            TokenEndpointClass::SignInRequired
+    let class = if status == 429 {
+        TokenEndpointClass::Throttled
+    } else if (500..=599).contains(&status) {
+        TokenEndpointClass::Unavailable
+    } else if !(400..=499).contains(&status) {
+        TokenEndpointClass::InvalidResponse
+    } else {
+        match error {
+            Some("server_error" | "temporarily_unavailable") => TokenEndpointClass::Unavailable,
+            Some(
+                "invalid_grant" | "interaction_required" | "consent_required" | "login_required",
+            ) => TokenEndpointClass::SignInRequired,
+            Some("invalid_client" | "unauthorized_client") => TokenEndpointClass::ClientRejected,
+            _ => TokenEndpointClass::RequestRejected,
         }
-        Some("invalid_client" | "unauthorized_client") => TokenEndpointClass::ClientRejected,
-        _ => TokenEndpointClass::RequestRejected,
     };
     (class, diagnostics)
 }

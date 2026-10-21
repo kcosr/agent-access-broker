@@ -2011,6 +2011,18 @@ async fn renewal_logs_and_audit_never_carry_tokens_or_microsoft_text() {
             )),
         ),
         (
+            "renewal-sentinel-throttled",
+            Some(status(
+                429,
+                Some("5".into()),
+                error_body("temporarily_unavailable"),
+            )),
+        ),
+        (
+            "renewal-sentinel-server",
+            Some(status(503, None, error_body("server_error"))),
+        ),
+        (
             "renewal-sentinel-grant",
             Some(status(400, None, error_body("invalid_grant"))),
         ),
@@ -2039,10 +2051,25 @@ async fn renewal_logs_and_audit_never_carry_tokens_or_microsoft_text() {
     assert_eq!(renewed["evidence"], "replaced");
     assert_eq!(renewed["httpStatus"], 200);
     assert_eq!(renewed["loginMethodId"], method.as_str());
-    let unavailable = by_outcome("unavailable");
+    let unavailable = renewals
+        .iter()
+        .find(|event| event["httpStatus"] == 500)
+        .unwrap();
+    assert_eq!(unavailable["classification"], "unavailable");
     assert_eq!(unavailable["level"], "WARN");
-    assert_eq!(unavailable["httpStatus"], 500);
     assert_eq!(unavailable["error"], "");
+    // A 429 and a 5xx keep Microsoft's sanitized error and codes.
+    let throttled = by_outcome("throttled");
+    assert_eq!(throttled["httpStatus"], 429);
+    assert_eq!(throttled["error"], "temporarily_unavailable");
+    assert_eq!(throttled["errorCodes"], "[70008, 50173]");
+    let server = renewals
+        .iter()
+        .find(|event| event["httpStatus"] == 503)
+        .unwrap();
+    assert_eq!(server["classification"], "unavailable");
+    assert_eq!(server["error"], "server_error");
+    assert_eq!(server["errorCodes"], "[70008, 50173]");
     let rejected = by_outcome("request_rejected");
     assert_eq!(rejected["error"], "other");
     assert_eq!(rejected["errorCodes"], "[1, 2, 3, 4, 5, 6, 7, 8]");

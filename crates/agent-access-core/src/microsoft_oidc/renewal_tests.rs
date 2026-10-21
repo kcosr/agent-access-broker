@@ -329,6 +329,52 @@ fn diagnostics_keep_an_allowlisted_error_and_eight_numeric_codes() {
         ));
         assert_eq!(diagnostics.error, Some(*allowed));
     }
+    // A 429, a 5xx or any other non-200 status keeps the sanitized
+    // diagnostics of a complete JSON body without changing its class; a
+    // truncated, oversized or non-JSON body has none.
+    for (status, expected) in [
+        (429, "throttled"),
+        (503, "unavailable"),
+        (500, "unavailable"),
+        (302, "invalid_response"),
+    ] {
+        let (class, diagnostics) = classify_token_endpoint_response(response(
+            status,
+            Some("30"),
+            json_body(json!({
+                "error": "invalid_grant",
+                "error_description": DESCRIPTION_SENTINEL,
+                "error_codes": [50196, "x", 9, 10, 11, 12, 13, 14, 15, 16],
+            })),
+        ));
+        assert_eq!(class_name(&class), expected, "{status}");
+        assert_eq!(diagnostics.status, Some(status));
+        assert_eq!(diagnostics.retry_after, Some(RetryAfter::Seconds(30)));
+        assert_eq!(diagnostics.error, Some("invalid_grant"), "{status}");
+        assert_eq!(
+            diagnostics.error_codes,
+            [50196, 9, 10, 11, 12, 13, 14, 15],
+            "{status}"
+        );
+        let (_, other) = classify_token_endpoint_response(response(
+            status,
+            None,
+            json_body(json!({"error": "temporarily_overloaded", "error_codes": [1]})),
+        ));
+        assert_eq!(other.error, Some("other"), "{status}");
+        assert_eq!(other.error_codes, [1], "{status}");
+        for body in [
+            TokenEndpointBody::Failed,
+            TokenEndpointBody::Oversized,
+            TokenEndpointBody::Complete(b"<html>busy</html>".to_vec()),
+        ] {
+            let (class, diagnostics) =
+                classify_token_endpoint_response(response(status, None, body));
+            assert_eq!(class_name(&class), expected, "{status}");
+            assert_eq!(diagnostics.error, None, "{status}");
+            assert!(diagnostics.error_codes.is_empty(), "{status}");
+        }
+    }
     // A 200 never reports error fields.
     let (_, success) = classify_token_endpoint_response(response(
         200,
