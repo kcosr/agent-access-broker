@@ -22,6 +22,7 @@ chrono.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
 http.workspace = true
+httpdate = "1.0.3"
 jsonschema.workspace = true
 libc.workspace = true
 openidconnect.workspace = true

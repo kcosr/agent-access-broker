@@ -9,7 +9,6 @@
 use super::*;
 use crate::OidcRenewalReference;
 use bytes::Bytes;
-use chrono::NaiveDateTime;
 use http::HeaderValue;
 use http::header::RETRY_AFTER;
 
@@ -35,12 +34,13 @@ pub const MEMBERSHIP_RENEWAL_MIN_BACKOFF_SECONDS: i64 = 30;
 pub const MEMBERSHIP_RENEWAL_MAX_BACKOFF_SECONDS: i64 = 15 * 60;
 /// How long a blocked renewal waits before it tries again.
 pub const MEMBERSHIP_RENEWAL_BLOCKED_RETRY_SECONDS: i64 = 60 * 60;
-/// The longest `Retry-After` honoured as given; a longer one is clamped so
-/// that time arithmetic cannot overflow.
+/// The longest `Retry-After` honoured as given, as seconds or a date; a
+/// longer one is clamped so that time arithmetic cannot overflow.
 const MAX_RETRY_AFTER_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
 
 /// When a token endpoint asked to be retried: a number of seconds, or an
-/// HTTP-date (IMF-fixdate).
+/// HTTP-date in any of the three formats RFC 9110 §5.6.7 has recipients
+/// accept (IMF-fixdate, RFC 850 and asctime).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryAfter {
     Seconds(u64),
@@ -59,18 +59,20 @@ impl RetryAfter {
                     .min(MAX_RETRY_AFTER_SECONDS),
             ));
         }
-        NaiveDateTime::parse_from_str(value, "%a, %d %b %Y %H:%M:%S GMT")
+        httpdate::parse_http_date(value)
             .ok()
-            .map(|at| Self::At(at.and_utc()))
+            .map(|at| Self::At(DateTime::<Utc>::from(at)))
     }
 
-    /// The earliest time it allows a retry, never before `now`.
+    /// The earliest time it allows a retry, never before `now` and at most
+    /// ten years after it.
     pub fn not_before(self, now: DateTime<Utc>) -> DateTime<Utc> {
+        let latest = now + ChronoDuration::seconds(MAX_RETRY_AFTER_SECONDS as i64);
         match self {
             Self::Seconds(seconds) => {
                 now + ChronoDuration::seconds(seconds.min(MAX_RETRY_AFTER_SECONDS) as i64)
             }
-            Self::At(at) => at.max(now),
+            Self::At(at) => at.clamp(now, latest),
         }
     }
 }

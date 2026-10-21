@@ -37,33 +37,58 @@ fn class_name(class: &TokenEndpointClass) -> &'static str {
 }
 
 #[test]
-fn retry_after_accepts_seconds_and_imf_fixdate_and_is_a_floor() {
+fn retry_after_accepts_seconds_and_every_http_date_format_and_is_a_floor() {
     let now = at(1_800_000_000);
     let seconds = RetryAfter::parse(&HeaderValue::from_static("120")).unwrap();
     assert_eq!(seconds, RetryAfter::Seconds(120));
     assert_eq!(seconds.not_before(now), at(1_800_000_120));
-    let date = RetryAfter::parse(&HeaderValue::from_static("Fri, 15 Jan 2027 08:00:30 GMT"));
     let expected = Utc
         .with_ymd_and_hms(2027, 1, 15, 8, 0, 30)
         .single()
         .unwrap();
-    assert_eq!(date, Some(RetryAfter::At(expected)));
+    // IMF-fixdate, RFC 850 and asctime (RFC 9110 §5.6.7).
+    for date in [
+        "Fri, 15 Jan 2027 08:00:30 GMT",
+        "Friday, 15-Jan-27 08:00:30 GMT",
+        "Fri Jan 15 08:00:30 2027",
+    ] {
+        assert_eq!(
+            RetryAfter::parse(&HeaderValue::from_static(date)),
+            Some(RetryAfter::At(expected)),
+            "{date}"
+        );
+    }
     // A date in the past allows a retry now, never earlier.
     assert_eq!(
         RetryAfter::At(at(1_700_000_000)).not_before(now),
         now,
         "a past date is not before now"
     );
-    for unusable in ["", "-5", "1.5", "soon", "Sunday, 15-Jan-27 08:00:30 GMT"] {
+    // A weekday that does not match its date, a zone other than GMT and
+    // other text are unusable.
+    for unusable in [
+        "",
+        "-5",
+        "1.5",
+        "soon",
+        "Sunday, 15-Jan-27 08:00:30 GMT",
+        "Sun, 15 Jan 2027 08:00:30 GMT",
+        "Fri, 15 Jan 2027 08:00:30 UTC",
+    ] {
         assert_eq!(
             RetryAfter::parse(&HeaderValue::from_str(unusable).unwrap()),
             None,
             "{unusable:?}"
         );
     }
-    // An absurd value is clamped instead of overflowing.
+    // An absurd value, as seconds or a date, is clamped to ten years
+    // instead of overflowing.
+    let ten_years = now + ChronoDuration::seconds(10 * 365 * 24 * 60 * 60);
     let huge = RetryAfter::parse(&HeaderValue::from_static("99999999999999999999")).unwrap();
-    assert!(huge.not_before(now) > now + ChronoDuration::days(3000));
+    assert_eq!(huge.not_before(now), ten_years);
+    let far =
+        RetryAfter::parse(&HeaderValue::from_static("Fri, 31 Dec 9999 23:59:59 GMT")).unwrap();
+    assert_eq!(far.not_before(now), ten_years);
 }
 
 #[tokio::test]

@@ -52,6 +52,8 @@ pub(crate) const RENEWAL_WAIT: Duration = Duration::from_secs(15);
 const MAX_CONCURRENT_REDEMPTIONS: usize = 8;
 /// At most this many waiting flights queue for a permit.
 const MAX_QUEUED_FLIGHTS: usize = 256;
+/// A full queue is logged at most this often.
+const QUEUE_FULL_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 
 tokio::task_local! {
     static REQUEST_RENEWAL: Arc<RenewalContext>;
@@ -283,6 +285,8 @@ pub(crate) struct MembershipRenewals {
     permits: Arc<Semaphore>,
     queued: AtomicUsize,
     throttled_until: Mutex<Option<DateTime<Utc>>>,
+    /// When a full queue was last logged.
+    queue_full_warned: Mutex<Option<Instant>>,
     tracker: TaskTracker,
     closed: AtomicBool,
     #[cfg(test)]
@@ -305,6 +309,7 @@ impl MembershipRenewals {
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REDEMPTIONS)),
             queued: AtomicUsize::new(0),
             throttled_until: Mutex::new(None),
+            queue_full_warned: Mutex::new(None),
             tracker: TaskTracker::new(),
             closed: AtomicBool::new(false),
             #[cfg(test)]
@@ -328,10 +333,30 @@ impl MembershipRenewals {
     }
 
     /// Raises the provider throttle to `until`; a later, shorter value never
-    /// shortens it.
-    fn record_throttle(&self, until: DateTime<Utc>) {
+    /// shortens it. Returns whether it activated or extended the throttle.
+    fn record_throttle(&self, until: DateTime<Utc>) -> bool {
         let mut throttled_until = self.throttled_until.lock().unwrap();
-        *throttled_until = Some(throttled_until.map_or(until, |current| current.max(until)));
+        if throttled_until.is_some_and(|current| current >= until) {
+            return false;
+        }
+        *throttled_until = Some(until);
+        true
+    }
+
+    /// Logs a full queue at most once a minute: every waiting request meets
+    /// it while it lasts.
+    fn warn_queue_full(&self) {
+        let mut warned = self.queue_full_warned.lock().unwrap();
+        if warned.is_some_and(|at| at.elapsed() < QUEUE_FULL_WARNING_INTERVAL) {
+            return;
+        }
+        *warned = Some(Instant::now());
+        tracing::warn!(
+            event = "oidc_membership_renewal_queue_full",
+            maxQueuedFlights = MAX_QUEUED_FLIGHTS,
+            maxConcurrentRedemptions = MAX_CONCURRENT_REDEMPTIONS,
+            "Microsoft membership renewals are at capacity; requests with expired evidence proceed without renewal"
+        );
     }
 
     #[cfg(test)]
@@ -403,6 +428,9 @@ impl MembershipRenewals {
                             Some(flight)
                         }
                         None => {
+                            if deadline.is_some() {
+                                self.warn_queue_full();
+                            }
                             log_skipped(&hint.login_method_id, trigger, "capacity");
                             None
                         }
@@ -674,10 +702,16 @@ impl MembershipRenewals {
         let response = provider.http_client().token_request(request).await;
         let (class, diagnostics) = classify_token_endpoint_response(response);
         if diagnostics.status == Some(429) {
-            self.record_throttle(microsoft_oidc_throttle_until(
-                diagnostics.retry_after,
-                provider.clock().now(),
-            ));
+            let until =
+                microsoft_oidc_throttle_until(diagnostics.retry_after, provider.clock().now());
+            if self.record_throttle(until) {
+                tracing::warn!(
+                    event = "oidc_membership_renewal_throttled",
+                    throttledUntil = timestamp(until).as_str(),
+                    retryAfterUsable = diagnostics.retry_after.is_some(),
+                    "Microsoft throttled membership renewal; no renewal starts until then"
+                );
+            }
         }
         redemption.diagnostics = diagnostics;
         redemption.classification = match class {
@@ -872,8 +906,8 @@ fn failure_reason(classification: MembershipRenewalClassification) -> ReasonCode
         MembershipRenewalClassification::ClientRejected => ReasonCode::OidcClientRejected,
         MembershipRenewalClassification::IdentityMismatch
         | MembershipRenewalClassification::InvalidResponse => ReasonCode::OidcIdentityInvalid,
-        MembershipRenewalClassification::RequestRejected
-        | MembershipRenewalClassification::Throttled
+        MembershipRenewalClassification::RequestRejected => ReasonCode::OidcProviderDenied,
+        MembershipRenewalClassification::Throttled
         | MembershipRenewalClassification::Unavailable
         | MembershipRenewalClassification::Renewed => ReasonCode::OidcUnavailable,
     }
@@ -883,21 +917,12 @@ fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Logs a renewal that did not start. A row still in its backoff is
-/// reported only at debug level: every request inside the window meets it.
+/// Logs, at debug level, a request's renewal that did not start: every
+/// request inside the window meets an active throttle, a full capacity or a
+/// backoff while it lasts. Throttle activation and a full queue have their
+/// own warnings.
 fn log_skipped(login_method_id: &str, trigger: Trigger, reason: &'static str) {
-    if reason == "not_due" {
-        tracing::debug!(
-            event = "oidc_membership_renewal",
-            loginMethodId = login_method_id,
-            trigger = trigger.as_str(),
-            outcome = "skipped",
-            reason = reason,
-            "Microsoft membership renewal skipped"
-        );
-        return;
-    }
-    tracing::info!(
+    tracing::debug!(
         event = "oidc_membership_renewal",
         loginMethodId = login_method_id,
         trigger = trigger.as_str(),
@@ -914,15 +939,29 @@ async fn report(flight: &Flight, end: FlightEnd, started: Instant) {
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let (attempt, outcome) = match &end {
         FlightEnd::Skipped(reason) => {
-            tracing::info!(
-                event = "oidc_membership_renewal",
-                loginMethodId = flight.login_method_id.as_str(),
-                trigger = flight.trigger.as_str(),
-                outcome = "skipped",
-                reason = *reason,
-                durationMs = duration_ms,
-                "Microsoft membership renewal skipped"
-            );
+            // An unavailable audit or managed store is an operational
+            // problem; the other reasons are ordinary.
+            if matches!(*reason, "audit_unavailable" | "store_unavailable") {
+                tracing::warn!(
+                    event = "oidc_membership_renewal",
+                    loginMethodId = flight.login_method_id.as_str(),
+                    trigger = flight.trigger.as_str(),
+                    outcome = "skipped",
+                    reason = *reason,
+                    durationMs = duration_ms,
+                    "Microsoft membership renewal skipped"
+                );
+            } else {
+                tracing::debug!(
+                    event = "oidc_membership_renewal",
+                    loginMethodId = flight.login_method_id.as_str(),
+                    trigger = flight.trigger.as_str(),
+                    outcome = "skipped",
+                    reason = *reason,
+                    durationMs = duration_ms,
+                    "Microsoft membership renewal skipped"
+                );
+            }
             return;
         }
         FlightEnd::Superseded(attempt) => (attempt, "superseded"),
@@ -963,7 +1002,8 @@ async fn report(flight: &Flight, end: FlightEnd, started: Instant) {
         };
     }
     match outcome {
-        "renewed" | "superseded" => renewal_event!(info, "Microsoft membership renewal ended"),
+        "renewed" => renewal_event!(info, "Microsoft membership renewal ended"),
+        "superseded" => renewal_event!(debug, "Microsoft membership renewal superseded"),
         "write_failed" => {
             renewal_event!(error, "Microsoft membership renewal could not be recorded")
         }
@@ -1074,12 +1114,13 @@ mod tests {
     fn the_provider_throttle_only_grows() {
         let registry = MembershipRenewals::new();
         assert!(!registry.throttle_active(at(0)));
-        registry.record_throttle(at(300));
-        registry.record_throttle(at(10));
+        assert!(registry.record_throttle(at(300)), "activated");
+        assert!(!registry.record_throttle(at(10)), "never shortened");
+        assert!(!registry.record_throttle(at(300)), "unchanged");
         assert_eq!(registry.throttled_until(), Some(at(300)));
         assert!(registry.throttle_active(at(299)));
         assert!(!registry.throttle_active(at(300)));
-        registry.record_throttle(at(400));
+        assert!(registry.record_throttle(at(400)), "extended");
         assert_eq!(registry.throttled_until(), Some(at(400)));
     }
 
@@ -1109,6 +1150,29 @@ mod tests {
     }
 
     #[test]
+    fn a_full_queue_warns_at_most_once_a_minute() {
+        let captured = agent_access_provider::test_support::install_trace_capture().start();
+        let registry = MembershipRenewals::new();
+        captured.in_scope(|| {
+            registry.warn_queue_full();
+            registry.warn_queue_full();
+        });
+        let warnings = |events: Vec<serde_json::Value>| {
+            events
+                .into_iter()
+                .filter(|event| event["event"] == "oidc_membership_renewal_queue_full")
+                .map(|event| event["level"].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(warnings(captured.take_events()), ["WARN"]);
+        // A minute later it warns again.
+        *registry.queue_full_warned.lock().unwrap() =
+            Some(Instant::now() - QUEUE_FULL_WARNING_INTERVAL);
+        captured.in_scope(|| registry.warn_queue_full());
+        assert_eq!(warnings(captured.take_events()), ["WARN"]);
+    }
+
+    #[test]
     fn start_refusals_cover_shutdown_throttle_and_backoff() {
         let registry = MembershipRenewals::new();
         let mut hint = MembershipRenewalHint {
@@ -1121,7 +1185,7 @@ mod tests {
         assert_eq!(registry.start_refusal(&hint, at(0)), Some("not_due"));
         assert_eq!(registry.start_refusal(&hint, at(60)), None);
         hint.next_attempt_after = None;
-        registry.record_throttle(at(30));
+        assert!(registry.record_throttle(at(30)));
         assert_eq!(registry.start_refusal(&hint, at(0)), Some("throttled"));
         assert_eq!(registry.start_refusal(&hint, at(30)), None);
         registry.close();
@@ -1158,7 +1222,7 @@ mod tests {
             (C::ClientRejected, ReasonCode::OidcClientRejected),
             (C::IdentityMismatch, ReasonCode::OidcIdentityInvalid),
             (C::InvalidResponse, ReasonCode::OidcIdentityInvalid),
-            (C::RequestRejected, ReasonCode::OidcUnavailable),
+            (C::RequestRejected, ReasonCode::OidcProviderDenied),
             (C::Throttled, ReasonCode::OidcUnavailable),
             (C::Unavailable, ReasonCode::OidcUnavailable),
         ] {

@@ -979,6 +979,7 @@ async fn attempts_keep_their_interval_across_reload_and_sign_in() {
 /// one never shortens it, and no flight starts while it lasts.
 #[tokio::test]
 async fn concurrent_throttles_never_shorten_the_provider_throttle() {
+    let captured = super::install_trace_capture().start();
     let f = fixture().await;
     let mut claims = FakeTokenClaims::valid(f.clock.now_timestamp());
     claims.user_object_id = OTHER_USER_OBJECT_ID.to_string();
@@ -997,11 +998,12 @@ async fn concurrent_throttles_never_shorten_the_provider_throttle() {
     f.provider
         .push_refresh(status(429, Some("10".into()), FakeBody::Failed));
     assert_eq!(
-        f.invoke("renewal-throttle-a").await.status(),
+        captured.run(f.invoke("renewal-throttle-a")).await.status(),
         StatusCode::OK
     );
     assert_eq!(
-        f.invoke_with(&Fixture::bearer(&other), "renewal-throttle-b")
+        captured
+            .run(f.invoke_with(&Fixture::bearer(&other), "renewal-throttle-b"))
             .await
             .status(),
         StatusCode::OK
@@ -1027,6 +1029,18 @@ async fn concurrent_throttles_never_shorten_the_provider_throttle() {
     assert_eq!(
         registry.throttled_until(),
         Some(now + chrono::Duration::seconds(300))
+    );
+    // Activation is logged once, at warn; the shorter 429 changed nothing.
+    let events = captured.take_events();
+    let throttled = events
+        .iter()
+        .filter(|event| event["event"] == "oidc_membership_renewal_throttled")
+        .collect::<Vec<_>>();
+    assert_eq!(throttled.len(), 1, "{throttled:?}");
+    assert_eq!(throttled[0]["level"], "WARN");
+    assert_eq!(
+        throttled[0]["throttledUntil"],
+        (now + chrono::Duration::seconds(300)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     );
     for (method, request_id) in [
         (&f.person.method, "renewal-throttle-a"),
@@ -1142,17 +1156,17 @@ async fn every_classification_writes_its_row_and_audit() {
         (
             "invalid-scope",
             Box::new(|_| vec![status(400, None, error_body("invalid_scope"))]),
-            Expect::Failed(Code::RequestRejected, "oidc_unavailable"),
+            Expect::Failed(Code::RequestRejected, "oidc_provider_denied"),
         ),
         (
             "empty-400",
             Box::new(|_| vec![status(400, None, FakeBody::Raw(Vec::new()))]),
-            Expect::Failed(Code::RequestRejected, "oidc_unavailable"),
+            Expect::Failed(Code::RequestRejected, "oidc_provider_denied"),
         ),
         (
             "truncated-400",
             Box::new(|_| vec![status(400, None, FakeBody::Failed)]),
-            Expect::Failed(Code::RequestRejected, "oidc_unavailable"),
+            Expect::Failed(Code::RequestRejected, "oidc_provider_denied"),
         ),
         (
             "non-json-403",
@@ -1163,7 +1177,7 @@ async fn every_classification_writes_its_row_and_audit() {
                     FakeBody::Raw(b"<html>SENTINEL</html>".to_vec()),
                 )]
             }),
-            Expect::Failed(Code::RequestRejected, "oidc_unavailable"),
+            Expect::Failed(Code::RequestRejected, "oidc_provider_denied"),
         ),
         (
             "redirect-302",
