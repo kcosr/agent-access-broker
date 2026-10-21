@@ -188,9 +188,14 @@ Before starting a managed deployment:
   reset works only on an active local method. A local password does not use
   Microsoft sign-in policies. Disabling the Microsoft directory account does not
   immediately disable the Broker principal or its existing sessions/tokens:
-  Microsoft-derived group evidence expires at its configured TTL, while local
-  groups, roles, and direct grants remain independent. Disable the Broker
-  principal when immediate Broker access denial is required.
+  Microsoft-derived group evidence expires at its configured TTL (membership
+  renewal fails for a disabled account), while local groups, roles, and direct
+  grants remain independent. Disable the Broker principal when immediate Broker
+  access denial is required.
+- Before enabling Microsoft membership renewal, keep the Entra app a Web client
+  with public client flows disabled and grant admin consent for
+  `offline_access` where users cannot consent; see
+  [Microsoft membership renewal](#microsoft-membership-renewal).
 - Local sign-in enablement requires a successful audit preflight. If its extra
   completion audit fails after the password commits, the API still reports
   success and the portal reveals the temporary password. Investigate
@@ -1070,7 +1075,8 @@ Losing the credential encryption keys makes managed credential material
 undecryptable. Losing the broker token hash key prevents stored broker tokens
 from resolving. Losing only the SQLite file removes principals, rights, token
 records, credential metadata, encrypted credential material, Microsoft login
-links, external-group mappings, membership evidence, and pending OIDC flows.
+links, external-group mappings, membership evidence, stored Microsoft refresh
+tokens, and pending OIDC flows.
 
 Back up a SQLite audit database with SQLite's online backup while the broker
 runs, for example as the broker user, after provisioning the owner-only backup directory:
@@ -1096,11 +1102,18 @@ be used if pending login flows are intentionally discarded; changing either
 invalidates those flows. Changing `public_origin` also invalidates pending
 flows. Changing `client_id` additionally invalidates Microsoft membership
 evidence and Microsoft browser sessions, while changing `tenant_id` is rejected
-as long as durable Microsoft login methods or group bindings exist. Expired
-Microsoft membership evidence remains expired after restore; users must log in
-again to refresh it. If a restored backup contains live browser sessions,
-restoring the matching broker-token hash key preserves their token lookup,
-while normal session and Microsoft-membership expiry checks still apply.
+as long as durable Microsoft login methods or group bindings exist. Restoring
+never extends Microsoft membership evidence: expired evidence stays expired
+until a new sign-in or, with membership renewal, a renewal replaces it. The
+backup also restores the encrypted Microsoft refresh tokens it held, which need
+their credential encryption keys; renewal resumes with each one that Microsoft
+still honours, and a person without a restored token, or whose restored token
+Microsoft rejects, signs in again. Restoring an older backup does not revoke
+tokens stored since then at Microsoft; see
+[revoking stored refresh tokens](#revoking-stored-refresh-tokens). If a
+restored backup contains live browser sessions, restoring the matching
+broker-token hash key preserves their token lookup, while normal session and
+Microsoft-membership expiry checks still apply.
 ### Restore verification
 
 1. Stop the broker and prevent automatic restart. Restore into broker-owned,
@@ -1307,10 +1320,15 @@ Migration `031_oidc_membership_renewal` follows `030_group_auto_enrollment`.
 It adds an empty table for the Microsoft refresh tokens that sign-in stores when
 `browser_auth.oidc.microsoft.membership_renewal` is enabled, and changes no
 existing data; no operator action is needed beyond the usual forward-migration
-steps. The stored tokens are encrypted under the credential key ring and join
-key readiness and `admin credentials rewrap`. Rolling back across `031` needs the
-backup taken before it: the previous binary refuses the migrated store. Deleting
-the Broker's copy of a refresh token does not revoke it at Microsoft.
+steps. Renewal itself stays off until `membership_renewal` is set (see
+[Microsoft membership renewal](#microsoft-membership-renewal)). The stored
+tokens are encrypted under the credential key ring and join key readiness and
+`admin credentials rewrap`. Rolling back across `031` needs the backup taken
+before it: the previous binary refuses the migrated store. The restored backup
+holds no tokens stored after it, but those tokens stay valid at Microsoft:
+deleting the Broker's copy of a refresh token does not revoke it there, so
+follow [revoking stored refresh tokens](#revoking-stored-refresh-tokens) when
+that matters.
 
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
@@ -1491,6 +1509,8 @@ thresholds; raising invocation limits does not raise login budgets.
 | `oidc_group_claims_incomplete` | The ID token indicated group overage/distributed claims or contained malformed group IDs. Reduce the user's app-visible security-group memberships or adjust Entra assignment/claim configuration; the broker does not query Graph. |
 | `oidc_admission_denied` | For a first/JIT login, create an active mapping from one claimed Entra group Object ID to an active broker group, assign the user appropriately in Entra, or explicitly link the existing principal. Empty/unmapped claims are allowed only for an already linked identity. |
 | `oidc_login_method_conflict` | The Entra user Object ID is already linked elsewhere, the principal already has another Microsoft identity, or a tenant change conflicts with durable Microsoft bindings/login methods. Inspect and deliberately unlink or remove the conflicting object. |
+| `oidc.membership.renewal_failed` audit records | A [membership renewal](#microsoft-membership-renewal) failed; `providerAudit.oidc.classification` says why. `oidc_sign_in_required` means Microsoft no longer honours the person's refresh token (inactivity, revoked sessions, a disabled account, removed consent): renewal ended and the person signs in again. `oidc_client_rejected` means Microsoft rejected the client ID or secret: correct `client_secret_ref` and reload; blocked renewals retry within an hour. `oidc_unavailable`, `oidc_identity_invalid` and `oidc_group_claims_incomplete` keep renewal and retry as described there. |
+| Microsoft sign-in asks for consent after enabling `membership_renewal` | Users cannot consent to `offline_access` in this tenant. Have an Entra administrator grant admin consent for it (see [Microsoft membership renewal](#microsoft-membership-renewal)), or turn `membership_renewal` off and reload. |
 | `external_group_binding_conflict` | The Entra group Object ID already has a binding, or deletion was attempted while the binding was active. Reuse the existing mapping, or disable it before deleting it. |
 | `local_login_locked` | The client's source (IPv4 address or IPv6 /64) reached `max_failed_attempts` for that principal. Only that source is locked, until `lockout_ttl` passes; the user can still sign in from other sources. If failures for the principal were already recorded from 256 other sources, further sources share one overflow counter, and its lockout blocks every source without a counter of its own, usually including the user's normal address. `admin principals password unlock <principal>` or the portal **Unlock** action (the user page's Overview tab) clears every source's lockout for the principal, including the overflow counter. Repeated lockouts from unfamiliar sources indicate password guessing. |
 
@@ -1506,7 +1526,10 @@ Create one Microsoft Entra app registration for this broker deployment:
 2. Add a **Web** redirect URI equal to
    `{public_origin}/v1/auth/oidc/microsoft/callback`. It must match exactly,
    including scheme, host, port, and path. Enable authorization-code flow and
-   leave implicit ID-token and access-token grants disabled.
+   leave implicit ID-token and access-token grants disabled. Keep the
+   registration a Web (confidential) client: leave **Allow public client
+   flows** set to **No**, so Microsoft accepts the code, and any refresh token
+   the Broker stores, only together with the client secret.
 3. Create a client secret and store its value behind `client_secret_ref`.
 4. In the app manifest set `groupMembershipClaims` to `SecurityGroup`. The
    broker consumes immutable group Object IDs from the ID token. It does not
@@ -1514,8 +1537,10 @@ Create one Microsoft Entra app registration for this broker deployment:
 5. On the Enterprise Application, set **Assignment required?** to **Yes**, then
    assign the intended pilot users or groups. This is an additional admission
    boundary; broker group mappings still control JIT admission and access.
-6. Do not add Microsoft Graph permissions. The broker requests only
-   `openid profile email` and never calls Graph or expands group claims.
+6. Do not add Microsoft Graph permissions. The broker requests only the OpenID
+   scopes `openid profile email`, plus `offline_access` when
+   [membership renewal](#microsoft-membership-renewal) is enabled, and never
+   calls Graph or expands group claims.
 
 `SecurityGroup` can include nested security-group membership. Users with enough
 directory memberships for Entra to emit an overage or distributed-claim marker
@@ -1572,10 +1597,20 @@ group; each Entra group Object ID may map only once. Disabling a broker group or
 binding stops that mapping from authorizing. These mappings never grant the
 managed `admin` role.
 
-There is no background directory synchronization. After adding a user to an
-Entra group or changing a mapping, have the user log out and complete a new
-Microsoft login to publish fresh group evidence immediately. Otherwise the last
-complete evidence remains usable only until `external_membership_ttl` expires.
+The Broker does not synchronize the directory in the background or on a timer.
+Group evidence comes only from the ID token of a Microsoft sign-in or, with
+[membership renewal](#microsoft-membership-renewal) enabled, of an on-demand
+renewal that a request from the person or their agents triggers. The last
+complete evidence is usable until `external_membership_ttl` expires. Without
+renewal, the person must complete a new Microsoft login before then to keep
+Microsoft-derived access; with renewal, it is renewed while they or their
+agents keep using the Broker, and a new sign-in is needed only when renewal
+ends or was never available (see [what still requires
+sign-in](#what-still-requires-sign-in)). After adding a user to an Entra group
+or creating a mapping, have the user log out and complete a new Microsoft login
+to publish fresh group evidence immediately; otherwise the change reaches the
+Broker at the person's next renewal or sign-in. Disabling a mapping takes effect
+immediately.
 
 With JIT enabled, a first login creates an opaque broker principal only when at
 least one active mapping reaches an active broker group. The initial display
@@ -1610,9 +1645,9 @@ agent-access admin principals login-methods oidc unlink alice
 
 Use the immutable Entra user Object ID, not an email address or display name.
 Unlinking revokes that login method's browser sessions and removes its cached
-Microsoft group contributions; it leaves local passwords, local groups, roles,
-direct grants, and non-browser broker tokens unchanged. The portal exposes the
-same mapping and link operations.
+Microsoft group contributions and any stored Microsoft refresh token; it leaves
+local passwords, local groups, roles, direct grants, and non-browser broker
+tokens unchanged. The portal exposes the same mapping and link operations.
 
 ### Reloads, provider outages, and disabling
 
@@ -1623,27 +1658,227 @@ login, token authorization, broker requests, health, and readiness continue.
 The next Microsoft login attempt retries discovery, with failed refresh attempts
 throttled for 30 seconds.
 
-Discovery and signing keys are held in memory. A callback refreshes metadata
-older than one hour before token validation. An unknown signing-key id triggers
-one throttled key refresh and one validation retry. If refresh cannot complete,
-that Microsoft login fails; existing local and token-based access is unaffected.
+Discovery and signing keys are held in memory. A callback or membership renewal
+refreshes metadata older than one hour before token validation. An unknown
+signing-key id triggers one throttled key refresh and one validation retry. If
+refresh cannot complete, that Microsoft login fails, or that renewal is retried
+as `unavailable`; existing local and token-based access is unaffected.
 
 A successful config reload atomically replaces the runtime, and a failed reload
 keeps the previous one. Changing effective Microsoft OIDC configuration or
 secret material invalidates pending flows from the prior generation; editing a
 secret reference without changing its resolved value does not. Changing
-`client_id` also expires cached Microsoft membership and revokes Microsoft
-browser sessions. Reducing `external_membership_ttl` clamps existing evidence
-to the shorter lifetime. Changing `tenant_id` is rejected after a Microsoft
-login method or external group binding exists; use a fresh managed store or
-remove those durable objects before intentionally moving to another tenant.
+`client_id` also expires cached Microsoft membership, revokes Microsoft browser
+sessions and deletes stored Microsoft refresh tokens. Reducing
+`external_membership_ttl` clamps existing evidence to the shorter lifetime.
+Changing `tenant_id` is rejected after a Microsoft login method or external
+group binding exists; use a fresh managed store or remove those durable objects
+before intentionally moving to another tenant.
 
 For an emergency local disable, set
 `browser_auth.oidc.microsoft.enabled = false` and reload. Disabled configuration
 does not resolve its Microsoft secrets or contact Microsoft. The disable expires
-Microsoft-derived membership and revokes Microsoft browser sessions, while local
-login and local authorization remain available. Re-enabling requires a new
-Microsoft login to restore current group evidence.
+Microsoft-derived membership, revokes Microsoft browser sessions and deletes
+stored Microsoft refresh tokens, while local login and local authorization
+remain available. Re-enabling requires a new Microsoft login to restore current
+group evidence and renewal.
+
+### Microsoft membership renewal
+
+With `browser_auth.oidc.microsoft.membership_renewal = true`, Microsoft sign-in
+also requests `offline_access` and the Broker stores the refresh token Microsoft
+returns, encrypted under the credential key ring, for that person's Microsoft
+login method. When a later request from the person or their agents finds the
+Microsoft group evidence expired or about to expire, the Broker redeems that
+token for a new ID token, validates it like a sign-in, and replaces the
+evidence with its groups. After one sign-in, people normally keep their
+Microsoft-derived access without returning to the portal for as long as they or
+their agents use the Broker and Microsoft keeps honouring the token. The setting
+defaults to `false`; field rules are in
+[configuration](configuration.md#browser_auth).
+
+To enable it:
+
+1. Keep the app registration a Web client with **Allow public client flows**
+   set to **No** and a current client secret (see
+   [register the application](#register-the-application)). A stored refresh
+   token is usable only together with that secret.
+2. Where users cannot consent to the application themselves (user consent is
+   restricted, or **Assignment required?** is **Yes** as recommended above), an
+   Entra administrator adds the delegated `offline_access` permission under
+   **API permissions** (Microsoft Graph, OpenId permissions) and selects
+   **Grant admin consent** first. Otherwise every Microsoft sign-in stops at a
+   consent prompt once the setting is on. `offline_access` is an OpenID scope,
+   not a Graph data permission; leave Graph permissions absent.
+3. Set `membership_renewal = true`, validate the configuration and reload. The
+   provider configuration generation advances, so Microsoft sign-ins already in
+   progress must start again; existing evidence is unaffected.
+4. Nothing is stored until each person's next Microsoft sign-in. The person's
+   **Overview** under **Sign-in methods** then shows "Groups renew
+   automatically", and `agent-access admin principals login-methods list
+   <principal>` reports the method's `oidc.membershipRenewal`.
+
+Setting it back to `false` and reloading deletes every stored refresh token and
+stops renewal; existing evidence stays usable until it expires.
+
+#### When renewal runs
+
+Nothing runs in the background or on a timer. Renewal is part of identity
+admission: it runs for a request authenticated as an enabled `user` whose
+active Microsoft login method has a renewal record that has not ended, through
+any credential the person uses: a browser session, any Broker token they own
+(agent, user-manage or admin), their identity token or a trusted username
+binding, or Git with a Basic token or a forwarded identity. HTTP invocation and
+discovery (including `GET /v1/me`), runtime specs, management requests
+(including the OAuth connection callback), `GET /v1/auth/session`, password
+changes, HTTP MCP requests and Git gateway requests all admit it. Discovery
+renews membership but still never contacts upstream services or refreshes OAuth
+connections. Anonymous requests, service accounts, local
+password login, the Microsoft callback and logout never renew, and an
+administrator viewing another principal never renews that principal.
+
+Let `ahead` be a quarter of `external_membership_ttl` (two hours for the
+eight-hour default):
+
+- Evidence valid for more than `ahead`: nothing happens.
+- Evidence valid for `ahead` or less: the request proceeds at once with its
+  current evidence, and a renewal starts alongside it when one may start and a
+  redemption slot is free.
+- Expired or absent evidence: the request joins a running renewal or starts
+  one and waits for it, once and for at most 15 seconds, then checks its
+  identity again before continuing: a Broker token, browser session or Git
+  token is resolved again, so one revoked meanwhile fails, and an attested
+  identity revalidates its original proof. A request that times out proceeds
+  with the expired evidence; the renewal keeps running and later requests see
+  its result. When no renewal may start, for example during a backoff, the
+  request proceeds with the expired evidence without waiting.
+
+An active person is therefore usually renewed about every three quarters of the
+TTL and never sees expiry. People whose agents are idle are not renewed; their
+next request after expiry waits for a renewal.
+
+Attempts are bounded:
+
+- One renewal runs per login method at a time; other requests join it.
+- At most eight redemptions run at once across the process. A waiting request
+  queues for a slot within its 15 seconds (at most 256 queued renewals); a
+  speculative renewal starts only when a slot is free.
+- Attempts for one login method start at least 60 seconds apart. The Broker
+  records each attempt's start before contacting Microsoft, so the interval
+  holds across reloads, restarts and sign-ins.
+- An HTTP 429 from Microsoft pauses every renewal start in the process until
+  its `Retry-After` (seconds or an HTTP date), or for 60 seconds without one. A
+  later, shorter value never shortens the pause.
+- Without a writable audit store, the attempt ends without contacting Microsoft.
+
+The redemption uses the same pinned HTTPS client as sign-in
+(`login.microsoftonline.com` only, no redirects or proxy, 3-second connect and
+10-second total timeouts, 256 KiB response bound) and posts the stored token to
+the discovered token endpoint with the client ID and secret and the scopes
+`openid profile email offline_access`. The new ID token must pass every
+sign-in check and repeat the original sign-in token's `sub`, `aud`, `azp`
+(present exactly when it was), `auth_time` if present, and nonce if present.
+
+#### Renewal outcomes
+
+| Microsoft's answer | Classification | Renewal afterwards | Next attempt |
+| --- | --- | --- | --- |
+| Valid ID token with complete groups | `renewed` | `active`; groups replace the evidence when the token is newer than every token observed for the method, otherwise the stored evidence is kept; a returned refresh token replaces the stored one | When the evidence is next within `ahead` |
+| Valid ID token whose group claim is incomplete (overage or malformed) | `groups_incomplete` | `blocked`; evidence unchanged; a returned refresh token is stored | 1 hour |
+| Valid ID token for another `sub` or user Object ID | `identity_mismatch` | Ended; token deleted | Next sign-in |
+| Missing, invalid or stale ID token, unusable body, or an unexpected status (1xx, 3xx, a 2xx other than 200) | `invalid_response` | `blocked`; token kept | 1 hour |
+| 4xx `invalid_grant`, `interaction_required`, `consent_required` or `login_required` | `sign_in_required` | Ended; token deleted | Next sign-in |
+| 4xx `invalid_client` or `unauthorized_client` | `client_rejected` | `blocked`; token kept | 1 hour |
+| Any other 4xx, including an unreadable body | `request_rejected` | `blocked`; token kept | 1 hour |
+| HTTP 429 | `throttled` | `retrying`; token kept | Backoff, and never before `Retry-After` |
+| No response, a 5xx, a 4xx `server_error` or `temporarily_unavailable`, or Microsoft discovery or signing keys unavailable | `unavailable` | `retrying`; token kept | Backoff, and never before `Retry-After` |
+
+A stale ID token is one whose `iat` would leave its evidence already within
+`ahead`. The backoff starts at 30 seconds and doubles per consecutive failure to
+15 minutes, then varies by up to 20% either way, so it can reach 18 minutes. A
+`blocked` renewal retries hourly so that a corrected client secret or a reduced
+group count recovers without anyone signing in. No failure extends evidence:
+it expires on schedule, and group-derived access stops until a renewal or
+sign-in succeeds. A renewal whose result arrives after a sign-in, unlink,
+principal disable, provider change or reload has changed what it started from
+is discarded without writing anything.
+
+#### What still requires sign-in
+
+A person signs in with Microsoft again when:
+
+- renewal has never run for them: no sign-in since `membership_renewal` was
+  enabled, or Microsoft returned no refresh token (or one over 16 KiB), which
+  the Broker records as not issued;
+- Microsoft ends it (`sign_in_required`): the token went unused for about 90
+  days, the account was disabled or deleted, an administrator revoked its
+  sessions or reset its password, a Conditional Access or MFA change requires
+  interaction, or consent was removed;
+- Microsoft returned a token for another identity (`identity_mismatch`);
+- the Broker deleted the stored token: the Microsoft method was unlinked, the
+  principal was disabled (re-enabling does not restore renewal), Microsoft
+  sign-in was disabled, its `client_id` changed, or `membership_renewal` was
+  turned off.
+
+Guests who sign in with email one-time passcodes receive 24-hour refresh tokens
+and sign in daily. Signing out of the portal ends only that browser session;
+renewal and the person's agents keep working. A `blocked` renewal needs an
+operator or directory fix rather than a sign-in; meanwhile the person's
+Microsoft groups lapse when their evidence expires.
+
+#### Logs and audit
+
+Every renewal attempt that reaches its outcome is audited as
+`oidc.membership.renewed` (decision `allow`) or `oidc.membership.renewal_failed`
+(decision `deny`); see [Microsoft membership renewal](http-api.md#microsoft-membership-renewal)
+for the record fields and reason codes. Renewals that are skipped or
+superseded are logged, not audited. Renewal events use the
+`agent_access_broker_host::membership_renewal` target:
+
+- `oidc_membership_renewal` reports each attempt with `loginMethodId`,
+  `trigger` (`expired` or `ahead`), `outcome` (`renewed`, `failed`,
+  `superseded`, `write_failed` or `skipped`), `classification`, `evidence`
+  (`replaced` or `kept_newer`), `durationMs`, `redemptionMs`, `httpStatus`,
+  Microsoft's `error` reduced to the OAuth identifiers in the outcome table
+  plus `invalid_request`, `invalid_scope` and `unsupported_grant_type` (any
+  other value is `other`), up to eight numeric `errorCodes`, and
+  `nextAttemptAfter`. A skipped attempt carries `reason`: `throttled`,
+  `capacity`, `audit_unavailable`, `attempt_interval`, `evidence_current`,
+  `not_due` (logged at debug level when a request finds the renewal in its
+  backoff), `not_renewable`, `provider_changed`, `snapshot_changed`,
+  `store_unavailable` or `shutdown`. Failures log at `warn`, `write_failed` at
+  `error`, the rest at `info`.
+- `oidc_membership_renewal_audit_failed` (error) reports a committed outcome
+  whose audit record could not be appended; the committed result stands.
+- `oidc_membership_renewal_unfinished` (error) names, at shutdown, each renewal
+  that did not finish within the drain budget and its phase; one that commits
+  afterwards has no audit record.
+- `oidc_refresh_token_unusable` (warn) reports a refresh token that was empty
+  or larger than 16 KiB, with its length: at sign-in (target
+  `agent_access_broker::handlers::oidc`) the method is recorded as not issued,
+  and at renewal the stored token is kept.
+
+Logs and audit records never contain refresh, ID or access tokens, response
+bodies or Microsoft's `error_description`; Microsoft group IDs appear only in the
+debug-level `oidc_claims_observed` event. Graceful shutdown stops new
+renewals, cancels those that have not yet submitted their outcome, and waits
+within the shutdown budget for submitted outcomes and their audit records.
+
+#### Revoking stored refresh tokens
+
+The Broker never hands out stored refresh tokens, but its store, its backups and
+a compromised host hold encrypted copies. Deleting the Broker's copy (unlinking
+the method, disabling the principal, or turning `membership_renewal` off) stops
+renewal but does not revoke the token at Microsoft, and Entra offers no
+per-token revocation for this client. When stored tokens may be exposed
+together with the credential key ring:
+
+1. Rotate the Entra client secret and update `client_secret_ref`, then reload.
+   Without the client secret a refresh token cannot be redeemed.
+2. In Entra, use **Revoke sessions** for the affected users, or remove their
+   consent to the application. Revoking a B2B guest may require action in the
+   guest's home tenant.
+3. Affected people sign in again to restore renewal.
 
 ## Service-specific MCP connections
 

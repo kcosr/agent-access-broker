@@ -509,7 +509,9 @@ security-relevant properties are:
   or a different browser from completing the flow.
 - **External groups are policy inputs, not administrators.** Microsoft group
   object IDs map to managed groups and create finite membership evidence (eight
-  hours by default).
+  hours by default). Optional [membership renewal](#microsoft-membership-renewal)
+  replaces that evidence on demand from a validated, refreshed ID token; it
+  never extends evidence without one.
   Effective groups combine current Microsoft evidence with explicit local
   memberships, but group mapping never assigns the DB `admin` role.
 - **Automatic local membership is durable.** Administrators may opt managed
@@ -536,8 +538,9 @@ security-relevant properties are:
   issuing an `agent_invoke` token still requires an effective invocation grant,
   so dormant bearer tokens cannot be created from an assignment alone.
 - **Microsoft failure is provider-scoped.** Discovery, key, or token endpoint
-  failure makes Microsoft login unavailable without taking down broker
-  readiness, local login, or agent invocation.
+  failure makes Microsoft login unavailable, and membership renewal retry with
+  backoff, without taking down broker readiness, local login, or agent
+  invocation.
 - **Runtime specs are authenticated and filtered.** `/v1/spec/*` routes expose
   operational shape, so they require normal identity admission, set `no-store`,
   and filter provider actions and HTTP routes by token class, service allowlist,
@@ -975,7 +978,9 @@ so configured identity headers remain with the original Broker endpoint.
 | Admin browser account is compromised. | Use short session TTLs, protect administrator workstations, monitor management audit records, disable the compromised principal, and rotate affected credentials or tokens. |
 | A service policy manager reads other principals' audit records for their services. | This is intended: managers need the full records to operate the service. Assign service management deliberately and revoke it when no longer needed; visibility follows current assignments on every page. Records without a service scope remain visible to administrators, auditors, and their owner with self-service enabled. |
 | Successful management reads, such as an administrator listing principals or credential metadata, or a user reading audit records, are not in the audit store, so who viewed what cannot be reconstructed from audit. | These reads return only data the caller is already authorized to see and no secret material; denials and failures are audited, and reveals, the policy export, and credential verification stay audited. Protect and monitor administrator sessions and tokens, and keep access logs at the fronting proxy where per-read records are required. |
-| A user is removed from a mapped Microsoft group after a successful login. | Microsoft-derived membership expires after the configured finite TTL (eight hours by default) and refreshes on the next login; local memberships remain independent. Reduce that TTL or disable the principal directly when faster revocation is required. |
+| A user is removed from a mapped Microsoft group after a successful login. | Microsoft-derived membership expires after the configured finite TTL (eight hours by default) and is replaced by the next login or, with membership renewal, the next renewal, which carries Microsoft's current groups; expired evidence never authorizes, so the removal applies within one TTL of Microsoft reflecting it. Local memberships remain independent. Reduce that TTL or disable the principal directly when faster revocation is required. |
+| The Broker's store or a backup is stolen together with its credential key ring and the Entra client secret while membership renewal is enabled. | The stored Microsoft refresh tokens can then obtain ID tokens, and tokens for the app's other delegated permissions, for those people until Microsoft revokes them. Protect the store, keys and secret like other credential material, keep Graph permissions absent, rotate the client secret, and use Entra **Revoke sessions** for affected users; deleting Broker rows does not revoke tokens at Microsoft. |
+| A tenant relies on Conditional Access sign-in frequency to force periodic interactive sign-in. | Renewal is a non-interactive confidential-client refresh, and Microsoft defers sign-in frequency to the next interactive sign-in, so renewal does not enforce it. Leave `membership_renewal` off where periodic interactive sign-in must gate Broker group access; `external_membership_ttl` then bounds how long one sign-in lasts. |
 | Broker logout is mistaken for Microsoft account logout. | Treat logout as revocation of the broker session only; it does not end the user's Microsoft session. Use Microsoft tenant controls for federated-session revocation. |
 | Microsoft discovery, signing keys, or token exchange are unavailable. | Fail Microsoft login closed while keeping broker readiness, local login, and agent invocation available; monitor the provider-specific availability signal. |
 | Prompt injection causes an allowed but inappropriate action. | Keep operations narrow, require confirmation for sensitive writes, and audit all write operations. |
@@ -1103,6 +1108,66 @@ Gmail consent uses `gmail.modify`, whose upstream authority exceeds the Brokerâ€
 supported action set. Broker grants expose reads, archive, Trash and restore only;
 sending and permanent deletion have no action. Mail is untrusted content and never
 an instruction source. See [Gmail boundaries](providers-gmail.md).
+
+## Microsoft membership renewal
+
+With `browser_auth.oidc.microsoft.membership_renewal` enabled, Microsoft sign-in
+also requests `offline_access`, and the Broker keeps the Microsoft refresh token
+of each Microsoft login method so that requests from the person or their agents
+can renew expired or expiring group evidence on demand. Nothing renews on a
+timer. See the [operator guide](operator-guide.md#microsoft-membership-renewal)
+for setup and outcomes.
+
+- **What is stored.** The refresh token covers the app registration's delegated
+  permissions: `openid profile email offline_access` plus any delegated
+  permissions the registration holds, typically Graph `User.Read`. Such a token
+  is not bound to one resource, so it can obtain tokens for any of them; keep
+  Graph permissions absent. Microsoft accepts it only with the client secret
+  while the registration stays a Web client with public client flows disabled.
+  It is encrypted with AES-256-GCM under the credential key ring, with
+  authenticated data binding the login method, its Microsoft subject, the
+  configured tenant and client, the record's token version and the key; it
+  joins key readiness, the used-key inventory and rewrap. Tokens never appear
+  in logs, audit records, errors or API responses.
+- **Compromise.** An attacker with the store (or a backup), the key ring and the
+  client secret can mint ID tokens for the stored users until Microsoft revokes
+  them. The client secret already lets its holder act as the application; the
+  added exposure is per-user tokens. Rotate the client secret, then use Entra
+  **Revoke sessions** for the affected users (or remove their consent to the
+  application). Deleting the Broker's records stops renewal but does not revoke
+  tokens at Microsoft.
+- **Validation parity.** A renewed ID token must pass every sign-in check:
+  RS256 signature from the tenant's signing keys (unsigned tokens and other
+  algorithms are rejected), issuer, audience and `azp`, time bounds, tenant and
+  user Object ID, and `at_hash` when present. It must also repeat the original
+  sign-in token's `sub`, `aud`, `azp` (present exactly when it was), and
+  `auth_time` and nonce when present (OpenID Connect Core section 12.2). The
+  nonce rule differs from sign-in only in allowing its absence. Renewal accepts
+  nothing a sign-in would reject.
+- **Fail-safe.** Every failure keeps or shrinks access: failed renewals leave
+  evidence to expire on schedule, and nothing extends it. The Broker never
+  contacts Microsoft while holding the store lock or a transaction, and every
+  outcome write rechecks the provider generation, tenant and client, the login
+  method and principal, and the stored token's version, so a sign-in, unlink,
+  disable or configuration change during a renewal discards its result.
+- **Removal latency.** For active people, a change Microsoft reports in a token
+  reaches the Broker at their next renewal, and expired evidence never
+  authorizes, so a removal applies no later than one TTL after Microsoft's view
+  changes. Microsoft's own propagation, such as dynamic group processing, comes
+  first and is outside that bound. A disabled Entra account fails renewal and
+  loses group access when its evidence expires.
+- **Conditional Access.** Renewal is a non-interactive confidential-client
+  refresh. Microsoft defers sign-in frequency enforcement to the next
+  interactive sign-in, so a tenant policy requiring periodic interactive sign-in
+  does not force one for renewal. Revocations, account disables and
+  Conditional Access blocks that Microsoft applies to refresh still end it.
+- **Exceptions.** Guests who sign in with email one-time passcodes receive
+  24-hour refresh tokens and must sign in daily. Revoking a B2B guest may
+  require action in the guest's home tenant.
+- **Discovery.** Renewal is part of identity admission, so discovery requests,
+  including MCP `tools/list` and `GET /v1/me`, renew the caller's own
+  membership; they still never contact upstream services or refresh OAuth
+  connections. No request renews anyone but its own authenticated person.
 
 ## Imported MCP services
 

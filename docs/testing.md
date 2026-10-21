@@ -791,6 +791,45 @@ request. Portal Vitest tests cover the Microsoft login/link-control helper, and
 the Playwright suite covers Microsoft login availability, provider-outage
 presentation, sanitized return paths, and start redirects.
 
+Microsoft membership renewal coverage is also deterministic and does not
+contact Microsoft. Core store tests
+(`managed_store/oidc_membership_renewal_tests.rs`) upgrade a `030` store to
+`031` with rows unchanged, reject prior-schema and validator drift (including
+the `030` group setting and the `029` identity-token invariant) and keep the
+old schema after a failed migration, and decrypt a frozen golden renewal record
+whose every bound column fails readiness when tampered with; never regenerate
+it. They also cover sign-in recording (token or `not_issued`, keeping the
+attempt interval, and a JIT account's record committed or rolled back with its
+group auto-enrollment), raw-`iat` evidence ordering in both completion orders with
+incomplete and superseded observations, lifecycle deletions, key readiness,
+inventory and rewrap, corrupt payloads, the renewal hint, attempt-start
+eligibility, success and failure writes, and fence failures. Core protocol tests
+(`microsoft_oidc/renewal_tests.rs`) cover `Retry-After` in seconds and
+IMF-fixdate form, the bounded body reader, the classification precedence, the
+logged `error` allowlist and code limit, stale `iat`, backoff and jitter, next
+attempts that never shorten `Retry-After`, the throttle default and the
+refresh request, the reference comparison and the nonce rule.
+
+Host unit tests use the fake Microsoft provider's scripted refresh responses.
+`src/tests/microsoft_oidc.rs` checks that sign-in requests `offline_access` and
+records the refresh token, records missing and oversized tokens as not issued,
+keeps newer evidence while still signing in, and deletes tokens when renewal is
+turned off. `src/tests/membership_renewal.rs` renews expired evidence once through
+HTTP invocation (token and forwarded identity), MCP `tools/list` and
+`tools/call`, Git Basic and forwarded fetches and cookie discovery; renews
+speculatively inside the window; shares one redemption among concurrent expired
+requests; keeps the attempt interval across reload and sign-in; never shortens
+the provider throttle; writes the row and audit of every classification;
+rechecks identity after a wait; supersedes renewals on sign-in, reload and
+unlink; keeps a renewal running past the request's wait; covers cancellation,
+graceful drain and forced shutdown reporting; asserts with sentinel values that
+logs and audit never carry tokens or Microsoft's error text; and applies group
+changes Microsoft reports. `src/tests/state_lock_lifetime.rs` checks that a
+managed-store write keeps the state locks after runtime shutdown drops its
+owner. Portal Vitest tests (`unit/microsoft-membership.test.ts`) cover the
+administrator status line and the person's own Account line for every renewal
+state.
+
 ### Audit store and viewer matrix
 
 Audit storage and query coverage is deterministic and uses temporary audit

@@ -842,8 +842,9 @@ secret references are not resolved.
   through 100,000.
 - `external_membership_ttl` uses the same duration syntax and must resolve to 15
   minutes through 24 hours. Microsoft-derived group access is valid only until
-  this TTL expires unless the user completes another Microsoft login. Local
-  group memberships, roles, and direct grants are independent.
+  this TTL expires unless the user completes another Microsoft login or, with
+  `membership_renewal`, the broker renews it. Local group memberships, roles,
+  and direct grants are independent.
 - `jit_provisioning = true` permits a new Microsoft user only when at least one
   group Object ID in the complete ID-token claim maps to an active broker group.
   An existing explicitly linked user may log in with a complete empty or
@@ -865,6 +866,13 @@ secret references are not resolved.
   token; turning it on stores nothing until each person's next sign-in. In a
   tenant that restricts user consent, an administrator must grant
   `offline_access` before enabling it, or Microsoft sign-in asks for consent.
+  With it enabled, a request authenticated as a person whose Microsoft group
+  evidence has expired, or expires within a quarter of
+  `external_membership_ttl`, redeems that token on demand for a new ID token
+  and replaces the evidence with its groups. Nothing renews on a timer, and the
+  renewal limits are fixed: an expired request waits at most 15 seconds, and
+  attempts for one person are at least 60 seconds apart. See
+  [Microsoft membership renewal](operator-guide.md#microsoft-membership-renewal).
 - Microsoft group claims that explicitly indicate overage, are distributed,
   contain more than 200 entries, or are malformed reject that login. The broker
   does not call Microsoft Graph to expand them. Microsoft groups can contribute

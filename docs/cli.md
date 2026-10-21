@@ -150,7 +150,9 @@ Every command below targets the broker over HTTP except `config validate`,
 ### `auth`
 
 - `auth status` — `GET /v1/me`. Prints the identity summary as pretty JSON,
-  including `readOnlyAccess` behind fingerprint-aware ingress.
+  including `readOnlyAccess` behind fingerprint-aware ingress and, for a person
+  with a Microsoft sign-in, `microsoftMembership` (group evidence expiry and
+  renewal state).
 - `auth token status` — locally inspects the configured `identity.token_file`
   and effective token source without printing token material. A leading `~` in
   the configured token file is shown after expansion to the current user's home

@@ -305,6 +305,31 @@ It is returned for every caller that can use `/v1/me`, including browser
 sessions and anonymous callers, under both identity authorities, and `/v1/me`
 is not counted as an invocation.
 
+When the caller's principal has a Microsoft login method, the response also
+carries `microsoftMembership`: `validUntil`, when the method's current
+Microsoft group evidence expires (`null` when it has none), and `renewal`, its
+[renewal status](#microsoft-membership-renewal) or `null` when the method has no
+renewal record. `/v1/me` itself passes renewal admission, so after expired
+evidence it reports the window of the renewal it waited for:
+
+```json
+{
+  "principal": "alice",
+  "groups": ["agent-users"],
+  "authenticated": true,
+  "serviceLimits": [],
+  "microsoftMembership": {
+    "validUntil": "2026-10-21T18:00:00Z",
+    "renewal": {
+      "state": "active",
+      "lastRenewedAt": "2026-10-21T10:00:00Z",
+      "nextAttemptAfter": null,
+      "lastFailure": null
+    }
+  }
+}
+```
+
 `readOnlyAccess` appears only for a [trusted fingerprint identity](managed-identity.md),
 the attested path REST accepts. `true` means the identity token is
 [read-only](managed-identity.md#read-only-paths): discovery lists only actions
@@ -582,7 +607,8 @@ runtime action catalog. The callback does not use the ordinary same-origin CSRF
 header; the single-use state and browser-binding cookie protect that
 cross-origin navigation.
 
-Microsoft group claims are consumed only from the validated ID token. The
+Microsoft group claims are consumed only from a validated ID token, from a
+sign-in or a [membership renewal](#microsoft-membership-renewal). The
 broker never follows distributed-claim URLs and never calls Microsoft Graph.
 An explicit group overage marker, a claim with more than 200 group entries, or a
 malformed group claim returns `oidc_group_claims_incomplete`; it is not
@@ -1171,7 +1197,8 @@ The six Microsoft management operations are:
   `oidc_login_method_conflict`.
 - `DELETE /v1/admin/principals/{principal}/login-methods/oidc/microsoft` accepts
   no body and returns `{"unlinked":true}`. It revokes browser sessions backed
-  by that login method and removes its Microsoft membership evidence. It does
+  by that login method and removes its Microsoft membership evidence and any
+  stored Microsoft refresh token. It does
   not remove local passwords, local group membership, roles, credentials, or
   independently issued broker tokens.
 
@@ -1197,7 +1224,9 @@ Microsoft object already linked to the principal also return
 
 OIDC entries returned by
 `GET /v1/admin/principals/{principal}/login-methods` do not expose the internal
-encoded external subject. They contain an `oidc` projection instead:
+encoded external subject. They contain an `oidc` projection instead, whose
+`membershipRenewal` is the method's [renewal status](#microsoft-membership-renewal),
+or `null` when it has no renewal record:
 
 ```json
 {
@@ -1207,7 +1236,13 @@ encoded external subject. They contain an `oidc` projection instead:
   "oidc": {
     "provider": "microsoft",
     "tenantId": "00000000-0000-0000-0000-000000000000",
-    "userObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    "userObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "membershipRenewal": {
+      "state": "retrying",
+      "lastRenewedAt": "2026-10-21T10:00:00Z",
+      "nextAttemptAfter": "2026-10-21T16:02:00Z",
+      "lastFailure": {"code": "unavailable", "at": "2026-10-21T16:01:00Z"}
+    }
   },
   "status": "active",
   "passwordSetAt": null,
@@ -2504,6 +2539,63 @@ admission limits. Presented invalid, expired,
 empty, duplicate, or malformed broker cookies remain audited as the anonymous
 caller; unrelated malformed cookies do not invalidate a broker session.
 Admission rejections remain audited too.
+
+### Microsoft membership renewal
+
+With `browser_auth.oidc.microsoft.membership_renewal` enabled, requests renew
+a person's Microsoft group evidence on demand (see the
+[operator guide](operator-guide.md#microsoft-membership-renewal)). One status
+shape describes a login method's renewal everywhere it appears (`/v1/me`
+`microsoftMembership.renewal` and the login-method listing's
+`oidc.membershipRenewal`):
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `active`, `retrying`, `blocked`, or, once renewal has ended until the next Microsoft sign-in, the reason it ended: `sign_in_required`, `not_issued` or `identity_mismatch`. |
+| `lastRenewedAt` | The last successful renewal, or `null`. A sign-in does not reset it. |
+| `nextAttemptAfter` | The earliest next attempt of a `retrying` or `blocked` renewal; `null` otherwise. |
+| `lastFailure` | `{code, at}` for a `retrying` or `blocked` renewal, `null` otherwise. `code` is `throttled` or `unavailable` (`retrying`), or `groups_incomplete`, `client_rejected`, `request_rejected` or `invalid_response` (`blocked`). |
+
+There are no renewal routes: unlinking the Microsoft method, disabling the
+principal or turning the setting off stops renewal.
+
+Each renewal attempt that reaches its outcome appends one audit record with
+`service = "broker"`, the person as `principal`, their effective `groups` after
+the outcome, `source.listener = "membership_renewal"`, `source.remote =
+"process"`, Microsoft's HTTP status as `upstreamStatus` and the redemption time
+as `upstreamDurationMs`. Its `brokerRequestId` is the renewal's own; its
+`agentRequestId` is that of the request that triggered the renewal when it sent
+a valid `X-Agent-Access-Request-Id`, and otherwise repeats the `brokerRequestId`
+with `source.agentRequestIdGenerated = true`. `providerAudit.oidc` carries
+`provider = "microsoft"`, `loginMethodId` and `trigger` (`expired`, or `ahead`
+for a renewal started before expiry):
+
+- `oidc.membership.renewed` (`decision = allow`) adds `effectiveGroupCount`,
+  `policyGroups`, `validUntil` (the evidence window afterwards),
+  `membershipChanged` (whether the matched group bindings changed) and
+  `evidence`: `replaced`, or `kept_newer` when evidence from a token at least as
+  new was already stored.
+- `oidc.membership.renewal_failed` (`decision = deny`) adds `classification`
+  and `nextAttemptAfter` (`null` when renewal ended), with this `reasonCode`:
+
+| `classification` | `reasonCode` |
+| --- | --- |
+| `sign_in_required` | `oidc_sign_in_required` |
+| `client_rejected` | `oidc_client_rejected` |
+| `groups_incomplete` | `oidc_group_claims_incomplete` |
+| `invalid_response`, `identity_mismatch` | `oidc_identity_invalid` |
+| `unavailable`, `throttled`, `request_rejected` | `oidc_unavailable` |
+
+`oidc_sign_in_required` and `oidc_client_rejected` appear only in these audit
+records; renewal never fails the request that triggered it. Superseded and
+skipped renewals are logged, not audited. Neither record carries tokens,
+Microsoft's `error_description` or Microsoft group IDs. A self-service user
+sees their own records in **Activity**.
+
+The `oidc.login.succeeded` record of a Microsoft sign-in reports
+`providerAudit.oidc.membershipEvidence`: `replaced`, or `kept_newer` when a
+renewal had already stored evidence from a newer token, in which case the
+sign-in still succeeds and records its refresh token.
 
 ### Decision semantics
 

@@ -487,16 +487,46 @@ when selecting groups. Membership grants no account role or service management
 assignment. Successful login audit details include `autoEnrolledGroupIds`, and
 group setting changes have supplemental success audit records.
 
-Group evidence refreshes only on successful Microsoft login and expires at the
-configured TTL. There is no background directory sync or Graph expansion; group
-overage denies login. Local groups, roles, direct grants, and tokens are independent
-of the directory account. Removing local membership may leave an active Microsoft
-contribution. Broker logout does not end Microsoft SSO.
+Group evidence comes from a successful Microsoft login and expires at the
+configured TTL. When the operator enables
+[membership renewal](operator-guide.md#microsoft-membership-renewal), the
+Broker also renews it on demand while the person or their agents use the
+Broker, from the refresh token stored at their last Microsoft sign-in. There is
+no background directory sync or Graph expansion; group overage denies login.
+Local groups, roles, direct grants, and tokens are independent of the directory
+account. Removing local membership may leave an active Microsoft contribution.
+Broker logout does not end Microsoft SSO, and does not stop renewal for the
+person's agents.
+
+The principal's **Overview**, under **Sign-in methods**, shows the Microsoft
+method's renewal state, as does `oidc.membershipRenewal` in
+`agent-access admin principals login-methods list <principal>`:
+
+| Portal status | State | Meaning |
+| --- | --- | --- |
+| Groups renew automatically | `active` | Renewal works; the line names the last renewal. |
+| Renewal retrying | `retrying` | Microsoft was unavailable or throttling; the Broker retries with backoff at the time shown. |
+| Renewal blocked: *reason* | `blocked` | Microsoft rejected the client credentials or the request, reported an incomplete group list, or returned a response the Broker rejected. It retries hourly; fix the cause (for example the client secret, or the person's group count). |
+| Sign-in required to renew groups | `sign_in_required` | Microsoft no longer honours the refresh token. The person signs in with Microsoft again. |
+| Not available: Microsoft returned no refresh token | `not_issued` | The last sign-in produced no usable refresh token. The person signs in again after their groups expire. |
+| Sign-in required to renew groups: Microsoft returned a different identity | `identity_mismatch` | A renewal returned another identity and was refused. The person signs in again. |
+
+No status appears when the method has no renewal record: renewal is off, or
+the person has not signed in with Microsoft since it was enabled. Renewal ends
+until the next Microsoft sign-in when Microsoft stops honouring the token
+(about 90 days unused, a disabled account, revoked sessions, a password reset by
+an administrator, removed consent). Unlinking the Microsoft method, disabling
+the principal, and disabling Microsoft sign-in or renewal delete the stored
+token; re-enabling a principal does not restore it. Failures never extend
+evidence. Renewal outcomes are audited as `oidc.membership.renewed` or
+`oidc.membership.renewal_failed` under the person's principal.
 
 For immediate access removal, disable the Broker principal. Unlinking Microsoft
 alone leaves nonbrowser tokens and local access intact and can permit later JIT
 creation if Entra eligibility remains. Remove that eligibility when preventing
-future admission.
+future admission. Deleting the Broker's stored refresh token does not revoke it
+at Microsoft; when it may be exposed, use Entra **Revoke sessions** for the
+person (see [revoking stored refresh tokens](operator-guide.md#revoking-stored-refresh-tokens)).
 
 ## Access review and offboarding
 
@@ -515,7 +545,9 @@ For a departing user or suspected compromise:
 1. Disable the principal to deny its tokens immediately, then revoke affected
    tokens. Pause is temporary and preserves the disclosed token secret.
    Disabling also ends the principal's OAuth connections and, for GitLab,
-   revokes their tokens in GitLab automatically.
+   revokes their tokens in GitLab automatically. It deletes the stored
+   Microsoft refresh token too, which Microsoft keeps honouring until its
+   sessions are revoked in Entra.
    The principal's **Credentials** tab and
    `agent-access admin credentials list <principal>` report each OAuth
    connection's remote revocation (`remoteRevocation`), and keep listing a

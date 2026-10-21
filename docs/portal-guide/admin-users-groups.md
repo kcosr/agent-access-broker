@@ -38,7 +38,13 @@ If Microsoft sign-in is configured, an administrator can create the account
 without enabling a local password and link Microsoft from the account's
 **Overview**. Entering an email alone does not link the Microsoft account. Follow
 [Microsoft onboarding](../administrator-guide.md#microsoft-onboarding) for the
-linking, mapping, and group-evidence rules.
+linking, mapping, and group-evidence rules. When the operator has enabled
+Microsoft membership renewal, the **Microsoft** row under **Sign-in methods**
+also shows one renewal status once the user has signed in with Microsoft, such
+as **Groups renew automatically**, **Renewal blocked** with its reason, or
+**Sign-in required to renew groups**; the
+[Microsoft onboarding](../administrator-guide.md#microsoft-onboarding) table
+explains each one.
 
 **Expected outcome:** the new user opens on its account page. Confirm the
 principal ID, role, self-service setting, sign-in method, and **Groups** tab.
@@ -165,6 +171,7 @@ services has its own controls.
 | A group does not appear in the picker | Confirm that it exists and is active. Create it before assigning it to a new account. |
 | Bob does not appear as an available member | He may already be a local member. Inspect the current Members table before adding another principal. |
 | Membership is saved but service access is absent | Review the group's active grants, selected actions, resources, and execution contexts. Then check token restrictions and credential setup. |
+| Access through a Microsoft group stopped | Open the user's **Overview** and check the Microsoft renewal status under **Sign-in methods**, and the group's expiry on the **Groups** tab. **Sign-in required** or no status means the user signs in with Microsoft again; **Renewal blocked** needs the reason fixed. |
 | My access is absent | Check **Self-service enabled** on the human account. It is always disabled for service accounts. |
 | A managed agent connection lacks write actions | Check **Read-only** on the identity token or username binding it uses. A read-only path lists only actions classified as reads; imported actions count as writes until reviewed as reads. |
 

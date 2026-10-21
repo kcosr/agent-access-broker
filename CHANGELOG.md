@@ -1077,14 +1077,26 @@ All notable changes to this project are documented in this file.
   seconds, then checks its identity again; evidence about to expire renews
   while the request proceeds. One renewal runs per login method and at most
   eight at once; attempts for one person are at least 60 seconds apart,
-  failures back off (30 seconds doubling to 15 minutes, never shorter than
-  Microsoft's `Retry-After`, hourly when blocked), and a 429 pauses every
-  renewal. A sign-in-required error or a token for another identity ends
-  renewal until the next sign-in; nothing extends expired evidence. Outcomes
-  are audited as `oidc.membership.renewed` and `oidc.membership.renewal_failed`,
-  with the new reason codes `oidc_sign_in_required` and `oidc_client_rejected`,
-  and logged as `oidc_membership_renewal` events without tokens or Microsoft's
-  error descriptions.
+  failures back off (30 seconds doubling to 15 minutes, varied by up to 20%,
+  never shorter than Microsoft's `Retry-After`, hourly when blocked), and a 429
+  pauses every renewal. A sign-in-required error or a token for another
+  identity ends renewal until the next sign-in; nothing extends expired
+  evidence. Outcomes are audited as `oidc.membership.renewed` and
+  `oidc.membership.renewal_failed`, with the new reason codes
+  `oidc_sign_in_required` and `oidc_client_rejected`, and logged as
+  `oidc_membership_renewal` events without tokens or Microsoft's error
+  descriptions. Discovery requests renew too, since renewal is part of identity
+  admission; they still never contact upstream services or refresh OAuth
+  connections.
+- `GET /v1/me` reports `microsoftMembership` (`validUntil` and the renewal
+  status, or `null`) for a person with a Microsoft login method, and
+  `GET /v1/admin/principals/{principal}/login-methods` reports the Microsoft
+  method's `oidc.membershipRenewal`. The status has `state` (`active`,
+  `retrying`, `blocked`, or the ended reason `sign_in_required`, `not_issued`
+  or `identity_mismatch`), `lastRenewedAt`, `nextAttemptAfter` and
+  `lastFailure`. The portal shows it under the principal's Microsoft sign-in
+  method, and **Account** tells the signed-in person whether their Microsoft
+  groups renew automatically or need a new sign-in.
 
 ### Changed
 
