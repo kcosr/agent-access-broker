@@ -279,6 +279,7 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
         CredentialConfig {
             kind: "connection".into(),
             connection: Some("jira".into()),
+            profile: None,
             provider: None,
             path: None,
             token_ref: None,

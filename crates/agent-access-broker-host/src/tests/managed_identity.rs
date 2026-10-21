@@ -1193,6 +1193,7 @@ async fn managed_git_fixture(token_free: bool, default_context: bool) -> Fixture
                     path: None,
                     read_only: None,
                     connection: None,
+                    profile: None,
                 },
             );
             config.policy.grants.push(PolicyGrantConfig {
@@ -1525,6 +1526,7 @@ async fn managed_git_push_fixture() -> (Fixture, PathBuf) {
                     path: None,
                     read_only: None,
                     connection: None,
+                    profile: None,
                 },
             );
             audit_path = dir.join("git-audit.jsonl");

@@ -213,6 +213,7 @@ async fn lookup_fixture(
                             path: None,
                             read_only,
                             connection: None,
+                            profile: None,
                         },
                     );
                 }

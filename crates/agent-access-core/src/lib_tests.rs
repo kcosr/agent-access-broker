@@ -1138,6 +1138,7 @@ fn cloudbees_ci_credentials_and_actions_use_job_scope() {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     let resources = select_resources(
@@ -2355,16 +2356,30 @@ fn accepts_jira_per_user_grants_when_configured() {
 
 #[test]
 fn rejects_the_removed_per_user_credential_types_and_fields() {
-    // `credential_name` and `profile` are no longer credential fields.
-    for field in [
-        "credential_name = \"default\"",
-        "profile = \"atlassian-api-token\"",
-    ] {
-        let raw = format!(
-            "{MINIMAL_BROKER_CONFIG}\n[credentials.per_user.jira]\ntype = \"connection\"\nconnection = \"jira\"\n{field}\n"
-        );
-        assert!(parse_test_config(&raw).is_err(), "{field}");
-    }
+    // `credential_name` is no longer a credential field.
+    let raw = format!(
+        "{MINIMAL_BROKER_CONFIG}\n[credentials.per_user.jira]\ntype = \"connection\"\nconnection = \"jira\"\ncredential_name = \"default\"\n"
+    );
+    assert!(parse_test_config(&raw).is_err());
+    // `profile` names only a shared credential's token profile.
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut credential = connection_per_user_credential("jira");
+    credential.profile = Some("atlassian-api-token".to_string());
+    use_connection(
+        &mut config,
+        "jira",
+        token_connection("atlassian-api-token"),
+        &["jira"],
+    );
+    config
+        .credentials
+        .per_user
+        .insert("jira".to_string(), credential);
+    assert_contains(
+        &validation_errors(validate_broker_config(&config)),
+        "credentials.per_user.jira.profile is supported only for credentials.service and credentials.lookup entries of type basic_api_token or bearer_token",
+    );
     // The per-user `managed_store` and `oauth` types are gone.
     for kind in ["managed_store", "oauth"] {
         let mut config = sample_broker();
@@ -2402,6 +2417,7 @@ fn rejects_static_per_user_credentials() {
                 path: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
             CredentialConfig {
                 kind: "bearer_token".to_string(),
@@ -2411,6 +2427,7 @@ fn rejects_static_per_user_credentials() {
                 path: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
         ] {
             let mut config = sample_broker();
@@ -2947,6 +2964,106 @@ fn rejects_atlassian_gateway_without_valid_cloud_id() {
     assert_contains(
         &errors,
         "providers.jira.cloud_id must be a valid Atlassian cloud UUID",
+    );
+}
+
+/// `credentials.service` and `credentials.lookup` entries of a static type
+/// may name a token profile their service declares with that kind; no
+/// other entry names one.
+#[test]
+fn shared_credentials_name_a_declared_token_profile_of_their_kind() {
+    let base = sample_broker();
+    let errors_with = |edit: &dyn Fn(&mut BrokerConfig)| {
+        let mut config = base.clone();
+        edit(&mut config);
+        match validate_broker_config(&config) {
+            Ok(()) => Vec::new(),
+            Err(ConfigError::Invalid { errors }) => errors,
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+    };
+    let set = |config: &mut BrokerConfig, mode: &str, service: &str, profile: &str| {
+        let entries = match mode {
+            "service" => &mut config.credentials.service,
+            "lookup" => &mut config.credentials.lookup,
+            _ => &mut config.credentials.per_user,
+        };
+        entries.get_mut(service).unwrap().profile = Some(profile.to_string());
+    };
+    let baseline = errors_with(&|_| {});
+    let added = |edit: &dyn Fn(&mut BrokerConfig)| {
+        errors_with(edit)
+            .into_iter()
+            .filter(|error| !baseline.contains(error))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        added(&|config| set(config, "service", "jira", "atlassian-api-token")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        added(&|config| set(config, "lookup", "gitlab", "gitlab-access-token")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        added(&|config| set(config, "service", "gitlab", "atlassian-api-token")),
+        [
+            "credentials.service.gitlab.profile atlassian-api-token is not a token profile gitlab declares"
+        ]
+    );
+    assert_eq!(
+        added(&|config| set(config, "lookup", "jira", "gitlab-access-token")),
+        [
+            "credentials.lookup.jira.profile gitlab-access-token is not a token profile jira declares"
+        ]
+    );
+    let mismatch = added(&|config| {
+        let credential = config.credentials.lookup.get_mut("gitlab").unwrap();
+        credential.kind = "basic_api_token".to_string();
+        credential.username_ref = Some("env:GITLAB_USERNAME".to_string());
+        set(config, "lookup", "gitlab", "gitlab-access-token");
+    });
+    assert!(
+        mismatch.contains(
+            &"credentials.lookup.gitlab.profile gitlab-access-token stores bearer_token, not basic_api_token"
+                .to_string()
+        ),
+        "{mismatch:?}"
+    );
+    let per_user = added(&|config| {
+        config.credentials.per_user.insert(
+            "jira".to_string(),
+            jira_per_user_credential("/etc/agent-access/jira.json"),
+        );
+        set(config, "per_user", "jira", "atlassian-api-token");
+    });
+    assert!(
+        per_user.contains(
+            &"credentials.per_user.jira.profile is supported only for credentials.service and credentials.lookup entries of type basic_api_token or bearer_token"
+                .to_string()
+        ),
+        "{per_user:?}"
+    );
+
+    // Backend validation sees the profile beside the kind.
+    let mut config = base.clone();
+    set(&mut config, "service", "jira", "atlassian-api-token");
+    let jira = configured_provider_descriptors(&config)
+        .into_iter()
+        .find(|descriptor| descriptor.service == "jira")
+        .unwrap();
+    let sources = BackendCredentials::new(&config.credentials, "jira", &jira);
+    assert_eq!(
+        sources.kinds().service,
+        Some(CredentialSource::static_profile(
+            "basic_api_token",
+            "atlassian-api-token"
+        ))
+    );
+    assert_eq!(
+        sources.kinds().lookup,
+        Some(CredentialSource::static_kind("basic_api_token"))
     );
 }
 
@@ -3693,6 +3810,7 @@ fn rejects_secret_store_outside_per_user_and_relative_store_paths() {
             path: Some("relative-users.json".to_string()),
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -3821,6 +3939,7 @@ fn fake_service_requires_explicit_non_production_enablement() {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.policy.grants[0].service = "fake".to_string();
@@ -5651,6 +5770,7 @@ fn connection_per_user_credential(connection: &str) -> CredentialConfig {
         path: None,
         read_only: None,
         connection: Some(connection.to_string()),
+        profile: None,
     }
 }
 
@@ -5763,6 +5883,7 @@ fn jira_per_user_credential(path: &str) -> CredentialConfig {
         path: Some(path.to_string()),
         read_only: None,
         connection: None,
+        profile: None,
     }
 }
 

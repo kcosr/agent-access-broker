@@ -95,6 +95,7 @@ mod tests {
                 kind: "connection".into(),
                 provider: None,
                 connection: Some(SERVICE.into()),
+                profile: None,
                 username_ref: None,
                 token_ref: None,
                 path: None,

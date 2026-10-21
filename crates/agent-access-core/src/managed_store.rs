@@ -9203,13 +9203,17 @@ fn credential_aad(row: &EncryptedCredentialRow) -> CredentialAad {
     }
 }
 
+/// The row's credential, lent as the row's own stored token profile, so
+/// execution, both lookup phases and verification present it as stored.
 fn decrypt_execution_credential(
     key_ring: &CredentialKeyRing,
     row: &EncryptedCredentialRow,
 ) -> Result<ExecutionCredential, ManagedStoreError> {
     let aad = credential_aad(row);
     let secret = key_ring.decrypt(&row.key_id, &row.secret_nonce, &row.secret_ciphertext, &aad)?;
-    execution_credential_from_secret(&row.credential_kind, secret)
+    execution_credential_from_secret(&row.credential_kind, secret).map(|credential| {
+        agent_access_provider::host::credential_with_profile(credential, row.profile.clone())
+    })
 }
 
 fn collect_rows<T>(
@@ -9330,7 +9334,17 @@ use sqlite_support::sqlite_sidecar_paths;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::{basic_credential, bearer_credential};
+    use agent_access_provider::test_support::{
+        basic_credential, bearer_credential, credential_with_profile,
+    };
+
+    /// The Jira credential the test rows store, lent as their profile.
+    fn jira_cloud_credential(token: &str) -> ExecutionCredential {
+        credential_with_profile(
+            basic_credential("alice@example.com", token),
+            "jira-cloud-api-token",
+        )
+    }
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/group_auto_enrollment_tests.rs");
@@ -13589,7 +13603,7 @@ PRAGMA foreign_keys = ON;
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
         assert_eq!(credential.kind().as_str(), "basic_api_token");
-        assert_eq!(credential, basic_credential("alice@example.com", "pat"));
+        assert_eq!(credential, jira_cloud_credential("pat"));
         let verified = store
             .verify_user_credential(
                 &ring,
@@ -13778,7 +13792,7 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential, basic_credential("alice@example.com", "new-pat"));
+        assert_eq!(credential, jira_cloud_credential("new-pat"));
     }
 
     #[test]
@@ -13890,7 +13904,7 @@ PRAGMA foreign_keys = ON;
         let credential = store
             .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
             .unwrap();
-        assert_eq!(credential, basic_credential("alice@example.com", "pat"));
+        assert_eq!(credential, jira_cloud_credential("pat"));
         let verified = store
             .mark_user_credential_verified_if_current(
                 &verification_candidate.target,
@@ -14201,10 +14215,7 @@ PRAGMA foreign_keys = ON;
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-        assert_eq!(
-            old_candidate.credential,
-            basic_credential("alice@example.com", "old-pat")
-        );
+        assert_eq!(old_candidate.credential, jira_cloud_credential("old-pat"));
         let verified = store
             .mark_user_credential_verified_if_current(
                 &old_candidate.target,
@@ -14279,7 +14290,7 @@ PRAGMA foreign_keys = ON;
             .unwrap();
         assert_eq!(
             current_candidate.credential,
-            basic_credential("alice@example.com", "new-pat")
+            jira_cloud_credential("new-pat")
         );
         let current_verified = store
             .mark_user_credential_verified_if_current(

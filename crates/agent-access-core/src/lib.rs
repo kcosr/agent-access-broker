@@ -755,6 +755,10 @@ pub struct CredentialConfig {
     /// The credential connection a `type = "connection"` per-user entry
     /// names.
     pub connection: Option<String>,
+    /// The token profile a `credentials.service` or `credentials.lookup`
+    /// static credential is lent as; it must be one the service declares
+    /// with the same kind as `type`.
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3107,6 +3111,9 @@ fn validate_credential(
             "{mode}.{service}.connection is supported only for type connection"
         ));
     }
+    if let Some(profile) = credential.profile.as_deref() {
+        validate_shared_credential_profile(services, mode, service, credential, profile, errors);
+    }
     match credential.kind.as_str() {
         "connection" => {
             if mode != "credentials.per_user" {
@@ -3196,6 +3203,41 @@ fn validate_credential(
             "credentials.service.{service}.type must be {}",
             descriptor.credentials.service_kinds.join(" or ")
         ));
+    }
+}
+
+/// A shared credential's `profile`: only `credentials.service` and
+/// `credentials.lookup` entries of a static type name one, and the service
+/// must declare it with that type's kind, so the credential is lent as a
+/// profile the provider knows.
+fn validate_shared_credential_profile(
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    mode: &str,
+    service: &str,
+    credential: &CredentialConfig,
+    profile: &str,
+    errors: &mut Vec<String>,
+) {
+    if !matches!(mode, "credentials.service" | "credentials.lookup")
+        || !matches!(credential.kind.as_str(), "basic_api_token" | "bearer_token")
+    {
+        errors.push(format!(
+            "{mode}.{service}.profile is supported only for credentials.service and credentials.lookup entries of type basic_api_token or bearer_token"
+        ));
+        return;
+    }
+    let Some(descriptor) = services.get(service) else {
+        return;
+    };
+    match descriptor.credential_profile_kind(profile) {
+        Some(kind) if kind == credential.kind => {}
+        Some(kind) => errors.push(format!(
+            "{mode}.{service}.profile {profile} stores {kind}, not {}",
+            credential.kind
+        )),
+        None => errors.push(format!(
+            "{mode}.{service}.profile {profile} is not a token profile {service} declares"
+        )),
     }
 }
 
@@ -4459,7 +4501,10 @@ impl<'a> BackendCredentials<'a> {
 /// rejected by credential validation and report nothing.
 fn shared_credential_source(credential: &CredentialConfig) -> Option<CredentialSource<'_>> {
     match credential.kind.as_str() {
-        "basic_api_token" | "bearer_token" => Some(CredentialSource::static_kind(&credential.kind)),
+        "basic_api_token" | "bearer_token" => Some(match credential.profile.as_deref() {
+            Some(profile) => CredentialSource::static_profile(&credential.kind, profile),
+            None => CredentialSource::static_kind(&credential.kind),
+        }),
         "secret_store" => Some(CredentialSource::SecretStore),
         _ => None,
     }

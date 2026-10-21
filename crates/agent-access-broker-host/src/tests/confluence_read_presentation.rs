@@ -359,6 +359,7 @@ fn confluence_broker_config(audit_file: &str) -> BrokerConfig {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.credentials.lookup.insert(
@@ -371,6 +372,7 @@ fn confluence_broker_config(audit_file: &str) -> BrokerConfig {
             path: None,
             read_only: Some(true),
             connection: None,
+            profile: None,
         },
     );
     let actions = agent_access_confluence::confluence_descriptor(&provider_config)

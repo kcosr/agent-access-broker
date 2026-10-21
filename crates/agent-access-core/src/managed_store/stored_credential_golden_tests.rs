@@ -151,10 +151,14 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
             "{}",
             golden.service
         );
-        let expected = match golden.username {
-            Some(username) => basic_credential(username, golden.token),
-            None => bearer_credential(golden.token),
-        };
+        // Lent as the row's own stored profile.
+        let expected = credential_with_profile(
+            match golden.username {
+                Some(username) => basic_credential(username, golden.token),
+                None => bearer_credential(golden.token),
+            },
+            golden.profile,
+        );
         assert_eq!(credential, expected, "{}", golden.service);
     }
 }
@@ -281,10 +285,13 @@ fn store_with_golden_atlassian_stored_credentials() -> (TempDir, ManagedStore) {
 }
 
 fn expected_golden_credential(golden: &GoldenStoredCredential) -> ExecutionCredential {
-    match golden.username {
-        Some(username) => basic_credential(username, golden.token),
-        None => bearer_credential(golden.token),
-    }
+    credential_with_profile(
+        match golden.username {
+            Some(username) => basic_credential(username, golden.token),
+            None => bearer_credential(golden.token),
+        },
+        golden.profile,
+    )
 }
 
 #[test]

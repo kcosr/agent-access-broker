@@ -339,6 +339,11 @@ fn credential_ring() -> agent_access_core::CredentialKeyRing {
         .unwrap()
 }
 
+/// A Jira token as the Broker lends it: as the connection's profile.
+fn jira_credential(username: &str, token: &str) -> ExecutionCredential {
+    credential_with_profile(basic_credential(username, token), JIRA_PROFILE)
+}
+
 fn jira_secret(token: &str) -> Value {
     json!({"secret": {"username": "alice@example.com", "token": token}})
 }
@@ -796,7 +801,7 @@ async fn administrators_verify_a_service_account_only_through_its_own_grants() {
     assert_eq!(verified["probeService"], "jira");
     assert_eq!(
         *fixture.probe.verified.lock().unwrap(),
-        [basic_credential("robot@example.com", "robot-token")]
+        [jira_credential("robot@example.com", "robot-token")]
     );
 
     // idle holds no grant: the administrator's own Jira grant never
@@ -1273,7 +1278,7 @@ async fn classless_rights_on_the_connection_authorize_each_token_operation() {
     );
     assert_eq!(
         *fixture.probe.verified.lock().unwrap(),
-        [basic_credential("alice@example.com", "classless-token")]
+        [jira_credential("alice@example.com", "classless-token")]
     );
 
     fixture
@@ -1330,7 +1335,7 @@ async fn a_classless_static_principal_invokes_with_the_token_it_stored() {
     assert_eq!(invoked["result"]["key"], "TEST-1", "{invoked}");
     assert_eq!(
         *fixture.probe.invoked.lock().unwrap(),
-        [Some(basic_credential(
+        [Some(jira_credential(
             "alice@example.com",
             "classless-invocation-token"
         ))]

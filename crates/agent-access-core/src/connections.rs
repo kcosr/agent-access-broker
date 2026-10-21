@@ -384,7 +384,8 @@ pub(crate) fn connection_authority_errors(
 
 /// Every consumer declares `profile` with one kind, except that a Git
 /// gateway accepts any token- or basic-kind profile another consumer or the
-/// gateway itself declares.
+/// gateway itself declares, unless a consumer marks it route-bound: only
+/// its declaring provider may present such a profile.
 fn validate_token_profile(
     config: &BrokerConfig,
     label: &str,
@@ -401,9 +402,18 @@ fn validate_token_profile(
             return;
         }
     };
+    let route_bound = consumers.iter().any(|(_, descriptor)| {
+        descriptor
+            .credential_profile(profile)
+            .is_some_and(|declared| declared.route_bound)
+    });
     for (service, descriptor) in consumers {
         if config.gateways.contains_key(*service) {
-            if !matches!(kind, Some("bearer_token" | "basic_api_token")) {
+            if route_bound {
+                errors.push(format!(
+                    "{label}.token_profile {profile} is route-bound: only the provider declaring it may present it, so the gateway {service} cannot consume this connection"
+                ));
+            } else if !matches!(kind, Some("bearer_token" | "basic_api_token")) {
                 errors.push(format!(
                     "{label}.token_profile {profile} is not a token or basic profile the gateway {service} can present"
                 ));
@@ -555,6 +565,7 @@ mod tests {
                     path: None,
                     read_only: None,
                     connection: Some("shared".into()),
+                    profile: None,
                 },
             );
         }

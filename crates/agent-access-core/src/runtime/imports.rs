@@ -457,6 +457,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                     read_only: None,
                     provider: None,
                     connection: Some(service.clone()),
+                    profile: None,
                 },
             );
         }

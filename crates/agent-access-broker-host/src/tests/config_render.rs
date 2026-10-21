@@ -352,6 +352,7 @@ fn credential_value(credential: &CredentialConfig) -> Value {
         path,
         read_only,
         connection,
+        profile,
     } = credential;
     Fields::default()
         .put("type", kind.as_str())
@@ -361,6 +362,7 @@ fn credential_value(credential: &CredentialConfig) -> Value {
         .opt("path", path.clone())
         .opt("read_only", *read_only)
         .opt("connection", connection.clone())
+        .opt("profile", profile.clone())
         .value()
 }
 

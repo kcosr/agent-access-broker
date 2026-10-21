@@ -5088,6 +5088,7 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
             kind: "connection".into(),
             provider: None,
             connection: Some("oauth_stub".into()),
+            profile: None,
             username_ref: None,
             token_ref: None,
             path: None,
@@ -5232,6 +5233,7 @@ async fn readiness_accepts_configured_secret_store_references() {
             path: Some(store_path.display().to_string()),
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -5287,6 +5289,29 @@ fn local_file_secret_store_resolves_per_user_material() {
 
     assert_eq!(resolved.kind().as_str(), "bearer_token");
     assert_eq!(resolved, bearer_credential("principal-token"));
+}
+
+/// A shared credential is lent as the token profile its entry names, and
+/// without one as its kind alone.
+#[test]
+fn shared_credentials_are_lent_as_their_configured_profile() {
+    let token = write_temp_secret("shared-token");
+    let mut credential = fake_service_credential(format!("file:{}", token.display()));
+    let unprofiled = load_execution_credential("gitlab", "service", &credential, None).unwrap();
+    assert_eq!(unprofiled.profile(), None);
+    assert_eq!(unprofiled, bearer_credential("shared-token"));
+    credential.profile = Some("gitlab-access-token".to_string());
+    for mode in ["service", "lookup"] {
+        let profiled = load_execution_credential("gitlab", mode, &credential, None).unwrap();
+        assert_eq!(profiled.profile(), Some("gitlab-access-token"));
+        assert_eq!(
+            profiled,
+            agent_access_provider::test_support::credential_with_profile(
+                bearer_credential("shared-token"),
+                "gitlab-access-token"
+            )
+        );
+    }
 }
 
 #[test]
@@ -8941,6 +8966,7 @@ fn lookup_trace_basic_credential(token: &str, read_only: bool) -> CredentialConf
         path: None,
         read_only: read_only.then_some(true),
         connection: None,
+        profile: None,
     }
 }
 
@@ -9143,6 +9169,7 @@ fn fake_per_user_credential(path: &str) -> CredentialConfig {
         path: Some(path.to_string()),
         read_only: None,
         connection: None,
+        profile: None,
     }
 }
 

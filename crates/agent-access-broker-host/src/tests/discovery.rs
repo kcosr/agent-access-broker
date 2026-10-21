@@ -47,6 +47,7 @@ async fn cloudbees_ci_catalog_and_discovery_follow_job_grant_and_context() {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.policy.resources.push(ResourceDefinition {
@@ -191,6 +192,7 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     for (id, selector) in [

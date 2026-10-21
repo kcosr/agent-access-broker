@@ -17,16 +17,16 @@ use agent_access_provider::presentation::{
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
     BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
-    ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, MutationReceipt,
-    NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
-    ProviderResult, ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
-    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
-    StaticCredentialKind, UpstreamAuthority, UpstreamAuthorization, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
-    complete_upstream_trace, file_upload_body, parse_backend_config, read_bounded_body,
-    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
-    validate_upstream_base_url,
+    ClientProfile, CredentialDescriptor, CredentialProfile, EgressDeclaration, EgressProxyConfig,
+    MutationReceipt, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
+    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, ReasonCode,
+    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
+    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
+    ServiceDescriptor, StateDisposition, StaticCredentialKind, UpstreamAuthority,
+    UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
+    ValidationContext, attachment_upload_plan, complete_upstream_trace, file_upload_body,
+    parse_backend_config, read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
+    validate_upstream_allowlist, validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -306,7 +306,16 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         .with_credentials(
             CredentialDescriptor::default()
                 .service_kinds(&["bearer_token"])
-                .profile("api_token", "bearer_token"),
+                .with_profile(
+                    CredentialProfile::new("api_token", "bearer_token").with_label("API token"),
+                )
+                // A token only this provider may present: configuration keeps
+                // it from a Git gateway consumer.
+                .with_profile(
+                    CredentialProfile::new("routed_token", "bearer_token")
+                        .with_label("Routed token")
+                        .route_bound(),
+                ),
         );
     // The upstream its credentials act on, for credential connections.
     match UpstreamAuthority::from_base_url(&config.base_url) {
