@@ -78,8 +78,8 @@ async fn browser_context(
 }
 
 /// The registrations the signed-in user's credential connections select
-/// OAuth for, each with its binding, the selecting connections and their
-/// consumers in configured order.
+/// OAuth for, each with its binding, the selecting connections by connection
+/// ID and their consumers.
 struct RegistrationConsumers {
     binding: OAuthBinding,
     connections: Vec<String>,
@@ -238,6 +238,8 @@ pub(crate) async fn list(
                     .as_ref()
                     .map(|connection| connection.description)
             });
+        // The row is labeled by the first selecting connection by ID, not by
+        // the order of the configuration file.
         let display_name = connections::display_name(runtime, &selected.connections[0]);
         rows.push(json!({"registration":registration_id,
             "permissionProfile":selected.binding.permission_profile,

@@ -3446,8 +3446,11 @@ also stays listed whatever the caller's entitlement or ownership, as a
 cleanup-only row with `consumers: []`, `canConnect: false` and
 `canDisconnect: false`, so provider-side cleanup stays visible after the owner
 lost the last grant and disconnected.
-`displayName` is the first selecting connection's configured `display_name`, or
-its ID, and `connectionDescription` comes from an entitled consumer's backend.
+`displayName` is the configured `display_name` of the first connection, by
+connection ID, that selects the registration for the caller, or that
+connection's ID; connections sharing a registration should set the same
+`display_name`. `connectionDescription` comes from an entitled consumer's
+backend.
 An owned connection whose registration no credential connection selects for the
 caller any more, because its last consumer was removed or rebound, is still
 listed for local disconnect on ownership alone: its `displayName` is the

@@ -1003,6 +1003,45 @@ async fn connection_rows_describe_services_from_their_descriptors() {
     assert_eq!(rows[0]["canDisconnect"], false);
 }
 
+/// Connections sharing a registration share one row, labeled by the first
+/// of them by connection ID whatever order configuration lists them in.
+#[tokio::test]
+async fn a_shared_registration_row_is_labeled_by_its_first_connection_by_id() {
+    let fixture = oauth_fixture_with(
+        Some("user:alice"),
+        |_, config| {
+            let connections = &mut config.credentials.connections;
+            connections.get_mut("oauth_stub").unwrap().display_name = Some("Records".into());
+            connections.insert(
+                "archive".into(),
+                agent_access_core::ConnectionConfig {
+                    display_name: Some("Records archive".into()),
+                    token_profile: None,
+                    oauth: Some(agent_access_core::ConnectionOAuthConfig {
+                        registration: "stub".into(),
+                        profile: "read".into(),
+                    }),
+                },
+            );
+        },
+        Vec::new(),
+    )
+    .await;
+    let response = fixture
+        .browser(
+            Method::GET,
+            "/v1/oauth/connections",
+            "oauth-shared-label",
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = response_json(response).await["result"].clone();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
+    assert_eq!(rows[0]["registration"], "stub");
+    assert_eq!(rows[0]["displayName"], "Records archive");
+}
+
 /// A connection that selects OAuth for its user stores no token: the token
 /// routes refuse it and point to the OAuth connection routes.
 #[tokio::test]

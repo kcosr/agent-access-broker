@@ -55,7 +55,10 @@ each person's OAuth connection: one consent and one refresh family per owner
 and registration. Each service still acquires its own service-bound lease, and
 its own grants decide what it may do. An invocation holds one lease for its
 metadata lookups and its execution. Connecting, reconnecting or disconnecting
-affects every service that uses a connection on that registration. Imported MCP
+affects every service that uses a connection on that registration. The portal
+lists the registration once, labeled with the `display_name` of the first
+selecting connection by connection ID, or that connection's ID, so give
+connections that share a registration the same `display_name`. Imported MCP
 OAuth services publish their own single-service connection; see
 [imported OAuth](imported-oauth.md).
 
@@ -463,10 +466,12 @@ target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
 # People connect through OAuth; service accounts keep each product's
 # administrator-provisioned scoped token.
 [credentials.connections.jira]
+display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
+display_name = "Atlassian"
 token_profile = "atlassian-bearer-token"
 oauth = { registration = "atlassian", profile = "default" }
 

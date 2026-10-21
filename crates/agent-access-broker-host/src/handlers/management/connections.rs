@@ -205,7 +205,7 @@ pub(super) fn target(
     })
 }
 
-/// Every effective connection ID, in configured order.
+/// Every effective connection ID, in ID order.
 pub(super) fn connection_ids(runtime: &BrokerRuntime) -> Vec<String> {
     runtime
         .effective_credentials()

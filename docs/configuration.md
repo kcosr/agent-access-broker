@@ -481,7 +481,7 @@ Connection keys (`[credentials.connections.<id>]`):
 
 | Key | Rule |
 | --- | --- |
-| `display_name` | Optional name that management shows, the connection ID when unset; must not be empty when set |
+| `display_name` | Optional name that management shows, the connection ID when unset; must not be empty when set. Connections that select one OAuth registration share one OAuth row, labeled by the first of them by connection ID, so give them the same name |
 | `token_profile` | Optional stored token form, one of the [token profiles](#connection-token-profiles) |
 | `oauth` | Optional `{ registration, profile }`: a configured `[oauth.registrations.<registration>]` and one of its `permission_profiles` |
 
