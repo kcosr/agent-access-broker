@@ -56,10 +56,8 @@ import {
   oauthAccountLabel,
   oauthConnected,
   oauthConnectionStatus,
-  oauthConnectUnavailableMessage,
   oauthRemoteRevocation,
   oauthRevocationNeedsAttention,
-  oauthScopeEvidence,
   useOAuthConnectionActions
 } from "../../components/oauth-connections";
 
@@ -111,7 +109,11 @@ function rowConsumers(row: CredentialRow) {
   }
 }
 
-/** The row's status; an administered principal's OAuth connection status is not listed, so its row names who manages it. */
+/**
+ * The row's status; an administered principal's OAuth connection status is not
+ * listed, so its row names who manages it. A ready connection is quiet unless
+ * a revocation problem stands beside it.
+ */
 function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boolean } {
   switch (row.kind) {
     case "token": {
@@ -122,13 +124,25 @@ function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boole
       return { label: "Unavailable", tone: "neutral", quiet: false };
     case "oauth": {
       const status = oauthConnectionStatus(row.oauth);
-      return { label: status.label, tone: status.tone, quiet: row.oauth.connection?.status === "ready" };
+      return { label: status.label, tone: status.tone, quiet: row.oauth.connection?.status === "ready" && !rowRevocationProblem(row) };
     }
     case "administered-oauth":
       return { ...ADMINISTERED_OAUTH_STATUS, quiet: false };
     case "retained":
       return { label: "Not used", tone: "neutral", quiet: false };
   }
+}
+
+/**
+ * A failed or unconfirmed remote revocation of the ended connections of an
+ * OAuth row, which the row's status shows beside the connection status, with
+ * its explanation as the tooltip. Pending and successful revocations show
+ * only in the drawer.
+ */
+function rowRevocationProblem(row: CredentialRow) {
+  if (row.kind === "oauth") return oauthRevocationNeedsAttention(row.oauth.remoteRevocation) ? oauthRemoteRevocation(row.oauth) : null;
+  if (row.kind === "administered-oauth") return oauthRevocationNeedsAttention(row.oauth.remoteRevocation) ? administeredRemoteRevocation(row.oauth.remoteRevocation) : null;
+  return null;
 }
 
 export function needsAttention(row: CredentialRow) {
@@ -261,12 +275,6 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
   const writable = canWriteSubject(useSession().session, subject);
   const { confirm } = useModal();
   const filtered = Boolean(list.state.q || list.state.status !== "all");
-  // Server-default evidence, unavailability and administered revocation notes need room to wrap.
-  const wrapPermissions = rows.some(
-    (row) =>
-      (row.kind === "oauth" && (row.oauth.scopeMode === "server_default" || row.oauth.connectUnavailableReason !== null)) ||
-      (row.kind === "administered-oauth" && administeredRemoteRevocation(row.oauth.remoteRevocation) !== null)
-  );
   const administeredOAuth = rows.some((row) => row.kind === "administered-oauth");
   const columns = useMemo<DataColumn<CredentialRow>[]>(
     () => [
@@ -276,6 +284,14 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         cell: (row) => {
           const state = rowState(row);
           return <StateCell label={state.label} tone={state.tone} quiet={state.quiet} title={row.kind === "administered-oauth" ? ADMINISTERED_OAUTH_NOTICE : undefined} />;
+        },
+        extra: (row) => {
+          const revocation = rowRevocationProblem(row);
+          return revocation ? (
+            <Badge tone={revocation.tone} title={revocation.message}>
+              {revocation.label}
+            </Badge>
+          ) : null;
         }
       },
       {
@@ -328,43 +344,6 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         }
       },
       {
-        key: "permissions",
-        header: "Permissions",
-        priority: 4,
-        truncate: !wrapPermissions,
-        wrap: wrapPermissions,
-        minWidth: wrapPermissions ? "26ch" : "12ch",
-        className: "wb-cell-muted",
-        hideWhenEmpty: true,
-        cell: (row) => {
-          if (row.kind === "administered-oauth") {
-            // Its profile is not listed: no permission text.
-            const revocation = administeredRemoteRevocation(row.oauth.remoteRevocation);
-            return revocation ? <span className="wb-small">{`${revocation.label}: ${revocation.message}`}</span> : null;
-          }
-          if (row.kind !== "oauth") return null;
-          const target = row.oauth;
-          const evidence = target.scopeMode === "server_default" ? oauthScopeEvidence(target) : null;
-          const unavailable = oauthConnectUnavailableMessage(target);
-          const revocation = oauthRemoteRevocation(target);
-          // A cleanup-only row's profile is unknown: no permission text.
-          const permissions =
-            target.scopeMode === null ? null : target.scopeMode === "explicit" ? target.connectionDescription ?? "Shown during connection" : "Server-default permissions";
-          const notes = [evidence, unavailable, revocation ? `${revocation.label}: ${revocation.message}` : null].filter((note): note is string => Boolean(note));
-          return (
-            <span>
-              {permissions ? <span>{permissions}</span> : null}
-              {notes.map((note, index) => (
-                <span key={note}>
-                  {permissions || index > 0 ? <br /> : null}
-                  <span className="wb-small">{note}</span>
-                </span>
-              ))}
-            </span>
-          );
-        }
-      },
-      {
         key: "error",
         header: "Last error",
         priority: 3,
@@ -407,7 +386,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         }
       }
     ],
-    [connections, actions, writable, confirm, wrapPermissions]
+    [connections, actions, writable, confirm]
   );
   return (
     <>

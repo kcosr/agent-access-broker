@@ -75,6 +75,18 @@ function render(role: "admin" | "auditor", credentials: CredentialList, open?: s
 function tableRow(html: string, key: string) {
   return (html.match(/<tr\b[\s\S]*?<\/tr>/g) ?? []).find((row) => row.includes(`data-wb-row="${key}"`)) ?? "";
 }
+/** A row's first cell, the Status column. */
+function statusCell(row: string) {
+  return /<t[dh]\b[\s\S]*?<\/t[dh]>/.exec(row)?.[0] ?? "";
+}
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+/** The table's column header texts. */
+function columnHeaders(html: string) {
+  const head = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
+  return (head.match(/<th\b[\s\S]*?<\/th>/g) ?? []).map((cell) => cell.replace(/<[^>]*>/g, "").trim());
+}
 /** The drawer's markup. */
 function drawer(html: string) {
   return html.slice(html.indexOf("<aside"));
@@ -130,18 +142,29 @@ describe("an administered principal's OAuth registrations", () => {
     ["revoked", "Revoked at provider", "revoked the tokens of the connections the broker ended"],
     ["failed", "Revocation failed", "did not revoke every token of an ended connection"],
     ["unconfirmed", "Revocation unconfirmed", "token renewal&#x27;s outcome was lost for an ended connection"]
-  ] as const)("show a %s remote revocation as concerning ended connections, in the row and the drawer", (state, label, explanation) => {
+  ] as const)("show a %s remote revocation as concerning ended connections in the drawer, and in the row's status only when it needs cleanup", (state, label, explanation) => {
     const html = render("admin", morgan(state), "oauth:gitlab");
-    for (const surface of [tableRow(html, "oauth:gitlab"), drawer(html)]) {
-      expect(surface).toContain(label);
-      expect(surface).toContain(explanation);
+    const row = tableRow(html, "oauth:gitlab");
+    const cleanup = state === "failed" || state === "unconfirmed";
+    expect(drawer(html)).toContain(label);
+    expect(drawer(html)).toContain(explanation);
+    // The row's status keeps who manages the account and adds a revocation
+    // that needs cleanup as a danger badge, explained by its tooltip; a
+    // pending or successful revocation shows only in the drawer.
+    const status = statusCell(row);
+    expect(status).toContain("Managed by user");
+    expect(status).toContain('title="Only the user can connect, reconnect or disconnect this account, from their own Credentials page."');
+    expect(status.includes('<span class="wb-badge wb-tone-danger" title="')).toBe(cleanup);
+    expect(row.includes(label)).toBe(cleanup);
+    expect(row.includes(explanation)).toBe(cleanup);
+    if (cleanup) expect(status).toMatch(new RegExp(`<span class="wb-badge wb-tone-danger" title="[^"]*${escapeRegExp(explanation)}[^"]*">${label}</span>`));
+    for (const surface of [row, drawer(html)]) {
       // No current connection is known, so none is described.
       expect(surface).not.toContain("current connection is not affected");
       expect(surface).not.toContain("Not connected");
       expect(surface).not.toContain("Connected");
     }
-    const cleanup = state === "failed" || state === "unconfirmed";
-    for (const surface of [tableRow(html, "oauth:gitlab"), drawer(html)]) {
+    for (const surface of [row, drawer(html)]) {
       // The administrator cannot act on the account; the user, or a provider administrator, revokes.
       expect(surface.includes("The user must revoke the broker application&#x27;s access at the provider")).toBe(cleanup);
       expect(surface.includes("Preferences › Applications › Authorized applications")).toBe(cleanup);
@@ -163,11 +186,22 @@ describe("an administered principal's OAuth registrations", () => {
     expect(drawer(render("admin", morgan(null), "oauth:atlassian"))).toContain(">jira, confluence</span>");
   });
 
+  test("list no Permissions column; the remote revocation's explanation is in the drawer and the status tooltip", () => {
+    const html = render("auditor", morgan("failed"));
+    // An auditor has no row actions, not even for the retained row.
+    expect(columnHeaders(html)).toEqual(["Status", "Connection", "Used by", "Method", "Verified"]);
+    // Only the badge's label is cell text.
+    const text = tableRow(html, "oauth:gitlab").replace(/<[^>]*>/g, " ");
+    expect(text).toContain("Revocation failed");
+    expect(text).not.toContain("did not revoke every token");
+  });
+
   test("list a cleanup-only registration with no current grants", () => {
     const html = render("admin", morgan("revoked"), "oauth:gitlab-ops");
     const row = tableRow(html, "oauth:gitlab-ops");
     expect(row).toContain("No current grants");
-    expect(row).toContain("Revocation failed");
+    expect(statusCell(row)).toContain("Managed by user");
+    expect(statusCell(row)).toContain(">Revocation failed</span>");
     expect(drawer(html)).toContain("No service this account is granted uses this connection now.");
     expect(drawer(html)).toContain("Also used by 2 other services this account is not granted.");
   });

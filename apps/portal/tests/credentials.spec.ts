@@ -8,8 +8,9 @@ import { portalDist } from "./support/binaries";
 
 // Deterministic browser contract for the one Credentials list: one row per
 // credential connection naming the entitled services it serves, one row per
-// OAuth registration (read-only for an administered principal), and retained
-// stored rows deleted by ID. The real-store flows live in portal.spec.ts and
+// OAuth registration (read-only for an administered principal) whose status
+// flags a remote revocation that needs cleanup, and retained stored rows
+// deleted by ID. The real-store flows live in portal.spec.ts and
 // my-access-metadata.spec.ts.
 let server: Server;
 let baseUrl: string;
@@ -128,6 +129,8 @@ const morganCredentials = {
 
 const list = (page: Page) => page.getByRole("table", { name: "Credentials", exact: true });
 const row = (page: Page, name: string) => list(page).getByRole("row").filter({ has: page.getByRole("link", { name, exact: true }) });
+/** A row's Status cell, its first data cell (the connection name is the row header). */
+const statusCell = (page: Page, name: string) => row(page, name).getByRole("cell").first();
 
 test("one row per connection names the services it serves and verifies through a Git service", async ({ page }, testInfo) => {
   const { writes, errors } = await fixture(page);
@@ -157,7 +160,12 @@ test("OAuth connections are one row per registration and disconnect names every 
   await expect(gmail).toHaveCount(1);
   await expect(gmail).toContainText("Connected");
   await expect(gmail).toContainText("morgan@example.test");
-  await expect(gmail).toContainText("Read and manage your mailbox");
+  // What connecting allows is in the drawer; the list has no Permissions column.
+  // Columns hidden by width still count.
+  await expect(list(page).getByRole("columnheader", { includeHidden: true })).toHaveText(["Status", "Connection", "Used by", "Method", "Verified", "Row actions"]);
+  await expect(gmail).not.toContainText("Read and manage your mailbox");
+  await gmail.getByRole("link", { name: "Gmail", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Gmail credential", exact: true })).toContainText("Read and manage your mailbox");
   await gmail.getByRole("button", { name: "Disconnect", exact: true }).click();
   const confirm = page.getByRole("alertdialog", { name: "Disconnect account?", exact: true });
   await expect(confirm).toContainText("Gmail and 1 other service stop using this account.");
@@ -167,15 +175,24 @@ test("OAuth connections are one row per registration and disconnect names every 
   await expect(page.getByText("Account disconnected. Access through the broker has ended, and the provider revoked every token the broker held for the account.")).toBeVisible();
 });
 
-test("an OAuth connection's remote revocation state and the provider-side action show in its row", async ({ page }) => {
+test("an OAuth connection's unconfirmed remote revocation shows in its status, with the provider-side action in its tooltip and drawer", async ({ page }) => {
   const { errors } = await fixture(page);
   const gitlab = row(page, "GitLab account");
   await expect(gitlab).toHaveCount(1);
-  await expect(gitlab).toContainText("Revocation unconfirmed");
+  // The connection's own status stays beside the revocation problem.
+  const status = statusCell(page, "GitLab account");
+  await expect(status).toContainText("Not connected");
+  const badge = status.getByText("Revocation unconfirmed", { exact: true });
+  await expect(badge).toBeVisible();
   // The state concerns the connection the broker ended, not current access.
-  await expect(gitlab).toContainText("outcome was lost for an ended connection");
-  await expect(gitlab).toContainText("Preferences › Applications › Authorized applications");
+  await expect(badge).toHaveAttribute("title", /outcome was lost for an ended connection.*Preferences › Applications › Authorized applications/);
+  await expect(gitlab).not.toContainText("outcome was lost");
   await expect(row(page, "Gmail")).not.toContainText("Revocation");
+  await expect(page.getByRole("group", { name: "Credential status" }).getByRole("button", { name: /^Needs attention/ })).toContainText("1");
+  await gitlab.getByRole("link", { name: "GitLab account", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "GitLab account credential", exact: true });
+  await expect(drawer).toContainText("Revocation unconfirmed. A token renewal's outcome was lost for an ended connection");
+  await expect(drawer).toContainText("Preferences › Applications › Authorized applications");
   expect(errors).toEqual([]);
 });
 
@@ -221,15 +238,17 @@ for (const role of ["admin", "auditor"] as const) {
     await expect(gitlab).toContainText("Managed by user");
     await expect(gitlab).toContainText("GitLab REST and GitLab Git");
     await expect(gitlab).toContainText("OAuth · gitlab");
-    await expect(gitlab).toContainText("Revocation unconfirmed");
+    const status = statusCell(page, "GitLab");
+    await expect(status).toContainText("Managed by user");
+    const badge = status.getByText("Revocation unconfirmed", { exact: true });
+    await expect(badge).toBeVisible();
     // The state concerns the connection the broker ended; the user, or a provider administrator, revokes.
-    await expect(gitlab).toContainText("outcome was lost for an ended connection");
-    await expect(gitlab).toContainText("The user must revoke the broker application's access at the provider");
-    await expect(gitlab).toContainText("Preferences › Applications › Authorized applications");
+    await expect(badge).toHaveAttribute("title", /outcome was lost for an ended connection.*The user must revoke the broker application's access at the provider.*Preferences › Applications › Authorized applications/);
+    await expect(gitlab).not.toContainText("outcome was lost");
     await expect(row(page, "Gmail")).not.toContainText("Revocation");
     const cleanup = row(page, "GitLab Ops");
     await expect(cleanup).toContainText("No current grants");
-    await expect(cleanup).toContainText("Revocation failed");
+    await expect(statusCell(page, "GitLab Ops").getByText("Revocation failed", { exact: true })).toBeVisible();
     await expect(list(page).getByRole("button", { name: /^(Connect account|Reconnect|Disconnect|Return to authorization tab|Delete)$/ })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`credentials-administered-oauth-${role}.png`), fullPage: true });
 
