@@ -1211,7 +1211,9 @@ dependency_inward = "is blocked by"
   whitespace.
 - `cloud_id` is optional in general, but when `allowed_upstream_hosts` includes
   `api.atlassian.com` (the Atlassian gateway) it is required and must be a valid
-  UUID.
+  UUID. Any UUID form is accepted, such as uppercase or braced; the gateway
+  route, continuation bindings and [Atlassian OAuth](oauth.md#atlassian-registration)
+  target checks use its lowercase hyphenated form.
 - `allowed_upstream_hosts` must be non-empty. Each entry is an `https` origin
   with a concrete (non-wildcarded) host; only `*` and `**` are valid wildcard
   path segments, and credentials in the URL are rejected. `*` matches one path

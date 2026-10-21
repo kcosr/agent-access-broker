@@ -491,7 +491,9 @@ startup and reload check, without contacting Atlassian:
 - The registration has exactly one permission profile. It requests explicit
   `scopes` including `read:me` and `offline_access`, its `audience` is
   `api.atlassian.com`, and its `target` is the site's cloud ID written as a
-  lowercase hyphenated UUID, exactly as the providers' `cloud_id`.
+  lowercase hyphenated UUID, as Atlassian writes it. The providers' `cloud_id`
+  may write the same UUID in another form, such as uppercase or braced; the
+  Broker compares, routes and binds its lowercase hyphenated form.
 - Every service using the connection acts through the gateway on that cloud
   ID: Jira and Confluence whose `cloud_id` is the target and whose
   `allowed_upstream_hosts` include `api.atlassian.com`. Any other consumer

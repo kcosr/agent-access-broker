@@ -441,6 +441,26 @@ fn consumers_must_use_the_gateway_on_the_profiles_site() {
             "it acts through the Atlassian gateway on cloud ID {OTHER_CLOUD_ID}, not cloud ID {CLOUD_ID}"
         )
     );
+    // A provider may write its cloud ID in any UUID form; the authority it
+    // declares names the site as the lowercase hyphenated target does, and
+    // another site is named in that form too.
+    let braced = format!("{{{CLOUD_ID}}}");
+    let urn = format!("urn:uuid:{CLOUD_ID}");
+    let simple = CLOUD_ID.replace('-', "");
+    for written in [braced, urn, simple] {
+        check(Some(site_authority(Some(&written), true)))
+            .unwrap_or_else(|error| panic!("{written}: {error}"));
+    }
+    assert_eq!(
+        check(Some(site_authority(
+            Some(&format!("{{{OTHER_CLOUD_ID}}}")),
+            true
+        )))
+        .unwrap_err(),
+        format!(
+            "it acts through the Atlassian gateway on cloud ID {OTHER_CLOUD_ID}, not cloud ID {CLOUD_ID}"
+        )
+    );
     // The site route alone, with or without a cloud ID.
     assert_eq!(
         check(Some(site_authority(Some(CLOUD_ID), false))).unwrap_err(),
