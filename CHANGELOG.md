@@ -1053,50 +1053,18 @@ All notable changes to this project are documented in this file.
   identity-token record for every human without one, and creates it with every
   new human; rolling back across it needs a pre-migration backup. See
   [managed identity](docs/managed-identity.md#access-path-controls).
-- `browser_auth.oidc.microsoft.membership_renewal` (default `false`) makes
-  Microsoft sign-in also request `offline_access` and store the returned
-  refresh token, encrypted under the credential key ring with the values of
-  its ID token, for each Microsoft login method; a sign-in without a usable
-  token records that none was issued. Turning it off deletes every stored
-  token, as do unlinking the login method, disabling the principal, disabling
-  Microsoft sign-in and changing its client ID. While a login method has such
-  a record, a sign-in replaces its Microsoft group evidence only when its ID
-  token was issued after every token observed for the method, by Microsoft's
-  `iat`; a sign-in that keeps the evidence still signs in and records its
-  token. `oidc.login.succeeded` audit details report `membershipEvidence`
-  (`replaced` or `kept_newer`). Managed-store migration
-  `031_oidc_membership_renewal` adds the table without changing existing data;
-  rolling back across it needs a pre-migration backup.
-- With `membership_renewal` enabled, a request authenticated as a person whose
-  Microsoft group evidence has expired, or expires within a quarter of
-  `external_membership_ttl`, renews it on demand: the Broker redeems the stored
-  refresh token at Microsoft's token endpoint, validates the new ID token like
-  a sign-in and against the original token's `sub`, `aud`, `azp`, nonce and
-  `auth_time`, and replaces the evidence with its complete groups. Expired
-  evidence makes the request wait for the renewal once, for at most 15
-  seconds, then checks its identity again; evidence about to expire renews
-  while the request proceeds. One renewal runs per login method and at most
-  eight at once; attempts for one person are at least 60 seconds apart,
-  failures back off (30 seconds doubling to 15 minutes, varied by up to 20%,
-  never shorter than Microsoft's `Retry-After`, at least an hour when
-  blocked), and a 429 pauses every renewal. A sign-in-required error or a
-  token for another identity ends renewal until the next sign-in; nothing
-  extends expired evidence. Outcomes are audited as
-  `oidc.membership.renewed` and `oidc.membership.renewal_failed`, with the new
-  reason codes `oidc_sign_in_required` and `oidc_client_rejected`, and logged
-  as `oidc_membership_renewal` events without tokens or Microsoft's error
-  descriptions. Discovery requests renew too, since renewal is part of identity
-  admission; they still never contact upstream services or refresh OAuth
-  connections.
-- `GET /v1/me` reports `microsoftMembership` (`validUntil` and the renewal
-  status, or `null`) for a person with a Microsoft login method, and
-  `GET /v1/admin/principals/{principal}/login-methods` reports the Microsoft
-  method's `oidc.membershipRenewal`. The status has `state` (`active`,
-  `retrying`, `blocked`, or the ended reason `sign_in_required`, `not_issued`
-  or `identity_mismatch`), `lastRenewedAt`, `nextAttemptAfter` and
-  `lastFailure`. The portal shows it under the principal's Microsoft sign-in
-  method, and **Account** tells the signed-in person whether their Microsoft
-  groups renew automatically or need a new sign-in.
+- Microsoft membership renewal (`browser_auth.oidc.microsoft.membership_renewal`,
+  off by default). With it on, Microsoft sign-in also requests `offline_access`
+  and the Broker keeps the refresh token encrypted; requests from that person
+  then renew expired or expiring Entra group evidence on demand, so their
+  agents keep group-derived access without returning to the portal until
+  Microsoft revokes or expires the token. Outcomes are audited as
+  `oidc.membership.renewed` and `oidc.membership.renewal_failed` (new reason
+  codes `oidc_sign_in_required` and `oidc_client_rejected`), and `GET /v1/me`,
+  the admin login-method listing and the portal show each person's renewal
+  status. Managed-store migration `031_oidc_membership_renewal`; rolling back
+  across it needs a pre-migration backup. See the
+  [operator guide](docs/operator-guide.md#microsoft-membership-renewal).
 
 ### Changed
 
