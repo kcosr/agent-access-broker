@@ -1447,12 +1447,14 @@ pub agent_access_provider::ReasonCode::ManagedStoreUnavailable
 pub agent_access_provider::ReasonCode::ManagementDenied
 pub agent_access_provider::ReasonCode::MutationVerificationFailed
 pub agent_access_provider::ReasonCode::OidcAdmissionDenied
+pub agent_access_provider::ReasonCode::OidcClientRejected
 pub agent_access_provider::ReasonCode::OidcFlowExpired
 pub agent_access_provider::ReasonCode::OidcFlowInvalid
 pub agent_access_provider::ReasonCode::OidcGroupClaimsIncomplete
 pub agent_access_provider::ReasonCode::OidcIdentityInvalid
 pub agent_access_provider::ReasonCode::OidcLoginMethodConflict
 pub agent_access_provider::ReasonCode::OidcProviderDenied
+pub agent_access_provider::ReasonCode::OidcSignInRequired
 pub agent_access_provider::ReasonCode::OidcUnavailable
 pub agent_access_provider::ReasonCode::OperationCancelled
 pub agent_access_provider::ReasonCode::OperationFailed

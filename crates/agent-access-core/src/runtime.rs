@@ -2950,6 +2950,25 @@ impl BrokerRuntime {
         self.resolve_admitted_identity(headers, &admission)
     }
 
+    /// Resolves the request's identity like [`Self::resolve_identity`],
+    /// returning its ingress admission and the attested proof and membership
+    /// renewal hint read with it.
+    pub fn resolve_identity_with_admission(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(IngressAdmission, AdmittedIdentity), IdentityFailure> {
+        let admission = self.admit_ingress(headers)?;
+        let admitted = self.resolve_admitted_identity_with_proof(headers, &admission)?;
+        Ok((admission, admitted))
+    }
+
+    /// Whether this generation's audit store can accept records now,
+    /// without appending one: the audit preflight of work whose only record
+    /// is written after it completes.
+    pub async fn check_audit_writable(&self) -> Result<(), RuntimeError> {
+        self.audit.check_writable().await
+    }
+
     fn resolve_identity_with_anonymous_fallback(
         &self,
         headers: &HeaderMap,
@@ -2970,7 +2989,7 @@ impl BrokerRuntime {
             };
             let resolved = match source.resolve(&token)? {
                 SourceResolution::NoMatch => continue,
-                SourceResolution::Resolved(resolved) => resolved,
+                SourceResolution::Resolved(resolved) => *resolved,
             };
             let source_audit = source.audit(&resolved);
             return Ok(AdmittedIdentity {
@@ -2983,6 +3002,7 @@ impl BrokerRuntime {
                     Some(source_audit),
                 ),
                 proof: None,
+                membership_renewal: resolved.membership_renewal,
             });
         }
 
@@ -2994,6 +3014,7 @@ impl BrokerRuntime {
             Ok(AdmittedIdentity {
                 identity: IdentityContext::anonymous(),
                 proof: None,
+                membership_renewal: None,
             })
         } else {
             Err(IdentityFailure::Required)
@@ -3668,10 +3689,12 @@ impl BrokerRuntime {
         })
     }
 
+    /// The identity of a Git gateway's Basic broker token, with the
+    /// membership renewal hint read with it.
     pub fn resolve_gateway_basic_broker_token(
         &self,
         token: &str,
-    ) -> Result<IdentityContext, IdentityFailure> {
+    ) -> Result<AdmittedIdentity, IdentityFailure> {
         if token.trim().is_empty() {
             return Err(IdentityFailure::Invalid);
         }
@@ -3681,17 +3704,21 @@ impl BrokerRuntime {
             };
             let resolved = match broker_tokens.resolve(token)? {
                 SourceResolution::NoMatch => continue,
-                SourceResolution::Resolved(resolved) => resolved,
+                SourceResolution::Resolved(resolved) => *resolved,
             };
             let source_audit = source.audit(&resolved);
-            return Ok(self.identity_from_principal_groups(
-                resolved.principal,
-                resolved.principal_kind,
-                resolved.subject,
-                resolved.groups,
-                Some(resolved.policy_groups),
-                Some(source_audit),
-            ));
+            return Ok(AdmittedIdentity {
+                identity: self.identity_from_principal_groups(
+                    resolved.principal,
+                    resolved.principal_kind,
+                    resolved.subject,
+                    resolved.groups,
+                    Some(resolved.policy_groups),
+                    Some(source_audit),
+                ),
+                proof: None,
+                membership_renewal: resolved.membership_renewal,
+            });
         }
         Err(IdentityFailure::Invalid)
     }
@@ -7592,6 +7619,7 @@ struct ResolvedTokenIdentity {
     token_class: Option<BrokerTokenClass>,
     token_id: Option<String>,
     token_scopes: Option<Value>,
+    membership_renewal: Option<crate::MembershipRenewalHint>,
 }
 
 enum TokenExtraction {
@@ -7601,7 +7629,7 @@ enum TokenExtraction {
 
 enum SourceResolution {
     NoMatch,
-    Resolved(ResolvedTokenIdentity),
+    Resolved(Box<ResolvedTokenIdentity>),
 }
 
 struct IdentitySourceResolver {
@@ -7678,16 +7706,19 @@ impl StaticPrincipalsSource {
                 .map_err(|_| IdentityFailure::Unavailable)?,
             None => None,
         };
-        Ok(SourceResolution::Resolved(ResolvedTokenIdentity {
-            principal: identity.principal.clone(),
-            principal_kind,
-            subject: Some(identity.principal.clone()),
-            groups: Vec::new(),
-            policy_groups: Vec::new(),
-            token_class: None,
-            token_id: None,
-            token_scopes: None,
-        }))
+        Ok(SourceResolution::Resolved(Box::new(
+            ResolvedTokenIdentity {
+                principal: identity.principal.clone(),
+                principal_kind,
+                subject: Some(identity.principal.clone()),
+                groups: Vec::new(),
+                policy_groups: Vec::new(),
+                token_class: None,
+                token_id: None,
+                token_scopes: None,
+                membership_renewal: None,
+            },
+        )))
     }
 }
 
@@ -7730,16 +7761,19 @@ impl BrokerTokensSource {
         } else {
             identity.scopes
         };
-        Ok(SourceResolution::Resolved(ResolvedTokenIdentity {
-            principal: identity.principal_id,
-            principal_kind: identity.principal_kind,
-            subject: None,
-            groups: identity.groups,
-            policy_groups: identity.policy_groups,
-            token_class: Some(token_class),
-            token_id: Some(identity.token_id),
-            token_scopes: Some(token_scopes),
-        }))
+        Ok(SourceResolution::Resolved(Box::new(
+            ResolvedTokenIdentity {
+                principal: identity.principal_id,
+                principal_kind: identity.principal_kind,
+                subject: None,
+                groups: identity.groups,
+                policy_groups: identity.policy_groups,
+                token_class: Some(token_class),
+                token_id: Some(identity.token_id),
+                token_scopes: Some(token_scopes),
+                membership_renewal: identity.membership_renewal,
+            },
+        )))
     }
 
     fn check_ready(&self) -> Result<(), RuntimeError> {

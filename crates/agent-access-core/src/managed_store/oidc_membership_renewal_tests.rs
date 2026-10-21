@@ -1731,3 +1731,847 @@ fn renewal_sign_in_inputs_are_validated() {
         OidcMembershipRenewalSignIn::issued(ring(), "r".repeat(16 * 1024), reference()).is_ok()
     );
 }
+
+// Renewal attempts and their outcome writes (design §8.4, §8.7, §8.8). The
+// fixture's provider TTL is one hour, so its renewal window is 15 minutes.
+
+fn at(fixture: &Fixture, offset: i64) -> String {
+    normalized_timestamp(DateTime::<Utc>::from_timestamp(fixture.now + offset, 0).unwrap())
+}
+
+impl Fixture {
+    fn attempt(&self, method: &str, offset: i64) -> OidcMembershipRenewalAttempt {
+        self.attempt_at_generation(method, offset, self.generation)
+    }
+
+    fn attempt_at_generation(
+        &self,
+        method: &str,
+        offset: i64,
+        config_generation: u64,
+    ) -> OidcMembershipRenewalAttempt {
+        self.store
+            .start_oidc_membership_renewal(
+                &self.ring,
+                &OidcMembershipRenewalAttemptRequest {
+                    login_method_id: method.into(),
+                    config_generation,
+                    now: at(self, offset),
+                },
+            )
+            .unwrap()
+    }
+
+    fn start(&self, method: &str, offset: i64) -> OidcMembershipRenewalStart {
+        match self.attempt(method, offset) {
+            OidcMembershipRenewalAttempt::Started(start) => *start,
+            OidcMembershipRenewalAttempt::Skipped(reason) => panic!("attempt skipped: {reason:?}"),
+        }
+    }
+
+    fn commit(
+        &self,
+        fence: &OidcMembershipRenewalFence,
+        offset: i64,
+        result: OidcMembershipRenewalResult,
+        rotation: Option<&str>,
+    ) -> OidcMembershipRenewalCommit {
+        self.store
+            .commit_oidc_membership_renewal(OidcMembershipRenewalCommitRequest {
+                fence: fence.clone(),
+                now: at(self, offset),
+                result,
+                rotation: rotation.map(|token| {
+                    OidcMembershipRenewalRotation::new(self.ring.clone(), token.into(), reference())
+                        .unwrap()
+                }),
+            })
+            .unwrap()
+    }
+
+    fn groups_at(&self, principal: &str, offset: i64) -> Vec<String> {
+        self.store
+            .effective_membership_at(principal, &at(self, offset))
+            .unwrap()
+            .groups
+    }
+}
+
+fn committed(commit: OidcMembershipRenewalCommit) -> OidcMembershipRenewalCommitted {
+    match commit {
+        OidcMembershipRenewalCommit::Committed(committed) => *committed,
+        OidcMembershipRenewalCommit::Superseded => panic!("superseded"),
+    }
+}
+
+fn renewed(issued_at: i64, groups: &[&str]) -> OidcMembershipRenewalResult {
+    OidcMembershipRenewalResult::Renewed {
+        issued_at,
+        external_group_ids: groups.iter().map(|group| group.to_string()).collect(),
+    }
+}
+
+fn failed(
+    code: OidcMembershipRenewalFailureCode,
+    observed_issued_at: Option<i64>,
+    next: String,
+) -> OidcMembershipRenewalResult {
+    OidcMembershipRenewalResult::Failed {
+        code,
+        observed_issued_at,
+        next_attempt_after: next,
+    }
+}
+
+/// Signs `alice` in with renewal at `iat_offset`; her evidence lasts until
+/// `iat_offset + 3600`.
+fn renewable_alice(fixture: &Fixture, iat_offset: i64) -> String {
+    succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        iat_offset,
+        issued(&fixture.ring, "refresh-1"),
+    ))
+    .login_method
+    .login_method_id
+}
+
+/// The hint is read with the membership on every store identity path, and
+/// only while renewal applies: an enabled user, an active Microsoft method
+/// with a non-ended row, and an enabled provider.
+#[test]
+fn renewal_hint_is_read_with_identity_only_when_renewal_applies() {
+    let fixture = fixture(true);
+    let first = succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        -10,
+        issued(&fixture.ring, "refresh-1"),
+    ));
+    let method = first.login_method.login_method_id.clone();
+    let row = fixture.renewal(&method).unwrap();
+    let session = fixture
+        .store
+        .resolve_browser_session(&hasher(), &first.session.token)
+        .unwrap();
+    let hint = session.membership_renewal.clone().unwrap();
+    assert_eq!(hint.login_method_id, method);
+    assert_eq!(hint.state, OidcMembershipRenewalState::Active);
+    assert_eq!(hint.token_version, row.token_version);
+    assert_eq!(hint.next_attempt_after, None);
+    let valid_until = fixture
+        .store
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT valid_until FROM oidc_membership_refresh_state WHERE login_method_id = ?1",
+            [&method],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(hint.valid_until.as_deref(), Some(valid_until.as_str()));
+    let token = fixture
+        .store
+        .resolve_broker_token(&hasher(), &first.session.token)
+        .unwrap();
+    assert_eq!(token.membership_renewal, Some(hint.clone()));
+
+    // Retrying and blocked rows still renew, and report their backoff.
+    for state in ["retrying", "blocked"] {
+        sql(
+            &fixture.store,
+            &format!(
+                "UPDATE oidc_membership_renewals SET state='{state}',
+                   last_failure_code='unavailable', last_failure_at='2026-10-20T00:00:00Z',
+                   next_attempt_after='2026-10-20T01:00:00Z'
+                 WHERE login_method_id='{method}'"
+            ),
+        );
+        let hint = fixture
+            .store
+            .resolve_broker_token(&hasher(), &first.session.token)
+            .unwrap()
+            .membership_renewal
+            .unwrap();
+        assert_eq!(hint.state.as_str(), state);
+        assert_eq!(
+            hint.next_attempt_after.as_deref(),
+            Some("2026-10-20T01:00:00Z")
+        );
+    }
+    // A disabled provider, an inactive method and an ended row do not.
+    let resolve = || {
+        fixture
+            .store
+            .resolve_broker_token(&hasher(), &first.session.token)
+            .unwrap()
+            .membership_renewal
+    };
+    sql(&fixture.store, "UPDATE oidc_provider_state SET enabled = 0");
+    assert_eq!(resolve(), None);
+    sql(&fixture.store, "UPDATE oidc_provider_state SET enabled = 1");
+    assert!(resolve().is_some());
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE oidc_membership_renewals SET state='ended', ended_reason='sign_in_required',
+               payload_version=NULL, key_id=NULL, nonce=NULL, ciphertext=NULL,
+               last_failure_code=NULL, last_failure_at=NULL, next_attempt_after=NULL
+             WHERE login_method_id='{method}'"
+        ),
+    );
+    assert_eq!(resolve(), None);
+    // No row, as without renewal: no hint.
+    let other = succeeded(fixture.sign_in(OTHER_USER, "bob", &[GROUP_A], -10, None));
+    assert_eq!(
+        fixture
+            .store
+            .resolve_broker_token(&hasher(), &other.session.token)
+            .unwrap()
+            .membership_renewal,
+        None
+    );
+}
+
+/// An attempt starts only inside the renewal window, at the provider's
+/// generation, for an eligible non-ended row whose backoff passed and whose
+/// previous attempt started at least 60 s ago. The start is durable and
+/// decrypts the payload; a skip writes nothing.
+#[test]
+fn attempt_start_rechecks_eligibility_and_records_the_interval() {
+    let fixture = fixture(true);
+    // Evidence until +3600-2800 = +800, inside the 900 s window now.
+    let method = renewable_alice(&fixture, -2800);
+    let before = fixture.renewal(&method).unwrap();
+    // Outside the window (at -200 the evidence has 1000 s left): nothing.
+    assert!(matches!(
+        fixture.attempt(&method, -200),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::EvidenceCurrent)
+    ));
+    assert!(matches!(
+        fixture.attempt_at_generation(&method, 0, fixture.generation + 1),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::ProviderChanged)
+    ));
+    assert_eq!(fixture.renewal(&method).unwrap(), before);
+
+    let start = fixture.start(&method, 0);
+    assert_eq!(start.fence.login_method_id, method);
+    assert_eq!(start.fence.principal_id, "alice");
+    assert_eq!(start.fence.external_subject, subject(USER));
+    assert_eq!(start.fence.config_generation, fixture.generation);
+    assert_eq!(start.fence.tenant_id, TENANT);
+    assert_eq!(start.fence.client_id, CLIENT);
+    assert_eq!(start.fence.token_version, before.token_version);
+    assert_eq!(start.failure_count, 0);
+    assert_eq!(start.material.refresh_token(), "refresh-1");
+    assert_eq!(start.material.reference(), &reference());
+    let started = fixture.renewal(&method).unwrap();
+    assert_eq!(started.last_attempt_at, Some(at(&fixture, 0)));
+    assert_eq!(started.token_version, before.token_version);
+    assert!(!format!("{start:?}").contains("refresh-1"));
+
+    // The durable interval: 59 s later no attempt starts; 60 s later one does.
+    assert!(matches!(
+        fixture.attempt(&method, 59),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::AttemptInterval)
+    ));
+    let _ = fixture.start(&method, 60);
+    // A backoff in the future, an ended row and an inactive method skip.
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE oidc_membership_renewals SET state='retrying',
+               last_failure_code='unavailable', last_failure_at='{now}',
+               next_attempt_after='{next}'
+             WHERE login_method_id='{method}'",
+            now = at(&fixture, 60),
+            next = at(&fixture, 300),
+        ),
+    );
+    assert!(matches!(
+        fixture.attempt(&method, 200),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::NotDue)
+    ));
+    let retried = fixture.start(&method, 300);
+    assert_eq!(retried.fence.token_version, before.token_version);
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE principal_login_methods SET status='disabled' WHERE login_method_id='{method}'"
+        ),
+    );
+    assert!(matches!(
+        fixture.attempt(&method, 400),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::NotRenewable)
+    ));
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE principal_login_methods SET status='active' WHERE login_method_id='{method}';
+             UPDATE oidc_membership_renewals SET state='ended', ended_reason='sign_in_required',
+               payload_version=NULL, key_id=NULL, nonce=NULL, ciphertext=NULL,
+               last_failure_code=NULL, last_failure_at=NULL, next_attempt_after=NULL
+             WHERE login_method_id='{method}'"
+        ),
+    );
+    assert!(matches!(
+        fixture.attempt(&method, 500),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::NotRenewable)
+    ));
+    // Absent evidence counts as expired.
+    let bob = succeeded(fixture.sign_in(
+        OTHER_USER,
+        "bob",
+        &[GROUP_A],
+        -10,
+        issued(&fixture.ring, "refresh-bob"),
+    ))
+    .login_method
+    .login_method_id;
+    sql(
+        &fixture.store,
+        &format!("DELETE FROM oidc_membership_refresh_state WHERE login_method_id='{bob}'"),
+    );
+    let _ = fixture.start(&bob, 0);
+}
+
+/// A renewal with complete groups from a strictly newer token replaces the
+/// evidence with the same matching as sign-in, rotates the returned token
+/// under a new version and clears failures; one not newer keeps the stored
+/// evidence but still succeeds.
+#[test]
+fn successful_renewals_replace_or_keep_evidence_and_rotate_the_token() {
+    let fixture = fixture(true);
+    let method = renewable_alice(&fixture, -2800);
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE oidc_membership_renewals SET state='retrying', failure_count=2,
+               last_failure_code='unavailable', last_failure_at='{now}', next_attempt_after='{now}'
+             WHERE login_method_id='{method}'",
+            now = at(&fixture, -1),
+        ),
+    );
+    let start = fixture.start(&method, 0);
+    assert_eq!(start.failure_count, 2);
+    assert_eq!(fixture.groups_at("alice", 0), ["team-a"]);
+    let done = committed(fixture.commit(
+        &start.fence,
+        1,
+        renewed(fixture.now, &[GROUP_B]),
+        Some("refresh-2"),
+    ));
+    assert_eq!(done.evidence, Some(OidcMembershipEvidence::Replaced));
+    assert!(done.membership_changed);
+    assert_eq!(done.membership.groups, ["team-b"]);
+    assert_eq!(done.principal_id, "alice");
+    // Evidence counts from min(iat, now) for the provider's TTL.
+    assert_eq!(done.valid_until, Some(at(&fixture, 3600)));
+    let row = fixture.renewal(&method).unwrap();
+    assert_eq!(done.record, row);
+    assert_eq!(row.state, OidcMembershipRenewalState::Active);
+    assert_eq!(row.failure_count, 0);
+    assert_eq!(row.last_failure_code, None);
+    assert_eq!(row.next_attempt_after, None);
+    assert_eq!(row.last_renewed_at, Some(at(&fixture, 1)));
+    assert_eq!(row.recorded_at, at(&fixture, 1));
+    assert_eq!(row.observation_iat, fixture.now);
+    assert_ne!(row.token_version, start.fence.token_version);
+    let material = fixture.material(&method).unwrap();
+    assert_eq!(material.refresh_token(), "refresh-2");
+    assert_eq!(material.reference(), &reference());
+    assert_eq!(fixture.groups_at("alice", 3599), ["team-b"]);
+    assert!(fixture.groups_at("alice", 3600).is_empty());
+
+    // The same groups from a newer token: replaced, unchanged.
+    let start = fixture.start(&method, 2900);
+    let same = committed(fixture.commit(
+        &start.fence,
+        2900,
+        renewed(fixture.now + 2900, &[GROUP_B]),
+        None,
+    ));
+    assert_eq!(same.evidence, Some(OidcMembershipEvidence::Replaced));
+    assert!(!same.membership_changed);
+    assert_eq!(same.valid_until, Some(at(&fixture, 6500)));
+    // Without a returned token the stored one stays at its version.
+    assert_eq!(same.record.token_version, start.fence.token_version);
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-2"
+    );
+
+    // A token not newer than the watermark (equal `iat`) keeps the evidence.
+    let start = fixture.start(&method, 5800);
+    let kept = committed(fixture.commit(
+        &start.fence,
+        5800,
+        renewed(fixture.now + 2900, &[GROUP_A]),
+        Some("refresh-3"),
+    ));
+    assert_eq!(kept.evidence, Some(OidcMembershipEvidence::KeptNewer));
+    assert!(!kept.membership_changed);
+    assert_eq!(kept.membership.groups, ["team-b"]);
+    assert_eq!(kept.valid_until, Some(at(&fixture, 6500)));
+    assert_eq!(kept.record.last_renewed_at, Some(at(&fixture, 5800)));
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-3"
+    );
+
+    // Microsoft's clock ahead: evidence counts from now, the watermark keeps
+    // the raw `iat`.
+    let start = fixture.start(&method, 5900);
+    let ahead = committed(fixture.commit(
+        &start.fence,
+        5900,
+        renewed(fixture.now + 5960, &[GROUP_A]),
+        None,
+    ));
+    assert_eq!(ahead.evidence, Some(OidcMembershipEvidence::Replaced));
+    assert_eq!(ahead.valid_until, Some(at(&fixture, 9500)));
+    assert_eq!(ahead.record.observation_iat, fixture.now + 5960);
+}
+
+/// Renewal never creates an account, so it never enrolls one: a group that
+/// adds new Microsoft users gains no member when an existing account renews.
+#[test]
+fn renewal_never_runs_group_auto_enrollment() {
+    let fixture = fixture(true);
+    let method = renewable_alice(&fixture, -2800);
+    fixture
+        .store
+        .create_group(GroupWriteRequest {
+            group_id: "defaults".into(),
+            display_name: None,
+            description: None,
+            auto_enroll_new_microsoft_users: true,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    let start = fixture.start(&method, 0);
+    let done = committed(fixture.commit(
+        &start.fence,
+        1,
+        renewed(fixture.now, &[GROUP_A, GROUP_B]),
+        Some("refresh-2"),
+    ));
+    assert_eq!(done.evidence, Some(OidcMembershipEvidence::Replaced));
+    assert_eq!(done.membership.groups, ["team-a", "team-b"]);
+    assert!(fixture.store.group_members("defaults").unwrap().is_empty());
+}
+
+/// Failures leave the evidence to expire: throttled and unavailable retry,
+/// the rest block; incomplete groups and a stale `iat` raise the watermark,
+/// and only incomplete groups store a returned token; endings delete it.
+#[test]
+fn failed_renewals_retry_block_or_end_without_extending_evidence() {
+    use OidcMembershipRenewalFailureCode as Code;
+    let fixture = fixture(true);
+    let method = renewable_alice(&fixture, -2800);
+    let evidence = |fixture: &Fixture| {
+        fixture
+            .store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT valid_until FROM oidc_membership_refresh_state WHERE login_method_id = ?1",
+                [&method],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    let initial_evidence = evidence(&fixture);
+    let mut offset = 0;
+    let mut failures = 0;
+    for (code, observed, rotation, state) in [
+        (Code::Unavailable, None, None, "retrying"),
+        (Code::Throttled, None, None, "retrying"),
+        (Code::ClientRejected, None, None, "blocked"),
+        (Code::RequestRejected, None, None, "blocked"),
+        (Code::InvalidResponse, None, None, "blocked"),
+        (Code::InvalidResponse, Some(-2000), None, "blocked"),
+        (
+            Code::GroupsIncomplete,
+            Some(-1000),
+            Some("refresh-incomplete"),
+            "blocked",
+        ),
+    ] {
+        let before = fixture.renewal(&method).unwrap();
+        let start = fixture.start(&method, offset);
+        let next = at(&fixture, offset + 30);
+        let done = committed(fixture.commit(
+            &start.fence,
+            offset,
+            failed(
+                code,
+                observed.map(|delta| fixture.now + delta),
+                next.clone(),
+            ),
+            rotation,
+        ));
+        failures += 1;
+        let row = fixture.renewal(&method).unwrap();
+        assert_eq!(done.record, row, "{code:?}");
+        assert_eq!(done.evidence, None);
+        assert_eq!(row.state.as_str(), state, "{code:?}");
+        assert_eq!(row.last_failure_code, Some(code), "{code:?}");
+        assert_eq!(row.last_failure_at, Some(at(&fixture, offset)));
+        assert_eq!(row.next_attempt_after, Some(next));
+        assert_eq!(row.failure_count, failures);
+        assert_eq!(
+            row.observation_iat,
+            observed
+                .map(|delta| fixture.now + delta)
+                .unwrap_or(before.observation_iat)
+                .max(before.observation_iat),
+            "{code:?}"
+        );
+        match rotation {
+            Some(token) => {
+                assert_ne!(row.token_version, before.token_version);
+                assert_eq!(fixture.material(&method).unwrap().refresh_token(), token);
+            }
+            None => {
+                assert_eq!(row.token_version, before.token_version, "{code:?}");
+                assert_eq!(
+                    fixture.material(&method).unwrap().refresh_token(),
+                    "refresh-1",
+                    "{code:?}"
+                );
+            }
+        }
+        assert_eq!(evidence(&fixture), initial_evidence, "{code:?}");
+        offset += 60;
+    }
+    // Only a renewal or incomplete groups may store a returned token.
+    let start = fixture.start(&method, offset);
+    assert!(matches!(
+        fixture
+            .store
+            .commit_oidc_membership_renewal(OidcMembershipRenewalCommitRequest {
+                fence: start.fence.clone(),
+                now: at(&fixture, offset),
+                result: failed(Code::Unavailable, None, at(&fixture, offset + 30)),
+                rotation: Some(
+                    OidcMembershipRenewalRotation::new(
+                        fixture.ring.clone(),
+                        "refresh-x".into(),
+                        reference()
+                    )
+                    .unwrap()
+                ),
+            }),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    // Ending deletes the token; readiness and inventory accept the row.
+    for reason in [
+        OidcMembershipRenewalEndedReason::IdentityMismatch,
+        OidcMembershipRenewalEndedReason::SignInRequired,
+    ] {
+        let method = renewable_alice(&fixture, -2800);
+        let start = fixture.start(&method, offset + 600);
+        let done = committed(fixture.commit(
+            &start.fence,
+            offset + 600,
+            OidcMembershipRenewalResult::Ended(reason),
+            None,
+        ));
+        assert_eq!(done.record.state, OidcMembershipRenewalState::Ended);
+        assert_eq!(done.record.ended_reason, Some(reason));
+        assert_eq!(done.record.next_attempt_after, None);
+        assert_eq!(done.record.last_failure_code, None);
+        assert_eq!(done.record.recorded_at, at(&fixture, offset + 600));
+        assert!(fixture.material(&method).is_none());
+        fixture.store.check_ready(Some(&fixture.ring)).unwrap();
+        assert!(matches!(
+            fixture.attempt(&method, offset + 1200),
+            OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::NotRenewable)
+        ));
+        offset += 1200;
+    }
+}
+
+/// Every outcome write runs under the full fence: a provider at another
+/// generation, tenant or client, a disabled or relinked method, a disabled
+/// principal and a token version replaced by a sign-in each discard it.
+#[test]
+fn outcome_writes_are_discarded_when_the_fence_fails() {
+    let fixture = fixture(true);
+    let method = renewable_alice(&fixture, -2800);
+    let start = fixture.start(&method, 0);
+    let attempted = fixture.renewal(&method).unwrap();
+    let outcomes = || {
+        [
+            renewed(fixture.now, &[GROUP_B]),
+            failed(
+                OidcMembershipRenewalFailureCode::Unavailable,
+                None,
+                at(&fixture, 30),
+            ),
+            OidcMembershipRenewalResult::Ended(OidcMembershipRenewalEndedReason::SignInRequired),
+        ]
+    };
+    // The stored evidence: its window and matched bindings.
+    let evidence = || -> (String, Vec<String>) {
+        let conn = fixture.store.connection.lock().unwrap();
+        let valid_until = conn
+            .query_row(
+                "SELECT valid_until FROM oidc_membership_refresh_state WHERE login_method_id = ?1",
+                [&method],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (valid_until, evidence_bindings(&conn, &method).unwrap())
+    };
+    let initial = evidence();
+    let superseded = |fence: &OidcMembershipRenewalFence, case: &str| {
+        let before = fixture.renewal(&method);
+        for result in outcomes() {
+            assert!(
+                matches!(
+                    fixture.commit(fence, 1, result, None),
+                    OidcMembershipRenewalCommit::Superseded
+                ),
+                "{case}"
+            );
+            assert_eq!(fixture.renewal(&method), before, "{case}");
+            assert_eq!(evidence(), initial, "{case}");
+        }
+    };
+    for (case, fence) in [
+        (
+            "generation",
+            OidcMembershipRenewalFence {
+                config_generation: start.fence.config_generation + 1,
+                ..start.fence.clone()
+            },
+        ),
+        (
+            "tenant",
+            OidcMembershipRenewalFence {
+                tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9".into(),
+                ..start.fence.clone()
+            },
+        ),
+        (
+            "client",
+            OidcMembershipRenewalFence {
+                client_id: OTHER_CLIENT.into(),
+                ..start.fence.clone()
+            },
+        ),
+        (
+            "subject",
+            OidcMembershipRenewalFence {
+                external_subject: subject(OTHER_USER),
+                ..start.fence.clone()
+            },
+        ),
+        (
+            "principal",
+            OidcMembershipRenewalFence {
+                principal_id: "bob".into(),
+                ..start.fence.clone()
+            },
+        ),
+        (
+            "token version",
+            OidcMembershipRenewalFence {
+                token_version: Uuid::new_v4().to_string(),
+                ..start.fence.clone()
+            },
+        ),
+    ] {
+        superseded(&fence, case);
+    }
+    // The row still holds the attempt's start only.
+    assert_eq!(fixture.renewal(&method).unwrap(), attempted);
+
+    // A disabled method or provider discards it too.
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE principal_login_methods SET status='disabled' WHERE login_method_id='{method}'"
+        ),
+    );
+    superseded(&start.fence, "method disabled");
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE principal_login_methods SET status='active' WHERE login_method_id='{method}';
+             UPDATE principals SET status='disabled' WHERE principal_id='alice'"
+        ),
+    );
+    superseded(&start.fence, "principal disabled");
+    sql(
+        &fixture.store,
+        "UPDATE principals SET status='active' WHERE principal_id='alice';
+         UPDATE oidc_provider_state SET enabled = 0",
+    );
+    superseded(&start.fence, "provider disabled");
+    sql(&fixture.store, "UPDATE oidc_provider_state SET enabled = 1");
+
+    // A sign-in during the attempt wins: its new token version fences the
+    // renewal out, whatever the renewal's `iat`.
+    let signed_in = succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        -2700,
+        issued(&fixture.ring, "refresh-sign-in"),
+    ));
+    assert_eq!(
+        signed_in.membership_evidence,
+        OidcMembershipEvidence::Replaced
+    );
+    let after_sign_in = fixture.renewal(&method).unwrap();
+    assert!(matches!(
+        fixture.commit(
+            &start.fence,
+            1,
+            renewed(fixture.now + 60, &[GROUP_B]),
+            Some("late")
+        ),
+        OidcMembershipRenewalCommit::Superseded
+    ));
+    assert_eq!(fixture.renewal(&method).unwrap(), after_sign_in);
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-sign-in"
+    );
+    // The sign-in kept the attempt time, so no new attempt starts yet.
+    assert_eq!(after_sign_in.last_attempt_at, Some(at(&fixture, 0)));
+    assert!(matches!(
+        fixture.attempt(&method, 30),
+        OidcMembershipRenewalAttempt::Skipped(OidcMembershipRenewalSkip::AttemptInterval)
+    ));
+}
+
+/// Sign-in and renewal order evidence by raw `iat` in both completion
+/// orders, and incomplete observations from either writer keep older
+/// complete claims out (design §8.7).
+#[test]
+fn sign_in_and_renewal_order_evidence_by_raw_iat() {
+    use OidcMembershipRenewalFailureCode as Code;
+    let fixture = fixture(true);
+    // Renewal first (iat -100), then a delayed sign-in with an older token
+    // (iat -200): the sign-in keeps the renewal's evidence but records its
+    // session and token.
+    let method = renewable_alice(&fixture, -2800);
+    let start = fixture.start(&method, 0);
+    committed(fixture.commit(
+        &start.fence,
+        0,
+        renewed(fixture.now - 100, &[GROUP_B]),
+        None,
+    ));
+    let delayed = succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        -200,
+        issued(&fixture.ring, "refresh-delayed"),
+    ));
+    assert_eq!(
+        delayed.membership_evidence,
+        OidcMembershipEvidence::KeptNewer
+    );
+    assert_eq!(fixture.groups_at("alice", 0), ["team-b"]);
+    assert_eq!(
+        fixture.material(&method).unwrap().refresh_token(),
+        "refresh-delayed"
+    );
+
+    // A trusted stale-`iat` renewal (iat -50) raises the watermark, so a
+    // delayed older sign-in (iat -60) does not replace the evidence either.
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE oidc_membership_refresh_state SET valid_until='{until}'
+             WHERE login_method_id='{method}'",
+            until = at(&fixture, 200),
+        ),
+    );
+    let start = fixture.start(&method, 100);
+    committed(fixture.commit(
+        &start.fence,
+        100,
+        failed(
+            Code::InvalidResponse,
+            Some(fixture.now - 50),
+            at(&fixture, 3700),
+        ),
+        None,
+    ));
+    let older = succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        -60,
+        issued(&fixture.ring, "refresh-older"),
+    ));
+    assert_eq!(older.membership_evidence, OidcMembershipEvidence::KeptNewer);
+    assert_eq!(fixture.groups_at("alice", 0), ["team-b"]);
+
+    // An incomplete sign-in (iat -20) keeps an older renewal (iat -30) out.
+    let flow = fixture.flow.get() + 1;
+    fixture.flow.set(flow);
+    assert!(fixture.incomplete(flow, USER, -20));
+    sql(
+        &fixture.store,
+        &format!(
+            "UPDATE oidc_membership_refresh_state SET valid_until='{until}'
+             WHERE login_method_id='{method}';
+             UPDATE oidc_membership_renewals SET state='active', last_failure_code=NULL,
+               last_failure_at=NULL, next_attempt_after=NULL
+             WHERE login_method_id='{method}'",
+            until = at(&fixture, 300),
+        ),
+    );
+    let start = fixture.start(&method, 200);
+    let kept = committed(fixture.commit(
+        &start.fence,
+        200,
+        renewed(fixture.now - 30, &[GROUP_A]),
+        None,
+    ));
+    assert_eq!(kept.evidence, Some(OidcMembershipEvidence::KeptNewer));
+    assert_eq!(fixture.groups_at("alice", 0), ["team-b"]);
+    // An incomplete renewal (iat -10) keeps an older complete sign-in out.
+    let start = fixture.start(&method, 300);
+    committed(fixture.commit(
+        &start.fence,
+        300,
+        failed(
+            Code::GroupsIncomplete,
+            Some(fixture.now - 10),
+            at(&fixture, 3900),
+        ),
+        None,
+    ));
+    let older = succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        -15,
+        issued(&fixture.ring, "refresh-15"),
+    ));
+    assert_eq!(older.membership_evidence, OidcMembershipEvidence::KeptNewer);
+    assert_eq!(fixture.groups_at("alice", 0), ["team-b"]);
+    // A newer complete one replaces it.
+    let newer = succeeded(fixture.sign_in(
+        USER,
+        "alice",
+        &[GROUP_A],
+        -5,
+        issued(&fixture.ring, "refresh-5"),
+    ));
+    assert_eq!(newer.membership_evidence, OidcMembershipEvidence::Replaced);
+    assert_eq!(fixture.groups_at("alice", 0), ["team-a"]);
+}

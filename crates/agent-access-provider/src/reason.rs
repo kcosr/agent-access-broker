@@ -83,6 +83,8 @@ pub enum ReasonCode {
     OidcGroupClaimsIncomplete,
     OidcAdmissionDenied,
     OidcLoginMethodConflict,
+    OidcSignInRequired,
+    OidcClientRejected,
     ExternalGroupBindingNotFound,
     ExternalGroupBindingConflict,
     RightMissing,
@@ -213,6 +215,8 @@ impl ReasonCode {
             Self::OidcGroupClaimsIncomplete => "oidc_group_claims_incomplete",
             Self::OidcAdmissionDenied => "oidc_admission_denied",
             Self::OidcLoginMethodConflict => "oidc_login_method_conflict",
+            Self::OidcSignInRequired => "oidc_sign_in_required",
+            Self::OidcClientRejected => "oidc_client_rejected",
             Self::ExternalGroupBindingNotFound => "external_group_binding_not_found",
             Self::ExternalGroupBindingConflict => "external_group_binding_conflict",
             Self::RightMissing => "right_missing",
@@ -319,7 +323,8 @@ impl ReasonCode {
             | Self::LocalLoginFailed
             | Self::LocalLoginLocked
             | Self::OidcProviderDenied
-            | Self::OidcIdentityInvalid => 401,
+            | Self::OidcIdentityInvalid
+            | Self::OidcSignInRequired => 401,
             Self::PrincipalNotFound
             | Self::IdentityBindingNotFound
             | Self::GroupNotFound
@@ -401,7 +406,8 @@ impl ReasonCode {
             | Self::AuditQueryTimeout
             | Self::ConfigReadFailed
             | Self::ConfigAdmissionFailed
-            | Self::OidcUnavailable => 503,
+            | Self::OidcUnavailable
+            | Self::OidcClientRejected => 503,
             Self::OidcFlowInvalid | Self::OidcFlowExpired => 400,
         }
     }
@@ -459,6 +465,8 @@ impl ReasonCode {
             Self::OidcGroupClaimsIncomplete,
             Self::OidcAdmissionDenied,
             Self::OidcLoginMethodConflict,
+            Self::OidcSignInRequired,
+            Self::OidcClientRejected,
             Self::ExternalGroupBindingNotFound,
             Self::ExternalGroupBindingConflict,
             Self::RightMissing,

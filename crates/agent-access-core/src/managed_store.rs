@@ -22,9 +22,13 @@ pub(crate) mod oauth;
 pub(crate) mod oauth_revocation;
 mod oidc_membership_renewal;
 pub use oidc_membership_renewal::{
-    OidcMembershipEvidence, OidcMembershipRenewalEndedReason, OidcMembershipRenewalFailureCode,
-    OidcMembershipRenewalMaterial, OidcMembershipRenewalRecord, OidcMembershipRenewalSignIn,
-    OidcMembershipRenewalState, OidcRenewalReference,
+    MembershipRenewalHint, OidcMembershipEvidence, OidcMembershipRenewalAttempt,
+    OidcMembershipRenewalAttemptRequest, OidcMembershipRenewalCommit,
+    OidcMembershipRenewalCommitRequest, OidcMembershipRenewalCommitted,
+    OidcMembershipRenewalEndedReason, OidcMembershipRenewalFailureCode, OidcMembershipRenewalFence,
+    OidcMembershipRenewalMaterial, OidcMembershipRenewalRecord, OidcMembershipRenewalResult,
+    OidcMembershipRenewalRotation, OidcMembershipRenewalSignIn, OidcMembershipRenewalSkip,
+    OidcMembershipRenewalStart, OidcMembershipRenewalState, OidcRenewalReference,
 };
 mod principal_service_limits;
 mod resource_attributes;
@@ -2363,6 +2367,7 @@ impl ManagedStore {
             principal_id: record.principal_id.clone(),
             principal_kind: principal.principal_kind(),
             policy_groups: principal_policy_groups(&conn, &record.principal_id)?,
+            membership_renewal: oidc_membership_renewal::renewal_hint(&conn, &record.principal_id)?,
             groups: principal.groups,
             role: principal.role,
             self_service_enabled: principal.self_service_enabled,
@@ -3016,24 +3021,7 @@ impl ManagedStore {
                 });
             }
         }
-        let mut statement = tx
-            .prepare(
-                "SELECT b.binding_id, b.external_group_id
-                 FROM external_group_bindings b JOIN groups g ON g.group_id = b.group_id
-                 WHERE b.status = 'active' AND g.status = 'active'
-                 ORDER BY b.binding_id",
-            )
-            .map_err(sql_unavailable)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(sql_unavailable)?;
-        let matched = collect_rows(rows)?
-            .into_iter()
-            .filter(|(_, external_group_id)| request.external_group_ids.contains(external_group_id))
-            .collect::<Vec<_>>();
-        drop(statement);
+        let matched = matched_external_group_bindings(&tx, &request.external_group_ids)?;
         let jit_created = method.is_none();
         if jit_created && (!request.jit_provisioning || matched.is_empty()) {
             tx.commit().map_err(sql_unavailable)?;
@@ -3117,42 +3105,16 @@ impl ManagedStore {
             _ => OidcMembershipEvidence::Replaced,
         };
         if membership_evidence == OidcMembershipEvidence::Replaced {
-            tx.execute(
-                "DELETE FROM external_principal_groups WHERE login_method_id = ?1",
-                params![method.login_method_id],
-            )
-            .map_err(sql_unavailable)?;
-            for (binding_id, _) in &matched {
-                tx.execute(
-                    "INSERT INTO external_principal_groups
-                     (login_method_id, binding_id, observed_at, evidence_at, valid_until,
-                      updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?3)",
-                    params![
-                        method.login_method_id,
-                        binding_id,
-                        callback_now,
-                        evidence_at,
-                        valid_until
-                    ],
-                )
-                .map_err(sql_unavailable)?;
-            }
-            tx.execute(
-                "INSERT INTO oidc_membership_refresh_state
-                 (login_method_id, observed_at, evidence_at, valid_until, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?2)
-                 ON CONFLICT(login_method_id) DO UPDATE SET
-                   observed_at = excluded.observed_at, evidence_at = excluded.evidence_at,
-                   valid_until = excluded.valid_until, updated_at = excluded.updated_at",
-                params![
-                    method.login_method_id,
-                    callback_now,
-                    evidence_at,
-                    valid_until
-                ],
-            )
-            .map_err(sql_unavailable)?;
+            replace_oidc_membership_evidence_tx(
+                &tx,
+                &method.login_method_id,
+                &matched,
+                &OidcEvidenceWindow {
+                    observed_at: &callback_now,
+                    evidence_at: &evidence_at,
+                    valid_until: &valid_until,
+                },
+            )?;
         }
         // The session and the refresh token are recorded whether or not the
         // groups replaced the evidence.
@@ -3637,6 +3599,7 @@ impl ManagedStore {
             email: principal.email,
             groups: token_identity.groups,
             policy_groups: token_identity.policy_groups,
+            membership_renewal: token_identity.membership_renewal,
             role: token_identity.role,
             self_service_enabled: token_identity.self_service_enabled,
             token_id: token_identity.token_id,
@@ -5835,6 +5798,8 @@ pub struct BrokerTokenIdentity {
     pub principal_kind: Option<crate::PrincipalKind>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
+    /// Read with the membership: whether membership renewal applies.
+    pub membership_renewal: Option<MembershipRenewalHint>,
     pub role: PrincipalRole,
     pub self_service_enabled: bool,
     pub token_class: BrokerTokenClass,
@@ -5962,6 +5927,8 @@ pub struct BrowserSessionIdentity {
     pub email: Option<String>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
+    /// Read with the membership: whether membership renewal applies.
+    pub membership_renewal: Option<MembershipRenewalHint>,
     pub role: PrincipalRole,
     pub self_service_enabled: bool,
     pub token_id: String,
@@ -8484,6 +8451,85 @@ fn oidc_flow_by_sequence(
     .optional()
     .map_err(sql_unavailable)?
     .ok_or(ManagedStoreError::OidcFlowInvalid)
+}
+
+/// The active bindings, of active groups, whose external group IDs are in
+/// `external_group_ids`: what complete Microsoft groups grant.
+fn matched_external_group_bindings(
+    conn: &Connection,
+    external_group_ids: &BTreeSet<String>,
+) -> Result<Vec<(String, String)>, ManagedStoreError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT b.binding_id, b.external_group_id
+             FROM external_group_bindings b JOIN groups g ON g.group_id = b.group_id
+             WHERE b.status = 'active' AND g.status = 'active'
+             ORDER BY b.binding_id",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sql_unavailable)?;
+    Ok(collect_rows(rows)?
+        .into_iter()
+        .filter(|(_, external_group_id)| external_group_ids.contains(external_group_id))
+        .collect())
+}
+
+/// When one Microsoft observation's evidence was observed, which time it
+/// counts from and when it expires.
+struct OidcEvidenceWindow<'a> {
+    observed_at: &'a str,
+    evidence_at: &'a str,
+    valid_until: &'a str,
+}
+
+/// Replaces a login method's evidence with the `matched` bindings, all
+/// valid for `window`; sign-in and renewal share it.
+fn replace_oidc_membership_evidence_tx(
+    conn: &Connection,
+    login_method_id: &str,
+    matched: &[(String, String)],
+    window: &OidcEvidenceWindow<'_>,
+) -> Result<(), ManagedStoreError> {
+    conn.execute(
+        "DELETE FROM external_principal_groups WHERE login_method_id = ?1",
+        params![login_method_id],
+    )
+    .map_err(sql_unavailable)?;
+    for (binding_id, _) in matched {
+        conn.execute(
+            "INSERT INTO external_principal_groups
+             (login_method_id, binding_id, observed_at, evidence_at, valid_until, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?3)",
+            params![
+                login_method_id,
+                binding_id,
+                window.observed_at,
+                window.evidence_at,
+                window.valid_until
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    }
+    conn.execute(
+        "INSERT INTO oidc_membership_refresh_state
+         (login_method_id, observed_at, evidence_at, valid_until, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?2)
+         ON CONFLICT(login_method_id) DO UPDATE SET
+           observed_at = excluded.observed_at, evidence_at = excluded.evidence_at,
+           valid_until = excluded.valid_until, updated_at = excluded.updated_at",
+        params![
+            login_method_id,
+            window.observed_at,
+            window.evidence_at,
+            window.valid_until
+        ],
+    )
+    .map_err(sql_unavailable)?;
+    Ok(())
 }
 
 fn oidc_login_method_for_principal(

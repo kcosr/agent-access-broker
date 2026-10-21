@@ -16,6 +16,7 @@
 //! the method's evidence only from a strictly newer token, and every trusted
 //! observation, complete or incomplete, raises it.
 use super::*;
+use crate::microsoft_oidc::renewal::MEMBERSHIP_RENEWAL_MIN_ATTEMPT_INTERVAL_SECONDS;
 use crate::microsoft_oidc::{
     MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES, MICROSOFT_OIDC_MAX_SUBJECT_BYTES,
 };
@@ -162,6 +163,191 @@ pub struct OidcMembershipRenewalRecord {
     pub last_failure_at: Option<String>,
     pub next_attempt_after: Option<String>,
     pub updated_at: String,
+}
+
+/// What identity resolution reads, in the same store call as the person's
+/// membership, for membership renewal to decide whether the request needs
+/// one: present only for an enabled `user` with an active Microsoft login
+/// method whose renewal row is `active`, `retrying` or `blocked`, while the
+/// provider is enabled. `valid_until` is `None` when the method has no
+/// evidence, which counts as expired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipRenewalHint {
+    pub login_method_id: String,
+    pub valid_until: Option<String>,
+    pub state: OidcMembershipRenewalState,
+    pub token_version: String,
+    pub next_attempt_after: Option<String>,
+}
+
+/// The durable start of one renewal attempt for `login_method_id`, by a
+/// flight of provider configuration generation `config_generation`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcMembershipRenewalAttemptRequest {
+    pub login_method_id: String,
+    pub config_generation: u64,
+    /// The attempt's time, normalized RFC 3339.
+    pub now: String,
+}
+
+/// What an attempt's outcome write must still find (design §8.8): the same
+/// provider generation, tenant and client, the method active with the same
+/// principal and subject, and the row at the token version read at attempt
+/// start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcMembershipRenewalFence {
+    pub login_method_id: String,
+    pub principal_id: String,
+    pub external_subject: String,
+    pub config_generation: u64,
+    pub tenant_id: String,
+    pub client_id: String,
+    pub token_version: String,
+}
+
+/// A started attempt: its fence, the decrypted payload to redeem and the
+/// row's consecutive failures before it.
+pub struct OidcMembershipRenewalStart {
+    pub fence: OidcMembershipRenewalFence,
+    pub material: OidcMembershipRenewalMaterial,
+    pub failure_count: u32,
+}
+
+impl std::fmt::Debug for OidcMembershipRenewalStart {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OidcMembershipRenewalStart")
+            .field("fence", &self.fence)
+            .field("failure_count", &self.failure_count)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why an attempt did not start; nothing was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OidcMembershipRenewalSkip {
+    /// The provider is disabled or at another configuration generation.
+    ProviderChanged,
+    /// The method, its principal or its row no longer qualify, or the row
+    /// ended.
+    NotRenewable,
+    /// The row's `next_attempt_after` has not passed.
+    NotDue,
+    /// The previous attempt started less than 60 s ago.
+    AttemptInterval,
+    /// The evidence is no longer inside the renewal window.
+    EvidenceCurrent,
+}
+
+impl OidcMembershipRenewalSkip {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderChanged => "provider_changed",
+            Self::NotRenewable => "not_renewable",
+            Self::NotDue => "not_due",
+            Self::AttemptInterval => "attempt_interval",
+            Self::EvidenceCurrent => "evidence_current",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OidcMembershipRenewalAttempt {
+    Started(Box<OidcMembershipRenewalStart>),
+    Skipped(OidcMembershipRenewalSkip),
+}
+
+/// A refresh token a renewal response returned, to be stored under a new
+/// token version with the reference its row already holds. Its debug output
+/// never shows the token.
+#[derive(Clone)]
+pub struct OidcMembershipRenewalRotation {
+    key_ring: CredentialKeyRing,
+    payload: Box<RenewalPayload>,
+}
+
+impl std::fmt::Debug for OidcMembershipRenewalRotation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OidcMembershipRenewalRotation")
+            .field("key_ring", &self.key_ring)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OidcMembershipRenewalRotation {
+    /// `refresh_token` must be nonempty and at most 16 KiB; the caller keeps
+    /// the stored token when a longer one is returned.
+    pub fn new(
+        key_ring: CredentialKeyRing,
+        refresh_token: String,
+        reference: OidcRenewalReference,
+    ) -> Result<Self, ManagedStoreError> {
+        if !refresh_token_well_formed(&refresh_token) {
+            return Err(input_invalid(
+                "Microsoft refresh token is empty or too large",
+            ));
+        }
+        Ok(Self {
+            key_ring,
+            payload: Box::new(RenewalPayload::new(refresh_token, reference)),
+        })
+    }
+}
+
+/// What a renewal attempt learned (design §8.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OidcMembershipRenewalResult {
+    /// A validated ID token with complete groups, raw `iat` `issued_at`.
+    Renewed {
+        issued_at: i64,
+        external_group_ids: BTreeSet<String>,
+    },
+    /// A failure that keeps renewal: `retrying` for `throttled` and
+    /// `unavailable`, otherwise `blocked`, until `next_attempt_after`.
+    /// `observed_issued_at` is the raw `iat` of a trusted token that changed
+    /// no evidence (incomplete groups or a stale `iat`), which still raises
+    /// the watermark.
+    Failed {
+        code: OidcMembershipRenewalFailureCode,
+        observed_issued_at: Option<i64>,
+        next_attempt_after: String,
+    },
+    /// Renewal ends until the next sign-in; the stored token is deleted.
+    Ended(OidcMembershipRenewalEndedReason),
+}
+
+/// One attempt's outcome write under its fence.
+#[derive(Debug)]
+pub struct OidcMembershipRenewalCommitRequest {
+    pub fence: OidcMembershipRenewalFence,
+    /// The write's time, normalized RFC 3339.
+    pub now: String,
+    pub result: OidcMembershipRenewalResult,
+    /// A returned refresh token; stored only with a renewal or incomplete
+    /// groups.
+    pub rotation: Option<OidcMembershipRenewalRotation>,
+}
+
+/// A committed outcome: the row afterwards and the principal's membership.
+#[derive(Debug, Clone)]
+pub struct OidcMembershipRenewalCommitted {
+    pub principal_id: String,
+    pub record: OidcMembershipRenewalRecord,
+    pub membership: EffectiveMembershipRecord,
+    /// For a renewal: whether its groups replaced the evidence.
+    pub evidence: Option<OidcMembershipEvidence>,
+    /// The method's evidence window afterwards.
+    pub valid_until: Option<String>,
+    /// Whether a replacement changed the method's matched bindings.
+    pub membership_changed: bool,
+}
+
+#[derive(Debug)]
+pub enum OidcMembershipRenewalCommit {
+    Committed(Box<OidcMembershipRenewalCommitted>),
+    /// The fence failed; nothing was written.
+    Superseded,
 }
 
 /// The values of the ID token a refresh token came with that a refreshed ID
@@ -905,7 +1091,442 @@ pub(super) fn delete_all(conn: &Connection) -> Result<(), ManagedStoreError> {
     Ok(())
 }
 
+/// The renewal hint of `principal_id`, read with its membership.
+pub(super) fn renewal_hint(
+    conn: &Connection,
+    principal_id: &str,
+) -> Result<Option<MembershipRenewalHint>, ManagedStoreError> {
+    let hint = conn
+        .query_row(
+            "SELECT r.login_method_id, rs.valid_until, r.state, r.token_version,
+                    r.next_attempt_after
+             FROM principals p
+             JOIN principal_login_methods lm ON lm.principal_id = p.principal_id
+             JOIN oidc_membership_renewals r ON r.login_method_id = lm.login_method_id
+             JOIN oidc_provider_state ps ON ps.provider_id = 'microsoft'
+             LEFT JOIN oidc_membership_refresh_state rs
+               ON rs.login_method_id = lm.login_method_id
+             WHERE p.principal_id = ?1 AND p.kind = 'user' AND p.status = 'active'
+               AND lm.method = 'oidc' AND lm.external_provider = 'microsoft'
+               AND lm.status = 'active' AND ps.enabled = 1
+               AND r.state IN ('active', 'retrying', 'blocked')",
+            [principal_id],
+            |row| {
+                Ok((
+                    MembershipRenewalHint {
+                        login_method_id: row.get(0)?,
+                        valid_until: row.get(1)?,
+                        state: OidcMembershipRenewalState::Active,
+                        token_version: row.get(3)?,
+                        next_attempt_after: row.get(4)?,
+                    },
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    hint.map(|(hint, state)| {
+        Ok(MembershipRenewalHint {
+            state: OidcMembershipRenewalState::parse(&state).ok_or_else(invalid_row)?,
+            ..hint
+        })
+    })
+    .transpose()
+}
+
+fn parse_time(value: &str) -> Result<DateTime<Utc>, ManagedStoreError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| input_invalid("membership renewal time is invalid"))
+}
+
+fn stored_time(value: &str) -> Result<DateTime<Utc>, ManagedStoreError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| invalid_row())
+}
+
+/// The evidence window of `login_method_id`, when it has evidence.
+fn evidence_valid_until(
+    conn: &Connection,
+    login_method_id: &str,
+) -> Result<Option<String>, ManagedStoreError> {
+    conn.query_row(
+        "SELECT valid_until FROM oidc_membership_refresh_state WHERE login_method_id = ?1",
+        [login_method_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(sql_unavailable)
+}
+
+/// The matched bindings of `login_method_id`'s current evidence.
+fn evidence_bindings(
+    conn: &Connection,
+    login_method_id: &str,
+) -> Result<Vec<String>, ManagedStoreError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT binding_id FROM external_principal_groups
+             WHERE login_method_id = ?1 ORDER BY binding_id",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map([login_method_id], |row| row.get(0))
+        .map_err(sql_unavailable)?;
+    collect_rows(rows)
+}
+
+/// The method and principal the row of `login_method_id` belongs to, when
+/// both still qualify for renewal.
+fn renewable_method(
+    conn: &Connection,
+    login_method_id: &str,
+) -> Result<Option<LoginMethodRecord>, ManagedStoreError> {
+    let method = conn
+        .query_row(
+            "SELECT login_method_id, principal_id, method, external_provider, external_subject,
+                    status, password_set_at, must_change_password, created_at, updated_at,
+                    created_by, updated_by
+             FROM principal_login_methods WHERE login_method_id = ?1",
+            [login_method_id],
+            login_method_from_row,
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    let Some(method) = method else {
+        return Ok(None);
+    };
+    if method.status != "active"
+        || method.method != "oidc"
+        || method.external_provider.as_deref() != Some("microsoft")
+        || method.external_subject.is_none()
+    {
+        return Ok(None);
+    }
+    let principal = principal_by_id_without_groups(conn, &method.principal_id)?;
+    Ok((principal.kind == "user" && principal.status == "active").then_some(method))
+}
+
+/// Whether the fence still holds in `conn`'s transaction; the provider row
+/// when it does.
+fn fence_holds(
+    conn: &Connection,
+    fence: &OidcMembershipRenewalFence,
+) -> Result<Option<OidcProviderStateRecord>, ManagedStoreError> {
+    let Some(provider) = oidc_provider_state(conn)? else {
+        return Ok(None);
+    };
+    if !provider.enabled
+        || provider.config_generation != fence.config_generation
+        || provider.tenant_id != fence.tenant_id
+        || provider.client_id != fence.client_id
+    {
+        return Ok(None);
+    }
+    let Some(method) = renewable_method(conn, &fence.login_method_id)? else {
+        return Ok(None);
+    };
+    if method.principal_id != fence.principal_id
+        || method.external_subject.as_deref() != Some(fence.external_subject.as_str())
+    {
+        return Ok(None);
+    }
+    let Some(row) = row(conn, &fence.login_method_id)? else {
+        return Ok(None);
+    };
+    Ok((row.token_version == fence.token_version).then_some(provider))
+}
+
+/// Stores `rotation` in `row`'s place under a new token version.
+fn rotate(
+    conn: &Connection,
+    row: &StoredRow,
+    provider: &OidcProviderStateRecord,
+    rotation: &OidcMembershipRenewalRotation,
+    now: &str,
+) -> Result<(), ManagedStoreError> {
+    let token_version = Uuid::new_v4().to_string();
+    let encrypted = encrypt(
+        &rotation.key_ring,
+        &Binding {
+            login_method_id: &row.login_method_id,
+            external_subject: row.external_subject.as_deref().unwrap_or_default(),
+            tenant_id: &provider.tenant_id,
+            client_id: &provider.client_id,
+            token_version: &token_version,
+        },
+        rotation.key_ring.active_key_id(),
+        &rotation.payload,
+    )?;
+    conn.execute(
+        "UPDATE oidc_membership_renewals
+         SET token_version = ?2, payload_version = ?3, key_id = ?4, nonce = ?5,
+             ciphertext = ?6, recorded_at = ?7, updated_at = ?7
+         WHERE login_method_id = ?1 AND token_version = ?8",
+        params![
+            row.login_method_id,
+            token_version,
+            PAYLOAD_VERSION,
+            encrypted.key_id,
+            encrypted.nonce,
+            encrypted.ciphertext,
+            now,
+            row.token_version
+        ],
+    )
+    .map_err(sql_unavailable)?;
+    Ok(())
+}
+
 impl ManagedStore {
+    /// Starts one renewal attempt in an immediate transaction (design §8.4):
+    /// the provider is enabled at the flight's configuration generation, the
+    /// method active and its principal an enabled `user`, the row not ended,
+    /// its `next_attempt_after` passed, its last attempt at least 60 s ago and
+    /// the evidence inside the renewal window `ttl / 4`. It then records the
+    /// attempt's start, which nothing clears, and returns the decrypted
+    /// payload with the fence its outcome must still find.
+    pub fn start_oidc_membership_renewal(
+        &self,
+        key_ring: &CredentialKeyRing,
+        request: &OidcMembershipRenewalAttemptRequest,
+    ) -> Result<OidcMembershipRenewalAttempt, ManagedStoreError> {
+        let now_time = parse_time(&request.now)?;
+        let now = normalized_timestamp(now_time);
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let skip = |tx: rusqlite::Transaction<'_>, reason| {
+            tx.commit().map_err(sql_unavailable)?;
+            Ok(OidcMembershipRenewalAttempt::Skipped(reason))
+        };
+        let provider = match oidc_provider_state(&tx)? {
+            Some(provider)
+                if provider.enabled && provider.config_generation == request.config_generation =>
+            {
+                provider
+            }
+            _ => return skip(tx, OidcMembershipRenewalSkip::ProviderChanged),
+        };
+        let Some(method) = renewable_method(&tx, &request.login_method_id)? else {
+            return skip(tx, OidcMembershipRenewalSkip::NotRenewable);
+        };
+        let Some(row) = row(&tx, &request.login_method_id)? else {
+            return skip(tx, OidcMembershipRenewalSkip::NotRenewable);
+        };
+        let record = row.record()?;
+        if record.state == OidcMembershipRenewalState::Ended {
+            return skip(tx, OidcMembershipRenewalSkip::NotRenewable);
+        }
+        if let Some(next) = record.next_attempt_after.as_deref()
+            && stored_time(next)? > now_time
+        {
+            return skip(tx, OidcMembershipRenewalSkip::NotDue);
+        }
+        if let Some(last) = record.last_attempt_at.as_deref()
+            && now_time.signed_duration_since(stored_time(last)?)
+                < Duration::seconds(MEMBERSHIP_RENEWAL_MIN_ATTEMPT_INTERVAL_SECONDS)
+        {
+            return skip(tx, OidcMembershipRenewalSkip::AttemptInterval);
+        }
+        let ahead = i64::try_from(provider.external_membership_ttl_seconds / 4).unwrap_or(i64::MAX);
+        if let Some(valid_until) = evidence_valid_until(&tx, &method.login_method_id)?
+            && stored_time(&valid_until)?.signed_duration_since(now_time) > Duration::seconds(ahead)
+        {
+            return skip(tx, OidcMembershipRenewalSkip::EvidenceCurrent);
+        }
+        let material = row.material(key_ring, &provider)?.ok_or_else(invalid_row)?;
+        tx.execute(
+            "UPDATE oidc_membership_renewals SET last_attempt_at = ?2, updated_at = ?2
+             WHERE login_method_id = ?1",
+            params![method.login_method_id, now],
+        )
+        .map_err(sql_unavailable)?;
+        let start = OidcMembershipRenewalStart {
+            fence: OidcMembershipRenewalFence {
+                login_method_id: method.login_method_id.clone(),
+                principal_id: method.principal_id.clone(),
+                external_subject: method.external_subject.clone().unwrap_or_default(),
+                config_generation: provider.config_generation,
+                tenant_id: provider.tenant_id.clone(),
+                client_id: provider.client_id.clone(),
+                token_version: record.token_version,
+            },
+            material,
+            failure_count: record.failure_count,
+        };
+        tx.commit().map_err(sql_unavailable)?;
+        Ok(OidcMembershipRenewalAttempt::Started(Box::new(start)))
+    }
+
+    /// Writes one attempt's outcome in an immediate transaction when its
+    /// fence still holds (design §8.8); otherwise writes nothing.
+    ///
+    /// A renewal replaces the method's evidence with its complete groups,
+    /// matched like a sign-in's, only when its raw `iat` is strictly newer
+    /// than every trusted observation, and raises the watermark either way
+    /// (§8.7); it stores a returned refresh token under a new token version,
+    /// records `last_renewed_at` and clears failures. A failure counts toward
+    /// `failure_count` and leaves the evidence to expire; an ending deletes
+    /// the stored token.
+    pub fn commit_oidc_membership_renewal(
+        &self,
+        request: OidcMembershipRenewalCommitRequest,
+    ) -> Result<OidcMembershipRenewalCommit, ManagedStoreError> {
+        let now_time = parse_time(&request.now)?;
+        let now = normalized_timestamp(now_time);
+        let rotation_allowed = matches!(
+            request.result,
+            OidcMembershipRenewalResult::Renewed { .. }
+                | OidcMembershipRenewalResult::Failed {
+                    code: OidcMembershipRenewalFailureCode::GroupsIncomplete,
+                    ..
+                }
+        );
+        if request.rotation.is_some() && !rotation_allowed {
+            return Err(input_invalid(
+                "only a renewal or incomplete groups store a returned refresh token",
+            ));
+        }
+        if let OidcMembershipRenewalResult::Renewed {
+            external_group_ids, ..
+        } = &request.result
+        {
+            for group_id in external_group_ids {
+                validate_external_group_id(group_id)?;
+            }
+        }
+        let next_attempt_after = match &request.result {
+            OidcMembershipRenewalResult::Failed {
+                next_attempt_after, ..
+            } => Some(normalized_timestamp(parse_time(next_attempt_after)?)),
+            _ => None,
+        };
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let Some(provider) = fence_holds(&tx, &request.fence)? else {
+            tx.commit().map_err(sql_unavailable)?;
+            return Ok(OidcMembershipRenewalCommit::Superseded);
+        };
+        let login_method_id = request.fence.login_method_id.as_str();
+        let row = row(&tx, login_method_id)?.ok_or_else(invalid_row)?;
+        row.record()?;
+        let mut evidence = None;
+        let mut membership_changed = false;
+        match &request.result {
+            OidcMembershipRenewalResult::Renewed {
+                issued_at,
+                external_group_ids,
+            } => {
+                if *issued_at > row.observation_iat {
+                    let ttl = i64::try_from(provider.external_membership_ttl_seconds)
+                        .map_err(|_| invalid_row())?;
+                    let evidence_at =
+                        DateTime::<Utc>::from_timestamp((*issued_at).min(now_time.timestamp()), 0)
+                            .ok_or_else(|| input_invalid("membership renewal iat is invalid"))?;
+                    let valid_until = evidence_at + Duration::seconds(ttl);
+                    let before = evidence_bindings(&tx, login_method_id)?;
+                    let matched = matched_external_group_bindings(&tx, external_group_ids)?;
+                    replace_oidc_membership_evidence_tx(
+                        &tx,
+                        login_method_id,
+                        &matched,
+                        &OidcEvidenceWindow {
+                            observed_at: &now,
+                            evidence_at: &normalized_timestamp(evidence_at),
+                            valid_until: &normalized_timestamp(valid_until),
+                        },
+                    )?;
+                    membership_changed = evidence_bindings(&tx, login_method_id)? != before;
+                    evidence = Some(OidcMembershipEvidence::Replaced);
+                } else {
+                    evidence = Some(OidcMembershipEvidence::KeptNewer);
+                }
+                raise_observation(&tx, login_method_id, *issued_at, &now)?;
+                if let Some(rotation) = &request.rotation {
+                    rotate(&tx, &row, &provider, rotation, &now)?;
+                }
+                tx.execute(
+                    "UPDATE oidc_membership_renewals
+                     SET state = 'active', ended_reason = NULL, failure_count = 0,
+                         last_failure_code = NULL, last_failure_at = NULL,
+                         next_attempt_after = NULL, last_renewed_at = ?2, updated_at = ?2
+                     WHERE login_method_id = ?1",
+                    params![login_method_id, now],
+                )
+                .map_err(sql_unavailable)?;
+            }
+            OidcMembershipRenewalResult::Failed {
+                code,
+                observed_issued_at,
+                ..
+            } => {
+                if let Some(issued_at) = observed_issued_at {
+                    raise_observation(&tx, login_method_id, *issued_at, &now)?;
+                }
+                if let Some(rotation) = &request.rotation {
+                    rotate(&tx, &row, &provider, rotation, &now)?;
+                }
+                let state = match code {
+                    OidcMembershipRenewalFailureCode::Throttled
+                    | OidcMembershipRenewalFailureCode::Unavailable => {
+                        OidcMembershipRenewalState::Retrying
+                    }
+                    _ => OidcMembershipRenewalState::Blocked,
+                };
+                tx.execute(
+                    "UPDATE oidc_membership_renewals
+                     SET state = ?2, ended_reason = NULL, failure_count = failure_count + 1,
+                         last_failure_code = ?3, last_failure_at = ?4, next_attempt_after = ?5,
+                         updated_at = ?4
+                     WHERE login_method_id = ?1",
+                    params![
+                        login_method_id,
+                        state.as_str(),
+                        code.as_str(),
+                        now,
+                        next_attempt_after
+                    ],
+                )
+                .map_err(sql_unavailable)?;
+            }
+            OidcMembershipRenewalResult::Ended(reason) => {
+                tx.execute(
+                    "UPDATE oidc_membership_renewals
+                     SET state = 'ended', ended_reason = ?2, payload_version = NULL,
+                         key_id = NULL, nonce = NULL, ciphertext = NULL,
+                         failure_count = failure_count + 1, last_failure_code = NULL,
+                         last_failure_at = NULL, next_attempt_after = NULL, recorded_at = ?3,
+                         updated_at = ?3
+                     WHERE login_method_id = ?1",
+                    params![login_method_id, reason.as_str(), now],
+                )
+                .map_err(sql_unavailable)?;
+            }
+        }
+        let record = self::row(&tx, login_method_id)?
+            .ok_or_else(invalid_row)?
+            .record()?;
+        let membership = effective_membership_at_conn(&tx, &request.fence.principal_id, &now)?;
+        let valid_until = evidence_valid_until(&tx, login_method_id)?;
+        tx.commit().map_err(sql_unavailable)?;
+        Ok(OidcMembershipRenewalCommit::Committed(Box::new(
+            OidcMembershipRenewalCommitted {
+                principal_id: request.fence.principal_id,
+                record,
+                membership,
+                evidence,
+                valid_until,
+                membership_changed,
+            },
+        )))
+    }
+
     /// The membership-renewal row of `login_method_id`, without its payload.
     pub fn oidc_membership_renewal(
         &self,

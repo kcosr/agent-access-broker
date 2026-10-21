@@ -478,6 +478,8 @@ fn reason_codes_have_expected_statuses() {
             "oidc_login_method_conflict",
             409,
         ),
+        (ReasonCode::OidcSignInRequired, "oidc_sign_in_required", 401),
+        (ReasonCode::OidcClientRejected, "oidc_client_rejected", 503),
         (
             ReasonCode::ExternalGroupBindingNotFound,
             "external_group_binding_not_found",

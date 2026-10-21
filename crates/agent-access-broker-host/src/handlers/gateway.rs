@@ -812,10 +812,11 @@ async fn gateway_basic_identity(
         && headers.contains_key("x-aw-identity-token-sha256")
     {
         let runtime = snapshot.runtime.clone();
-        let headers = headers.clone();
         let admission = admission.clone();
         return tokio::task::spawn_blocking(move || {
-            runtime.resolve_forwarded_identity(&headers, &admission)
+            runtime
+                .resolve_forwarded_identity_with_proof(&admission)
+                .map(|resolved| resolved.identity)
         })
         .await
         .unwrap_or(Err(IdentityFailure::Invalid))
@@ -833,7 +834,7 @@ async fn gateway_basic_identity(
     let runtime = snapshot.runtime.clone();
     let caller_id = admission.caller_id().map(str::to_owned);
     tokio::task::spawn_blocking(move || {
-        let mut identity = runtime.resolve_gateway_basic_broker_token(&token)?;
+        let mut identity = runtime.resolve_gateway_basic_broker_token(&token)?.identity;
         identity.caller_id = caller_id;
         Ok(identity)
     })
