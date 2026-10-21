@@ -71,6 +71,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "launcher-tests", command: [python, "-B", "scripts/local-broker-process.test.py"] },
     { id: "audit-demo-tests", command: [python, "-B", "demo/seed-audit-showcase.test.py"] },
     { id: "doc-links", command: [node, "scripts/check-doc-links.mjs"] },
+    { id: "changelog", command: [node, "scripts/check-changelog.mjs"] },
     { id: "rust-format", command: cargoCommand("fmt", "--check"), cargo: true },
     { id: "crate-boundaries", command: [node, "scripts/check-crate-boundaries.mjs"], cargo: true },
     // Runs the pinned nightly rustdoc in target/public-api; it sets its own toolchain environment.

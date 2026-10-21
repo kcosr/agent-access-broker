@@ -207,6 +207,7 @@ cargo build --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 node scripts/check-crate-boundaries.mjs
 node scripts/public-api.mjs check
+node scripts/check-changelog.mjs
 ```
 
 Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
@@ -675,6 +676,9 @@ Use these sections under `## [Unreleased]`:
   as `([#12](https://github.com/kcosr/agent-access-broker/pull/12))`. Add the
   PR number or link after opening the PR and before merging.
 - Leave dated release sections unchanged; record corrections under Unreleased.
+- `node scripts/check-changelog.mjs` enforces these sections, with bullets and
+  indented continuation lines; empty headings are fine in `Unreleased`. Released
+  sections must match the merge-base with `origin/main` byte for byte.
 
 ## Release Procedure
 
@@ -714,8 +718,8 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 ```
 
 The driver runs the required standalone Rust, crate-boundary, public API,
-downstream consumer, portal, script, documentation, sample-config, Unix signal,
-native release-provenance, and notice checks. It
+downstream consumer, portal, script, documentation, changelog, sample-config,
+Unix signal, native release-provenance, and notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight

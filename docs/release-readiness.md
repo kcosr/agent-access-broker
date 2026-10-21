@@ -50,7 +50,9 @@ prepared version. The script edits only `Cargo.toml`,
 `Unreleased` section in the same change. It validates locked Cargo metadata and
 restores the three files if preparation fails. Review and commit the change,
 then merge it through the normal PR process. Preparation performs no commits,
-tags, pushes, or publication.
+tags, pushes, or publication. It first applies the
+`node scripts/check-changelog.mjs` rules, refuses empty notes, and omits empty
+category headings from the release.
 
 ## Qualify the candidate
 
@@ -83,9 +85,9 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 
 The output directory must be new or empty and outside the checkout. The driver
 runs the required standalone Rust, crate-boundary, public API, downstream
-consumer, portal build/unit/browser, script, documentation, sample-config, Unix
-signal, native release-provenance, and notice checks. It writes
-`qualification.json`, per-gate logs, native Rust notices, and the downstream
+consumer, portal build/unit/browser, script, documentation, changelog,
+sample-config, Unix signal, native release-provenance, and notice checks. It
+writes `qualification.json`, per-gate logs, native Rust notices, and the downstream
 consumer evidence in `downstream-consumer/`.
 It fails on missing required prerequisites or failed gates; unavailable required
 checks cannot become a passing qualification. Optional OAuth/live-provider
@@ -123,6 +125,7 @@ python3 scripts/release-prerequisites.test.py
 python3 scripts/local-broker-process.test.py
 python3 demo/seed-audit-showcase.test.py
 node scripts/check-doc-links.mjs
+node scripts/check-changelog.mjs
 ```
 
 On Unix, also run the required isolated real-signal parent fixture:
