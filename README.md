@@ -34,6 +34,9 @@ Administrators can also [automatically add newly created Microsoft users to loca
 groups](docs/administrator-guide.md#microsoft-onboarding). These memberships
 persist independently of Microsoft group evidence; the mapped-group admission
 requirement still applies.
+Optional [membership renewal](docs/operator-guide.md#microsoft-membership-renewal)
+keeps group-derived access working after one sign-in while people and their
+agents use the Broker.
 
 ## Supported integrations
 

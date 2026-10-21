@@ -341,7 +341,7 @@ async fn resolve_body_identity(
     headers: &axum::http::HeaderMap,
 ) -> Option<agent_access_core::IdentityContext> {
     if !snapshot.runtime.has_configured_identity_header(headers) {
-        match crate::handlers::auth::resolve_browser_cookie_identity_blocking(
+        match crate::handlers::auth::resolve_browser_cookie_identity_without_renewal(
             snapshot.clone(),
             headers.clone(),
         )
@@ -352,7 +352,7 @@ async fn resolve_body_identity(
             Ok(None) => {}
         }
     }
-    crate::handlers::common::resolve_identity_blocking(snapshot.clone(), headers.clone())
+    crate::handlers::common::resolve_identity_without_renewal(snapshot.clone(), headers.clone())
         .await
         .ok()
         .filter(|identity| identity.authenticated)

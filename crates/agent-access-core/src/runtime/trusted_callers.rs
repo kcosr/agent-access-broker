@@ -83,6 +83,9 @@ impl IngressAdmission {
 pub struct AdmittedIdentity {
     pub identity: IdentityContext,
     pub proof: Option<crate::AttestedIdentityProof>,
+    /// Read with the identity's membership: whether membership renewal
+    /// applies to the person.
+    pub membership_renewal: Option<crate::MembershipRenewalHint>,
 }
 
 /// The shared bounded single-field bearer grammar for username assertions and MCP.
@@ -522,16 +525,9 @@ impl BrokerRuntime {
         Ok(self.attested_identity(resolved, admission))
     }
 
-    pub fn resolve_forwarded_identity(
-        &self,
-        _headers: &HeaderMap,
-        admission: &IngressAdmission,
-    ) -> Result<IdentityContext, IdentityFailure> {
-        self.resolve_forwarded_identity_with_proof(admission)
-            .map(|resolved| resolved.identity)
-    }
-
-    pub(super) fn resolve_forwarded_identity_with_proof(
+    /// The forwarded identity of `admission`'s fingerprint, with its proof
+    /// and the membership renewal hint read with it.
+    pub fn resolve_forwarded_identity_with_proof(
         &self,
         admission: &IngressAdmission,
     ) -> Result<AdmittedIdentity, IdentityFailure> {
@@ -649,6 +645,7 @@ impl BrokerRuntime {
         AdmittedIdentity {
             identity,
             proof: Some(resolved.proof),
+            membership_renewal: resolved.membership_renewal,
         }
     }
 }

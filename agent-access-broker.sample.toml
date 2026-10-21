@@ -188,6 +188,7 @@ default_context = "default"
 # max_pending_flows = 10000
 # jit_provisioning = true
 # external_membership_ttl = "8h"
+# membership_renewal = false
 #
 # The client-secret ref contains the nonempty value issued by Entra. The flow
 # key ref contains an independent unpadded base64url value that decodes to
@@ -195,6 +196,10 @@ default_context = "default"
 # broker groups through the admin API, CLI, or portal. Overage/distributed group
 # claims deny that login; the broker does not call Graph. An already linked user
 # may log in with a complete empty group list and retain any local access.
+# membership_renewal = true also requests offline_access at sign-in and keeps
+# each person's Microsoft refresh token, encrypted, so requests renew expiring
+# group evidence on demand. Keep public client flows disabled on the Entra app,
+# and grant admin consent for offline_access first where users cannot consent.
 #
 # [portal]
 # enabled = true

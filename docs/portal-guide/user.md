@@ -40,7 +40,10 @@ other portal pages.*
 Expected result: the password-change requirement clears and your permitted
 portal navigation becomes available. Later password changes are available on
 **Account** for accounts with active local password sign-in. Microsoft-only users
-change their password with Microsoft.
+change their password with Microsoft. If you sign in with Microsoft, **Account**
+also shows **Microsoft groups**: whether your Microsoft groups renew
+automatically or need a new Microsoft sign-in, and when the current ones
+expire. See the [end-user guide](../end-user-guide.md#sign-in-and-check-access).
 
 If sign-in opens an unexpected Microsoft-linked account, contact your
 administrator. If **My access** is missing, your account may have self-service

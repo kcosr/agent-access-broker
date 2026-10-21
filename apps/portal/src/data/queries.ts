@@ -164,6 +164,22 @@ export function useOwnServiceLimits(enabled: boolean) {
   return { query, limits: query.data?.serviceLimits ?? null, loading: query.isLoading };
 }
 
+/**
+ * The signed-in user's own Microsoft membership from the same `/v1/me`
+ * query, which any signed-in session may read. `/v1/me` first waits for the
+ * renewal of expired groups, so the window it reports reflects that renewal.
+ */
+export function useOwnMicrosoftMembership(enabled: boolean) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  const query = useQuery<MeResult>({
+    queryKey: portalQueryKeys.me(viewer),
+    enabled: signedIn && enabled,
+    staleTime: 0,
+    queryFn: () => runQuery(() => brokerApi.me())
+  });
+  return { query, membership: query.data?.microsoftMembership ?? null };
+}
+
 export function useAdminPrincipals(enabled = true) {
   const { viewer, admin, runQuery } = useQueryAccess();
   return useQuery<PrincipalRecord[]>({

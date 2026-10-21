@@ -233,6 +233,7 @@ impl StartupHooks {
         state
             .mcp_cleanup_paused
             .store(self.mcp_cleanup_paused, std::sync::atomic::Ordering::SeqCst);
+        *state.microsoft_oidc_test_components.lock().unwrap() = self.microsoft_oidc.clone();
         state
     }
 }
@@ -609,6 +610,9 @@ async fn drain_lifecycle(
 
     // No revocation pass starts once shutdown has begun.
     state.oauth_revocations.stop();
+    // Nor does a membership renewal; those that have not submitted their
+    // outcome write are cancelled and write nothing more.
+    state.membership_renewals.close();
     let operation_state = state.clone();
     let operation_budget =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or_default();
@@ -706,6 +710,17 @@ async fn drain_lifecycle(
     {
         tracing::warn!(event = "oauth_revocation_shutdown_unfinished");
     }
+    // Submitted membership renewal writes run to completion and append their
+    // audit records before the audit store closes. Each one that does not
+    // finish in time is logged: it may commit without its record.
+    state
+        .membership_renewals
+        .drain(
+            remaining_shutdown_time(&coordinator, shutdown_timeout)
+                .unwrap_or_default()
+                .max(SHUTDOWN_DRAIN_FLOOR),
+        )
+        .await;
     let remaining =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);
     let audit_error = match state.shutdown_audit(remaining).await {

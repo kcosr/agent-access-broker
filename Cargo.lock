@@ -291,6 +291,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "http",
+ "httpdate",
  "jsonschema",
  "libc",
  "openidconnect",

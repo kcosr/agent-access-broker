@@ -60,7 +60,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
 `027_command_imports`, `028_oauth_revocations`,
-`029_identity_access_path_controls`, and `030_group_auto_enrollment` in order. The
+`029_identity_access_path_controls`, `030_group_auto_enrollment`, and
+`031_oidc_membership_renewal` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -138,6 +139,7 @@ erDiagram
 | `external_group_bindings` | Microsoft group-object-ID mappings to managed groups. | binding ID, unique external group ID, group ID, active/disabled status, actor metadata |
 | `oidc_membership_refresh_state` | Completeness and freshness window for a login method's latest accepted group claim. | login method ID, observed/evidence timestamps, `valid_until` |
 | `external_principal_groups` | Current Microsoft-derived group contributions from the latest complete claim. | login method ID, binding ID, observed/evidence timestamps, `valid_until` |
+| `oidc_membership_renewals` | The encrypted Microsoft refresh token of a Microsoft login method and its renewal state, when membership renewal is enabled. | login method ID, `token_version`, `state`, `ended_reason`, payload version/key ID/nonce/ciphertext, `observation_iat`, `last_renewed_at`, `last_attempt_at`, `failure_count`, `last_failure_code`/`last_failure_at`, `next_attempt_after` |
 
 `policy_grants.grant_id` is a durable text identifier. When a managed grant is
 created without an explicit ID, the broker stores a generated UUID. Explicit
@@ -472,9 +474,10 @@ and client. Reconciliation advances `config_generation` when effective OIDC
 configuration or secret material changes, invalidating older pending flows.
 Existing OIDC login methods or external group bindings prevent silently adopting
 a different tenant. Changing the client or disabling the provider additionally
-expires Microsoft membership contributions and revokes Microsoft browser-session
-tokens. Reducing the configured membership TTL clamps existing evidence to the
-shorter window; other fingerprint-only changes preserve existing membership.
+expires Microsoft membership contributions, revokes Microsoft browser-session
+tokens and deletes every membership-renewal record. Reducing the configured
+membership TTL clamps existing evidence to the shorter window; other
+fingerprint-only changes preserve existing membership.
 
 Each accepted complete group claim replaces that login method's current rows in
 `external_principal_groups` and refreshes the corresponding completeness window
@@ -483,7 +486,42 @@ authoritative: an already linked user may sign in and the replacement removes
 all Microsoft-derived contributions. An explicit Microsoft overage marker or a
 malformed/incomplete groups claim denies login and does not replace the last
 complete evidence; that older evidence remains effective only until its
-original `valid_until`.
+original `valid_until`. The window is `evidence_at = min(iat, now)` plus the
+configured TTL, so a Microsoft clock ahead of the Broker's only shortens it.
+
+With `membership_renewal` enabled, a successful sign-in also upserts the login
+method's `oidc_membership_renewals` row: a new `token_version` holding the
+returned refresh token in state `active`, or state `ended` with
+`ended_reason = 'not_issued'` when Microsoft returned none (or one over 16 KiB).
+The upsert clears failures and `next_attempt_after` but keeps `last_attempt_at`
+and `last_renewed_at`, so a sign-in never shortens the minimum interval between
+renewal attempts. A renewal (see [design](design.md#microsoft-membership-renewal))
+is the second writer of the method's evidence. While a row exists, both writers
+order their evidence by Microsoft's raw `iat`: `observation_iat` is the highest
+`iat` of any trusted ID token observed for the method, from complete and
+incomplete group claims alike, including a superseded sign-in flow's validated
+token and a renewal whose token was too old to use. Complete groups replace the
+evidence only from a token whose `iat` is strictly greater, and every trusted
+observation raises `observation_iat`; a sign-in that keeps the newer evidence
+still issues its session and records its refresh token. Without a row there is
+no second writer, and each sign-in replaces the evidence as before.
+
+A renewal row's `state` is `active`, `retrying` (after `throttled` or
+`unavailable`), `blocked` (after `groups_incomplete`, `client_rejected`,
+`request_rejected` or `invalid_response`) or `ended`, with `ended_reason`
+`sign_in_required`, `not_issued` or `identity_mismatch`. `last_failure_code`,
+`last_failure_at` and `next_attempt_after` are set exactly for `retrying` and
+`blocked`; `last_failure_code` holds only that sanitized classification, never
+Microsoft's error text. Only non-ended rows hold a payload. Each attempt first
+records `last_attempt_at` in its own transaction; its outcome write runs in
+another one that requires the same provider generation, tenant and client, the
+method still active with the same principal and subject, an enabled `user`, and
+the `token_version` read at attempt start, and otherwise writes nothing. A
+success, and a `groups_incomplete` failure, store any returned refresh token
+under a new `token_version`; a success also records `last_renewed_at`.
+`failure_count` counts failed outcomes since the last success or sign-in,
+including the one that ends renewal. An ending deletes the payload. State-only
+updates keep the `token_version` and do not re-encrypt.
 
 JIT creation requires at least one claimed Microsoft group mapped through an
 active binding to an active managed group. Once a login method is explicitly
@@ -491,8 +529,8 @@ bound, Microsoft membership is not itself a login prerequisite. Direct admin
 linking uses the tenant's Microsoft user object ID and reactivates an exact
 disabled link; conflicting subject or principal links are rejected. Unlinking
 revokes browser sessions backed by that OIDC login method and deletes its
-refresh and Microsoft-group rows, while leaving local group membership, the role,
-direct grants, and unrelated broker tokens intact.
+refresh-state, Microsoft-group and membership-renewal rows, while leaving local
+group membership, the role, direct grants, and unrelated broker tokens intact.
 
 New JIT account creation also selects all active groups whose
 `auto_enroll_new_microsoft_users` flag is set and inserts local
@@ -505,8 +543,8 @@ local-password login and account creation through administration do not run
 this step.
 
 The flag selection, local inserts, principal, login method, Microsoft evidence,
-subject watermark and browser session all commit in the same immediate
-transaction. Concurrent group edits serialize before or after that transaction;
+subject watermark, browser session and, with `membership_renewal` enabled, the
+login method's renewal record all commit in the same immediate transaction. Concurrent group edits serialize before or after that transaction;
 a failed local insert rolls it back in full. The commit is the once-only
 enrollment boundary even if later audit emission or cookie delivery fails.
 The store returns the sorted IDs actually enrolled from that transaction for
@@ -578,14 +616,17 @@ Metadata-only store opening without a key ring performs structural checks and
 cannot establish cryptographic readiness.
 
 Key inventory and readiness also include all retained identity-token, OAuth,
-pending OAuth revocation, private-resource-attribute, and imported-service
-secret slots. Disabling a
-resource or imported service does not remove its key requirement.
+pending OAuth revocation, Microsoft membership-renewal, private-resource-attribute,
+and imported-service secret slots. Disabling a
+resource or imported service does not remove its key requirement. Readiness
+decrypts every membership-renewal row that holds a token and checks its payload
+against the row's login method, subject, token version and key and the
+provider's tenant and client; ended rows hold no token and need no key.
 
 The admin rewrap operation decrypts active credentials and retained secret slots
 under a source key id and rewrites their encrypted material under a target key id.
-It does not change credential metadata, material versions, resource versions, or
-imported service/action revisions. Rewrap includes disabled resources and imports.
+It does not change credential metadata, material versions, resource versions,
+Microsoft membership-renewal token versions, or imported service/action revisions. Rewrap includes disabled resources and imports.
 Keep each old key until the used-key inventory confirms that no required material
 uses it, and preserve keys needed to decrypt retained backups.
 
@@ -653,6 +694,14 @@ The managed store is stateful rather than append-only:
   rows, and expired evidence does not authorize;
 - unlinking a Microsoft login method removes its current external membership
   evidence through explicit deletion/cascades and revokes its browser sessions;
+- a membership-renewal row is replaced by each Microsoft sign-in with renewal
+  enabled and deleted with its login method; disabling the principal (through
+  either the enable or the patch route), disabling Microsoft sign-in, changing
+  its `client_id` and turning `membership_renewal` off delete rows in the same
+  transaction. Re-enabling a principal does not restore them. Adding,
+  disabling or removing an external group binding, lowering the TTL and portal
+  sign-out leave them unchanged. Deleting a row does not revoke its token at
+  Microsoft;
 - managed policy grant creation, edits, and status changes update
   `policy_revisions.generation`;
 - principal service limit overrides are replaced or deleted in place and do
@@ -694,9 +743,14 @@ still needed.
 Restored group bindings, login links, subject watermarks, and current membership
 evidence are part of the SQLite backup. The broker still evaluates restored
 membership against its stored expiry and the reconciled provider configuration;
-backup/restore does not extend an evidence window. Losing or rotating the OIDC
-flow key makes authorization flows captured in the backup unusable, but users
-can start new login flows after the current key is configured.
+backup/restore does not extend an evidence window. Membership-renewal rows are
+restored with their encrypted refresh tokens and need the credential key IDs
+that encrypted them. A restored token renews only while Microsoft still honours
+it, and a backup taken before later sign-ins or rotations holds older tokens;
+tokens issued after the backup remain valid at Microsoft until revoked there.
+Losing or rotating the OIDC flow key makes authorization flows captured in the
+backup unusable, but users can start new login flows after the current key is
+configured.
 
 On Unix, newly created managed-store directories are owner-only (`0700`) and the
 SQLite database plus WAL/SHM sidecar files are owner read/write only (`0600`).
@@ -814,6 +868,27 @@ check. Existing groups remain opted out and existing memberships are unchanged.
 Its structural validator checks the full schema and preserves the requirement
 for exactly one identity-token row per human introduced in `029`. Rollback
 requires a pre-migration backup; the previous binary refuses the newer ledger.
+
+Migration `031_oidc_membership_renewal`, appended after
+`030_group_auto_enrollment`, adds the `oidc_membership_renewals` table
+and changes no existing table or row; no row exists until a Microsoft sign-in
+with `membership_renewal` enabled. Each row belongs to one Microsoft login
+method (deleted with it) and holds the refresh token that sign-in returned,
+AES-256-GCM encrypted under the credential key ring's active key with the
+values of its ID token, or records that none was issued. The ciphertext's
+authenticated data is the JSON tuple `("aab-oidc-membership-renewal", 1,
+login_method_id, external_subject, tenant_id, client_id, token_version,
+key_id)` of stored facts, so a payload moved to another method, subject,
+tenant, client or token version fails authentication. Rows join key
+readiness, the used-key inventory and `admin credentials rewrap`, which keeps
+their token version. Their states, ordering and lifecycle are described in
+[Microsoft OIDC state](#microsoft-oidc-state-and-membership) and
+[lifecycle](#lifecycle-and-retention). Its structural validator compares the
+whole schema with the catalog through `031`, including the `030` group setting,
+checks every renewal row's state, reason, payload and failure columns and that
+it belongs to a Microsoft login method, and still requires one identity-token
+row for every human. Rollback requires a pre-migration backup: an older binary
+refuses the newer ledger.
 
 ### Identity-token inventory
 

@@ -20,6 +20,17 @@ pub use imported_resource_types::{
 mod local_password_failures;
 pub(crate) mod oauth;
 pub(crate) mod oauth_revocation;
+mod oidc_membership_renewal;
+pub use oidc_membership_renewal::{
+    MembershipRenewalHint, MicrosoftMembershipRecord, OidcMembershipEvidence,
+    OidcMembershipRenewalAttempt, OidcMembershipRenewalAttemptRequest, OidcMembershipRenewalCommit,
+    OidcMembershipRenewalCommitRequest, OidcMembershipRenewalCommitted,
+    OidcMembershipRenewalEndedReason, OidcMembershipRenewalFailureCode, OidcMembershipRenewalFence,
+    OidcMembershipRenewalLastFailure, OidcMembershipRenewalMaterial, OidcMembershipRenewalRecord,
+    OidcMembershipRenewalResult, OidcMembershipRenewalRotation, OidcMembershipRenewalSignIn,
+    OidcMembershipRenewalSkip, OidcMembershipRenewalStart, OidcMembershipRenewalState,
+    OidcMembershipRenewalStatus, OidcMembershipRenewalStatusState, OidcRenewalReference,
+};
 mod principal_service_limits;
 mod resource_attributes;
 pub(crate) use resource_attributes::{AdmittedResourceEntry, CommandResourceAttributes};
@@ -69,7 +80,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION;
+const MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION: &str = "031_oidc_membership_renewal";
 const MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION: &str = "030_group_auto_enrollment";
 const MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION: &str =
     "029_identity_access_path_controls";
@@ -246,6 +258,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/group_auto_enrollment.sql"),
         seed: None,
         structural_validation: imported_store::validate_group_auto_enrollment_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION,
+        checksum: "14db84b6de4475a352670bb38ccdfb3eff4937f429c94548688d2e1fab0c9b09",
+        sql: include_str!("managed_store/oidc_membership_renewal.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_oidc_membership_renewal_structure,
     },
 ];
 
@@ -724,6 +743,7 @@ impl ManagedStore {
         identity_tokens::check_ready(&conn, key_ring)?;
         oauth::check_ready(&conn, key_ring)?;
         oauth_revocation::check_ready(&conn, key_ring)?;
+        oidc_membership_renewal::check_ready(&conn, key_ring)?;
         resource_attributes::check_ready(&conn, key_ring)?;
         imported_store::check_ready(&conn, key_ring)?;
         let key_ids = active_credential_key_ids(&conn)?;
@@ -1805,10 +1825,12 @@ impl ManagedStore {
             return Err(ManagedStoreError::PrincipalNotFound);
         }
         // Disablement ends the owner's OAuth connections and keeps their
-        // families for remote revocation in this transaction.
+        // families for remote revocation in this transaction. It also deletes
+        // the stored Microsoft refresh tokens; re-enabling needs a sign-in.
         let kept = if enabled {
             0
         } else {
+            oidc_membership_renewal::delete_for_principal(&tx, principal_id)?;
             oauth_revocation::end_owner_slots(
                 &tx,
                 self.oauth_revocation_capture().as_ref(),
@@ -1876,8 +1898,10 @@ impl ManagedStore {
             .map_err(sql_unavailable)?;
         }
         // Disablement ends the owner's OAuth connections and keeps their
-        // families for remote revocation in this transaction.
+        // families for remote revocation in this transaction. It also deletes
+        // the stored Microsoft refresh tokens; re-enabling needs a sign-in.
         let kept = if request.status.as_deref() == Some("disabled") {
+            oidc_membership_renewal::delete_for_principal(&tx, &request.principal_id)?;
             oauth_revocation::end_owner_slots(
                 &tx,
                 self.oauth_revocation_capture().as_ref(),
@@ -2344,6 +2368,7 @@ impl ManagedStore {
             principal_id: record.principal_id.clone(),
             principal_kind: principal.principal_kind(),
             policy_groups: principal_policy_groups(&conn, &record.principal_id)?,
+            membership_renewal: oidc_membership_renewal::renewal_hint(&conn, &record.principal_id)?,
             groups: principal.groups,
             role: principal.role,
             self_service_enabled: principal.self_service_enabled,
@@ -2549,6 +2574,9 @@ impl ManagedStore {
             .is_some_and(|state| state.client_id != request.client_id);
         if !request.enabled || request.invalidate_existing_evidence || client_changed {
             expire_all_oidc_membership_tx(&tx, &request.actor, &now)?;
+        }
+        if !request.membership_renewal {
+            oidc_membership_renewal::delete_all(&tx)?;
         }
         tx.execute(
             "INSERT INTO oidc_provider_state
@@ -2879,6 +2907,7 @@ impl ManagedStore {
             params![method.login_method_id],
         )
         .map_err(sql_unavailable)?;
+        oidc_membership_renewal::delete_for_method(&tx, &method.login_method_id)?;
         tx.execute(
             "DELETE FROM principal_login_methods WHERE login_method_id = ?1",
             params![method.login_method_id],
@@ -2888,12 +2917,18 @@ impl ManagedStore {
         Ok(())
     }
 
+    /// Records a trusted sign-in whose group claim was incomplete: advances
+    /// the subject's flow watermark and raises the login method's renewal
+    /// `observation_iat` to the ID token's raw `issued_at`. Flow order need
+    /// not match Microsoft's issuance order, so a superseded flow's trusted
+    /// observation raises it too. It changes no evidence and no renewal token.
     pub fn record_trusted_incomplete_oidc_callback(
         &self,
         external_subject: &str,
         flow_sequence: u64,
         provider_generation: u64,
         observed_at: &str,
+        issued_at: i64,
     ) -> Result<bool, ManagedStoreError> {
         validate_oidc_external_subject(external_subject)?;
         let observed_at = normalize_optional_timestamp(Some(observed_at), "observedAt")?
@@ -2905,6 +2940,12 @@ impl ManagedStore {
         require_oidc_provider_generation(&tx, provider_generation)?;
         let advanced =
             advance_oidc_subject_watermark_tx(&tx, external_subject, flow_sequence, &observed_at)?;
+        oidc_membership_renewal::raise_observation_for_subject(
+            &tx,
+            external_subject,
+            issued_at,
+            &observed_at,
+        )?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(advanced)
     }
@@ -2940,6 +2981,16 @@ impl ManagedStore {
             request.flow_sequence,
             &callback_now,
         )? {
+            // A superseded flow issues no session and records no evidence
+            // or token, but its validated ID token is still a trusted
+            // observation: flow order need not match Microsoft's issuance
+            // order.
+            oidc_membership_renewal::raise_observation_for_subject(
+                &tx,
+                &request.external_subject,
+                request.issued_at,
+                &callback_now,
+            )?;
             tx.commit().map_err(sql_unavailable)?;
             return Ok(OidcCompletionOutcome::Superseded);
         }
@@ -2971,24 +3022,7 @@ impl ManagedStore {
                 });
             }
         }
-        let mut statement = tx
-            .prepare(
-                "SELECT b.binding_id, b.external_group_id
-                 FROM external_group_bindings b JOIN groups g ON g.group_id = b.group_id
-                 WHERE b.status = 'active' AND g.status = 'active'
-                 ORDER BY b.binding_id",
-            )
-            .map_err(sql_unavailable)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(sql_unavailable)?;
-        let matched = collect_rows(rows)?
-            .into_iter()
-            .filter(|(_, external_group_id)| request.external_group_ids.contains(external_group_id))
-            .collect::<Vec<_>>();
-        drop(statement);
+        let matched = matched_external_group_bindings(&tx, &request.external_group_ids)?;
         let jit_created = method.is_none();
         if jit_created && (!request.jit_provisioning || matched.is_empty()) {
             tx.commit().map_err(sql_unavailable)?;
@@ -3063,41 +3097,44 @@ impl ManagedStore {
             }
         }
         let method = method.expect("OIDC method resolved or created");
-        tx.execute(
-            "DELETE FROM external_principal_groups WHERE login_method_id = ?1",
-            params![method.login_method_id],
-        )
-        .map_err(sql_unavailable)?;
-        for (binding_id, _) in &matched {
-            tx.execute(
-                "INSERT INTO external_principal_groups
-                 (login_method_id, binding_id, observed_at, evidence_at, valid_until, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?3)",
-                params![
-                    method.login_method_id,
-                    binding_id,
-                    callback_now,
-                    evidence_at,
-                    valid_until
-                ],
-            )
-            .map_err(sql_unavailable)?;
+        // With a renewal row, a second writer can replace the evidence, so
+        // only a token strictly newer by Microsoft's raw `iat` than every
+        // trusted observation replaces it. Without one, sign-in replaces it.
+        let observation = oidc_membership_renewal::observation_iat(&tx, &method.login_method_id)?;
+        let membership_evidence = match observation {
+            Some(observed) if request.issued_at <= observed => OidcMembershipEvidence::KeptNewer,
+            _ => OidcMembershipEvidence::Replaced,
+        };
+        if membership_evidence == OidcMembershipEvidence::Replaced {
+            replace_oidc_membership_evidence_tx(
+                &tx,
+                &method.login_method_id,
+                &matched,
+                &OidcEvidenceWindow {
+                    observed_at: &callback_now,
+                    evidence_at: &evidence_at,
+                    valid_until: &valid_until,
+                },
+            )?;
         }
-        tx.execute(
-            "INSERT INTO oidc_membership_refresh_state
-             (login_method_id, observed_at, evidence_at, valid_until, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?2)
-             ON CONFLICT(login_method_id) DO UPDATE SET
-               observed_at = excluded.observed_at, evidence_at = excluded.evidence_at,
-               valid_until = excluded.valid_until, updated_at = excluded.updated_at",
-            params![
-                method.login_method_id,
-                callback_now,
-                evidence_at,
-                valid_until
-            ],
-        )
-        .map_err(sql_unavailable)?;
+        // The session and the refresh token are recorded whether or not the
+        // groups replaced the evidence.
+        match request.membership_renewal.as_ref() {
+            Some(sign_in) => oidc_membership_renewal::record_sign_in(
+                &tx,
+                &method,
+                &provider,
+                sign_in,
+                request.issued_at,
+                &callback_now,
+            )?,
+            None => oidc_membership_renewal::raise_observation(
+                &tx,
+                &method.login_method_id,
+                request.issued_at,
+                &callback_now,
+            )?,
+        }
         let session_request = BrowserSessionIssueRequest {
             principal_id: method.principal_id.clone(),
             login_method: "oidc".to_string(),
@@ -3117,6 +3154,7 @@ impl ManagedStore {
             session,
             membership,
             auto_enrolled_group_ids,
+            membership_evidence,
         };
         tx.commit().map_err(sql_unavailable)?;
         Ok(OidcCompletionOutcome::Succeeded {
@@ -3562,6 +3600,7 @@ impl ManagedStore {
             email: principal.email,
             groups: token_identity.groups,
             policy_groups: token_identity.policy_groups,
+            membership_renewal: token_identity.membership_renewal,
             role: token_identity.role,
             self_service_enabled: token_identity.self_service_enabled,
             token_id: token_identity.token_id,
@@ -4563,6 +4602,7 @@ impl ManagedStore {
         rewrapped += identity_tokens::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += oauth::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += oauth_revocation::rewrap(&mut conn, key_ring, from_key, to_key)?;
+        rewrapped += oidc_membership_renewal::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += resource_attributes::rewrap(&mut conn, key_ring, from_key, to_key)?;
         rewrapped += imported_store::rewrap(&mut conn, key_ring, from_key, to_key)?;
         Ok(RewrapSummary {
@@ -4846,6 +4886,7 @@ fn active_credential_key_ids(conn: &Connection) -> Result<Vec<String>, ManagedSt
              UNION SELECT key_id FROM principal_identity_tokens WHERE key_id IS NOT NULL
              UNION SELECT key_id FROM oauth_slots
              UNION SELECT key_id FROM oauth_revocations WHERE key_id IS NOT NULL
+             UNION SELECT key_id FROM oidc_membership_renewals WHERE key_id IS NOT NULL
              UNION SELECT key_id FROM resource_secret_material
              UNION SELECT key_id FROM imported_secret_material
              ORDER BY key_id",
@@ -5758,6 +5799,8 @@ pub struct BrokerTokenIdentity {
     pub principal_kind: Option<crate::PrincipalKind>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
+    /// Read with the membership: whether membership renewal applies.
+    pub membership_renewal: Option<MembershipRenewalHint>,
     pub role: PrincipalRole,
     pub self_service_enabled: bool,
     pub token_class: BrokerTokenClass,
@@ -5885,6 +5928,8 @@ pub struct BrowserSessionIdentity {
     pub email: Option<String>,
     pub groups: Vec<String>,
     pub policy_groups: Vec<String>,
+    /// Read with the membership: whether membership renewal applies.
+    pub membership_renewal: Option<MembershipRenewalHint>,
     pub role: PrincipalRole,
     pub self_service_enabled: bool,
     pub token_id: String,
@@ -5916,6 +5961,9 @@ pub struct OidcProviderStateReconcileRequest {
     pub enabled: bool,
     pub config_fingerprint: String,
     pub external_membership_ttl_seconds: u64,
+    /// Whether membership renewal is enabled; when it is not, every stored
+    /// renewal row is deleted.
+    pub membership_renewal: bool,
     pub invalidate_existing_evidence: bool,
     pub actor: String,
 }
@@ -6001,6 +6049,12 @@ pub struct OidcCompleteLoginRequest {
     pub callback_now: String,
     pub session_ttl_seconds: u64,
     pub created_by: String,
+    /// The validated ID token's raw `iat` in seconds: Microsoft's own clock,
+    /// which orders this sign-in's evidence against the method's renewal row.
+    pub issued_at: i64,
+    /// With membership renewal enabled, the refresh token this sign-in
+    /// records, or that none was issued; `None` records nothing.
+    pub membership_renewal: Option<OidcMembershipRenewalSignIn>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -6011,6 +6065,7 @@ pub struct OidcCompleteLoginResult {
     pub session: IssuedBrowserSession,
     pub membership: EffectiveMembershipRecord,
     pub auto_enrolled_group_ids: Vec<String>,
+    pub membership_evidence: OidcMembershipEvidence,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -8399,6 +8454,85 @@ fn oidc_flow_by_sequence(
     .ok_or(ManagedStoreError::OidcFlowInvalid)
 }
 
+/// The active bindings, of active groups, whose external group IDs are in
+/// `external_group_ids`: what complete Microsoft groups grant.
+fn matched_external_group_bindings(
+    conn: &Connection,
+    external_group_ids: &BTreeSet<String>,
+) -> Result<Vec<(String, String)>, ManagedStoreError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT b.binding_id, b.external_group_id
+             FROM external_group_bindings b JOIN groups g ON g.group_id = b.group_id
+             WHERE b.status = 'active' AND g.status = 'active'
+             ORDER BY b.binding_id",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sql_unavailable)?;
+    Ok(collect_rows(rows)?
+        .into_iter()
+        .filter(|(_, external_group_id)| external_group_ids.contains(external_group_id))
+        .collect())
+}
+
+/// When one Microsoft observation's evidence was observed, which time it
+/// counts from and when it expires.
+struct OidcEvidenceWindow<'a> {
+    observed_at: &'a str,
+    evidence_at: &'a str,
+    valid_until: &'a str,
+}
+
+/// Replaces a login method's evidence with the `matched` bindings, all
+/// valid for `window`; sign-in and renewal share it.
+fn replace_oidc_membership_evidence_tx(
+    conn: &Connection,
+    login_method_id: &str,
+    matched: &[(String, String)],
+    window: &OidcEvidenceWindow<'_>,
+) -> Result<(), ManagedStoreError> {
+    conn.execute(
+        "DELETE FROM external_principal_groups WHERE login_method_id = ?1",
+        params![login_method_id],
+    )
+    .map_err(sql_unavailable)?;
+    for (binding_id, _) in matched {
+        conn.execute(
+            "INSERT INTO external_principal_groups
+             (login_method_id, binding_id, observed_at, evidence_at, valid_until, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?3)",
+            params![
+                login_method_id,
+                binding_id,
+                window.observed_at,
+                window.evidence_at,
+                window.valid_until
+            ],
+        )
+        .map_err(sql_unavailable)?;
+    }
+    conn.execute(
+        "INSERT INTO oidc_membership_refresh_state
+         (login_method_id, observed_at, evidence_at, valid_until, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?2)
+         ON CONFLICT(login_method_id) DO UPDATE SET
+           observed_at = excluded.observed_at, evidence_at = excluded.evidence_at,
+           valid_until = excluded.valid_until, updated_at = excluded.updated_at",
+        params![
+            login_method_id,
+            window.observed_at,
+            window.evidence_at,
+            window.valid_until
+        ],
+    )
+    .map_err(sql_unavailable)?;
+    Ok(())
+}
+
 fn oidc_login_method_for_principal(
     conn: &Connection,
     principal_id: &str,
@@ -8675,6 +8809,7 @@ fn expire_all_oidc_membership_tx(
         .map_err(sql_unavailable)?;
     conn.execute("DELETE FROM oidc_membership_refresh_state", [])
         .map_err(sql_unavailable)?;
+    oidc_membership_renewal::delete_all(conn)?;
     conn.execute(
         "UPDATE broker_tokens
          SET revoked_at = COALESCE(revoked_at, ?2), revoked_by = COALESCE(revoked_by, ?1)
@@ -9330,6 +9465,7 @@ mod tests {
                 enabled,
                 config_fingerprint: fingerprint.to_string(),
                 external_membership_ttl_seconds: ttl_seconds,
+                membership_renewal: false,
                 invalidate_existing_evidence: false,
                 actor: "admin".to_string(),
             })
@@ -9376,6 +9512,10 @@ mod tests {
             callback_now: callback_now.to_string(),
             session_ttl_seconds: 3_600,
             created_by: "oidc-microsoft".to_string(),
+            issued_at: DateTime::parse_from_rfc3339(callback_now)
+                .unwrap()
+                .timestamp(),
+            membership_renewal: None,
         }
     }
 
@@ -9880,6 +10020,7 @@ mod tests {
             MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION
         );
         assert_eq!(rows[16].0, MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION);
+        assert_eq!(rows[17].0, MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION);
         assert_eq!(rows.last().unwrap().0, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(store.policy_revision().unwrap().generation, 0);
         let conn = Connection::open(&path).unwrap();
@@ -14378,6 +14519,7 @@ PRAGMA foreign_keys = ON;
                     11,
                     provider.config_generation,
                     &now,
+                    0,
                 )
                 .unwrap()
         );
@@ -14388,6 +14530,7 @@ PRAGMA foreign_keys = ON;
                     9,
                     provider.config_generation,
                     &now,
+                    0,
                 )
                 .unwrap()
         );

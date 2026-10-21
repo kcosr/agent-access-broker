@@ -22,9 +22,10 @@ use agent_access_core::{
     DEFAULT_EXECUTION_CONTEXT, EffectiveGroupMembershipRecord, ExternalGroupBindingCreateRequest,
     GroupMemberRecord, GroupPatchRequest, GroupRecord, GroupWriteRequest, IdentityContext,
     LocalPasswordWriteRequest, LoginMethodRecord, ManagedPolicyGrantRecord, ManagedStoreError,
-    OidcLoginMethodLinkRequest, PrincipalAccessPatchRequest, PrincipalPatchRequest,
-    PrincipalRecord, PrincipalRole, PrincipalWriteRequest, RightGrantRequest,
-    broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl, parse_ttl_seconds,
+    OidcLoginMethodLinkRequest, OidcMembershipRenewalRecord, PrincipalAccessPatchRequest,
+    PrincipalPatchRequest, PrincipalRecord, PrincipalRole, PrincipalWriteRequest,
+    RightGrantRequest, broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl,
+    parse_ttl_seconds,
 };
 use agent_access_provider::ReasonCode;
 use axum::Json;
@@ -676,7 +677,13 @@ fn principal_subject(principal_id: &str) -> String {
     format!("user:{principal_id}")
 }
 
-fn login_method_projection(method: LoginMethodRecord) -> Value {
+/// A login method as management reports it. A Microsoft method's `oidc`
+/// object carries its tenant and user object IDs and its membership
+/// renewal status, `null` when it has no renewal row.
+fn login_method_projection(
+    method: LoginMethodRecord,
+    renewal: Option<OidcMembershipRenewalRecord>,
+) -> Value {
     let mut projection = serde_json::to_value(&method).unwrap_or(Value::Null);
     if method.method != "oidc" || method.external_provider.as_deref() != Some("microsoft") {
         return projection;
@@ -700,6 +707,7 @@ fn login_method_projection(method: LoginMethodRecord) -> Value {
                 "provider": "microsoft",
                 "tenantId": tenant_id,
                 "userObjectId": user_object_id,
+                "membershipRenewal": renewal.as_ref().map(OidcMembershipRenewalRecord::status),
             }),
         );
     }
@@ -2029,14 +2037,27 @@ pub(crate) async fn admin_principal_login_methods_list(
     let target = Some(json!({"principal": principal}));
     let principal_for_store = principal.clone();
     match management_store_call(&context, move |store| {
-        store.list_login_methods(&principal_for_store)
+        store
+            .list_login_methods(&principal_for_store)?
+            .into_iter()
+            .map(|method| {
+                let renewal = if method.method == "oidc"
+                    && method.external_provider.as_deref() == Some("microsoft")
+                {
+                    store.oidc_membership_renewal(&method.login_method_id)?
+                } else {
+                    None
+                };
+                Ok((method, renewal))
+            })
+            .collect::<Result<Vec<_>, ManagedStoreError>>()
     })
     .await
     {
         Ok(methods) => {
             let methods = methods
                 .into_iter()
-                .map(login_method_projection)
+                .map(|(method, renewal)| login_method_projection(method, renewal))
                 .collect::<Vec<_>>();
             management_success_response(&context, operation, target, json!(methods)).await
         }
@@ -2076,19 +2097,22 @@ pub(crate) async fn admin_principal_microsoft_oidc_link(
     }
     let actor = context.identity.principal.clone();
     match management_store_call(&context, move |store| {
-        store.link_oidc_login_method(OidcLoginMethodLinkRequest {
+        let method = store.link_oidc_login_method(OidcLoginMethodLinkRequest {
             principal_id: principal,
             user_object_id: body.user_object_id,
             actor,
-        })
+        })?;
+        // Linking an identity that is already linked keeps its renewal row.
+        let renewal = store.oidc_membership_renewal(&method.login_method_id)?;
+        Ok((method, renewal))
     })
     .await
     {
-        Ok(method) => management_pre_audited_success_response(
+        Ok((method, renewal)) => management_pre_audited_success_response(
             &context,
             operation,
             target,
-            login_method_projection(method),
+            login_method_projection(method, renewal),
         ),
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }

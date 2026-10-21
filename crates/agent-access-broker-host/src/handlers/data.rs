@@ -1,9 +1,8 @@
-use crate::handlers::auth::resolve_browser_cookie_identity_blocking;
 use crate::handlers::common::{
-    CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
+    CallerAdmission, PendingIdentity, acquire_caller_guard, acquire_global_concurrency_guard,
     admit_service_invocation, check_auth_source_rate_guard, discovery_unavailable_envelope,
     envelope_response, input_error_envelope, not_found_envelope, request_id_from_headers,
-    resolve_identity_blocking,
+    resolve_identity_pending, resolve_request_identity_pending,
 };
 use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
@@ -107,12 +106,28 @@ pub(crate) async fn me(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    let microsoft_membership =
+        match me_microsoft_membership(&context.snapshot, &context.identity).await {
+            Ok(membership) => membership,
+            Err(error) => {
+                return envelope_response(discovery_error_envelope(
+                    request_id,
+                    new_broker_request_id(),
+                    String::new(),
+                    String::new(),
+                    error.reason_code(),
+                    "Microsoft membership is unavailable",
+                ))
+                .into_response();
+            }
+        };
     match me_service_limits(&context.snapshot, &context.identity, &request_headers).await {
         Ok(service_limits) => (
             StatusCode::OK,
             Json(MeResponse {
                 identity: context.identity.summary(),
                 service_limits,
+                microsoft_membership,
             }),
         )
             .into_response(),
@@ -136,6 +151,48 @@ struct MeResponse {
     #[serde(flatten)]
     identity: IdentitySummary,
     service_limits: Vec<SelfServiceLimit>,
+    /// Present for a caller whose principal has a Microsoft login method.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    microsoft_membership: Option<MeMicrosoftMembership>,
+}
+
+/// The caller's Microsoft group evidence window (`null` without evidence)
+/// and its membership renewal status (`null` without a renewal row). Read
+/// after renewal admission, so it reflects a renewal the request waited for.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeMicrosoftMembership {
+    valid_until: Option<String>,
+    renewal: Option<agent_access_core::OidcMembershipRenewalStatus>,
+}
+
+/// The caller's Microsoft membership, for a managed principal with a
+/// Microsoft login method.
+async fn me_microsoft_membership(
+    snapshot: &RuntimeSnapshot,
+    identity: &IdentityContext,
+) -> Result<Option<MeMicrosoftMembership>, agent_access_core::ManagedStoreError> {
+    let Some(store) = snapshot.runtime.managed_store().cloned() else {
+        return Ok(None);
+    };
+    if !identity.authenticated {
+        return Ok(None);
+    }
+    let principal = identity.principal.clone();
+    let membership = tokio::task::spawn_blocking(move || store.microsoft_membership(&principal))
+        .await
+        .map_err(|_| {
+            agent_access_core::ManagedStoreError::Unavailable(
+                "Microsoft membership read failed".into(),
+            )
+        })??;
+    Ok(membership.map(|membership| MeMicrosoftMembership {
+        valid_until: membership.valid_until,
+        renewal: membership
+            .renewal
+            .as_ref()
+            .map(agent_access_core::OidcMembershipRenewalRecord::status),
+    }))
 }
 
 /// One `serviceLimits` item. Deliberately omits whether the value is a
@@ -588,6 +645,64 @@ fn discovery_query_fields(
     Ok(fields)
 }
 
+/// An invocation's identity failure: the source's authentication budget is
+/// charged, then the identity error is finalized for the operation.
+async fn invocation_identity_failure(
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+    context: GovernedIdentityFailureContext,
+    failure: agent_access_core::IdentityFailure,
+) -> Box<axum::response::Response> {
+    if let Err(response) = check_auth_source_rate_guard(
+        state,
+        snapshot,
+        &context.agent_request_id,
+        context.service.clone(),
+        context.action.clone(),
+        &context.source,
+    )
+    .await
+    {
+        return Box::new(envelope_response(*response).into_response());
+    }
+    let response = snapshot
+        .runtime
+        .identity_error_response_for_operation(context, failure)
+        .await;
+    Box::new(envelope_response(response).into_response())
+}
+
+/// A discovery request's identity failure: the source's authentication
+/// budget is charged, then the identity error is returned.
+async fn discovery_identity_failure(
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+    request_id: &str,
+    service: &str,
+    action: &str,
+    source: &SourceContext,
+    failure: agent_access_core::IdentityFailure,
+) -> Box<axum::response::Response> {
+    if let Err(response) = check_auth_source_rate_guard(
+        state,
+        snapshot,
+        request_id,
+        service.to_string(),
+        action.to_string(),
+        source,
+    )
+    .await
+    {
+        return Box::new(envelope_response(*response).into_response());
+    }
+    let response = snapshot.runtime.identity_error_response(
+        request_id.to_string(),
+        new_broker_request_id(),
+        failure,
+    );
+    Box::new(envelope_response(response).into_response())
+}
+
 async fn discovery_context(
     state: &AppState,
     remote_addr: SocketAddr,
@@ -627,53 +742,39 @@ async fn discovery_context(
     } else {
         None
     };
-    let identity_result = if !snapshot.runtime.has_configured_identity_header(&headers) {
-        match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
-            Ok(Some(cookie_identity)) => {
-                if cookie_identity.password_change_required {
-                    return Err(Box::new(
-                        envelope_response(discovery_error_envelope(
-                            request_id,
-                            new_broker_request_id(),
-                            service,
-                            action,
-                            ReasonCode::PasswordChangeRequired,
-                            "password change is required before discovery",
-                        ))
-                        .into_response(),
-                    ));
-                }
-                Ok(cookie_identity.identity)
+    let pending =
+        match resolve_request_identity_pending(state, snapshot.clone(), headers.clone()).await {
+            Ok(pending) => pending,
+            Err(failure) => {
+                return Err(discovery_identity_failure(
+                    state,
+                    &snapshot,
+                    &request_id,
+                    &service,
+                    &action,
+                    &source,
+                    failure,
+                )
+                .await);
             }
-            Ok(None) => resolve_identity_blocking(snapshot.clone(), headers.clone()).await,
-            Err(failure) => Err(failure),
-        }
-    } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
-    };
-    if identity_result.is_err() {
-        check_auth_source_rate_guard(
-            state,
-            &snapshot,
-            &request_id,
-            service.clone(),
-            action.clone(),
-            &source,
-        )
-        .await
-        .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
-    }
-    let identity = match identity_result {
-        Ok(identity) => identity,
-        Err(failure) => {
-            let response = snapshot.runtime.identity_error_response(
+        };
+    let password_change_required = |request_id: String, service: String, action: String| {
+        Box::new(
+            envelope_response(discovery_error_envelope(
                 request_id,
                 new_broker_request_id(),
-                failure,
-            );
-            return Err(Box::new(envelope_response(response).into_response()));
-        }
+                service,
+                action,
+                ReasonCode::PasswordChangeRequired,
+                "password change is required before discovery",
+            ))
+            .into_response(),
+        )
     };
+    if pending.value().password_change_required {
+        return Err(password_change_required(request_id, service, action));
+    }
+    // A membership renewal wait holds the caller's capacity.
     let principal_permit = acquire_caller_guard(
         state,
         &snapshot,
@@ -682,11 +783,29 @@ async fn discovery_context(
         action.clone(),
         &source,
         CallerAdmission {
-            identity: &identity,
+            identity: &pending.value().identity,
         },
     )
     .await
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
+    let identity = match pending.admit(state, &snapshot, &headers).await {
+        Ok(resolved) if resolved.password_change_required => {
+            return Err(password_change_required(request_id, service, action));
+        }
+        Ok(resolved) => resolved.identity,
+        Err(failure) => {
+            return Err(discovery_identity_failure(
+                state,
+                &snapshot,
+                &request_id,
+                &service,
+                &action,
+                &source,
+                failure,
+            )
+            .await);
+        }
+    };
     observability::record_principal(&identity.principal);
     if let Some(execution_context) = execution_context.as_ref()
         && let Err(error) = snapshot
@@ -925,48 +1044,33 @@ async fn admit_invoke_with_identity(
         }
     };
 
+    // An MCP-dispatched operation revalidates the identity its intake
+    // admitted; renewal admission ran there.
     let identity_result = if let Some(pin) = identity_pin {
         pin.revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
             .await
+            .map(PendingIdentity::admitted)
     } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
+        resolve_identity_pending(state, snapshot.clone(), headers.clone()).await
     };
-    let identity = match identity_result {
-        Ok(identity) => {
-            observability::record_principal(&identity.principal);
-            identity
-        }
+    let failure_context = || GovernedIdentityFailureContext {
+        agent_request_id: agent_request_id.clone(),
+        broker_request_id: new_broker_request_id(),
+        service: service.clone(),
+        action: action.clone(),
+        source: source.clone(),
+        execution_context: execution_context.clone(),
+    };
+    let pending = match identity_result {
+        Ok(pending) => pending,
         Err(failure) => {
-            if let Err(response) = check_auth_source_rate_guard(
-                state,
-                &snapshot,
-                &agent_request_id,
-                service.clone(),
-                action.clone(),
-                &source,
-            )
-            .await
-            {
-                return Err(Box::new(envelope_response(*response).into_response()));
-            }
-            let response = snapshot
-                .runtime
-                .identity_error_response_for_operation(
-                    GovernedIdentityFailureContext {
-                        agent_request_id,
-                        broker_request_id: new_broker_request_id(),
-                        service,
-                        action,
-                        source,
-                        execution_context,
-                    },
-                    failure,
-                )
-                .await;
-            return Err(Box::new(envelope_response(response).into_response()));
+            return Err(
+                invocation_identity_failure(state, &snapshot, failure_context(), failure).await,
+            );
         }
     };
-
+    observability::record_principal(&pending.value().principal);
+    // A membership renewal wait holds the caller's capacity.
     let principal_permit = match acquire_caller_guard(
         state,
         &snapshot,
@@ -975,13 +1079,21 @@ async fn admit_invoke_with_identity(
         action.clone(),
         &source,
         CallerAdmission {
-            identity: &identity,
+            identity: pending.value(),
         },
     )
     .await
     {
         Ok(permit) => permit,
         Err(response) => return Err(Box::new(envelope_response(*response).into_response())),
+    };
+    let identity = match pending.admit(state, &snapshot, headers).await {
+        Ok(identity) => identity,
+        Err(failure) => {
+            return Err(
+                invocation_identity_failure(state, &snapshot, failure_context(), failure).await,
+            );
+        }
     };
 
     let broker_request_id = new_broker_request_id();

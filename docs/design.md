@@ -185,7 +185,9 @@ also includes a same-origin browser portal frontend:
   command parsing, configuration validation, audit verification, and the
   `serve` lifecycle with listeners, signals, reload, and bounded shutdown), HTTP
   routers, request decoding, host-matched gateway dispatch, source/proxy-chain
-  derivation, dynamic config reload, management routing, and HTTP MCP serving.
+  derivation, dynamic config reload, management routing, HTTP MCP serving, and
+  Microsoft membership renewal (`membership_renewal.rs`, with the ID-token
+  validator it shares with sign-in in `oidc_id_token.rs`).
   It depends on core and never on a backend or import adapter. Its public API
   is the composition, the application, the assembly identity and the build
   status; its routers and reload and runtime state are private, so other
@@ -1058,6 +1060,9 @@ token. Administrators map those IDs to managed groups. Each successful Microsoft
 login replaces that login method's external membership evidence with a complete
 snapshot that expires after the configured finite TTL (eight hours by default);
 an empty complete snapshot is valid and removes earlier Microsoft contributions.
+With [membership renewal](#microsoft-membership-renewal) enabled, a refreshed ID
+token can replace it too, and both writers order their evidence by Microsoft's
+`iat`.
 Claim overage or malformed group claims deny login rather than treating the list
 as empty. A just-in-time principal is created only when at least one claimed
 group maps to an active managed group.
@@ -1084,6 +1089,112 @@ supplemental `success` record under the existing group operation, with old/new
 values captured in the mutation transaction. Audit is a separate store;
 completion emission is not crash-atomic with the managed write, and a completion
 audit failure does not undo or report failure for a committed group mutation.
+
+### Microsoft membership renewal
+
+`browser_auth.oidc.microsoft.membership_renewal` (default `false`) adds
+on-demand renewal of Microsoft group evidence. Sign-in then also requests
+`offline_access`, and its transaction upserts the login method's
+`oidc_membership_renewals` record: the returned refresh token together with the
+sign-in ID token's `sub`, exact `aud`, `azp`, `auth_time` and the SHA-256 of the
+flow's nonce, AES-256-GCM encrypted, or an ended `not_issued` record when no
+usable token came back. Requests then renew that evidence during identity
+admission; nothing runs on a timer, so an idle person is never renewed. The
+[operator guide](operator-guide.md#microsoft-membership-renewal) describes the
+operational behavior and outcomes, and [the
+store](database.md#microsoft-oidc-state-and-membership) the record.
+
+**Hint and context.** Membership is still read synchronously under the store
+mutex, so the outbound call never happens inside identity resolution or any
+store transaction. Instead resolution returns a `MembershipRenewalHint`, read in
+the same store call as the membership: the login method ID, its evidence
+`valid_until`, the record's state, token version and `next_attempt_after`. It
+exists only for an enabled `user` with an active Microsoft login method whose
+record is `active`, `retrying` or `blocked`, while the provider is enabled. Ingress
+middleware on the public and gateway routers gives every request a task-local
+`RenewalContext`, which allows one wait per request; later admissions in the same
+request make only the non-blocking checks.
+
+**Admission.** `admit_membership_renewal` runs after resolution in
+`resolve_identity_blocking` (HTTP invocation, discovery, specs and management by
+token), the browser-cookie helper (portal and cookie management, session reads
+and password change), HTTP MCP intake after intake resolution and before
+protocol handling, and the Git gateway's Basic-token and forwarded-identity
+branches. Body admission resolves identity without renewal, so the handler's
+admission is the single renewal point of a request. With `ahead` a quarter of
+the TTL, evidence valid for longer needs nothing; evidence inside `ahead` starts
+a speculative renewal while the request proceeds; expired or absent evidence
+waits once, for at most 15 seconds. After every wait, whatever its outcome, the
+entry point checks the identity once more: ordinary credentials (Broker tokens,
+browser sessions, Git Basic tokens) are resolved again from the same credential,
+and attested identities (identity token, username bindings, forwarded Git
+identity) revalidate their original proof and caller-security epoch; a new
+proof is never substituted. Later revalidations in the same request, such as the
+MCP pin or final admission, read the store and see the renewed evidence. This
+is the one exception to discovery's read-only rule: discovery renews the
+caller's own membership but never contacts upstream services or refreshes OAuth
+connections.
+
+**Flights.** A process-wide registry on the reloadable state, which survives
+reloads, maps each login method to at most one in-flight renewal. A request
+first joins an existing flight; only without one does it consider starting one,
+which is refused during shutdown, while the provider throttle set by a 429 is
+active, or before the hint's `next_attempt_after`. At most eight redemptions run
+at once; a waiting flight queues for a permit until its request's deadline (at
+most 256 queued), and a speculative flight starts only with a free permit. Each
+flight runs in its own tracked task in the triggering request's tracing span,
+so a waiter's cancellation never aborts it.
+
+**One renewal.** After its permit, a flight rechecks the provider settings and
+throttle, then starts its attempt durably in one immediate transaction
+(`start_oidc_membership_renewal` through `token_store_call_from_snapshot`): the
+provider enabled at the flight's configuration generation, the method active,
+the principal an enabled `user`, the record not ended, `next_attempt_after`
+passed, the last attempt at least 60 seconds ago and the evidence still inside
+`ahead`. It records `last_attempt_at`, which nothing clears, and decrypts the
+payload. An audit preflight follows; without a writable audit store Microsoft is
+not contacted. The redemption posts `grant_type=refresh_token` with
+`client_secret_post` and the sign-in scopes to the discovered token endpoint over
+`MicrosoftOidcHttpClient`, whose token request keeps the HTTP status and
+`Retry-After` even when the body fails or exceeds its bound
+(`microsoft_oidc::renewal` in core). Only the status, `Retry-After`, Microsoft's
+`error` and numeric `error_codes`, or the ID, refresh and access tokens of a 200
+are taken from the response; the access token only checks `at_hash`. The ID
+token passes the validator the sign-in callback uses (`oidc_id_token.rs`),
+parameterized by a reference: the callback requires the flow's nonce, and
+renewal requires the stored `sub`, exact `aud`, `azp` presence and value, an
+absent or equal `auth_time` and nonce, and the login method's Broker subject.
+A different `sub` or user Object ID is an identity mismatch; any other
+difference is an invalid response. Classification follows the precedence in
+the operator guide's outcome table.
+
+**Ordering and fences.** The record's `observation_iat` is the highest raw `iat`
+of any trusted observation by either writer. Complete groups replace the
+evidence only from a strictly newer token, every trusted observation raises the
+watermark, and the TTL still counts from `min(iat, now)`, so a Microsoft clock
+ahead of the Broker's can neither reorder observations nor lengthen evidence.
+Each outcome write, success or failure, runs in one immediate transaction
+through `token_store_call_from_snapshot` and requires the snapshot to be
+current, the same provider generation, tenant and client, the method active with
+the same principal and subject, an enabled `user`, and the token version read at
+attempt start. A failed fence writes nothing, so a sign-in, unlink, disable,
+reload or configuration change during a renewal supersedes it. Once submitted,
+the write runs to completion in its independent owner, and the same tracked task
+appends the supplemental `oidc.membership.renewed` or
+`oidc.membership.renewal_failed` record. Like other supplemental audit, that
+append follows the commit and can fail without undoing it.
+
+**Shutdown.** When drain begins, the registry stops new flights and cancels
+flights that have not submitted their outcome write; they write nothing more.
+After operations drain, shutdown waits within the remaining budget (at least
+100 ms) for submitted writes and their audit records before the audit store
+closes, and logs `oidc_membership_renewal_unfinished` with the login method and
+phase of each renewal still running, since one that commits afterwards has no
+audit record. Every write through `token_store_call_from_snapshot`, including
+sign-in completion and management writes, holds the snapshot's state locks
+until its blocking store call returns, even when runtime shutdown drops the
+task waiting for it, so no other process can open the store while a write may
+still run.
 
 ## Trusted human identity and MCP admission
 
@@ -1308,11 +1419,14 @@ metadata so absent credentials cannot prevent onboarding.
 
 Checks read static file/environment references, personal file-store entries,
 managed encrypted credentials and imported execution slots using their execution
-validation rules. Managed checks do not record usage or verification. OAuth checks
-the exact binding, current connection, consent/refresh blockers, scopes and target;
-a locally eligible refreshable family can remain available with an expired access
-token. Discovery never acquires or refreshes tokens or contacts upstream. Results
-are reused within a service's discovery request and rechecked on the next request.
+validation rules. Managed checks do not record usage or verification. OAuth
+checks the exact binding, current connection, consent/refresh blockers, scopes
+and target; a locally eligible refreshable family can remain available with an
+expired access token. Discovery never acquires or refreshes credential tokens or
+contacts upstream services. Its identity admission may renew the caller's own
+Microsoft membership ([membership renewal](#microsoft-membership-renewal)),
+which is not upstream service access. Results are reused within a service's
+discovery request and rechecked on the next request.
 
 Registered resources and broad coverage use credential-filtered effective clauses
 from one policy snapshot. These are advisory: invocation rechecks credentials,
@@ -1582,6 +1696,9 @@ The durable tables are:
 - `external_group_bindings`, `oidc_membership_refresh_state`, and
   `external_principal_groups` - Microsoft group-to-managed-group mappings and
   finite membership evidence used to compute effective groups.
+- `oidc_membership_renewals` - per Microsoft login method, the encrypted
+  refresh token, renewal state, attempt and failure timestamps, and the
+  `observation_iat` watermark of [membership renewal](#microsoft-membership-renewal).
 
 The managed `credentials` table holds user-owned credentials; imported shared
 execution/discovery/transport secrets use separate service-owned encrypted slots.
@@ -1642,7 +1759,8 @@ unlink that method. Otherwise, a first successful login creates a principal only
 when at least one claimed Microsoft group has an active mapping to an active
 managed group. An existing binding may log in with a complete empty or unmapped
 group list. Successful callbacks atomically refresh Microsoft-derived group
-evidence for the configured finite TTL and create the browser session. The
+evidence for the configured finite TTL, unless a renewal already stored evidence
+from a newer token, and create the browser session. The
 resulting effective groups combine current Microsoft evidence with explicit
 local memberships; neither an external mapping nor an OIDC login method grants
 the managed `admin` role.
@@ -2349,7 +2467,11 @@ command registry closes: a call that reaches its command afterwards fails
 without starting a process, every live process supervisor is asked to kill its
 process group and leader, and shutdown waits within the remaining budget (at
 least 100 ms) until each has reaped its process and returned its concurrency
-permit, reporting those that have not. The audit writer shuts
+permit, reporting those that have not. Microsoft
+[membership renewals](#microsoft-membership-renewal) stop starting when drain
+begins; shutdown then waits within the remaining budget (at least 100 ms) for
+submitted renewal writes and their audit records, logging each one that does
+not finish. The audit writer shuts
 down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.

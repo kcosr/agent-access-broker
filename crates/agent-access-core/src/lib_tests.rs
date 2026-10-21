@@ -478,6 +478,8 @@ fn reason_codes_have_expected_statuses() {
             "oidc_login_method_conflict",
             409,
         ),
+        (ReasonCode::OidcSignInRequired, "oidc_sign_in_required", 401),
+        (ReasonCode::OidcClientRejected, "oidc_client_rejected", 503),
         (
             ReasonCode::ExternalGroupBindingNotFound,
             "external_group_binding_not_found",
@@ -958,6 +960,7 @@ fn disabled_microsoft_oidc_does_not_require_provider_fields_or_secrets() {
         max_pending_flows: 0,
         jit_provisioning: true,
         external_membership_ttl: "invalid".to_string(),
+        membership_renewal: false,
     };
     validate_broker_config(&config).unwrap();
 }

@@ -41,10 +41,20 @@ connection and service names and IDs, profiles, and credential IDs; secret
 values are never searched. Selecting a service action opens its authorized access view.
 See [portal search](portal-guide/index.md#search-and-jump-with-ctrlk--k).
 
-Microsoft groups refresh on successful Microsoft login and expire after the
-configured TTL. Logging out of the broker does not end Microsoft SSO. A new
-Microsoft login refreshes membership evidence; local groups and direct grants
-remain independent. Microsoft-only users change their password at Microsoft.
+Microsoft groups come from your Microsoft sign-in and expire after a period your
+operator configures (eight hours by default). A new Microsoft login refreshes
+them. If your deployment enables automatic renewal, one Microsoft sign-in is
+enough: while you or your agents keep using the Broker, it renews your groups
+from Microsoft before or when they expire, without another visit to the portal.
+The first request after a long idle period may wait a few seconds for that
+renewal. **Account** shows under **Microsoft groups** whether your groups renew
+automatically or need a new sign-in, and when the current ones expire. Sign in
+with Microsoft again when it asks you to, for example after about 90 days
+without any Broker use, after your Microsoft sessions were revoked, or when your
+administrator turned renewal on after your last sign-in. Logging out of the
+portal ends only that browser session: it does not end Microsoft SSO, and your
+agents keep working. Local groups and direct grants remain independent.
+Microsoft-only users change their password at Microsoft.
 
 ## Store a credential or connect OAuth
 
@@ -426,5 +436,6 @@ report.
 | Output-file save failure after operation success | Preserve the receipt and recover output if possible; do not replay a mutation to save its response |
 | `encryption_key_missing` / `credential_decrypt_failed` | Ask the operator to repair the key ring or matched backup; replacing a user token will not fix decryption |
 | Microsoft login unavailable or incomplete group claim | Use an existing local login if available and contact the operator; do not repeatedly retry enrollment |
+| Access through a Microsoft group stopped working | Check **Microsoft groups** on **Account** (or `microsoftMembership` in `agent-access auth status`). If it asks for a sign-in, sign in to the portal with Microsoft again; if renewal is blocked, ask your administrator |
 
 Exact command contracts and exit codes are in the [CLI reference](cli.md).

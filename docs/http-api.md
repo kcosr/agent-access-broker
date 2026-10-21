@@ -305,6 +305,31 @@ It is returned for every caller that can use `/v1/me`, including browser
 sessions and anonymous callers, under both identity authorities, and `/v1/me`
 is not counted as an invocation.
 
+When the caller's principal has a Microsoft login method, the response also
+carries `microsoftMembership`: `validUntil`, when the method's current
+Microsoft group evidence expires (`null` when it has none), and `renewal`, its
+[renewal status](#microsoft-membership-renewal) or `null` when the method has no
+renewal record. `/v1/me` itself passes renewal admission, so after expired
+evidence it reports the window of the renewal it waited for:
+
+```json
+{
+  "principal": "alice",
+  "groups": ["agent-users"],
+  "authenticated": true,
+  "serviceLimits": [],
+  "microsoftMembership": {
+    "validUntil": "2026-10-21T18:00:00Z",
+    "renewal": {
+      "state": "active",
+      "lastRenewedAt": "2026-10-21T10:00:00Z",
+      "nextAttemptAfter": null,
+      "lastFailure": null
+    }
+  }
+}
+```
+
 `readOnlyAccess` appears only for a [trusted fingerprint identity](managed-identity.md),
 the attested path REST accepts. `true` means the identity token is
 [read-only](managed-identity.md#read-only-paths): discovery lists only actions
@@ -582,7 +607,8 @@ runtime action catalog. The callback does not use the ordinary same-origin CSRF
 header; the single-use state and browser-binding cookie protect that
 cross-origin navigation.
 
-Microsoft group claims are consumed only from the validated ID token. The
+Microsoft group claims are consumed only from a validated ID token, from a
+sign-in or a [membership renewal](#microsoft-membership-renewal). The
 broker never follows distributed-claim URLs and never calls Microsoft Graph.
 An explicit group overage marker, a claim with more than 200 group entries, or a
 malformed group claim returns `oidc_group_claims_incomplete`; it is not
@@ -1168,10 +1194,13 @@ The six Microsoft management operations are:
   structured login-method record. The server supplies the configured tenant.
   One Microsoft object can belong to only one broker principal, and a principal
   can have only one Microsoft login method; a conflicting link returns
-  `oidc_login_method_conflict`.
+  `oidc_login_method_conflict`. Repeating the link for the identity already
+  linked succeeds and keeps the method's renewal record, whose status the
+  response reports as the listing below does.
 - `DELETE /v1/admin/principals/{principal}/login-methods/oidc/microsoft` accepts
   no body and returns `{"unlinked":true}`. It revokes browser sessions backed
-  by that login method and removes its Microsoft membership evidence. It does
+  by that login method and removes its Microsoft membership evidence and any
+  stored Microsoft refresh token. It does
   not remove local passwords, local group membership, roles, credentials, or
   independently issued broker tokens.
 
@@ -1196,8 +1225,11 @@ Microsoft object already linked to the principal also return
 `oidc_unavailable`.
 
 OIDC entries returned by
-`GET /v1/admin/principals/{principal}/login-methods` do not expose the internal
-encoded external subject. They contain an `oidc` projection instead:
+`GET /v1/admin/principals/{principal}/login-methods` and by the Microsoft link
+do not expose the internal encoded external subject. They contain an `oidc`
+projection instead, whose `membershipRenewal` is the method's
+[renewal status](#microsoft-membership-renewal), or `null` when it has no
+renewal record:
 
 ```json
 {
@@ -1207,7 +1239,13 @@ encoded external subject. They contain an `oidc` projection instead:
   "oidc": {
     "provider": "microsoft",
     "tenantId": "00000000-0000-0000-0000-000000000000",
-    "userObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    "userObjectId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "membershipRenewal": {
+      "state": "retrying",
+      "lastRenewedAt": "2026-10-21T10:00:00Z",
+      "nextAttemptAfter": "2026-10-21T16:02:00Z",
+      "lastFailure": {"code": "unavailable", "at": "2026-10-21T16:01:00Z"}
+    }
   },
   "status": "active",
   "passwordSetAt": null,
@@ -2505,6 +2543,64 @@ empty, duplicate, or malformed broker cookies remain audited as the anonymous
 caller; unrelated malformed cookies do not invalidate a broker session.
 Admission rejections remain audited too.
 
+### Microsoft membership renewal
+
+With `browser_auth.oidc.microsoft.membership_renewal` enabled, requests renew
+a person's Microsoft group evidence on demand (see the
+[operator guide](operator-guide.md#microsoft-membership-renewal)). One status
+shape describes a login method's renewal everywhere it appears (`/v1/me`
+`microsoftMembership.renewal` and the login-method listing's
+`oidc.membershipRenewal`):
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `active`, `retrying`, `blocked`, or, once renewal has ended until the next Microsoft sign-in, the reason it ended: `sign_in_required`, `not_issued` or `identity_mismatch`. |
+| `lastRenewedAt` | The last successful renewal, or `null`. A sign-in does not reset it. |
+| `nextAttemptAfter` | The earliest next attempt of a `retrying` or `blocked` renewal; `null` otherwise. |
+| `lastFailure` | `{code, at}` for a `retrying` or `blocked` renewal, `null` otherwise. `code` is `throttled` or `unavailable` (`retrying`), or `groups_incomplete`, `client_rejected`, `request_rejected` or `invalid_response` (`blocked`). |
+
+There are no renewal routes: unlinking the Microsoft method, disabling the
+principal or turning the setting off stops renewal.
+
+Each renewal attempt that reaches its outcome appends one audit record with
+`service = "broker"`, the person as `principal`, their effective `groups` after
+the outcome, `source.listener = "membership_renewal"`, `source.remote =
+"process"`, Microsoft's HTTP status as `upstreamStatus` and the redemption time
+as `upstreamDurationMs`. Its `brokerRequestId` is the renewal's own; its
+`agentRequestId` is that of the request that triggered the renewal when it sent
+a valid `X-Agent-Access-Request-Id`, and otherwise repeats the `brokerRequestId`
+with `source.agentRequestIdGenerated = true`. `providerAudit.oidc` carries
+`provider = "microsoft"`, `loginMethodId` and `trigger` (`expired`, or `ahead`
+for a renewal started before expiry):
+
+- `oidc.membership.renewed` (`decision = allow`) adds `effectiveGroupCount`,
+  `policyGroups`, `validUntil` (the evidence window afterwards),
+  `membershipChanged` (whether the matched group bindings changed) and
+  `evidence`: `replaced`, or `kept_newer` when evidence from a token at least as
+  new was already stored.
+- `oidc.membership.renewal_failed` (`decision = deny`) adds `classification`
+  and `nextAttemptAfter` (`null` when renewal ended), with this `reasonCode`:
+
+| `classification` | `reasonCode` |
+| --- | --- |
+| `sign_in_required` | `oidc_sign_in_required` |
+| `client_rejected` | `oidc_client_rejected` |
+| `groups_incomplete` | `oidc_group_claims_incomplete` |
+| `invalid_response`, `identity_mismatch` | `oidc_identity_invalid` |
+| `request_rejected` | `oidc_provider_denied` |
+| `unavailable`, `throttled` | `oidc_unavailable` |
+
+`oidc_sign_in_required` and `oidc_client_rejected` appear only in these audit
+records; renewal never fails the request that triggered it. Superseded and
+skipped renewals are logged, not audited. Neither record carries tokens,
+Microsoft's `error_description` or Microsoft group IDs. A self-service user
+sees their own records in **Activity**.
+
+The `oidc.login.succeeded` record of a Microsoft sign-in reports
+`providerAudit.oidc.membershipEvidence`: `replaced`, or `kept_newer` when a
+renewal had already stored evidence from a newer token, in which case the
+sign-in still succeeds and records its refresh token.
+
 ### Decision semantics
 
 `decision` serializes in `snake_case` as one of:
@@ -2603,7 +2699,7 @@ reason code in the sanitized portal error URL.
 | HTTP status | Reason codes |
 | --- | --- |
 | 400 | `identity_assertion_invalid`, `identity_assertion_unsupported`, `request_id_missing`, `request_id_invalid`, `input_invalid`, `oidc_flow_invalid`, `oidc_flow_expired`, `invalid_draft_handle`, `policy_authority_unavailable`, `policy_validation_failed`, `body_malformed`, `gateway_host_invalid`, `gateway_query_denied`, `gateway_header_denied`, `gateway_request_body_denied`, `git_service_denied`, `git_pkt_line_malformed`, `config_parse_failed`, `config_validation_failed` |
-| 401 | `caller_authentication_required`, `caller_authentication_invalid`, `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_revoked`, `broker_token_paused`, `gateway_auth_required`, `gateway_auth_invalid`, `local_login_failed`, `local_login_locked`, `oidc_provider_denied`, `oidc_identity_invalid` |
+| 401 | `caller_authentication_required`, `caller_authentication_invalid`, `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_revoked`, `broker_token_paused`, `gateway_auth_required`, `gateway_auth_invalid`, `local_login_failed`, `local_login_locked`, `oidc_provider_denied`, `oidc_identity_invalid`, `oidc_sign_in_required` |
 | 404 | `identity_binding_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
 | 403 | `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
 | 409 | `identity_binding_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
@@ -2616,7 +2712,7 @@ reason code in the sanitized portal error URL.
 | 500 | `operation_failed`, `broker_provider_contract_failed` |
 | 502 | `upstream_connection_failed`, `upstream_protocol_failed`, `gateway_response_cap_exceeded`, `gateway_upstream_denied` |
 | 504 | `upstream_timeout`, `operation_timeout` |
-| 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
+| 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `oidc_client_rejected`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
 
 `broker_provider_contract_failed` (`decision = error`) means a provider
 reported an outcome its contract does not allow: a standard reason, decision,

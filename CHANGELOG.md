@@ -1053,6 +1053,18 @@ All notable changes to this project are documented in this file.
   identity-token record for every human without one, and creates it with every
   new human; rolling back across it needs a pre-migration backup. See
   [managed identity](docs/managed-identity.md#access-path-controls).
+- Microsoft membership renewal (`browser_auth.oidc.microsoft.membership_renewal`,
+  off by default). With it on, Microsoft sign-in also requests `offline_access`
+  and the Broker keeps the refresh token encrypted; requests from that person
+  then renew expired or expiring Entra group evidence on demand, so their
+  agents keep group-derived access without returning to the portal until
+  Microsoft revokes or expires the token. Outcomes are audited as
+  `oidc.membership.renewed` and `oidc.membership.renewal_failed` (new reason
+  codes `oidc_sign_in_required` and `oidc_client_rejected`), and `GET /v1/me`,
+  the admin login-method listing and the portal show each person's renewal
+  status. Managed-store migration `031_oidc_membership_renewal`; rolling back
+  across it needs a pre-migration backup. See the
+  [operator guide](docs/operator-guide.md#microsoft-membership-renewal).
 
 ### Changed
 
@@ -1413,6 +1425,10 @@ All notable changes to this project are documented in this file.
   before any execution request, as issue reads and mutations already did.
   `attachment.add` confirms the issue immediately before its first upload
   instead of reusing the lookup from body admission, which no longer calls Jira.
+- A managed-store write submitted by sign-in or a management request keeps the
+  broker's state locks until it returns, even when shutdown drops its waiting
+  task after the drain deadline, so another broker process cannot take the
+  store while the write still runs.
 
 ### Removed
 

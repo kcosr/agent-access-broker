@@ -90,12 +90,14 @@ mod management_service_metadata;
 mod mcp;
 mod mcp_managed;
 mod mcp_spans;
+mod membership_renewal;
 mod microsoft_oidc;
 mod oauth;
 mod principal_access;
 mod resource_management;
 mod security_snapshot;
 mod service_limits;
+mod state_lock_lifetime;
 mod trusted_user_mcp;
 
 fn resource_id(scope: &str, value: &str) -> String {
@@ -6252,6 +6254,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             enabled: true,
             config_fingerprint: "sha256:test-provider".to_string(),
             external_membership_ttl_seconds: 8 * 60 * 60,
+            membership_renewal: false,
             invalidate_existing_evidence: false,
             actor: "system".to_string(),
         })
@@ -6746,6 +6749,7 @@ async fn managed_store_admin_and_user_token_smoke() {
             "provider": "microsoft",
             "tenantId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             "userObjectId": "12345678-1234-1234-1234-123456789abc",
+            "membershipRenewal": null,
         })
     );
     assert!(link_oidc_body["result"].get("externalSubject").is_none());
@@ -6765,6 +6769,10 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(
         login_methods_body["result"][0]["oidc"]["provider"],
         "microsoft"
+    );
+    assert_eq!(
+        login_methods_body["result"][0]["oidc"]["membershipRenewal"],
+        Value::Null
     );
     assert!(
         login_methods_body["result"][0]
@@ -6795,6 +6803,8 @@ async fn managed_store_admin_and_user_token_smoke() {
                 callback_now: observed_at,
                 session_ttl_seconds: 60 * 60,
                 created_by: "admin".to_string(),
+                issued_at: chrono::Utc::now().timestamp(),
+                membership_renewal: None,
             },
         )
         .unwrap();

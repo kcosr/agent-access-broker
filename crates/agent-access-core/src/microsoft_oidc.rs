@@ -28,10 +28,17 @@ use crate::load_secret_ref_value;
 use crate::{MicrosoftOidcConfig, parse_ttl_seconds};
 use agent_access_provider::is_loopback_or_localhost;
 
+pub mod renewal;
+
 pub const MICROSOFT_OIDC_PROVIDER_ID: &str = "microsoft";
 pub const MICROSOFT_OIDC_HOST: &str = "login.microsoftonline.com";
 pub const MICROSOFT_OIDC_CALLBACK_PATH: &str = "/v1/auth/oidc/microsoft/callback";
 pub const MICROSOFT_OIDC_SCOPES: [&str; 3] = ["openid", "profile", "email"];
+/// Requested as well when membership renewal is enabled, so Microsoft
+/// returns a refresh token.
+pub const MICROSOFT_OIDC_OFFLINE_ACCESS_SCOPE: &str = "offline_access";
+/// A longer refresh token is treated as not issued.
+pub const MICROSOFT_OIDC_MAX_REFRESH_TOKEN_BYTES: usize = 16 * 1024;
 pub const MICROSOFT_OIDC_CLOCK_SKEW_SECONDS: i64 = 120;
 pub const MICROSOFT_OIDC_MAX_GROUPS: usize = 200;
 pub const MICROSOFT_OIDC_MAX_ID_TOKEN_BYTES: usize = 32 * 1024;
@@ -118,6 +125,7 @@ pub struct MicrosoftOidcRuntimeConfig {
     max_pending_flows: u32,
     jit_provisioning: bool,
     external_membership_ttl_seconds: u64,
+    membership_renewal: bool,
     secrets: ResolvedMicrosoftOidcSecrets,
     config_fingerprint: String,
 }
@@ -138,6 +146,7 @@ impl fmt::Debug for MicrosoftOidcRuntimeConfig {
                 "external_membership_ttl_seconds",
                 &self.external_membership_ttl_seconds,
             )
+            .field("membership_renewal", &self.membership_renewal)
             .field("secrets", &self.secrets)
             .field("config_fingerprint", &self.config_fingerprint)
             .finish()
@@ -180,10 +189,13 @@ impl MicrosoftOidcRuntimeConfig {
             issuer_url.as_str(),
             discovery_url.as_str(),
             redirect_url.as_str(),
-            flow_ttl_seconds,
-            config.max_pending_flows,
-            config.jit_provisioning,
-            external_membership_ttl_seconds,
+            FingerprintSettings {
+                flow_ttl_seconds,
+                max_pending_flows: config.max_pending_flows,
+                jit_provisioning: config.jit_provisioning,
+                external_membership_ttl_seconds,
+                membership_renewal: config.membership_renewal,
+            },
             &secrets,
         );
         Ok(Some(Self {
@@ -196,6 +208,7 @@ impl MicrosoftOidcRuntimeConfig {
             max_pending_flows: config.max_pending_flows,
             jit_provisioning: config.jit_provisioning,
             external_membership_ttl_seconds,
+            membership_renewal: config.membership_renewal,
             secrets,
             config_fingerprint,
         }))
@@ -237,6 +250,21 @@ impl MicrosoftOidcRuntimeConfig {
         self.external_membership_ttl_seconds
     }
 
+    /// Whether sign-in keeps Microsoft refresh tokens for membership renewal.
+    pub fn membership_renewal(&self) -> bool {
+        self.membership_renewal
+    }
+
+    /// The scopes a sign-in requests: the base OIDC scopes, and
+    /// `offline_access` when membership renewal is enabled.
+    pub fn sign_in_scopes(&self) -> Vec<&'static str> {
+        let mut scopes = MICROSOFT_OIDC_SCOPES.to_vec();
+        if self.membership_renewal {
+            scopes.push(MICROSOFT_OIDC_OFFLINE_ACCESS_SCOPE);
+        }
+        scopes
+    }
+
     pub fn secrets(&self) -> &ResolvedMicrosoftOidcSecrets {
         &self.secrets
     }
@@ -246,19 +274,31 @@ impl MicrosoftOidcRuntimeConfig {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The scalar provider settings the configuration fingerprint covers.
+struct FingerprintSettings {
+    flow_ttl_seconds: u64,
+    max_pending_flows: u32,
+    jit_provisioning: bool,
+    external_membership_ttl_seconds: u64,
+    membership_renewal: bool,
+}
+
 fn microsoft_oidc_config_fingerprint(
     tenant_id: &str,
     client_id: &str,
     issuer_url: &str,
     discovery_url: &str,
     redirect_url: &str,
-    flow_ttl_seconds: u64,
-    max_pending_flows: u32,
-    jit_provisioning: bool,
-    external_membership_ttl_seconds: u64,
+    settings: FingerprintSettings,
     secrets: &ResolvedMicrosoftOidcSecrets,
 ) -> String {
+    let FingerprintSettings {
+        flow_ttl_seconds,
+        max_pending_flows,
+        jit_provisioning,
+        external_membership_ttl_seconds,
+        membership_renewal,
+    } = settings;
     let mut mac = Hmac::<Sha256>::new_from_slice(secrets.flow_key())
         .expect("HMAC-SHA256 accepts a 32-byte Microsoft OIDC flow key");
     for value in [
@@ -277,6 +317,7 @@ fn microsoft_oidc_config_fingerprint(
     mac.update(&max_pending_flows.to_be_bytes());
     mac.update(&[u8::from(jit_provisioning)]);
     mac.update(&external_membership_ttl_seconds.to_be_bytes());
+    mac.update(&[u8::from(membership_renewal)]);
     let digest = mac.finalize().into_bytes();
     let encoded = digest
         .iter()
@@ -646,6 +687,44 @@ pub fn validate_microsoft_id_token_payload_syntax(
         .map_err(|_| MicrosoftOidcValidationError::MalformedIdToken)
 }
 
+/// The unpadded base64url SHA-256 of a sign-in flow's nonce: how the
+/// membership-renewal record keeps the nonce a refreshed ID token may repeat.
+pub fn microsoft_oidc_nonce_sha256(nonce: &str) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(<Sha256 as sha2::Digest>::digest(nonce.as_bytes()))
+}
+
+/// The `aud` claim of an ID token whose payload syntax was validated,
+/// exactly as issued: a string or an array of strings. A refreshed ID token
+/// must repeat it (OIDC Core §12.2).
+pub fn microsoft_id_token_audience_claim(
+    id_token: &str,
+) -> Result<Value, MicrosoftOidcValidationError> {
+    let payload = id_token
+        .split('.')
+        .nth(1)
+        .ok_or(MicrosoftOidcValidationError::MalformedIdToken)?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| MicrosoftOidcValidationError::MalformedIdToken)?;
+    let claims: serde_json::Map<String, Value> = serde_json::from_slice(&decoded)
+        .map_err(|_| MicrosoftOidcValidationError::MalformedIdToken)?;
+    match claims.get("aud") {
+        Some(Value::String(audience)) if !audience.is_empty() => {
+            Ok(Value::String(audience.clone()))
+        }
+        Some(Value::Array(audiences))
+            if !audiences.is_empty()
+                && audiences
+                    .iter()
+                    .all(|audience| audience.as_str().is_some_and(|value| !value.is_empty())) =>
+        {
+            Ok(Value::Array(audiences.clone()))
+        }
+        _ => Err(MicrosoftOidcValidationError::InvalidIdentityClaims),
+    }
+}
+
 struct TopLevelClaimVisitor;
 
 impl<'de> Visitor<'de> for TopLevelClaimVisitor {
@@ -993,6 +1072,90 @@ mod tests {
                 MicrosoftOidcValidationError::InvalidUrl
             ))
         ));
+    }
+
+    #[test]
+    fn membership_renewal_adds_offline_access_and_changes_the_fingerprint() {
+        let directory = tempfile::tempdir().unwrap();
+        let client_secret_path = directory.path().join("client-secret");
+        let flow_key_path = directory.path().join("flow-key");
+        fs::write(&client_secret_path, "oidc-renewal-test-client-secret").unwrap();
+        fs::write(&flow_key_path, URL_SAFE_NO_PAD.encode([18_u8; 32])).unwrap();
+        let config = MicrosoftOidcConfig {
+            enabled: true,
+            tenant_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+            client_id: Some("00000000-0000-4000-8000-000000000002".to_string()),
+            client_secret_ref: Some(format!("file:{}", client_secret_path.display())),
+            flow_key_ref: Some(format!("file:{}", flow_key_path.display())),
+            ..MicrosoftOidcConfig::default()
+        };
+        assert!(!config.membership_renewal);
+        let parsed: MicrosoftOidcConfig = toml::from_str("membership_renewal = true").unwrap();
+        assert!(parsed.membership_renewal);
+        let disabled =
+            MicrosoftOidcRuntimeConfig::from_config(&config, Some("https://broker.test"))
+                .unwrap()
+                .unwrap();
+        let enabled = MicrosoftOidcRuntimeConfig::from_config(
+            &MicrosoftOidcConfig {
+                membership_renewal: true,
+                ..config.clone()
+            },
+            Some("https://broker.test"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!disabled.membership_renewal());
+        assert_eq!(disabled.sign_in_scopes(), MICROSOFT_OIDC_SCOPES);
+        assert!(enabled.membership_renewal());
+        assert_eq!(
+            enabled.sign_in_scopes(),
+            ["openid", "profile", "email", "offline_access"]
+        );
+        assert_ne!(disabled.config_fingerprint(), enabled.config_fingerprint());
+        assert_eq!(
+            disabled.config_fingerprint(),
+            MicrosoftOidcRuntimeConfig::from_config(&config, Some("https://broker.test"))
+                .unwrap()
+                .unwrap()
+                .config_fingerprint()
+        );
+    }
+
+    #[test]
+    fn renewal_reference_keeps_the_audience_as_issued_and_hashes_the_nonce() {
+        let client = "00000000-0000-4000-8000-000000000002";
+        for audience in [json!(client), json!([client, "api://other"])] {
+            let token = token_with_payload(&json!({"aud": audience, "sub": "s"}).to_string());
+            assert_eq!(microsoft_id_token_audience_claim(&token), Ok(audience));
+        }
+        for audience in [
+            json!(""),
+            json!([]),
+            json!([1]),
+            json!(null),
+            json!({"a": 1}),
+        ] {
+            let token = token_with_payload(&json!({"aud": audience}).to_string());
+            assert_eq!(
+                microsoft_id_token_audience_claim(&token),
+                Err(MicrosoftOidcValidationError::InvalidIdentityClaims),
+                "{audience}"
+            );
+        }
+        assert_eq!(
+            microsoft_id_token_audience_claim(&token_with_payload(r#"{"sub":"s"}"#)),
+            Err(MicrosoftOidcValidationError::InvalidIdentityClaims)
+        );
+        assert_eq!(
+            microsoft_id_token_audience_claim("e30.not base64.c2ln"),
+            Err(MicrosoftOidcValidationError::MalformedIdToken)
+        );
+        // SHA-256("abc"), unpadded base64url.
+        assert_eq!(
+            microsoft_oidc_nonce_sha256("abc"),
+            "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0"
+        );
     }
 
     #[test]

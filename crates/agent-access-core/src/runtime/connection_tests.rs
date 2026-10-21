@@ -563,7 +563,10 @@ async fn every_ingress_carries_the_principal_kind_that_selects_the_connection() 
         assert_eq!(identity.principal_kind, Some(kind), "bearer {principal}");
         assert_selected(&runtime, &observations, identity, Some(principal), "bearer").await;
         // Git Basic with the Broker token as the password.
-        let identity = runtime.resolve_gateway_basic_broker_token(&token).unwrap();
+        let identity = runtime
+            .resolve_gateway_basic_broker_token(&token)
+            .unwrap()
+            .identity;
         assert_eq!(identity.principal_kind, Some(kind), "git basic {principal}");
         assert_selected(
             &runtime,

@@ -150,6 +150,8 @@ pub struct ResolvedAttestedIdentity {
     pub principal: PrincipalRecord,
     pub policy_groups: Vec<String>,
     pub proof: AttestedIdentityProof,
+    /// Read with the membership: whether membership renewal applies.
+    pub membership_renewal: Option<MembershipRenewalHint>,
 }
 
 impl ResolvedAttestedIdentity {
@@ -666,10 +668,12 @@ fn with_membership(
     let membership =
         effective_membership_at_conn(conn, &principal.principal_id, &normalized_now_string())?;
     principal.groups = membership.groups;
+    let membership_renewal = oidc_membership_renewal::renewal_hint(conn, &principal.principal_id)?;
     Ok(ResolvedAttestedIdentity {
         principal,
         policy_groups: membership.policy_groups,
         proof,
+        membership_renewal,
     })
 }
 

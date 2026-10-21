@@ -75,6 +75,7 @@ fn link_microsoft(fixture: &BrowserRateFixture) -> String {
             enabled: true,
             config_fingerprint: "local-method-test".into(),
             external_membership_ttl_seconds: 3600,
+            membership_renewal: false,
             invalidate_existing_evidence: false,
             actor: "test".into(),
         })

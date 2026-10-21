@@ -61,9 +61,11 @@ actions and exposes typed wrappers for supported services.
   MCP describe hints use stable service/action IDs, never client-renamed names.
 - Caller discovery and native MCP lists expose only authority with locally usable
   selected execution and lookup credentials. Preserve grant precedence and hide
-  unknown availability too. Discovery must not contact upstream, refresh OAuth,
-  or record credential use/verification. Keep management and setup previews
-  independent so missing credentials cannot prevent onboarding.
+  unknown availability too. Discovery must not contact upstream services,
+  refresh OAuth connections, or record credential use/verification. Identity
+  admission may renew the caller's own Microsoft membership (see
+  `docs/design.md`). Keep management and setup previews independent so missing
+  credentials cannot prevent onboarding.
 - Token-only actions (`ActionDescriptor::token_only`, native only) are checked
   with the mode each grant region's winning grant selects, beside the action's
   supported modes: refuse them only where `per_user` selects OAuth, with no
@@ -133,6 +135,29 @@ Microsoft group auto-enrollment adds local membership only in the new JIT
 principal's creation transaction after mapped-group admission; preserve the
 disabled-group pause, no-backfill/no-re-add semantics, and transaction-captured
 enrollment and setting-change audit details.
+
+## Microsoft membership renewal
+
+`membership_renewal` keeps one encrypted Microsoft refresh-token record per
+Microsoft login method (`managed_store/oidc_membership_renewal.rs`, migration
+`031`). The record, its AAD inputs and its payload are durable contracts: it
+stays in key readiness, the used-key inventory and rewrap (which keeps its token
+version), and its golden vector freezes the stored row format; never
+regenerate it. While a record exists, sign-in and renewal order evidence by
+Microsoft's raw `iat` against `observation_iat`: only a strictly newer complete
+claim replaces evidence, and every trusted observation, complete or not, raises
+the watermark. Every outcome write, success or failure, runs through
+`token_store_call_from_snapshot` with the full fence (current snapshot, provider
+generation, tenant, client, active method and subject, enabled user, token
+version) and writes nothing when it fails. Renew only at request admission
+(`membership_renewal.rs` in the host) for the caller's own identity, never under
+the store mutex or inside a store transaction, at most one wait per request,
+with a post-wait identity check that revalidates attested proofs rather than
+replacing them. Renewal never creates a principal, so group auto-enrollment
+never runs for it; a JIT sign-in records its row in the transaction that creates
+and enrolls the account. Failures never extend evidence. Refresh, ID and access tokens,
+response bodies and `error_description` never reach logs, audit, errors or API
+responses.
 
 ## Build Service
 
@@ -325,7 +350,11 @@ binary and needs `python3`, whose absence fails it.
   (`oauth/revocation.rs`: the family a fence ends kept in the same transaction
   for a dialect that revokes, bounded revocation passes, late and uncertain
   refreshes, and the `remoteRevocation` states; `managed_store/oauth_revocation.rs`
-  stores the encrypted pending revocations of migration `028`); contains no
+  stores the encrypted pending revocations of migration `028`) and Microsoft
+  membership renewal (`microsoft_oidc/renewal.rs`: the bounded token-endpoint
+  request, response classification and backoff;
+  `managed_store/oidc_membership_renewal.rs`: the encrypted records of migration
+  `031`, the renewal hint, and the attempt-start and outcome writes); contains no
   backend. Its internal
   `imports` module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
@@ -410,16 +439,17 @@ binary and needs `python3`, whose absence fails it.
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
   bounded shutdown; `src/http_server.rs` serves each listener's connections and
   owns their tasks; `src/oauth_revocations.rs` the OAuth revocation worker the
-  lifecycle starts and drains), HTTP routers and handlers, management, HTTP MCP serving,
-  portal serving, the Git smart HTTP gateway, reload, and runtime state, plus the
-  broker unit-test tree
-  (`src/tests/`). Its production code depends on no backend or import adapter;
-  tests link the real backends through `src/test_composition.rs`. Its public
-  API is the composition, the application, the assembly identity and the build
-  status; routers, reload and runtime state stay crate-private. The
-  `test-support` feature adds `src/test_support.rs`: isolated broker
-  applications for acceptance tests, with provider fixtures and read-only store
-  views. Release builds never enable it.
+  lifecycle starts and drains; `src/membership_renewal.rs` the Microsoft
+  membership renewal admission, flights and drain, sharing ID-token validation
+  with sign-in through `src/oidc_id_token.rs`), HTTP routers and handlers,
+  management, HTTP MCP serving, portal serving, the Git smart HTTP gateway,
+  reload, and runtime state, plus the broker unit-test tree (`src/tests/`). Its
+  production code depends on no backend or import adapter; tests link the real
+  backends through `src/test_composition.rs`. Its public API is the composition,
+  the application, the assembly identity and the build status; routers, reload
+  and runtime state stay crate-private. The `test-support` feature adds
+  `src/test_support.rs`: isolated broker applications for acceptance tests, with
+  provider fixtures and read-only store views. Release builds never enable it.
 - `crates/agent-access-broker`: the `agent-access-broker` binary: a thin
   assembly whose `main.rs` runs the host's `BrokerApplication`; `composition()`
   in `src/backends.rs` selects the modules it links and `build_identity()` in

@@ -1,8 +1,8 @@
-use crate::handlers::auth::{csrf_header_valid, resolve_browser_cookie_identity_blocking};
+use crate::handlers::auth::csrf_header_valid;
 use crate::handlers::common::{
     CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
     check_auth_source_rate_guard, envelope_response, request_id_from_headers,
-    resolve_identity_blocking,
+    resolve_request_identity_pending,
 };
 use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
@@ -583,6 +583,62 @@ pub(crate) async fn effective_management_authority(
     Ok(authority)
 }
 
+/// A management request's identity failure, or a request without an
+/// authenticated identity (`None`): the source's authentication budget is
+/// charged, then the error is returned.
+async fn management_identity_failure(
+    state: &AppState,
+    snapshot: &RuntimeSnapshot,
+    request_id: &str,
+    broker_request_id: &str,
+    operation: &str,
+    source: &SourceContext,
+    failure: Option<agent_access_core::IdentityFailure>,
+) -> Box<axum::response::Response> {
+    if let Err(response) = check_auth_source_rate_guard(
+        state,
+        snapshot,
+        request_id,
+        "broker".to_string(),
+        operation.to_string(),
+        source,
+    )
+    .await
+    {
+        return Box::new(envelope_response(*response).into_response());
+    }
+    let (status, reason_code, message) = match &failure {
+        Some(failure) => {
+            let reason_code = failure.reason_code();
+            (
+                StatusCode::from_u16(reason_code.http_status()).unwrap_or(StatusCode::UNAUTHORIZED),
+                reason_code,
+                failure.message(),
+            )
+        }
+        None => (
+            StatusCode::UNAUTHORIZED,
+            ReasonCode::IdentityRequired,
+            "authenticated identity is required",
+        ),
+    };
+    let identity = agent_access_core::IdentityContext::anonymous();
+    Box::new(
+        management_pre_context_error_response(ManagementPreContextError {
+            snapshot,
+            request_id,
+            broker_request_id,
+            operation,
+            identity: &identity,
+            source,
+            status,
+            reason_code,
+            message,
+        })
+        .await,
+    )
+}
+
 pub(crate) async fn management_context(
     state: &AppState,
     remote_addr: SocketAddr,
@@ -631,76 +687,25 @@ pub(crate) async fn management_context(
         Ok(permit) => permit,
         Err(response) => return Err(Box::new(envelope_response(*response).into_response())),
     };
-    let mut browser_password_change_required = false;
-    let identity_result = if !snapshot.runtime.has_configured_identity_header(headers) {
-        match resolve_browser_cookie_identity_blocking(snapshot.clone(), headers.clone()).await {
-            Ok(Some(cookie_identity)) => {
-                browser_password_change_required = cookie_identity.password_change_required;
-                Ok(cookie_identity.identity)
-            }
-            Ok(None) => resolve_identity_blocking(snapshot.clone(), headers.clone()).await,
-            Err(failure) => Err(failure),
-        }
-    } else {
-        resolve_identity_blocking(snapshot.clone(), headers.clone()).await
-    };
-    if !matches!(&identity_result, Ok(identity) if identity.authenticated) {
-        check_auth_source_rate_guard(
+    let identity_failure = |failure: Option<agent_access_core::IdentityFailure>| {
+        management_identity_failure(
             state,
             &snapshot,
             &request_id,
-            "broker".to_string(),
-            operation.to_string(),
+            &broker_request_id,
+            operation,
             &source,
+            failure,
         )
-        .await
-        .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
-    }
-    let identity = match identity_result {
-        Ok(identity) if identity.authenticated => identity,
-        Ok(_) => {
-            let identity = agent_access_core::IdentityContext::anonymous();
-            return Err(Box::new(
-                management_pre_context_error_response(ManagementPreContextError {
-                    snapshot: &snapshot,
-                    request_id: &request_id,
-                    broker_request_id: &broker_request_id,
-                    operation,
-                    identity: &identity,
-                    source: &source,
-                    status: StatusCode::UNAUTHORIZED,
-                    reason_code: ReasonCode::IdentityRequired,
-                    message: "authenticated identity is required",
-                })
-                .await,
-            ));
-        }
-        Err(failure) => {
-            let reason_code = failure.reason_code();
-            let identity = agent_access_core::IdentityContext::anonymous();
-            return Err(Box::new(
-                management_pre_context_error_response(ManagementPreContextError {
-                    snapshot: &snapshot,
-                    request_id: &request_id,
-                    broker_request_id: &broker_request_id,
-                    operation,
-                    identity: &identity,
-                    source: &source,
-                    status: StatusCode::from_u16(reason_code.http_status())
-                        .unwrap_or(StatusCode::UNAUTHORIZED),
-                    reason_code,
-                    message: failure.message(),
-                })
-                .await,
-            ));
-        }
     };
-    let browser_session_token_id = identity
-        .source
-        .as_ref()
-        .filter(|source| source.name == "browser-session")
-        .and_then(|source| source.token_id.clone());
-    observability::record_principal(&identity.principal);
+    let pending =
+        match resolve_request_identity_pending(state, snapshot.clone(), headers.clone()).await {
+            Ok(pending) if pending.value().identity.authenticated => pending,
+            Ok(_) => return Err(identity_failure(None).await),
+            Err(failure) => return Err(identity_failure(Some(failure)).await),
+        };
+    observability::record_principal(&pending.value().identity.principal);
+    // A membership renewal wait holds the caller's capacity.
     let principal_permit = match acquire_caller_guard(
         state,
         &snapshot,
@@ -709,7 +714,7 @@ pub(crate) async fn management_context(
         operation.to_string(),
         &source,
         CallerAdmission {
-            identity: &identity,
+            identity: &pending.value().identity,
         },
     )
     .await
@@ -717,6 +722,18 @@ pub(crate) async fn management_context(
         Ok(permit) => permit,
         Err(response) => return Err(Box::new(envelope_response(*response).into_response())),
     };
+    let resolved = match pending.admit(state, &snapshot, headers).await {
+        Ok(resolved) if resolved.identity.authenticated => resolved,
+        Ok(_) => return Err(identity_failure(None).await),
+        Err(failure) => return Err(identity_failure(Some(failure)).await),
+    };
+    let browser_password_change_required = resolved.password_change_required;
+    let identity = resolved.identity;
+    let browser_session_token_id = identity
+        .source
+        .as_ref()
+        .filter(|source| source.name == "browser-session")
+        .and_then(|source| source.token_id.clone());
     let token_class = identity
         .source
         .as_ref()

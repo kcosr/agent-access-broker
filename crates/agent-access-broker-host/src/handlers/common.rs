@@ -323,11 +323,176 @@ pub(crate) fn response_retry_after_header(response: &BrokerResponse<Value>) -> O
         .or_else(|| retry_after_header(response.status, response.envelope.result.as_ref()))
 }
 
-pub(crate) async fn resolve_identity_blocking(
+/// A request's identity resolved before Microsoft membership renewal
+/// admission (design §8.3). Its entry point first takes the caller's
+/// per-principal capacity, so that a renewal wait holds it, then calls
+/// [`Self::admit`]. After a wait the identity is checked once more by the
+/// resolver's own recheck: an ordinary credential is resolved again from the
+/// same credential, and an attested identity revalidates its original proof
+/// and caller-security epoch, never a new proof.
+pub(crate) struct PendingIdentity<T, E> {
+    value: T,
+    hint: Option<agent_access_core::MembershipRenewalHint>,
+    recheck: std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, E>> + Send>>,
+}
+
+impl<T: Send + 'static, E: Send + 'static> PendingIdentity<T, E> {
+    /// `value`, the renewal hint read with it and how to check it again
+    /// after a wait.
+    pub(crate) fn new(
+        value: T,
+        hint: Option<agent_access_core::MembershipRenewalHint>,
+        recheck: impl std::future::Future<Output = Result<T, E>> + Send + 'static,
+    ) -> Self {
+        Self {
+            value,
+            hint,
+            recheck: Box::pin(recheck),
+        }
+    }
+
+    /// An identity that renewal does not apply to, such as one an MCP
+    /// intake already admitted.
+    pub(crate) fn admitted(value: T) -> Self {
+        Self::new(value, None, std::future::pending())
+    }
+
+    /// The identity as resolved, for the checks made before admission.
+    pub(crate) fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub(crate) fn map<U: Send + 'static>(self, map: fn(T) -> U) -> PendingIdentity<U, E> {
+        let recheck = self.recheck;
+        PendingIdentity {
+            value: map(self.value),
+            hint: self.hint,
+            recheck: Box::pin(async move { recheck.await.map(map) }),
+        }
+    }
+
+    pub(crate) fn map_err<F: Send + 'static>(self, map: fn(E) -> F) -> PendingIdentity<T, F> {
+        let recheck = self.recheck;
+        PendingIdentity {
+            value: self.value,
+            hint: self.hint,
+            recheck: Box::pin(async move { recheck.await.map_err(map) }),
+        }
+    }
+
+    /// Admits membership renewal for the identity: the identity as resolved,
+    /// or after a wait the result of its recheck.
+    pub(crate) async fn admit(
+        self,
+        state: &AppState,
+        snapshot: &RuntimeSnapshot,
+        headers: &HeaderMap,
+    ) -> Result<T, E> {
+        match crate::membership_renewal::admit_membership_renewal(
+            &state.reloadable,
+            snapshot,
+            self.hint.as_ref(),
+            headers,
+        )
+        .await
+        {
+            crate::membership_renewal::RenewalAdmission::Proceed => Ok(self.value),
+            crate::membership_renewal::RenewalAdmission::Waited => self.recheck.await,
+        }
+    }
+}
+
+/// Resolves the request's identity for membership renewal admission.
+pub(crate) async fn resolve_identity_pending(
+    state: &AppState,
+    snapshot: Arc<RuntimeSnapshot>,
+    headers: HeaderMap,
+) -> Result<
+    PendingIdentity<agent_access_core::IdentityContext, agent_access_core::IdentityFailure>,
+    agent_access_core::IdentityFailure,
+> {
+    // Keep identity resolution in the request's span for log correlation.
+    let span = tracing::Span::current();
+    let resolver = snapshot.clone();
+    let credential = headers.clone();
+    let (admission, admitted) = tokio::task::spawn_blocking(move || {
+        span.in_scope(|| {
+            resolver
+                .runtime
+                .resolve_identity_with_admission(&credential)
+        })
+    })
+    .await
+    .unwrap_or(Err(agent_access_core::IdentityFailure::Invalid))?;
+    let reloadable = state.reloadable.clone();
+    let proof = admitted.proof;
+    let recheck = async move {
+        match proof {
+            Some(proof) => {
+                crate::mcp::IdentityPin {
+                    caller_security_epoch: admission
+                        .caller_id()
+                        .map(|_| snapshot.caller_security_epoch),
+                    admission,
+                    proof: Some(proof),
+                }
+                .revalidate(reloadable, snapshot, headers)
+                .await
+            }
+            None => resolve_identity_without_renewal(snapshot, headers).await,
+        }
+    };
+    Ok(PendingIdentity::new(
+        admitted.identity,
+        admitted.membership_renewal,
+        recheck,
+    ))
+}
+
+/// A request's identity from its browser session, when it carries no
+/// configured identity header and has one, or from its identity headers.
+pub(crate) struct RequestIdentity {
+    pub(crate) identity: agent_access_core::IdentityContext,
+    /// The browser session must change its password first.
+    pub(crate) password_change_required: bool,
+}
+
+/// Resolves the request's browser session or identity headers for
+/// membership renewal admission.
+pub(crate) async fn resolve_request_identity_pending(
+    state: &AppState,
+    snapshot: Arc<RuntimeSnapshot>,
+    headers: HeaderMap,
+) -> Result<
+    PendingIdentity<RequestIdentity, agent_access_core::IdentityFailure>,
+    agent_access_core::IdentityFailure,
+> {
+    if !snapshot.runtime.has_configured_identity_header(&headers)
+        && let Some(cookie) = crate::handlers::auth::resolve_browser_cookie_identity_pending(
+            snapshot.clone(),
+            headers.clone(),
+        )
+        .await?
+    {
+        return Ok(cookie.map(|cookie| RequestIdentity {
+            identity: cookie.identity,
+            password_change_required: cookie.password_change_required,
+        }));
+    }
+    Ok(resolve_identity_pending(state, snapshot, headers)
+        .await?
+        .map(|identity| RequestIdentity {
+            identity,
+            password_change_required: false,
+        }))
+}
+
+/// Resolves the request's identity without membership renewal, as body
+/// admission does before its handler's admission.
+pub(crate) async fn resolve_identity_without_renewal(
     snapshot: Arc<RuntimeSnapshot>,
     headers: HeaderMap,
 ) -> Result<agent_access_core::IdentityContext, agent_access_core::IdentityFailure> {
-    // Keep identity resolution in the request's span for log correlation.
     let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || {
         span.in_scope(|| snapshot.runtime.resolve_identity(&headers))

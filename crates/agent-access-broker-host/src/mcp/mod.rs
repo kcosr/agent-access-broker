@@ -568,6 +568,7 @@ pub(crate) async fn handle(
     let identity_snapshot = snapshot.clone();
     let identity_ingress = ingress.clone();
     let identity_lease = intake_global.clone();
+    let renewal_headers = auth_headers.clone();
     let identity_worker = tokio::task::spawn_blocking(move || {
         // A timed-out response cannot release capacity while blocking token
         // verification is still running.
@@ -622,6 +623,50 @@ pub(crate) async fn handle(
         admission: ingress.clone(),
         proof: resolved.proof,
     };
+    // The caller's intake capacity is taken before any renewal wait, so a
+    // waiting principal holds its own share rather than the global one.
+    let intake_principal = match endpoint.0.control.try_principal_concurrency(
+        &identity.principal,
+        config.max_control_requests_per_principal,
+    ) {
+        Ok(permit) => permit,
+        Err(_) => {
+            return failure(
+                StatusCode::TOO_MANY_REQUESTS,
+                "MCP caller capacity exhausted",
+            );
+        }
+    };
+    // Membership renewal admission, after intake resolution and before
+    // protocol handling. After a wait the pin is checked once more: the same
+    // credential, or the original proof and caller-security epoch.
+    if crate::membership_renewal::admit_membership_renewal(
+        &state.reloadable,
+        &snapshot,
+        resolved.membership_renewal.as_ref(),
+        request.headers(),
+    )
+    .await
+        == crate::membership_renewal::RenewalAdmission::Waited
+    {
+        identity = match identity_pin
+            .revalidate(state.reloadable.clone(), snapshot.clone(), renewal_headers)
+            .await
+        {
+            Ok(identity) => identity,
+            Err(error) => {
+                return identity_failure_response(
+                    &state,
+                    snapshot,
+                    request.headers(),
+                    remote,
+                    ingress.is_username(),
+                    error,
+                )
+                .await;
+            }
+        };
+    }
     if identity.source.as_ref().is_none_or(|source| {
         let allowed_kind = if ingress.is_username() {
             source.kind == "trusted_user"
@@ -681,18 +726,6 @@ pub(crate) async fn handle(
             .insert("allow", HeaderValue::from_static("POST, DELETE"));
         return r;
     }
-    let intake_principal = match endpoint.0.control.try_principal_concurrency(
-        &identity.principal,
-        config.max_control_requests_per_principal,
-    ) {
-        Ok(permit) => permit,
-        Err(_) => {
-            return failure(
-                StatusCode::TOO_MANY_REQUESTS,
-                "MCP caller capacity exhausted",
-            );
-        }
-    };
     let intake = Arc::new(ProtocolPermits {
         _global: intake_global,
         _principal: intake_principal,
