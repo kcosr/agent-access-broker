@@ -54,7 +54,8 @@ on one site:
 ```toml
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-token_profile = "atlassian-api-token"
+user_token_profiles = ["atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.confluence]
 type = "connection"
@@ -100,7 +101,8 @@ before using a mutation. Confluence page create/update require an enabled native
 People can connect their Atlassian account instead of storing a token. Give
 each product's connection an `oauth` registration of the
 [`atlassian` dialect](oauth.md#atlassian) for the site, beside
-`token_profile = "atlassian-bearer-token"` for service accounts or alone.
+`service_account_token_profiles = ["atlassian-bearer-token"]` for service
+accounts, or alone.
 Without Jira, omit its entries:
 
 ```toml
@@ -114,12 +116,12 @@ allowed_upstream_hosts = [
 
 [credentials.connections.jira]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+service_account_token_profiles = ["atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+service_account_token_profiles = ["atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]

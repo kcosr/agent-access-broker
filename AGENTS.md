@@ -337,11 +337,15 @@ binary and needs `python3`, whose absence fails it.
   verification share; `runtime/gateway_access.rs`: each gateway request's
   static credential or OAuth lease, revalidated and pinned to the gateway's
   `upstream_base_url` before every upstream attempt, with ref discovery's one
-  401 recovery, no pack POST replay, and the 403 naming the portal reconnect)
+  401 recovery, no pack POST replay, the 403 naming the portal reconnect, and
+  the refusal, before sending, of a token profile a published service marks
+  route-bound or none declares)
   and credential connections (`connections.rs`: the
-  `[credentials.connections]` model, its validation and authority checks,
-  `PrincipalKind` and `select`, which every personal-credential consumer
-  uses; `runtime/personal_credentials.rs` reads the selected token rows;
+  `[credentials.connections]` model with its people's and service accounts'
+  token profile lists, its validation and authority checks, `PrincipalKind`
+  and `select`, which every personal-credential consumer uses;
+  `runtime/personal_credentials.rs` reads the selected token rows whose
+  stored profile the selected list accepts, lent as that profile;
   `runtime/lookup_access.rs` plans and selects lookup access: the shared
   lookup credential, the caller's token, or the operation's one OAuth lease
   shared with execution) and OAuth login binding (`oauth/login_binding.rs`:

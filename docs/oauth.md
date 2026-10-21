@@ -36,9 +36,10 @@ names a registration and one of its permission profiles; each service that uses
 it names the connection from its `credentials.per_user` entry. Only `user`
 principals use OAuth: a person connects their upstream account, and the Broker
 never reads a stored token for them through that connection. Service accounts
-and `system` principals cannot complete browser consent. They use the
-connection's `token_profile` when it sets one, and otherwise have no personal
-credential for its services. Nobody chooses between a token and OAuth, and the
+and `system` principals cannot complete browser consent. They use a token of
+the connection's `service_account_token_profiles` when it sets that list, and
+otherwise have no personal credential for its services. A connection with
+`oauth` does not set `user_token_profiles`. Nobody chooses between a token and OAuth, and the
 Broker never falls back from one to the other.
 
 Some upstream operations accept only a token, and their providers mark those
@@ -211,7 +212,7 @@ target = "https://gitlab.example.com"
 
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
+service_account_token_profiles = ["gitlab-access-token"]
 oauth = { registration = "gitlab", profile = "default" }
 
 [credentials.per_user.gitlab]
@@ -243,10 +244,10 @@ connection = "gitlab"
   GitLab instance <target>`.
 
 People always use their OAuth connection and never store a GitLab token
-through it. With `token_profile` set, service accounts keep tokens an
-administrator provisions, because GitLab service accounts authenticate only
-with personal access tokens, and `system` principals store their own. Without
-`token_profile`, only people have a GitLab credential.
+through it. With `service_account_token_profiles` set, service accounts keep
+tokens an administrator provisions, because GitLab service accounts
+authenticate only with personal access tokens, and `system` principals store
+their own. Without it, only people have a GitLab credential.
 
 ### GitLab scopes
 
@@ -467,12 +468,12 @@ target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
 # administrator-provisioned scoped token.
 [credentials.connections.jira]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+service_account_token_profiles = ["atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+service_account_token_profiles = ["atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]
@@ -511,8 +512,8 @@ A connection's method and route follow this table:
 
 | Connection | Gateway | Result |
 | --- | --- | --- |
-| `token_profile = "atlassian-api-token"` only | Off | Valid: the site route |
-| `token_profile = "atlassian-bearer-token"` only | On | Valid: the gateway |
+| `atlassian-api-token` token lists only | Off | Valid: the site route |
+| `atlassian-bearer-token` token lists only | On | Valid: the gateway |
 | `oauth` only | On, required | Valid: the gateway |
 | `atlassian-bearer-token` and `oauth` | On | Valid: people use OAuth and service accounts bearer tokens, both through the gateway |
 | `atlassian-api-token` and `oauth` | Either | Rejected: `credentials.per_user.<service> combines OAuth with a basic_api_token profile; ...` |
@@ -526,9 +527,9 @@ requires providers.<service>.allowed_upstream_hosts to include
 api.atlassian.com`.
 
 People always use their OAuth connection and never store an Atlassian token
-through it. With `token_profile = "atlassian-bearer-token"`, service accounts
-keep the scoped tokens an administrator provisions, and `system` principals
-store their own. An OAuth-only connection, such as one `atlassian` connection
+through it. With `service_account_token_profiles = ["atlassian-bearer-token"]`,
+service accounts keep the scoped tokens an administrator provisions, and
+`system` principals store their own. An OAuth-only connection, such as one `atlassian` connection
 that both products use, gives only people an Atlassian credential.
 
 ### Atlassian scopes
@@ -601,11 +602,11 @@ product connection its own registration:
 
 ```toml
 [credentials.connections.jira]
-token_profile = "atlassian-bearer-token"
+service_account_token_profiles = ["atlassian-bearer-token"]
 oauth = { registration = "atlassian_jira", profile = "default" }
 
 [credentials.connections.confluence]
-token_profile = "atlassian-bearer-token"
+service_account_token_profiles = ["atlassian-bearer-token"]
 oauth = { registration = "atlassian_confluence", profile = "default" }
 ```
 

@@ -87,7 +87,8 @@ Atlassian account email and API token for both with:
 ```toml
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-token_profile = "atlassian-api-token"
+user_token_profiles = ["atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.jira]
 type = "connection"
@@ -122,14 +123,22 @@ have only one product, register one Atlassian integration per product and give
 each product connection its own registration; see
 [one registration or one per product](oauth.md#one-registration-or-one-per-product).
 
-You decide each connection's method; principals never choose, and the Broker
-never falls back from one method to the other:
+You decide each connection's method and the token types (profiles) it accepts:
+`user_token_profiles` for people and `service_account_token_profiles` for
+service accounts and `system` principals. Principals never choose between OAuth
+and a token, and the Broker never falls back from one method to the other:
 
-| Principal | Connection with `oauth` | Connection with only `token_profile` |
+| Principal | Connection with `oauth` | Connection without `oauth` |
 | --- | --- | --- |
-| Human user | Connects their account through OAuth | Stores their own token |
-| Service account | Uses the token you provision, if the connection sets `token_profile` | Uses the token you provision |
-| `system` principal | Stores its own token, if the connection sets `token_profile` | Stores its own token |
+| Human user | Connects their account through OAuth | Stores their own token of a `user_token_profiles` type |
+| Service account | Uses the token you provision, of a `service_account_token_profiles` type | The same |
+| `system` principal | Stores its own token, of a `service_account_token_profiles` type | The same |
+
+Without the list for its kind, a principal has no personal credential for the
+connection. With several types in a list, whoever stores the token picks one;
+with one, there is nothing to pick. A stored token whose type the list no
+longer accepts is kept but not used, and listed as retained until it is
+deleted or the type is accepted again.
 
 OAuth is available for services that accept delegated credentials: Gmail,
 GitLab REST and GitLab Git gateways, which share one GitLab OAuth connection
@@ -411,9 +420,11 @@ Use **Admin > Principals > Service accounts** for workloads that must outlive a
 human owner. These accounts have no password/Microsoft login, self-service, or
 management tokens. Administrators manage their credentials, groups, grants, and
 bounded `agent_invoke` tokens. A service account always uses a token you
-provision for each credential connection that sets `token_profile`, even when
-people connect that connection through OAuth; an OAuth-only connection gives it
-no personal credential. Assign an operational owner and rotation schedule.
+provision for each credential connection that sets
+`service_account_token_profiles`, even when people connect that connection
+through OAuth; with several types listed, choose one with
+`admin credentials put --profile`. A connection without that list gives it no
+personal credential. Assign an operational owner and rotation schedule.
 
 ```bash
 agent-access admin principals create build-agent \

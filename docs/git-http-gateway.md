@@ -303,7 +303,8 @@ token_ref = "env:GITLAB_GIT_TOKEN"
 # The connection GitLab REST also consumes (see providers-gitlab-rest.md).
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
+user_token_profiles = ["gitlab-access-token"]
+service_account_token_profiles = ["gitlab-access-token"]
 
 [credentials.per_user.gitlab_git]
 type = "connection"
@@ -388,7 +389,7 @@ GitLab, people connect once for GitLab REST and Git:
 ```toml
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"   # service accounts' tokens
+service_account_token_profiles = ["gitlab-access-token"]   # service accounts' tokens
 oauth = { registration = "gitlab", profile = "default" }
 
 [credentials.per_user.gitlab_git]

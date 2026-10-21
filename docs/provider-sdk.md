@@ -321,7 +321,7 @@ service's credentials act on, derived from its configuration alone: an
 `UpstreamAuthority` built with `UpstreamAuthority::from_base_url` (a normalized
 origin and instance path), optionally `.with_tenant(id)` and
 `.with_tenant_gateway(url)`. Services that consume one credential connection
-with a token profile must declare authorities naming the same instance, and an
+with token profiles must declare authorities naming the same instance, and an
 OAuth connection's dialect checks each consumer's authority (see
 [delegated access](#delegated-access)). A service that declares none cannot
 share a token connection with another service.

@@ -425,6 +425,12 @@ Additional rules:
   that service uses `credential_mode = "service"`. Per-user-only lookup-backed
   grants validate without a shared lookup credential.
 - Static kinds must not set `provider` or `path`.
+- A `credentials.service` or `credentials.lookup` entry of type
+  `basic_api_token` or `bearer_token` may set `profile`: the token profile its
+  service receives the credential as, which the service must declare with the
+  same kind as `type` (see [token profiles](#connection-token-profiles)).
+  Without it, the provider uses its default for the kind. No other entry sets
+  `profile`; a `secret_store` record is always received as its own kind alone.
 - `secret_store` must not set `username_ref`, `token_ref`, or `read_only`. Its
   `provider` must be `local_file` and `path` must be absolute.
 - `connection` sets only `connection`, which must name a configured
@@ -444,7 +450,8 @@ fetch.
 # One GitLab token for GitLab REST and the GitLab Git gateway.
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
+user_token_profiles = ["gitlab-access-token"]
+service_account_token_profiles = ["gitlab-access-token"]
 
 [credentials.per_user.gitlab]
 type = "connection"
@@ -457,7 +464,8 @@ connection = "gitlab"
 # One Atlassian account token for Jira and Confluence on one site.
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-token_profile = "atlassian-api-token"
+user_token_profiles = ["atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.jira]
 type = "connection"
@@ -482,20 +490,30 @@ Connection keys (`[credentials.connections.<id>]`):
 | Key | Rule |
 | --- | --- |
 | `display_name` | Optional name that management shows, the connection ID when unset; must not be empty when set. Connections that select one OAuth registration share one OAuth row, labeled by the first of them by connection ID, so give them the same name |
-| `token_profile` | Optional stored token form, one of the [token profiles](#connection-token-profiles) |
+| `user_token_profiles` | Optional list of the [token profiles](#connection-token-profiles) people (`user` principals) may store, in the order a picker offers them. Not allowed beside `oauth`: people then use OAuth |
+| `service_account_token_profiles` | Optional list of the token profiles service accounts and `system` principals may store, in picker order |
 | `oauth` | Optional `{ registration, profile }`: a configured `[oauth.registrations.<registration>]` and one of its `permission_profiles` |
 
-A connection must set `token_profile`, `oauth`, or both. The administrator
-decides the method per connection; principals do not choose between a token
-and OAuth, and the Broker never falls back from one method to the other. A
-principal's kind selects the method from configuration alone:
+A connection must set `oauth`, `user_token_profiles` or
+`service_account_token_profiles`. A list must not be empty or name a profile
+twice; one profile may appear in both lists. The administrator decides the
+method per connection; principals do not choose between a token and OAuth, and
+the Broker never falls back from one method to the other. A principal's kind
+selects the method from configuration alone:
 
-| Principal | Connection sets `oauth` | Connection sets only `token_profile` |
+| Principal | Connection sets `oauth` | Connection does not set `oauth` |
 | --- | --- | --- |
-| `user` | The person's OAuth connection for the registration; a stored token is never read | A token the person stores |
-| `service_account` | A token an administrator provisions, when `token_profile` is set; otherwise none | A token an administrator provisions |
-| `system` | A token the principal stores, when `token_profile` is set; otherwise none | A token the principal stores |
+| `user` | The person's OAuth connection for the registration; a stored token is never read | A token of a `user_token_profiles` profile the person stores; none without that list |
+| `service_account` | A token of a `service_account_token_profiles` profile an administrator provisions; none without that list | The same |
+| `system` | A token of a `service_account_token_profiles` profile the principal stores; none without that list | The same |
 | Configured static principal without an active managed principal of its ID, or anonymous caller | None | None |
+
+Service accounts and `system` principals share one list, so changing a
+principal between those kinds keeps its stored token usable. With one profile
+in the selected list, a token is stored as that profile; with several, whoever
+stores it chooses one (the person, or an administrator for a service account),
+and the token keeps that profile. The stored token is used when the selected
+list accepts its stored profile, and the provider receives it as that profile.
 
 Selection never reads stored tokens or OAuth connections. Whether the selected
 token is stored, or the selected OAuth connection is connected, is checked
@@ -516,11 +534,16 @@ Validation rules:
   gateway. Startup and reload also reject a connection ID equal to an imported
   service ID, and creating an import rejects an ID a configured connection
   holds.
-- **Token profile.** Every consumer other than a Git gateway must declare
-  `token_profile`, and the consumers that declare it must agree on its
-  credential kind. A Git gateway consumer accepts any token- or basic-kind
-  profile that it or another consumer declares, and presents it as described
-  under [`upstream_token_auth`](#gateways).
+- **Token profiles.** Each entry of either list must satisfy these rules,
+  checked once per profile: every consumer other than a Git gateway must
+  declare it, and the consumers that declare it must agree on its credential
+  kind. A Git gateway consumer accepts any token- or basic-kind profile that it
+  or another consumer declares, and presents it as described under
+  [`upstream_token_auth`](#gateways), except a profile a consumer marks
+  route-bound: only the provider declaring such a profile may present it, so a
+  connection listing one cannot have a Git gateway consumer. A list may mix
+  kinds, such as a Git gateway's `git-basic-api-token` and `git-bearer-token`.
+  `user_token_profiles` beside `oauth` is rejected.
 - **OAuth.** Every consumer must accept delegated credentials. The OAuth
   connection serves a consumer's metadata lookups as well as its execution.
   Today these consumers are `gmail`, GitLab REST (`gitlab`), Git gateways
@@ -537,7 +560,8 @@ Validation rules:
   credentials act on: GitLab REST the instance of its `api_base_url` (without
   `/api/v4`), a Git gateway its `upstream_base_url`, Jira and Confluence their
   site with the configured cloud ID and Atlassian gateway, an HTTP import its
-  endpoint, and the development `oauth_stub` service its `base_url`. A token connection with several consumers requires each to declare
+  endpoint, and the development `oauth_stub` service its `base_url`. A token
+  connection (one with either list) with several consumers requires each to declare
   an authority, with one origin and instance path; otherwise validation reports
   `credentials.connections.<id>: <service> declares no upstream authority, so it
   cannot share a token connection` or `... <a> acts on <origin> but <b> acts on
@@ -555,12 +579,14 @@ Validation rules:
   URL always has.
 
 **Storage.** A connection's token rows live in the managed store with the
-connection ID as their `service` and `default` as their name. A connection with
-the same ID and token profile as an earlier per-service credential therefore
+connection ID as their `service` and `default` as their name, one per principal,
+with the profile the token was stored as. A connection with the same ID as an
+earlier per-service credential, listing that credential's profile, therefore
 reads that service's stored tokens unchanged. Stored rows the configuration no
-longer selects, such as rows under another name or profile, stay stored but
-unread, and their owners and administrators can list and delete them.
-Credential rights apply to `(connection, default)`.
+longer selects, such as rows under another name or of a profile the owner's
+list does not accept, stay stored but unread, and their owners and
+administrators can list and delete them; listing the profile again uses the
+row without re-entry. Credential rights apply to `(connection, default)`.
 
 **Imported services.** The runtime publishes a single-consumer connection,
 keyed by the imported service ID, for each import with a supported, allowed
@@ -569,7 +595,7 @@ personal binding. It mirrors that binding and never adds a second method:
 | Import's personal binding | Published connection |
 | --- | --- |
 | None, unsupported or not allowed (service-only, credential-free, unapproved OAuth) | None |
-| Static personal token | `token_profile` only: `token`, or `username-token` for a command import that declares `username_token` |
+| Static personal token | `user_token_profiles` and `service_account_token_profiles` with the one profile: `token`, or `username-token` for a command import that declares `username_token` |
 | Approved MCP OAuth | `oauth` only, with the import's registration and profile |
 
 Imported connections are not configured in TOML. See
@@ -577,19 +603,21 @@ Imported connections are not configured in TOML. See
 [command imports](command-imports.md#credentials).
 
 **Provider validation.** A backend's own configuration checks see the credential
-kinds configured for its service under `credentials.service`,
-`credentials.per_user` and `credentials.lookup` (`ServiceCredentialKinds`). For
-a `type = "connection"` entry, `per_user` is the connection's token profile kind
-(`basic_api_token` or `bearer_token`), or `oauth` for a connection with only
-`oauth`, and a separate delegated flag reports that the connection also offers
-OAuth. Gmail therefore requires a connection with only `oauth`, and Jira and
-Confluence accept OAuth only through the Atlassian gateway, alone or beside an
-`atlassian-bearer-token` profile, with a `bearer_token` lookup credential when
-one is configured (see [`[providers.jira]`](#providersjira)).
+sources configured for its service under `credentials.service`,
+`credentials.per_user` and `credentials.lookup` (`ServiceCredentialKinds`): the
+shared credentials' kinds and `profile`, the token profiles a `type =
+"connection"` entry's connection accepts in either list, whether it offers
+OAuth, and whether the per-user entry is a `secret_store`. Gmail therefore
+requires a connection with only `oauth`, Teams accepts no execution credential,
+and Jira and Confluence accept OAuth only through the Atlassian gateway, alone
+or beside an `atlassian-bearer-token` profile for service accounts, with a
+`bearer_token` lookup credential when one is configured (see
+[`[providers.jira]`](#providersjira)).
 
 ### Connection token profiles
 
-The supported `token_profile` values, and the credential kind each resolves to,
+The supported token profiles in `user_token_profiles` and
+`service_account_token_profiles`, and the credential kind each resolves to,
 depend on the consumers and the surrounding config:
 
 | Consumer | Profile | Resolves to | Requires |
@@ -602,7 +630,7 @@ depend on the consumers and the surrounding config:
 | any Git HTTP gateway | `git-bearer-token` | `bearer_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
 
 Any other profile fails validation, as does a profile that one consumer of the
-connection does not declare, with `credentials.connections.<id>.token_profile
+connection does not declare, with `credentials.connections.<id>.<list> profile
 <profile> is unsupported for service <service>, which accepts <profiles>`. A
 Git gateway also accepts the profile of another consumer of its connection, such
 as `gitlab-access-token`. It presents a bearer-kind credential as its
@@ -1226,8 +1254,8 @@ dependency_inward = "is blocked by"
   `api.atlassian.com` in the allowlist). With the gateway enabled, each
   configured `credentials.service` and `credentials.lookup` entry must resolve
   to `bearer_token`, and each `credentials.per_user` entry to `bearer_token` or
-  OAuth: a static `bearer_token`, or a credential connection whose
-  `token_profile` is the bearer profile `atlassian-bearer-token`, whose `oauth`
+  OAuth: a static `bearer_token`, or a credential connection whose token
+  lists name only the bearer profile `atlassian-bearer-token`, whose `oauth`
   names an [Atlassian registration](oauth.md#atlassian), or both. A
   `basic_api_token`, a connection with a basic profile such as
   `atlassian-api-token`, and a `secret_store` (whose records carry their own

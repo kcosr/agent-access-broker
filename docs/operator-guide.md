@@ -1367,8 +1367,8 @@ deploying it:
 
 | Before | After | Stored data | Action |
 | --- | --- | --- | --- |
-| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` other than an Atlassian product profile, and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `token_profile = P`, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
-| Jira or Confluence per-user credentials with a product profile: `jira-cloud-api-token`, `confluence-cloud-api-token`, `jira-bearer-token` or `confluence-bearer-token` | `[credentials.connections.atlassian]` with `token_profile = "atlassian-api-token"`, named by `[credentials.per_user.jira]` and `[credentials.per_user.confluence]`; through the Atlassian gateway, one connection per product with `token_profile = "atlassian-bearer-token"` | Tokens under the product profiles are not read, and stay listed for deletion | People store their Atlassian token once, one token where they stored two; administrators re-provision service accounts' tokens |
+| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` other than an Atlassian product profile, and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `user_token_profiles = ["P"]` and `service_account_token_profiles = ["P"]`, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
+| Jira or Confluence per-user credentials with a product profile: `jira-cloud-api-token`, `confluence-cloud-api-token`, `jira-bearer-token` or `confluence-bearer-token` | `[credentials.connections.atlassian]` listing `"atlassian-api-token"` in both token lists, named by `[credentials.per_user.jira]` and `[credentials.per_user.confluence]`; through the Atlassian gateway, one connection per product listing `"atlassian-bearer-token"` | Tokens under the product profiles are not read, and stay listed for deletion | People store their Atlassian token once, one token where they stored two; administrators re-provision service accounts' tokens |
 | `type = "managed_store"` with another `credential_name` | As above | Tokens under the other name are not read | People store their token again; administrators re-provision service accounts' |
 | `type = "oauth"` with `provider = R` and `profile = Q` | `[credentials.connections.<svc>]` with `oauth = { registration = "R", profile = "Q" }` | OAuth connections unchanged, because the registration is unchanged | None |
 | Separate `gitlab` and `gitlab_git` per-user credentials | One `gitlab` connection both name, with the gateway's `upstream_token_auth = { scheme = "basic", username = "oauth2" }` | `gitlab` tokens read; `gitlab_git` tokens not read | People who stored only a Git token store a GitLab token; administrators re-provision service accounts that had only Git tokens |
@@ -1392,11 +1392,13 @@ users start consent again, and stored OAuth connections are unaffected. A connec
 equal an imported service ID or a configured service or gateway that does not
 use it, so choose new IDs accordingly.
 
-A principal's kind now selects each connection's method. A connection with only
-`token_profile` behaves as the per-service token did, for every kind of
-principal. Adding `oauth` to a connection later moves people to OAuth: their
-stored tokens for it stay stored but are no longer read, and remain listed for
-deletion, while service accounts and `system` principals keep using tokens.
+A principal's kind now selects each connection's method. A connection listing
+one profile in both `user_token_profiles` and `service_account_token_profiles`
+behaves as the per-service token did, for every kind of principal. Adding
+`oauth` to a connection later, and removing `user_token_profiles`, moves people
+to OAuth: their stored tokens for it stay stored but are no longer read, and
+remain listed for deletion, while service accounts and `system` principals keep
+using tokens.
 Stored tokens are not bound to an upstream: changing the base URL of a
 connection's services sends the existing tokens to the new host, as changing a
 provider's base URL always has.
@@ -1433,8 +1435,44 @@ needs the backup taken before it.
   replaces an OAuth connection's tokens. Restore the backup, or have people store
   their tokens again.
 - When a connection needs a different token profile than the tokens stored
-  under its service, introduce it under a new connection ID. The old tokens then
-  stay untouched until you delete them, which keeps rollback cheap.
+  under its service, list both profiles during the change, or introduce it
+  under a new connection ID. The old tokens then stay untouched until you delete
+  them, which keeps rollback cheap.
+
+### Connection token types
+
+A credential connection lists the token profiles (token types) it accepts in
+two lists: `user_token_profiles` for people and `service_account_token_profiles`
+for service accounts and `system` principals. The single `token_profile` key is
+removed and the new binary rejects it, so rewrite each connection before
+deploying it:
+
+| Before | After |
+| --- | --- |
+| `token_profile = P`, no `oauth` | `user_token_profiles = ["P"]` and `service_account_token_profiles = ["P"]` |
+| `token_profile = P` with `oauth` | `service_account_token_profiles = ["P"]` (people use OAuth) |
+| `oauth` only | Unchanged |
+| Scripts and clients reading `profile`, `credentialKind` or `inputSchema` on `GET /v1/credentials/targets` targets and `GET /v1/credentials` connection rows, or the administrator equivalents | Read `tokenProfiles[]`: each accepted profile with its `label`, `credentialKind` and `inputSchema` |
+| CLI scripts running `credentials put` or `admin credentials put` | Add `--profile <profile>` where the connection accepts several types |
+
+`user_token_profiles` beside `oauth` is rejected: people use the connection's
+OAuth. There is no managed-store migration. Stored tokens, credential rights
+and OAuth connections are unchanged, and a token is read when its owner's list
+accepts the profile it was stored as. A stored token whose type the owner's list
+does not accept is kept, listed as retained and never read; listing the type
+again uses it without re-entry. Service accounts and `system` principals share
+one list, so changing a principal between those kinds keeps its token usable.
+
+To move service accounts from one token type to another, list both types in
+`service_account_token_profiles` during the move: each service account keeps
+working with its stored type until an administrator stores the new one, which
+replaces it in place. Then remove the old type; tokens still of it are retained
+for review and deletion.
+
+Rollback needs the previous binary and its previous configuration. Tokens
+stored with a type the previous configuration does not name are listed there as
+retained and not used, and a token replaced in place by another type is not
+restored.
 
 ### GitLab remote revocation
 

@@ -51,7 +51,8 @@ For per-user execution, configure a
 ```toml
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
+user_token_profiles = ["gitlab-access-token"]
+service_account_token_profiles = ["gitlab-access-token"]
 
 [credentials.per_user.gitlab]
 type = "connection"
@@ -88,13 +89,14 @@ in [GitLab OAuth](oauth.md#gitlab), and reference it from the connection:
 ```toml
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token" # optional: service-account tokens
+service_account_token_profiles = ["gitlab-access-token"] # optional: service-account tokens
 oauth = { registration = "gitlab", profile = "default" }
 ```
 
 People then always use their OAuth connection and never store a token through
 it. Service accounts keep administrator-provisioned tokens when the connection
-also sets `token_profile`; without it, only people have a GitLab credential.
+also sets `service_account_token_profiles`; without it, only people have a
+GitLab credential.
 The registration's `target` must be this provider's instance, `api_base_url`
 without `/api/v4`, or `config validate` rejects the connection.
 

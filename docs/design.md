@@ -1504,12 +1504,14 @@ declare the same `atlassian-api-token` and `atlassian-bearer-token` profiles.
 The connection decides how a principal authenticates; each
 consuming service's grants still decide what the principal may do. One
 configuration-only function, `select(connection, principal_kind)`, returns the
-method: a stored token of the connection's `token_profile`, the principal's
-OAuth connection for the connection's `oauth` registration and profile, or
-nothing. `user` principals use OAuth when the connection sets it and a stored
-token otherwise; `service_account` and `system` principals use a stored token
-when the connection sets `token_profile` and have no personal method
-otherwise. A configured static principal takes the kind of the active managed
+method: a stored token of one of the token profiles a list accepts, the
+principal's OAuth connection for the connection's `oauth` registration and
+profile, or nothing. `user` principals use OAuth when the connection sets it,
+and otherwise a stored token of a `user_token_profiles` profile when that list
+is set; `service_account` and `system` principals share
+`service_account_token_profiles`, so a kind change between them keeps their
+token, and never use OAuth. A connection whose list has several profiles lets
+the saver choose one; the stored row keeps the profile it was saved as. A configured static principal takes the kind of the active managed
 principal with its ID, read once per authentication; other static principals
 and anonymous callers have none. The principal kind travels on the identity
 from `principals.kind` (never defaulted; unknown kinds select nothing). Selection never reads stored material, and there
@@ -1537,10 +1539,20 @@ tokens are not bound to an authority, so a later base-URL change sends them to
 the new instance, as a provider base-URL change always has.
 
 A **token** selection loads the authenticated principal's row
-`(principal, connection, default)`, requires the stored profile to match the
-connection's `token_profile`, decrypts the secret with the credential
-encryption key ring, and enforces metadata expiry (`CredentialExpired`) plus
-active status. A missing row resolves to `CredentialNotFound` (404); a
+`(principal, connection, default)`, requires the selected list to accept the
+row's stored profile, decrypts the secret with the credential encryption key
+ring, and enforces metadata expiry (`CredentialExpired`) plus active status. The
+provider receives the credential as the row's own profile
+(`ExecutionCredential::profile()`), for execution, both lookup phases and
+verification alike; a shared `credentials.service` or `credentials.lookup`
+credential is received as the `profile` its entry names, if any. A row whose
+profile the owner's current list does not accept is retained: kept, listed as
+not used and never read, until a configuration accepts its profile again.
+A profile a provider marks route-bound may be presented only by that provider:
+a connection listing one cannot have a Git gateway consumer, and the Git
+gateway and Git verification refuse a credential whose profile any published
+service marks route-bound, or that no published service declares, before
+sending anything. A missing row resolves to `CredentialNotFound` (404); a
 principal for which the connection selects nothing is denied with
 `CredentialNotProvisioned`.
 

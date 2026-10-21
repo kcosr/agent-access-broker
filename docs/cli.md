@@ -517,15 +517,19 @@ literal or alternate token sources").
   entitled to, and any stored token, plus the retained stored credentials the
   configuration no longer selects.
 - `credentials targets` — `GET /v1/credentials/targets`: the connections whose
-  token you can store now, with their input form.
+  token you can store now, each with the token profiles (token types) it
+  accepts from you in `tokenProfiles`, their labels and input forms.
 - `credentials inspect <connection>` — `GET /v1/credentials/connections/{connection}`.
-- `credentials put <connection> [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>]`
-  — fetches the broker-owned input schema first
+- `credentials put <connection> [--profile <PROFILE>] [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>]`
+  — fetches the broker-owned input schema of the chosen profile first
   (`GET /v1/credentials/connections/{connection}/input-schema`, with
   `?profile=...` when `--profile` is set), builds the secret body from the field
-  sources, then `PUT /v1/credentials/connections/{connection}`. `--profile`
-  only asserts the connection's token profile; the broker rejects any other.
-  With `--verify`, it follows up with
+  sources, then `PUT /v1/credentials/connections/{connection}` with that
+  `profile`. `--profile` chooses the token profile to store, one of the
+  connection's `tokenProfiles` in `credentials targets`; it is required when the
+  connection accepts several, and may be omitted when it accepts one. The
+  broker refuses a profile the connection does not accept from you. With
+  `--verify`, it follows up with
   `POST /v1/credentials/connections/{connection}/verify`.
 - `credentials delete <connection>` — `DELETE /v1/credentials/connections/{connection}`.
 - `credentials verify <connection> [--service <SERVICE>] [--repository <REPO>]` —
@@ -814,9 +818,11 @@ the same effective group.
   token-boundary JSON file flag.
   Pause and resume likewise accept only `agent_invoke`; authentication,
   management, and browser-session backing tokens cannot be paused.
-- `admin credentials list <principal> | list-stored [--principal <PRINCIPAL>] | targets <principal> | inspect <principal> <connection> | put <principal> <connection> [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>] | delete <principal> <connection> | verify <principal> <connection> [--service <SERVICE>] [--repository <REPO>] | inspect-by-id <credential-id> | delete-by-id <credential-id> | rewrap --from-key <ID> --to-key <ID>`.
+- `admin credentials list <principal> | list-stored [--principal <PRINCIPAL>] | targets <principal> | inspect <principal> <connection> | put <principal> <connection> [--profile <PROFILE>] [field flags] [--verify] [--verify-service <SERVICE>] [--verify-repository <REPO>] | delete <principal> <connection> | verify <principal> <connection> [--service <SERVICE>] [--repository <REPO>] | inspect-by-id <credential-id> | delete-by-id <credential-id> | rewrap --from-key <ID> --to-key <ID>`.
   `admin credentials put` mirrors the self-service `credentials put` field-source
-  set and `--verify` follow-up, with a leading `<principal>` positional, and uses
+  set, `--profile` choice and `--verify` follow-up, with a leading `<principal>`
+  positional; the principal's kind decides which profiles it accepts, and
+  `targets <principal>` lists them. It uses
   the `/v1/admin/principals/{principal}/credentials/connections/{connection}`
   routes. These apply only when the connection selects a token for the
   principal, such as a service account's administrator-provisioned token.
@@ -986,9 +992,10 @@ native representation map.
 ## `credentials put` field model
 
 `credentials put` and `admin credentials put` collect secret and non-secret
-fields from explicit sources, validated against the profile's broker-owned input
-schema. Every field uses the `name=value` form; there is no `--field-json` flag
-and no boolean/array shorthand.
+fields from explicit sources, validated against the chosen profile's
+broker-owned input schema: a `basic_api_token` profile takes `username` and
+`token`, a `bearer_token` profile `token`. Every field uses the `name=value`
+form; there is no `--field-json` flag and no boolean/array shorthand.
 
 Field sources:
 
