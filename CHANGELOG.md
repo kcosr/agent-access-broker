@@ -6,12 +6,12 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- **Token types per kind of account.** `token_profile` is replaced by
-  `user_token_profiles` and `service_account_token_profiles` (also used by
-  system principals). People's list cannot be set beside `oauth`. Credential
-  targets and rows report `tokenProfiles[]`, and a put names its `profile`
-  when several are accepted. See
-  [connection token types](docs/operator-guide.md#connection-token-types).
+- **Token types per connection.** `token_profile` is replaced by an optional
+  `token_profiles` list. Without `oauth`, a connection whose services accept
+  only one type needs none. `service_account_token_profiles` gives service
+  accounts a different list. Credential targets and rows report
+  `tokenProfiles[]`, and a put names its `profile` when several are accepted.
+  See [connection token types](docs/operator-guide.md#connection-token-types).
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 - **Atlassian routes follow the token type.** Classic tokens go to the site.
   Service-account, scoped and OAuth credentials go through `api.atlassian.com`.
