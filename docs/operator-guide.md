@@ -1436,10 +1436,12 @@ needs the backup taken before it.
   profile and secret. Deleting unselected tokens removes them, and reconnecting
   replaces an OAuth connection's tokens. Restore the backup, or have people store
   their tokens again.
-- When a connection needs a different token profile than the tokens stored
-  under its service, list both profiles during the change, or introduce it
-  under a new connection ID. The old tokens then stay untouched until you delete
-  them, which keeps rollback cheap.
+- When a connection moves to a different token profile, listing both profiles
+  during the change keeps existing tokens usable until each one is replaced. A
+  connection holds one token per principal, so saving the new type replaces the
+  old token in place, and that token is not kept for rollback. To keep the old
+  tokens untouched until you delete them, introduce the new profile under a new
+  connection ID instead.
 
 ### Connection token types
 
