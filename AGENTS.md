@@ -389,18 +389,27 @@ binary and needs `python3`, whose absence fails it.
   token-response scope evidence, `accessible-resources` sites merged per cloud
   ID with the granted `read:me`, a cloud-ID target and `api.atlassian.com`
   audience, and the consumer check that requires the gateway on that cloud ID)
-  and the helpers shared by the Atlassian backends (gateway credential rules
-  with the OAuth connection table; `access.rs`, the credential each request
-  presents: a static token, or delegated access pinned to the gateway route's
-  cloud ID and `api.atlassian.com` before every request, with one 401 recovery
-  per operation, attachment downloads that present it only within the route's
+  and the helpers shared by the Atlassian backends: the vendor-level,
+  labeled and route-bound token profiles `atlassian-api-token` (site),
+  `atlassian-scoped-api-token` and `atlassian-bearer-token` (gateway, declared
+  with a `cloud_id`) that Jira and Confluence both declare, so one credential
+  connection can serve both; the one fallible route classifier
+  (`static_route`), by which each credential takes the route its token type
+  selects (no profile: its kind's route; unknown profile, profile/kind
+  mismatch or a gateway route without a valid `cloud_id`: refused before
+  sending), shared by requests, verification, downloads and continuation
+  binding; route-coverage validation of every credential source
+  (`validate_atlassian_routes`, with the SDK's `base_covered_by_patterns`);
+  `access.rs`, the credential each request presents: a static token on its
+  route, or delegated access pinned to the gateway route's cloud ID and
+  `api.atlassian.com` before every request, with one 401 recovery per
+  operation, attachment downloads that present it only within the route's
   site (`AtlassianClients::site_base`), revalidated before each redirect hop,
-  and the `mutation_verification_failed` receipt of a read-back
-  the connection stopped; tenant/gateway client routes, where OAuth always
-  takes the gateway, and their route fingerprint; the credential binding of
-  their continuations and draft handles; and the vendor-level token profiles
-  `atlassian-api-token` and `atlassian-bearer-token` that Jira and Confluence
-  both declare, so one credential connection can serve both).
+  and the `mutation_verification_failed` receipt of a read-back the
+  connection stopped; the tenant/gateway client routes, the gateway built
+  whenever `cloud_id` is set, and their route fingerprint (tenant host and
+  cloud ID); and the credential binding of their continuations and draft
+  handles, whose classic, bearer and OAuth encodings are durable.
 - `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
 - `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
 - `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and

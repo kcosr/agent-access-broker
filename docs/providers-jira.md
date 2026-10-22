@@ -70,12 +70,31 @@ products' tokens separate, give each product its own connection with the same
 profile. The
 [configuration reference](configuration.md#connection-token-profiles) describes
 secret sources, token profiles, attachment limits and optional egress/TLS
-settings. Atlassian bearer credentials, such as a service account's scoped
-token under the `atlassian-bearer-token` profile, additionally require
-`cloud_id` and an explicit `https://api.atlassian.com/**` allowlist; credential
-kind selects that gateway rather than the tenant route. With the gateway
-enabled, the service, per-user and lookup credentials must all reach it: a
-`bearer_token`, or OAuth for per-user access.
+settings.
+
+A connection may accept several token types, and the person saving a token, or
+an administrator for a service account, picks one. Each type takes its own
+route:
+
+| Token type (profile) | Stored as | Route |
+| --- | --- | --- |
+| Classic API token (`atlassian-api-token`) | email and token, presented as Basic | Site: `https://<tenant_host>/rest/api/3/` |
+| Scoped API token (`atlassian-scoped-api-token`) | email and token, presented as Basic | Gateway: `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/` |
+| Service account token (`atlassian-bearer-token`) | token, presented as Bearer | Gateway |
+
+The scoped API token covers a person's scoped API token and an Atlassian
+service account's token used with its email. The gateway types require
+`providers.jira.cloud_id`, and every accepted type's route must be covered by
+`allowed_upstream_hosts`, which validation checks (see
+[route coverage](configuration.md#providersjira)). People's scoped tokens
+beside classic tokens look like this:
+
+```toml
+[credentials.connections.atlassian]
+display_name = "Atlassian"
+user_token_profiles = ["atlassian-scoped-api-token", "atlassian-api-token"]
+service_account_token_profiles = ["atlassian-api-token"]
+```
 
 For ordinary managed browser or `user_manage` credential management, enable the
 owner's self-service flag and grant them a `per_user` action on a service that
@@ -91,28 +110,30 @@ complete user handoff. OAuth connections use grant-based personal setup instead.
 
 People can connect their Atlassian account instead of storing a token. Give
 each product's connection an `oauth` registration of the
-[`atlassian` dialect](oauth.md#atlassian) for the site, beside
-`service_account_token_profiles = ["atlassian-bearer-token"]` for service
-accounts, or alone.
-Without Confluence, omit its entries:
+[`atlassian` dialect](oauth.md#atlassian) for the site, beside the token types
+service accounts use, or alone. Here service accounts keep classic API tokens
+of regular accounts on the site and Atlassian service-account tokens on the
+gateway side by side, so the allowlist covers the tenant, the gateway and the
+media host. Without Confluence, omit its entries:
 
 ```toml
 [providers.jira]
 tenant_host = "example.atlassian.net"
 cloud_id = "00000000-0000-0000-0000-000000000000"
 allowed_upstream_hosts = [
-  "https://api.atlassian.com/ex/jira/**",
+  "https://example.atlassian.net/rest/api/3/**",
+  "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**",
   "https://api.media.atlassian.com/**",
 ]
 
 [credentials.connections.jira]
 display_name = "Atlassian"
-service_account_token_profiles = ["atlassian-bearer-token"]
+service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-service_account_token_profiles = ["atlassian-bearer-token"]
+service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]
@@ -130,9 +151,9 @@ document one service-account token holding both products' scopes.
 
 - **Route.** OAuth always goes through the Atlassian gateway,
   `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`, so `cloud_id`
-  and `api.atlassian.com` are required; a classic API token keeps the site
-  route and a bearer token the gateway. A connection with `oauth` cannot use
-  `atlassian-api-token` (see the [validation table](oauth.md#atlassian-registration)).
+  is required and the allowlist must cover that base; service accounts' tokens
+  beside it take the route their type selects (see the
+  [connection table](oauth.md#atlassian-registration)).
 - **Access per request.** Before every request, including the project
   lookups before policy and at execution and each authorized hop of an
   attachment download, Jira revalidates the invocation's lease and pins its
@@ -153,7 +174,8 @@ document one service-account token holding both products' scopes.
   write reports `mutation_verification_failed` with an `applied_unverified`
   receipt.
 - **Verification.** Credential verification (`myself`) applies to stored and
-  service tokens; OAuth connections are checked by connecting them.
+  service tokens, each probed on the route its type selects; OAuth connections
+  are checked by connecting them.
 
 Each action needs these Atlassian OAuth scopes:
 
@@ -320,16 +342,20 @@ validation; `search` resolves scope from policy rather than from an upstream
 metadata lookup. `issue.child.create` is lookup-backed because the broker must
 resolve the requested parent before authorization and mutation.
 
-`basic_api_token` credentials issue requests against the tenant base
-(`https://<tenant_host>/rest/api/3/`). `bearer_token` credentials route to the
-Atlassian gateway (`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`) and
-require `providers.jira.cloud_id` plus `api.atlassian.com` in
-`allowed_upstream_hosts`; absent either, bearer requests fail. Every Jira
-request, including each attachment redirect hop, must match
-`allowed_upstream_hosts`, so the allowlist must cover the REST paths in use
-(for example `https://<tenant_host>/rest/api/3/**`, and
-`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/**` for bearer
-credentials).
+Each credential's token type selects its base. Classic API tokens, and
+`basic_api_token` credentials without a profile, use the tenant base
+(`https://<tenant_host>/rest/api/3/`). Scoped API tokens (Basic), bearer
+tokens and OAuth use the Atlassian gateway
+(`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`), which requires
+`providers.jira.cloud_id`. A credential whose token profile Jira does not
+declare, or whose kind differs from its profile's, and a gateway credential
+without a `cloud_id` are refused before anything is sent. Every Jira request,
+including each attachment redirect hop, must match `allowed_upstream_hosts`,
+so the allowlist must cover the REST paths in use (for example
+`https://<tenant_host>/rest/api/3/**`, and
+`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/**` for gateway
+credentials); validation checks that each configured credential's base is
+covered.
 
 Broker-side ADF and body-format validation remains actionable on lookup-backed
 actions: malformed ADF returns `body_malformed`, and an unsupported format
@@ -1115,18 +1141,18 @@ Jira's own token. To fetch the next page, pass it back unchanged as
 
 The continuation is also bound to the execution context, the principal and
 whether it authenticated, the credential mode, the credential that reaches
-Jira, and the Jira configuration Jira's token depends on: `tenant_host`,
-`cloud_id`, and whether `api.atlassian.com` is allowed. The credential binding
-is the credential method and:
+Jira, and the Jira configuration Jira's token depends on: `tenant_host` and
+`cloud_id`. The credential binding is the credential method and:
 
-- for a stored or service token, its type, which chooses the tenant or gateway
-  route. The token value is not bound, so replacing a stored token with another
-  of the same type keeps the continuation;
+- for a stored or service token, its kind (`basic_api_token` or
+  `bearer_token`). The token value is not bound, so replacing a stored token
+  with another of the same type keeps the continuation;
 - for delegated (OAuth) access, the OAuth connection and its generation, never the current access token: a routine
   refresh keeps the continuation, while disconnecting and reconnecting or
   connecting another Atlassian account invalidates it;
-- for a route through the Atlassian gateway (a bearer token or OAuth), the
-  site's `cloud_id`.
+- for a route through the Atlassian gateway (a scoped API token, a bearer
+  token or OAuth), the site's `cloud_id`, so a classic and a scoped API token,
+  both Basic, never continue each other's searches.
 
 Any change, including a switch between a token and OAuth, rejects the token
 with `input_invalid`. Continuations expire 15 minutes after they are issued.
@@ -1328,8 +1354,8 @@ membership by lookup, validates the metadata size and content type, then GETs
 `attachment/content/{id}?redirect=false` with the execution credential. It follows
 up to 5 allowlisted redirects, presenting the credential only on hops within the
 route's site: the tenant host for a classic API token, or the configured cloud
-ID's `https://api.atlassian.com/ex/jira/<cloud_id>/` path for OAuth and bearer
-tokens. A redirect on the same origin outside that site, such as another cloud
+ID's `https://api.atlassian.com/ex/jira/<cloud_id>/` path for OAuth, scoped API
+tokens and bearer tokens. A redirect on the same origin outside that site, such as another cloud
 ID on the gateway, fails the download (`upstream_protocol_failed`) before it is
 sent, whether it comes directly or back from a media host. Hops to other
 allowlisted origins, such as Atlassian's media hosts, carry no credential; every

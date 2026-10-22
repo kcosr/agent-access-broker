@@ -176,10 +176,13 @@ also includes a same-origin browser portal frontend:
   host changes. See the [conformance reference](provider-sdk.md#conformance-reference).
 - **`agent-access-atlassian`** — a native module crate: the `atlassian` OAuth
   dialect, which the broker binary registers, and the helpers shared by the
-  Jira and Confluence backends: Atlassian gateway credential rules, request
-  authorization, the tenant/gateway client routes selected by credential type,
-  the route fingerprint their relayed continuations bind, and the credential
-  binding (`bind_atlassian_access`) of every continuation and draft handle.
+  Jira and Confluence backends: the vendor-level token profiles, the one route
+  classifier that sends each credential to the route its token type selects
+  (tenant host or Atlassian gateway) and refuses one without a route,
+  route-coverage validation per credential source, request authorization, the
+  tenant/gateway client routes, the route fingerprint their relayed
+  continuations bind, and the credential binding (`bind_atlassian_access`) of
+  every continuation and draft handle.
 - **`agent-access-broker-host`** — the broker host library: module
   composition (`BrokerComposition`), the application (`BrokerApplication`:
   command parsing, configuration validation, audit verification, and the
@@ -439,7 +442,9 @@ target and audience, which routine token refresh keeps. Providers of services
 whose credential connections can select either a token or OAuth (GitLab, Jira
 and Confluence) bind the execution material's method in every family: a static
 credential's kind, or the lease's binding, target and audience, plus the
-gateway cloud ID for Atlassian gateway routes. A method switch, account
+gateway cloud ID for Atlassian gateway routes, so an Atlassian scoped API token
+(Basic on the gateway) and a classic one (Basic on the site) never share
+tokens. A method switch, account
 replacement, disconnect and reconnect, or tenant change therefore invalidates
 their tokens, while routine refresh and, for stable-key families, a restart
 keep them; static token values are not bound. The binding is a
@@ -803,13 +808,26 @@ existence, ownership of a particular object, or an authorization outcome.
   combined `controller/full/job/name` resource; queue reads prove task identity
   before disclosure. See [the provider contract](providers-cloudbees-ci.md).
 
-`bearer_token` credentials for Jira and Confluence route through the Atlassian
-gateway (`api.atlassian.com`) and require `providers.<svc>.cloud_id` (a validated
-UUID) plus `api.atlassian.com` in `allowed_upstream_hosts`; `basic_api_token`
-credentials use the tenant base directly. With the gateway enabled, the service
-and lookup credentials must be `bearer_token` and per-user credentials
-`bearer_token` or OAuth, so no static credential silently takes the tenant
-route; the lookup credential never counts as execution material.
+Jira and Confluence send each credential to the route its token type selects.
+The runtime lends a credential as the token profile it was stored or configured
+as (`ExecutionCredential::profile()`), and one fallible classifier in
+`agent-access-atlassian` decides every route, for requests, verification,
+downloads and continuation binding alike: a classic API token
+(`atlassian-api-token`) takes the tenant host; a scoped API token
+(`atlassian-scoped-api-token`, Basic), a bearer token
+(`atlassian-bearer-token`) and OAuth take the Atlassian gateway
+(`api.atlassian.com`) on the configured cloud ID; a credential without a
+profile takes its kind's route. An unknown profile, a profile/kind mismatch and
+a gateway credential without a valid `cloud_id` are refused before anything is
+sent. The gateway route exists exactly when `cloud_id` is set, which must then
+be a UUID. Validation checks, per configured credential source, that the
+allowlist covers every API base the product uses on that source's route, with
+`base_covered_by_patterns` over the runtime allowlist grammar; coverage proves
+reachability, while each request is still checked against the allowlist.
+Credentials of different types therefore coexist in one deployment, such as
+people on OAuth beside service accounts' classic and service-account tokens.
+All three Atlassian profiles are route-bound, so a Git gateway never presents
+one.
 
 Response presentation is common invoke metadata, not provider input. JSON and
 multipart `InvokeRequest` envelopes may carry top-level `readContentFormat`
@@ -1500,7 +1518,8 @@ identity and matches the exact principal first, then the exact
 (`credentials.connections.<id>`): one per-principal credential slot that
 several services can consume, such as one GitLab token for GitLab REST and the
 GitLab Git gateway, or one Atlassian API token for Jira and Confluence, which
-declare the same `atlassian-api-token` and `atlassian-bearer-token` profiles.
+declare the same `atlassian-api-token`, `atlassian-scoped-api-token` and
+`atlassian-bearer-token` profiles.
 The connection decides how a principal authenticates; each
 consuming service's grants still decide what the principal may do. One
 configuration-only function, `select(connection, principal_kind)`, returns the
@@ -1526,9 +1545,12 @@ Services sharing a connection must act on one upstream. Each backend or gateway
 declares an `UpstreamAuthority` in its service descriptor: a normalized origin
 and instance path, with an optional tenant and tenant gateway (GitLab REST the
 instance of its `api_base_url`, a Git gateway its `upstream_base_url`, Jira and
-Confluence their site with the cloud ID and Atlassian gateway, an HTTP import its
-endpoint, the development `oauth_stub` service its `base_url`). A token
-connection's consumers must all declare authorities naming the same instance.
+Confluence their site with the cloud ID and, with a cloud ID, the Atlassian
+gateway, an HTTP import its endpoint, the development `oauth_stub` service its
+`base_url`). A token connection's consumers must all declare authorities naming
+the same instance (`UpstreamAuthority::same_instance`): the same origin,
+instance path, tenant and tenant gateway, so Jira and Confluence with different
+cloud IDs never share a stored token.
 An OAuth connection's registration dialect checks each consumer's authority
 against the resource the registration grants through
 `OAuthDialect::check_consumer_authority`, which accepts by default; the `gitlab`
@@ -2515,9 +2537,13 @@ admin config status reports the active `shutdownTimeoutMs`.
   or the configured cloud ID's gateway path) and refuse a redirect to another
   site on the same origin. Both Atlassian providers reject redirect responses on
   non-content (body) endpoints.
-- **Atlassian gateway.** `bearer_token` Jira/Confluence credentials route through
-  the Atlassian gateway and require `providers.<svc>.cloud_id` (validated UUID)
-  plus `api.atlassian.com` in `allowed_upstream_hosts`.
+- **Atlassian routes.** Each Jira/Confluence credential takes the route its
+  token type selects: classic API tokens the tenant host; scoped API tokens,
+  bearer tokens and OAuth the Atlassian gateway, which requires
+  `providers.<svc>.cloud_id` (validated UUID). Unknown profiles, profile/kind
+  mismatches and an unavailable gateway are refused before anything is sent,
+  and validation requires the allowlist to cover each configured credential's
+  route.
 - **Query languages.** Provider-supplied JQL and CQL are parsed into broker-owned
   ASTs and re-emitted canonically with broker-injected scope predicates. Results
   are revalidated against the authorized scope, and no partial results are
@@ -2601,8 +2627,10 @@ The `atlassian` dialect lives in `agent-access-atlassian`, beside the helpers
 Jira and Confluence share. Its fixed endpoints are Atlassian's authorization
 server and the Atlassian gateway. A registration's one profile targets a site's
 cloud ID with the audience `api.atlassian.com`, and its consumer check accepts
-only services that act through the gateway on that cloud ID, so Jira and
-Confluence pin their leases to the cloud ID their gateway route uses. Its
+only services that act through the gateway on that cloud ID (Jira and
+Confluence configured with it), so Jira and Confluence pin their leases to the
+cloud ID their gateway route uses; route-coverage validation checks that their
+allowlists reach the gateway. Its
 refresh material is consuming and rotates the refresh token. Granted scopes come
 only from token responses: an exchange without them fails, and a refresh without
 them keeps the consent evidence. Target discovery merges the per-product entries

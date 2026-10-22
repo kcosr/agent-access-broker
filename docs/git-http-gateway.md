@@ -248,7 +248,11 @@ connection uses OAuth for them (see [OAuth connections](#oauth-connections)).
 The gateway can have its own connection, with the profile
 `git-basic-api-token` or `git-bearer-token`, or share another service's, such
 as the `gitlab` connection of GitLab REST, so that one stored token or one
-OAuth connection serves both. The self-service credential verifier checks
+OAuth connection serves both. It cannot share a connection that lists a
+route-bound profile, which only its declaring provider may present, such as
+any Atlassian profile (`atlassian-api-token`, `atlassian-scoped-api-token`,
+`atlassian-bearer-token`): validation rejects that connection, and forwarding
+and verification refuse such a token before anything is sent. The self-service credential verifier checks
 stored tokens; it requires a repository that the principal can fetch and uses
 `streaming_idle_timeout_ms` for stalled upstream discovery headers or body
 reads.

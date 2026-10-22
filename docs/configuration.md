@@ -559,19 +559,23 @@ Validation rules:
 - **Upstream authority.** Each service declares the upstream instance its
   credentials act on: GitLab REST the instance of its `api_base_url` (without
   `/api/v4`), a Git gateway its `upstream_base_url`, Jira and Confluence their
-  site with the configured cloud ID and Atlassian gateway, an HTTP import its
-  endpoint, and the development `oauth_stub` service its `base_url`. A token
-  connection (one with either list) with several consumers requires each to declare
-  an authority, with one origin and instance path; otherwise validation reports
+  tenant host with the configured cloud ID and, when the cloud ID gives them a
+  gateway route, the Atlassian gateway, an HTTP import its endpoint, and the
+  development `oauth_stub` service its `base_url`. A token connection (one with
+  either list) with several consumers requires each to declare an authority
+  naming one instance: the same origin and instance path, and the same tenant
+  and tenant gateway, or neither. Jira and Confluence on one tenant host
+  therefore share a token connection only with the same `cloud_id` (written in
+  any UUID form). Otherwise validation reports
   `credentials.connections.<id>: <service> declares no upstream authority, so it
-  cannot share a token connection` or `... <a> acts on <origin> but <b> acts on
-  <origin>; a token connection's consumers must act on one upstream`. An OAuth
+  cannot share a token connection` or `... <a> acts on <authority> but <b> acts
+  on <authority>; a token connection's consumers must act on one upstream`. An OAuth
   connection requires the registration's dialect to accept each consumer, or
   reports `credentials.connections.<id>.oauth: <service> does not act on the
   upstream registration <registration> grants access to: <reason>`; the
   `gitlab` dialect accepts only consumers on its registration's instance, and
-  the `atlassian` dialect only consumers that act through the Atlassian gateway
-  on its profile's cloud ID. These checks
+  the `atlassian` dialect only consumers whose `cloud_id` is its profile's
+  target, which gives them the Atlassian gateway route. These checks
   run at `config validate`, at startup and reload, and whenever the imported
   catalog is published, including import creation, without contacting
   upstream. Stored tokens are not bound to an upstream: changing the consumers'
@@ -609,10 +613,8 @@ shared credentials' kinds and `profile`, the token profiles a `type =
 "connection"` entry's connection accepts in either list, whether it offers
 OAuth, and whether the per-user entry is a `secret_store`. Gmail therefore
 requires a connection with only `oauth`, Teams accepts no execution credential,
-and Jira and Confluence accept OAuth only through the Atlassian gateway, alone
-or beside an `atlassian-bearer-token` profile for service accounts, with a
-`bearer_token` lookup credential when one is configured (see
-[`[providers.jira]`](#providersjira)).
+and Jira and Confluence check that each source reaches the route its token type
+takes (see [`[providers.jira]`](#providersjira)).
 
 ### Connection token profiles
 
@@ -622,8 +624,9 @@ depend on the consumers and the surrounding config:
 
 | Consumer | Profile | Resolves to | Requires |
 | --- | --- | --- | --- |
-| `jira`, `confluence` | `atlassian-api-token` | `basic_api_token` | the provider is configured; the account email and classic API token reach the site |
-| `jira`, `confluence` | `atlassian-bearer-token` | `bearer_token` | the provider's gateway is enabled (`cloud_id` set AND `api.atlassian.com` allowlisted); a service account's scoped token reaches the gateway |
+| `jira`, `confluence` | `atlassian-api-token` (label "Classic API token (site)") | `basic_api_token` | the provider is configured; the account email and classic API token reach the site |
+| `jira`, `confluence` | `atlassian-scoped-api-token` (label "Scoped API token (gateway)") | `basic_api_token` | the provider sets `cloud_id`; the account email and scoped API token reach the gateway as Basic |
+| `jira`, `confluence` | `atlassian-bearer-token` (label "Service account token (gateway)") | `bearer_token` | the provider sets `cloud_id`; a service account's bearer token reaches the gateway |
 | `gitlab` | `gitlab-access-token` | `bearer_token` | `[providers.gitlab]` present |
 | `cloudbees_ci` | `cloudbees-ci-api-token` | `basic_api_token` | `[providers.cloudbees_ci]` present |
 | any Git HTTP gateway | `git-basic-api-token` | `basic_api_token` | the `gateways.<service>` entry has `kind = "git_http"` and allows `per_user` |
@@ -635,20 +638,22 @@ connection does not declare, with `credentials.connections.<id>.<list> profile
 Git gateway also accepts the profile of another consumer of its connection, such
 as `gitlab-access-token`. It presents a bearer-kind credential as its
 [`upstream_token_auth`](#gateways) selects, and a basic-kind credential with its
-own username.
+own username. A Git gateway never consumes a connection that lists a
+route-bound profile, which only its declaring provider may present; all three
+Atlassian profiles are route-bound, because the token type decides where Jira
+and Confluence send it.
 
 Jira and Confluence declare the same Atlassian profiles, so one connection can
-serve both on one site. Classic API tokens are account-wide: a shared
-`atlassian-api-token` connection lets each principal store one email and token
-for both products. A shared `atlassian-bearer-token` connection requires the
-gateway on both providers. Atlassian service-account tokens are scoped to the
-products chosen when they are created, and Atlassian does not document one
-token holding both products' scopes, so give each product its own bearer
-connection unless you have verified such a token. With the gateway enabled, a
-provider's per-user credential must resolve to `bearer_token` or OAuth (see
-[`[providers.jira]`](#providersjira)), so a deployment that routes through the
-gateway uses `atlassian-bearer-token`, [Atlassian OAuth](oauth.md#atlassian)
-or both for its connections.
+serve both on one site with one `cloud_id`. Each stored token takes the route
+its type selects, so one connection may mix types, such as classic API tokens
+and service-account tokens for service accounts, beside OAuth for people.
+Classic API tokens are account-wide: a shared `atlassian-api-token` connection
+lets each principal store one email and token for both products. Atlassian
+service-account tokens are scoped to the products chosen when they are created,
+and Atlassian does not document one token holding both products' scopes, so
+give each product its own connection for them unless you have verified such a
+token. Every accepted type's route must be reachable (see
+[`[providers.jira]`](#providersjira)).
 
 ### Secret-ref syntax
 
@@ -1193,9 +1198,10 @@ below are the config reference.
 ```toml
 [providers.jira]
 tenant_host = "example.atlassian.net"               # required, lowercase normalized bare host
-cloud_id = "00000000-0000-0000-0000-000000000000"   # optional UUID
+cloud_id = "00000000-0000-0000-0000-000000000000"   # optional UUID; enables the gateway route
 allowed_upstream_hosts = [
   "https://example.atlassian.net/rest/api/3/**",
+  "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**",
   "https://api.media.atlassian.com/**",
 ]
 
@@ -1239,31 +1245,59 @@ dependency_inward = "is blocked by"
 - `tenant_host` is required and must be a lowercase, normalized bare host name
   with no scheme, path, userinfo, port, query, fragment, or surrounding
   whitespace.
-- `cloud_id` is optional in general, but when `allowed_upstream_hosts` includes
-  `api.atlassian.com` (the Atlassian gateway) it is required and must be a valid
-  UUID. Any UUID form is accepted, such as uppercase or braced; the gateway
-  route, continuation bindings and [Atlassian OAuth](oauth.md#atlassian-registration)
+- `cloud_id` is optional and must be a valid UUID whenever it is set. It gives
+  the provider its Atlassian gateway route,
+  `https://api.atlassian.com/ex/jira/<cloud_id>/`, and with it the
+  `atlassian-scoped-api-token` and `atlassian-bearer-token` profiles. Any UUID
+  form is accepted, such as uppercase or braced; the gateway route,
+  continuation bindings and [Atlassian OAuth](oauth.md#atlassian-registration)
   target checks use its lowercase hyphenated form.
 - `allowed_upstream_hosts` must be non-empty. Each entry is an `https` origin
   with a concrete (non-wildcarded) host; only `*` and `**` are valid wildcard
   path segments, and credentials in the URL are rejected. `*` matches one path
   segment; `**` matches zero or more path segments while still requiring any
-  later pattern segments to match. Including `api.atlassian.com` enables the
-  gateway and requires a `bearer_token` or OAuth execution credential (and vice
-  versa: a `bearer_token` credential or an OAuth connection requires
-  `api.atlassian.com` in the allowlist). With the gateway enabled, each
-  configured `credentials.service` and `credentials.lookup` entry must resolve
-  to `bearer_token`, and each `credentials.per_user` entry to `bearer_token` or
-  OAuth: a static `bearer_token`, or a credential connection whose token
-  lists name only the bearer profile `atlassian-bearer-token`, whose `oauth`
-  names an [Atlassian registration](oauth.md#atlassian), or both. A
-  `basic_api_token`, a connection with a basic profile such as
-  `atlassian-api-token`, and a `secret_store` (whose records carry their own
-  kinds) are rejected. A connection that combines `atlassian-api-token` with
-  `oauth` is rejected with or without the gateway, because Basic site tokens
-  would mix with gateway OAuth. The read-only lookup credential is not an
-  execution credential, so it never satisfies the gateway's execution
-  requirement on its own.
+  later pattern segments to match.
+- **Routes.** Each credential takes the route its token type selects:
+
+  | Credential | Route |
+  | --- | --- |
+  | `atlassian-api-token` (classic API token, Basic) | Site: `https://<tenant_host>/` |
+  | `atlassian-scoped-api-token` (email and scoped API token, Basic) | Gateway: `https://api.atlassian.com/ex/<product>/<cloud_id>/` |
+  | `atlassian-bearer-token` (service-account or other bearer token) | Gateway |
+  | OAuth | Gateway |
+  | `credentials.service` or `credentials.lookup` without `profile`, and `secret_store` records | By kind: `basic_api_token` the site, `bearer_token` the gateway |
+
+  Execution, both lookup phases, verification probes and attachment downloads
+  use the same route. A shared credential may name a `profile` to take that
+  profile's route, such as `profile = "atlassian-scoped-api-token"` for a
+  scoped token with `type = "basic_api_token"`; `secret_store` records cannot
+  carry scoped tokens.
+- **Route coverage.** Every configured credential source must reach its
+  route: the `credentials.service` and `credentials.lookup` entries, each
+  profile the per-user connection accepts in either list, and its OAuth. For
+  each, `allowed_upstream_hosts` must cover every API base the product uses on
+  that route; Jira's is `https://<tenant_host>/rest/api/3/` on the site and
+  `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/` on the gateway. A
+  base is covered when some pattern has its scheme, host and port and its path
+  glob can match some path at or under the base, with `*` and `**` anywhere, so
+  narrow patterns such as
+  `https://api.atlassian.com/ex/*/<cloud_id>/rest/api/3/issue/**` count; query
+  constraints do not affect coverage. A pattern that can only match another
+  product, another cloud ID, another port or an unrelated path does not count.
+  Coverage is not permission: each request is still checked against the
+  allowlist. Errors name the source, its type, the route and the uncovered
+  bases, such as `credentials.per_user.jira (OAuth) takes the Atlassian gateway
+  route, but providers.jira.allowed_upstream_hosts does not cover <base>` or
+  `credentials.service.jira (type bearer_token) takes the Atlassian gateway
+  route, which requires providers.jira.cloud_id`.
+- A per-user `secret_store`, whose records carry their own kinds, is checked
+  offline on the site route only. A `bearer_token` record whose gateway route
+  is unavailable (no `cloud_id`) or uncovered is refused at run time before
+  anything is sent.
+- Attachment downloads redirect to Atlassian's media host,
+  `https://api.media.atlassian.com/`; allow it to download attachments. It is
+  not required, and downloads fail at run time without it. A deployment
+  mixing routes allows the tenant, the gateway and the media host, as above.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
   50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
   `media_types` entry must contain a `/`. See the cross-section limits checks in
@@ -1311,11 +1345,12 @@ dependency_inward = "is blocked by"
 ```toml
 [providers.confluence]
 tenant_host = "example.atlassian.net"               # required, lowercase normalized bare host
-cloud_id = "00000000-0000-0000-0000-000000000000"   # optional UUID
+cloud_id = "00000000-0000-0000-0000-000000000000"   # optional UUID; enables the gateway route
 allowed_upstream_hosts = [
   "https://example.atlassian.net/wiki/rest/api/**",
   "https://example.atlassian.net/wiki/api/v2/**",
   "https://example.atlassian.net/wiki/download/attachments/**",
+  "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**",
   "https://api.media.atlassian.com/**",
 ]
 
@@ -1339,7 +1374,11 @@ max_results = 50            # default
 ```
 
 - `tenant_host`, `cloud_id`, `allowed_upstream_hosts`, `[...attachments]`, and
-  `[...search]` follow the same rules as Jira above. `tenant_host` must be the
+  `[...search]` follow the same rules as Jira above. Confluence's route
+  coverage requires two API bases on each route: `https://<tenant_host>/wiki/rest/api/`
+  and `https://<tenant_host>/wiki/api/v2/` on the site, and
+  `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/` and
+  `.../wiki/api/v2/` on the gateway. `tenant_host` must be the
   user-facing Atlassian tenant host because Confluence `webUrl` and `spaceUrl`
   results are normalized from it.
 - `[providers.confluence.content].page_formats` is a native-representation

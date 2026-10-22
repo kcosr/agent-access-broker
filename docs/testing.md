@@ -2002,24 +2002,39 @@ instance.
 `cargo test -p agent-access-atlassian --lib` covers the `atlassian` dialect
 against stubbed Atlassian endpoints: registration rules, including the
 cloud-ID target, required scopes and one profile; the consumer check that
-requires the gateway on the profile's cloud ID; the authorization URL's
+requires the gateway on the profile's cloud ID, which a provider's cloud ID
+gives it whatever its allowlist says; the authorization URL's
 audience, consent prompt and PKCE; JSON code exchange and refresh with and
 without a response `scope` (an exchange without it fails, a refresh keeps the
 granted scopes); identity mapping; token-response bounds and error
 classification, including Atlassian's 403 `invalid_grant`; and site discovery,
 which merges a site's product entries, adds `read:me` only when granted, keeps
-extra scopes and reports grants for other sites. It also checks every row of
-the Atlassian gateway validation table with and without service credentials,
-and the credential Jira and Confluence present: static tokens as before,
-delegated access pinned to the gateway route's cloud ID and audience, one
-recovery per operation, a second 401 as `credential_invalid`, and
+extra scopes and reports grants for other sites. It also covers the route
+each token type takes and the one route classifier: a classic API token on
+the site, a scoped API token (Basic) and a bearer token on the gateway, kind
+defaults without a profile, and unknown profiles, profile/kind mismatches and
+a gateway credential without a cloud ID refused before anything is sent; the
+labeled route-bound profiles a site declares, the gateway ones only with a
+cloud ID; route-coverage validation of every credential source, with narrow
+and wildcard patterns accepted and wrong-product, wrong-cloud, wrong-port and
+unrelated-path patterns reported by source, secret stores on the site route,
+and the `cloud_id` UUID rule; the route fingerprint, which no longer depends
+on the allowlist; continuation bindings, where classic, bearer and OAuth
+bindings keep their encoding and a classic and a scoped token never open each
+other's; and the credential Jira and Confluence present: unroutable tokens
+never presented, delegated access pinned to the gateway route's cloud ID and
+audience, one recovery per operation, a second 401 as `credential_invalid`,
+downloads that present a scoped or classic Basic token only within its route's
+site across the tenant, media, product and cloud boundaries, and
 `mutation_verification_failed` receipts for read-backs the connection stopped.
 
 `cargo test -p agent-access-jira --lib access_tests` and
 `cargo test -p agent-access-confluence --lib access_tests` run each provider
 with delegated doubles against a stub serving both routes: OAuth through the
 gateway on the configured site and refused for another site, static tokens
-routed by kind, one recovery across the lookups and execution, a second 401 as
+routed by token type (a scoped API token through the gateway as Basic for the
+lookups, execution, verification and downloads, and unroutable tokens refused
+before sending), one recovery across the lookups and execution, a second 401 as
 `credential_invalid` with reconnect, read-back failures after an accepted write
 reported applied but unverified and failures before it passed through
 unchanged. For Jira, they also cover uploads and downloads repeated once after
@@ -2041,7 +2056,9 @@ scopes and rereads the sites, and a 403 `invalid_grant` that requires reconnect.
 Installation stores nothing for an exchange without `scope`, a grant for another
 site, or a site without one of the shared profile's products. It also validates
 full configurations for every row of the Atlassian connection table, including
-simultaneous bearer service credentials and per-product registrations.
+people on OAuth beside service accounts' classic and service-account tokens,
+simultaneous classic or bearer service credentials, an allowlist that does not
+cover OAuth's gateway route, and per-product registrations.
 
 `tests::oauth::atlassian_products` runs the real Jira and Confluence providers
 and dialect against one stub serving the OAuth endpoints and, in place of

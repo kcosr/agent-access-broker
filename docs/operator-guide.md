@@ -1377,8 +1377,10 @@ deploying it:
 
 Jira and Confluence declare only the vendor-level Atlassian profiles
 `atlassian-api-token` (an account email and classic API token, sent as Basic to
-the site) and `atlassian-bearer-token` (a service account's scoped token, sent
-through the Atlassian gateway). `config validate` rejects a connection naming a
+the site), `atlassian-scoped-api-token` (an account email and scoped API token,
+sent as Basic through the Atlassian gateway) and `atlassian-bearer-token` (a
+service account's bearer token, sent through the Atlassian gateway); see
+[connection token types](#connection-token-types). `config validate` rejects a connection naming a
 product profile and lists the profiles its services accept. Classic tokens are
 account-wide, so one `atlassian` connection serves both products. Introduce it
 under that new ID: the product rows then stay untouched until deleted, which
@@ -1452,6 +1454,10 @@ deploying it:
 | `token_profile = P`, no `oauth` | `user_token_profiles = ["P"]` and `service_account_token_profiles = ["P"]` |
 | `token_profile = P` with `oauth` | `service_account_token_profiles = ["P"]` (people use OAuth) |
 | `oauth` only | Unchanged |
+| Atlassian `cloud_id` that is not a UUID | Fix it or remove it: `cloud_id` must be a UUID whenever it is set |
+| Atlassian allowlist that does not cover an API base its credentials use | Add the base (see [route coverage](configuration.md#providersjira)) |
+| Jira and Confluence sharing a token connection with different `cloud_id` values | Make the cloud IDs agree, or give each product its own connection |
+| A Git gateway sharing a connection that lists an Atlassian profile | Give the Git gateway its own connection |
 | Scripts and clients reading `profile`, `credentialKind` or `inputSchema` on `GET /v1/credentials/targets` targets and `GET /v1/credentials` connection rows, or the administrator equivalents | Read `tokenProfiles[]`: each accepted profile with its `label`, `credentialKind` and `inputSchema` |
 | CLI scripts running `credentials put` or `admin credentials put` | Add `--profile <profile>` where the connection accepts several types |
 
@@ -1468,6 +1474,26 @@ To move service accounts from one token type to another, list both types in
 working with its stored type until an administrator stores the new one, which
 replaces it in place. Then remove the old type; tokens still of it are retained
 for review and deletion.
+
+**Atlassian routes follow the token type.** Jira and Confluence no longer have
+a provider-wide gateway mode switched on by `api.atlassian.com` in the
+allowlist. Each credential takes its type's route: classic API tokens the
+tenant host; scoped API tokens (`atlassian-scoped-api-token`, new),
+service-account tokens and OAuth the Atlassian gateway, which `cloud_id`
+enables. People on OAuth may therefore sit beside service accounts' classic
+tokens, and classic and service-account tokens may coexist during a move
+between them. Validation instead checks that the allowlist covers every API
+base each configured credential uses on its route, which is new for site-only
+deployments: an allowlist that misses a base, such as Confluence's
+`wiki/api/v2/`, now fails `config validate` where those requests already
+failed at run time. Allow `api.atlassian.com` for gateway credentials, the
+tenant for classic tokens and Atlassian's media host for attachment downloads.
+After the upgrade, outstanding Jira and Confluence list and search
+continuations are refused once, because their route binding changed; repeat
+the request without the token. Confluence draft handles keep working, except
+gateway (bearer or OAuth) handles minted by 0.2.0 under a non-canonical
+`cloud_id` spelling, which were already refused after the cloud ID became
+canonical.
 
 Rollback needs the previous binary and its previous configuration. Tokens
 stored with a type the previous configuration does not name are listed there as

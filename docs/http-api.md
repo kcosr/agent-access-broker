@@ -1111,7 +1111,7 @@ owner lost every grant on its connection stays listed as the connection's
       "tokenProfiles": [
         {
           "profile": "atlassian-api-token",
-          "label": null,
+          "label": "Classic API token (site)",
           "credentialKind": "basic_api_token",
           "inputSchema": {"connection": "atlassian", "profile": "atlassian-api-token", "credentialKind": "basic_api_token", "fields": ["…"]}
         }
@@ -1124,7 +1124,7 @@ owner lost every grant on its connection stays listed as the connection's
         "ownerPrincipal": "bob",
         "ownerKind": "user",
         "profile": "atlassian-api-token",
-        "label": null,
+        "label": "Classic API token (site)",
         "credentialKind": "basic_api_token",
         "metadata": {},
         "status": "active",
