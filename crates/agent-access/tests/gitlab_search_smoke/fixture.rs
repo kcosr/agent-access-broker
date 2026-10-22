@@ -764,7 +764,7 @@ audience = "gitlab"
 target = {upstream:?}
 
 [credentials.connections.gitlab]
-token_profile = "gitlab-access-token"
+token_profiles = ["gitlab-access-token"]
 oauth = {{ registration = "gitlab", profile = "read" }}
 
 [credentials.per_user.gitlab]

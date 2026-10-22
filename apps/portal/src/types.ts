@@ -218,15 +218,23 @@ export type CredentialInputSchema = {
   fields: CredentialInputField[];
 };
 
+/** A token profile (token type) a connection accepts from the principal, with its input form. */
+export type CredentialTokenProfile = {
+  profile: string;
+  /** The name a consuming service declares; show the profile when null. */
+  label: string | null;
+  credentialKind: string;
+  inputSchema: CredentialInputSchema;
+};
+
 /** A credential connection whose token the principal can store now. */
 export type CredentialTarget = {
   connection: string;
   displayName: string;
   consumers: ConnectionConsumer[];
   otherConsumers: number;
-  profile: string;
-  credentialKind: string;
-  inputSchema: CredentialInputSchema;
+  /** The token profiles the principal may store, in configuration order; never empty. */
+  tokenProfiles: CredentialTokenProfile[];
 };
 
 /** Lifecycle and verification fields every stored credential has. */
@@ -249,15 +257,22 @@ export type CredentialState = {
   lastVerificationErrorCode?: string | null;
 };
 
-/** A stored row with its stored service column and name (administrator lists, retained rows). */
+/** A stored row with its stored service column and name (retained-row deletes). */
 export type CredentialMetadata = CredentialState & { service: string; name: string };
 
+/** The label a consumer of the row's connection declares for its stored profile; show the profile when null. */
+type StoredProfileLabel = { label: string | null };
+
+/** A stored row the configuration no longer selects, as the credential list reports it. */
+export type RetainedCredential = CredentialMetadata & StoredProfileLabel;
+
 /** A connection's active token, keyed by its connection. */
-export type ConnectionCredential = CredentialState & {
-  connection: string;
-  /** The consumer whose probe answered the latest verification; `null` for a local check. */
-  probeService?: string | null;
-};
+export type ConnectionCredential = CredentialState &
+  StoredProfileLabel & {
+    connection: string;
+    /** The consumer whose probe answered the latest verification; `null` for a local check. */
+    probeService?: string | null;
+  };
 
 export type CredentialMethod = "token" | "oauth" | "unavailable";
 
@@ -268,8 +283,8 @@ export type CredentialConnection = {
   method: CredentialMethod;
   consumers: ConnectionConsumer[];
   otherConsumers: number;
-  profile: string | null;
-  credentialKind: string | null;
+  /** The token profiles the principal may store, for the token method; empty otherwise. */
+  tokenProfiles: CredentialTokenProfile[];
   registration: string | null;
   /** For the OAuth method, as `GET /v1/oauth/connections` reports it. */
   remoteRevocation: RemoteRevocation | null;
@@ -279,7 +294,7 @@ export type CredentialConnection = {
 /** `GET /v1/credentials`: the caller's connections and the stored rows the configuration no longer selects. */
 export type CredentialList = {
   connections: CredentialConnection[];
-  retained: CredentialMetadata[];
+  retained: RetainedCredential[];
 };
 
 export type CredentialVerificationInput = {

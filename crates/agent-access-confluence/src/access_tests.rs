@@ -15,7 +15,7 @@ use agent_access_provider::host::{
 };
 use agent_access_provider::test_support::{
     InvocationBuilder, ScopeRequestFixture, TestHost, basic_credential, bearer_credential,
-    delegated_binding_id,
+    credential_with_profile, delegated_binding_id,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -375,6 +375,152 @@ async fn oauth_searches_a_personal_space_through_the_gateway() {
         requests(&server).await,
         [format!("GET {route} Bearer oauth-1")]
     );
+}
+
+/// Static tokens take the route their token type selects: an unprofiled
+/// Basic token or a classic API token reaches the site, and an unprofiled
+/// bearer token, a service-account token or a scoped API token (Basic) the
+/// gateway, for lookups, execution and verification alike.
+#[tokio::test]
+async fn static_tokens_route_by_token_type() {
+    let server = MockServer::start().await;
+    let basic = "Basic YWxpY2VAZXhhbXBsZS5jb206dG9rZW4=";
+    let site = format!("{SITE}/rest/api/content/123456");
+    let gateway = format!("{GATEWAY}/rest/api/content/123456");
+    for (route, authorization) in [
+        (&site, basic),
+        (&gateway, basic),
+        (&gateway, "Bearer service-token"),
+    ] {
+        answer(&server, "GET", route, authorization, 200, page("ENG")).await;
+    }
+    for authorization in [basic, "Bearer service-token"] {
+        for route in [
+            format!("{SITE}/rest/api/user/current"),
+            format!("{GATEWAY}/rest/api/user/current"),
+        ] {
+            answer(
+                &server,
+                "GET",
+                &route,
+                authorization,
+                200,
+                json!({ "accountId": "5b10ac8d82e05b22cc7d4ef5" }),
+            )
+            .await;
+        }
+    }
+    let provider = provider(&server);
+    let basic_token = || basic_credential("alice@example.com", "token");
+    let bearer_token = || bearer_credential("service-token");
+    let cases = [
+        (basic_token(), &site, basic),
+        (
+            credential_with_profile(basic_token(), "atlassian-api-token"),
+            &site,
+            basic,
+        ),
+        (bearer_token(), &gateway, "Bearer service-token"),
+        (
+            credential_with_profile(bearer_token(), "atlassian-bearer-token"),
+            &gateway,
+            "Bearer service-token",
+        ),
+        (
+            credential_with_profile(basic_token(), "atlassian-scoped-api-token"),
+            &gateway,
+            basic,
+        ),
+    ];
+    for (credential, route, authorization) in cases {
+        let before = requests(&server).await.len();
+        invoke(
+            &provider,
+            InvocationBuilder::new("confluence", "page.view")
+                .inputs(json!({ "pageId": "123456" }))
+                .resources(space_scopes("ENG"))
+                .credential(credential.clone())
+                .lookup_credential(credential.clone())
+                .build(),
+        )
+        .await
+        .unwrap();
+        provider
+            .verify_execution_credential(&credential, &crate::CorrelationContext::for_tests())
+            .await
+            .unwrap()
+            .unwrap();
+        let probe = route.replace("content/123456", "user/current");
+        assert_eq!(
+            requests(&server).await[before..],
+            [
+                format!("GET {route} {authorization}"),
+                format!("GET {probe} {authorization}"),
+            ],
+            "{credential:?}"
+        );
+    }
+
+    // A credential without a route is denied as not provisioned, in
+    // execution and verification alike, before anything is sent: an unknown
+    // profile, a profile of another kind, and a gateway credential (such as
+    // a secret store's bearer record) on a site without a cloud ID.
+    let mut site_only = site_config(&server);
+    site_only.cloud_id = None;
+    let without_gateway = ConfluenceProvider::with_backend(
+        site_only.clone(),
+        ProviderLimits::default(),
+        Arc::new(HttpConfluenceBackend::for_tests(
+            site_only,
+            ProviderLimits::default(),
+        )),
+    );
+    let sent = requests(&server).await.len();
+    for (provider, credential, message) in [
+        (
+            &provider,
+            credential_with_profile(basic_token(), "gitlab-access-token"),
+            "Confluence does not present the selected credential's token profile",
+        ),
+        (
+            &provider,
+            credential_with_profile(bearer_token(), "atlassian-api-token"),
+            "the selected credential's kind does not match its Confluence token profile",
+        ),
+        (
+            &without_gateway,
+            bearer_token(),
+            "Confluence OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.confluence.cloud_id",
+        ),
+        (
+            &without_gateway,
+            credential_with_profile(basic_token(), "atlassian-scoped-api-token"),
+            "Confluence OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.confluence.cloud_id",
+        ),
+    ] {
+        let denial = ProviderError::deny(ReasonCode::CredentialNotProvisioned, message);
+        let error = invoke(
+            provider,
+            InvocationBuilder::new("confluence", "page.view")
+                .inputs(json!({ "pageId": "123456" }))
+                .resources(space_scopes("ENG"))
+                .credential(credential.clone())
+                .lookup_credential(credential.clone())
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, denial, "{credential:?}");
+        assert_eq!(
+            provider
+                .verify_execution_credential(&credential, &crate::CorrelationContext::for_tests())
+                .await
+                .unwrap_err(),
+            denial,
+            "{credential:?}"
+        );
+    }
+    assert_eq!(requests(&server).await.len(), sent);
 }
 
 /// Static tokens keep their routes: a Basic API token reaches the site and a

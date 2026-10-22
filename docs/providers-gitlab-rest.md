@@ -45,13 +45,13 @@ boundary first and use only the selected execution credential for all requests;
 they do not require or use a separate lookup credential.
 
 For per-user execution, configure a
-[credential connection](configuration.md#credential-connections) with the
-`gitlab-access-token` profile and name it from `[credentials.per_user.gitlab]`:
+[credential connection](configuration.md#credential-connections) and name it
+from `[credentials.per_user.gitlab]`. GitLab REST accepts one token type,
+`gitlab-access-token`, so the connection needs no `token_profiles` list:
 
 ```toml
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
 
 [credentials.per_user.gitlab]
 type = "connection"
@@ -88,13 +88,14 @@ in [GitLab OAuth](oauth.md#gitlab), and reference it from the connection:
 ```toml
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token" # optional: service-account tokens
+token_profiles = ["gitlab-access-token"] # optional: service-account tokens
 oauth = { registration = "gitlab", profile = "default" }
 ```
 
 People then always use their OAuth connection and never store a token through
-it. Service accounts keep administrator-provisioned tokens when the connection
-also sets `token_profile`; without it, only people have a GitLab credential.
+it. Service accounts and `system` principals keep administrator-provisioned or
+their own tokens when the connection also sets `token_profiles`; no type is
+implied beside `oauth`, so without it only people have a GitLab credential.
 The registration's `target` must be this provider's instance, `api_base_url`
 without `/api/v4`, or `config validate` rejects the connection.
 

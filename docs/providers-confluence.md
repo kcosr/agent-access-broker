@@ -49,12 +49,12 @@ principal's selected credential for lookup and execution.
 For per-user credentials, replace the service execution stanza with a
 [credential connection](configuration.md#credential-connections). Confluence and
 Jira declare the same Atlassian token profiles, so one connection serves both
-on one site:
+on one site. Without a `cloud_id`, as above, the classic API token is the only
+type they accept, so the connection needs no `token_profiles` list:
 
 ```toml
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-token_profile = "atlassian-api-token"
 
 [credentials.per_user.confluence]
 type = "connection"
@@ -68,16 +68,26 @@ connection = "atlassian"
 Each principal stores their own account email and classic API token for the
 connection, or an administrator provisions a service account's, and grants use
 `credential_mode = "per_user"`. Without Jira, omit its entry. To keep the
-products' tokens separate, give each product its own connection with the same
-profile. The
+products' tokens separate, give each product its own connection. The
 [configuration reference](configuration.md#connection-token-profiles) describes
 secret sources, token profiles, attachment limits and optional egress/TLS
-settings. Atlassian bearer credentials, such as a service account's scoped
-token under the `atlassian-bearer-token` profile, additionally require
-`cloud_id` and an explicit `https://api.atlassian.com/**` allowlist; credential
-kind selects that gateway rather than the tenant route. With the gateway
-enabled, the service, per-user and lookup credentials must all reach it: a
-`bearer_token`, or OAuth for per-user access.
+settings.
+
+With a `cloud_id`, Confluence accepts several token types, so a connection
+without OAuth lists those it accepts in `token_profiles`; a connection may
+accept several, and the person saving a token, or an administrator for a
+service account, picks one. Each type takes its own route:
+
+| Token type (profile) | Stored as | Route |
+| --- | --- | --- |
+| Classic API token (`atlassian-api-token`) | email and token, presented as Basic | Site: `https://<tenant_host>/wiki/rest/api/` and `.../wiki/api/v2/` |
+| Scoped API token (`atlassian-scoped-api-token`) | email and token, presented as Basic | Gateway: `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/` and `.../wiki/api/v2/` |
+| Service account token (`atlassian-bearer-token`) | token, presented as Bearer | Gateway |
+
+The gateway types require `providers.confluence.cloud_id`, and every accepted
+type's route must be covered by `allowed_upstream_hosts`, both API bases
+included, which validation checks (see
+[route coverage](configuration.md#providersjira)).
 
 For ordinary managed browser or `user_manage` credential management, enable the
 owner's self-service flag and grant them a `per_user` action on a service that
@@ -99,27 +109,32 @@ before using a mutation. Confluence page create/update require an enabled native
 
 People can connect their Atlassian account instead of storing a token. Give
 each product's connection an `oauth` registration of the
-[`atlassian` dialect](oauth.md#atlassian) for the site, beside
-`token_profile = "atlassian-bearer-token"` for service accounts or alone.
-Without Jira, omit its entries:
+[`atlassian` dialect](oauth.md#atlassian) for the site, beside the token types
+service accounts use, or alone. Here service accounts keep classic API tokens
+of regular accounts on the site and Atlassian service-account tokens on the
+gateway side by side, so the allowlist covers the tenant, the gateway and the
+media host. Without Jira, omit its entries:
 
 ```toml
 [providers.confluence]
 tenant_host = "example.atlassian.net"
 cloud_id = "00000000-0000-0000-0000-000000000000"
 allowed_upstream_hosts = [
-  "https://api.atlassian.com/ex/confluence/**",
+  "https://example.atlassian.net/wiki/rest/api/**",
+  "https://example.atlassian.net/wiki/api/v2/**",
+  "https://example.atlassian.net/wiki/download/attachments/**",
+  "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**",
   "https://api.media.atlassian.com/**",
 ]
 
 [credentials.connections.jira]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]
@@ -137,10 +152,9 @@ document one service-account token holding both products' scopes.
 
 - **Route.** OAuth always goes through the Atlassian gateway,
   `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/` and its
-  `wiki/api/v2/` sibling, so `cloud_id` and `api.atlassian.com` are required;
-  a classic API token keeps the site route and a bearer token the gateway. A
-  connection with `oauth` cannot use `atlassian-api-token` (see the
-  [validation table](oauth.md#atlassian-registration)).
+  `wiki/api/v2/` sibling, so `cloud_id` is required and the allowlist must
+  cover both bases; service accounts' tokens beside it take the route their
+  type selects (see the [connection table](oauth.md#atlassian-registration)).
 - **Access per request.** Before every request, including the page, blog,
   space and comment lookups before policy and at execution, list pages,
   read-backs and each authorized hop of an attachment download, Confluence
@@ -164,7 +178,8 @@ document one service-account token holding both products' scopes.
 - **Personal spaces.** `~key` spaces read, search and write through the
   gateway like team spaces.
 - **Verification.** Credential verification (`user/current`) applies to
-  stored and service tokens; OAuth connections are checked by connecting them.
+  stored and service tokens, each probed on the route its type selects; OAuth
+  connections are checked by connecting them.
 
 Each action needs these Atlassian OAuth scopes. Confluence's REST API v1 calls
 use classic scopes and its v2 calls granular ones:
@@ -536,12 +551,18 @@ again. Page draft view, update, publish, verify, discard, and
 attachment operations re-read the draft and reject placement drift from the
 bound parent.
 
-`basic_api_token` credentials use the tenant bases
-(`https://<tenant_host>/wiki/rest/api/` and, for blog metadata/writes/listing,
-`https://<tenant_host>/wiki/api/v2/`). `bearer_token` credentials route to the
-Atlassian gateway (`https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/...`)
-and require `providers.confluence.cloud_id` plus `api.atlassian.com`
-allowlisted.
+Each credential's token type selects its bases. Classic API tokens, and
+`basic_api_token` credentials without a profile, use the tenant bases
+(`https://<tenant_host>/wiki/rest/api/` and, for blog metadata/writes/listing
+and other v2 calls, `https://<tenant_host>/wiki/api/v2/`). Scoped API tokens
+(Basic), bearer tokens and OAuth use the Atlassian gateway
+(`https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/...`), which
+requires `providers.confluence.cloud_id`. A credential whose token profile
+Confluence does not declare, or whose kind differs from its profile's, and a
+gateway credential without a `cloud_id` are refused before anything is sent,
+as `credential_not_provisioned`.
+Validation checks that the allowlist covers both bases of each configured
+credential's route.
 
 ## Browser URLs
 
@@ -784,8 +805,8 @@ unchanged as `nextPageToken` to the same action with the same search:
 The continuation is also bound to the execution context, the principal and
 whether it authenticated, the credential mode, the
 [credential binding](#continuation-credential-binding), and the Confluence
-configuration the cursor depends on: `tenant_host`, `cloud_id`, and whether
-`api.atlassian.com` is allowed. Any change rejects the token with
+configuration the cursor depends on: `tenant_host` and `cloud_id`. Any change
+rejects the token with
 `input_invalid`. Continuations expire 15 minutes after they are issued. They are
 signed with a key generated for each broker runtime generation, so a
 configuration reload or restart also invalidates them. Confluence may also
@@ -808,15 +829,17 @@ bound fails with `upstream_protocol_failed`, never truncated.
 Search continuations, comment and attachment list tokens, and draft handles
 are bound to the credential method that reaches Confluence and:
 
-- for a stored or service token, its type, which chooses the tenant or gateway
-  route. The token value is not bound, so replacing a stored token with another
-  of the same type keeps them;
+- for a stored or service token, its kind (`basic_api_token` or
+  `bearer_token`). The token value is not bound, so replacing a stored token
+  with another of the same type keeps them;
 - for delegated (OAuth) access, the OAuth connection and its generation, never the current access token: a routine
   refresh keeps them, while disconnecting and reconnecting or connecting
   another Atlassian account invalidates them;
-- for a route through the Atlassian gateway (a bearer token or OAuth), the
-  site's `cloud_id`. A draft handle used with a Basic API token on the tenant
-  route therefore survives a `cloud_id` change.
+- for a route through the Atlassian gateway (a scoped API token, a bearer
+  token or OAuth), the site's `cloud_id`, in its lowercase hyphenated form.
+  A classic and a scoped API token, both Basic, therefore never use each
+  other's continuations or handles, and a draft handle used with a classic API
+  token on the tenant route survives a `cloud_id` change.
 
 A switch between a token and OAuth, between token types, or to another account
 or gateway site rejects a continuation with `input_invalid` and a draft handle
@@ -1195,7 +1218,8 @@ then proves attachment→page membership, validates metadata, and streams the
 bounded content with up to 5 allowlisted redirects. The credential reaches only
 hops within the route's site: the tenant host for a classic API token, or the
 configured cloud ID's `https://api.atlassian.com/ex/confluence/<cloud_id>/` path
-for OAuth and bearer tokens, including `wiki/download/attachments/` there. A
+for OAuth, scoped API tokens and bearer tokens, including
+`wiki/download/attachments/` there. A
 redirect on the same origin outside that site, such as another cloud ID on the
 gateway, fails the download (`upstream_protocol_failed`) before it is sent,
 whether it comes directly or back from a media host. Hops to Atlassian's media
@@ -1210,7 +1234,7 @@ configured default; larger values equal the cap), the execution context, the pri
 authenticated, the credential mode, the
 [credential binding](#continuation-credential-binding) (which includes the
 tenant or gateway route), and the Confluence route configuration
-(`tenant_host`, `cloud_id`, and whether `api.atlassian.com` is allowed). `blog.attachment.list`
+(`tenant_host` and `cloud_id`). `blog.attachment.list`
 tokens bind the blog ID, space key, and space ID instead of the page. When
 `broker_tokens.hash_key_ref` is configured, list tokens are signed with that
 stable key and validate across restarts and instances whose clocks differ by up

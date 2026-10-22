@@ -245,10 +245,16 @@ credential is what the gateway's
 [credential connection](configuration.md#credential-connections) selects for
 the calling principal: their stored token, or their OAuth connection when the
 connection uses OAuth for them (see [OAuth connections](#oauth-connections)).
-The gateway can have its own connection, with the profile
-`git-basic-api-token` or `git-bearer-token`, or share another service's, such
-as the `gitlab` connection of GitLab REST, so that one stored token or one
-OAuth connection serves both. The self-service credential verifier checks
+The gateway can have its own connection, whose `token_profiles` lists
+`git-basic-api-token`, `git-bearer-token` or both (the gateway declares both,
+so its own connection needs the list), or share another service's, such as the
+`gitlab` connection of GitLab REST, so that one stored token or one OAuth
+connection serves both. A connection shared with GitLab REST needs no list:
+`gitlab-access-token` is the only type both accept. It cannot share a connection that lists a
+route-bound profile, which only its declaring provider may present, such as
+any Atlassian profile (`atlassian-api-token`, `atlassian-scoped-api-token`,
+`atlassian-bearer-token`): validation rejects that connection, and forwarding
+and verification refuse such a token before anything is sent. The self-service credential verifier checks
 stored tokens; it requires a repository that the principal can fetch and uses
 `streaming_idle_timeout_ms` for stalled upstream discovery headers or body
 reads.
@@ -300,10 +306,10 @@ upstream_token_auth = { scheme = "basic", username = "oauth2" }
 type = "bearer_token"
 token_ref = "env:GITLAB_GIT_TOKEN"
 
-# The connection GitLab REST also consumes (see providers-gitlab-rest.md).
+# The connection GitLab REST also consumes (see providers-gitlab-rest.md),
+# whose only possible type is gitlab-access-token.
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
 
 [credentials.per_user.gitlab_git]
 type = "connection"
@@ -377,9 +383,9 @@ the synthetic non-grantable action `gateway.classify`.
 
 When the gateway's credential connection sets `oauth`, people (`user`
 principals) present their OAuth connection to that registration and never a
-stored token; service accounts and `system` principals keep the connection's
-token form, as [oauth.md](oauth.md#credential-connections-and-shared-registrations)
-describes. A gateway whose `credential_modes` include `per_user` accepts
+stored token; service accounts and `system` principals store tokens of the
+connection's `token_profiles`, and have no method without it, as
+[oauth.md](oauth.md#credential-connections-and-shared-registrations) describes. A gateway whose `credential_modes` include `per_user` accepts
 delegated credentials, so `config validate` accepts it on an OAuth connection
 whose registration grants access to the gateway's `upstream_base_url`
 instance; for a `gitlab` registration, that is the profile's `target`. For
@@ -388,7 +394,7 @@ GitLab, people connect once for GitLab REST and Git:
 ```toml
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"   # service accounts' tokens
+token_profiles = ["gitlab-access-token"]   # service accounts' tokens
 oauth = { registration = "gitlab", profile = "default" }
 
 [credentials.per_user.gitlab_git]

@@ -284,10 +284,9 @@ impl BackendConfig for JiraProviderConfig {
             true,
             errors,
         );
-        validate_atlassian_gateway_credential(
-            "jira",
-            &self.allowed_upstream_hosts,
-            self.cloud_id.as_deref(),
+        validate_atlassian_routes(
+            crate::backend::JIRA_PRODUCT,
+            &self.site(),
             context.credentials,
             errors,
         );

@@ -327,6 +327,7 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.credentials.lookup.insert(
@@ -339,6 +340,7 @@ async fn webhook_direct_http_invoke_preserves_safe_mutation_envelopes_without_se
             path: None,
             read_only: Some(true),
             connection: None,
+            profile: None,
         },
     );
     config

@@ -17,8 +17,8 @@ use crate::handlers::management::common::{
 };
 use crate::handlers::management::connections::{self, audit_target, connection_credential};
 use agent_access_core::{
-    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialVerificationInput, CredentialWriteRequest,
-    IdentityContext, ManagedStoreError,
+    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, ConnectionTokenProfile, CredentialVerificationInput,
+    CredentialWriteRequest, IdentityContext, ManagedStoreError,
 };
 use agent_access_provider::{ProviderError, ReasonCode, is_service_name};
 use axum::body::Bytes;
@@ -110,11 +110,49 @@ pub(super) fn connection_verify_body(body: Bytes) -> Result<ConnectionVerifyBody
         .map_err(|error| format!("credential verification body is invalid: {error}"))
 }
 
-/// The token method's selected profile and kind for the owner.
+/// The token profiles the connection accepts from the owner.
 struct Admitted {
     owner: IdentityContext,
-    profile: String,
-    credential_kind: String,
+    profiles: Vec<ConnectionTokenProfile>,
+}
+
+impl Admitted {
+    /// The accepted profile names, for reads, verification and deletes.
+    fn profile_names(&self) -> Vec<String> {
+        self.profiles
+            .iter()
+            .map(|profile| profile.profile.clone())
+            .collect()
+    }
+
+    /// The profile a put or input schema stores: `requested` when the
+    /// connection accepts it, which is required when it accepts several and
+    /// otherwise defaults to the only one.
+    fn choose(&self, requested: Option<&str>) -> Result<&ConnectionTokenProfile, String> {
+        let accepted = || {
+            self.profiles
+                .iter()
+                .map(|profile| profile.profile.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        match (requested, self.profiles.as_slice()) {
+            (Some(requested), profiles) => profiles
+                .iter()
+                .find(|profile| profile.profile == requested)
+                .ok_or_else(|| {
+                    format!(
+                        "credential profile is not accepted for this principal; the connection accepts {}",
+                        accepted()
+                    )
+                }),
+            (None, [only]) => Ok(only),
+            (None, _) => Err(format!(
+                "credential profile is required: the connection accepts {}",
+                accepted()
+            )),
+        }
+    }
 }
 
 async fn deny(
@@ -229,7 +267,7 @@ async fn admit(
         }
         CredentialAccess::Owner | CredentialAccess::ClasslessOwner => context.identity.clone(),
     };
-    let Some((profile, credential_kind)) =
+    let Some(profiles) =
         connections::token_selection(runtime, &request.connection, owner.principal_kind)
     else {
         let message = match connections::selection(
@@ -289,11 +327,7 @@ async fn admit(
         }
         CredentialAccess::Administrator => {}
     }
-    Ok(Admitted {
-        owner,
-        profile,
-        credential_kind,
-    })
+    Ok(Admitted { owner, profiles })
 }
 
 pub(super) async fn get_connection_credential(
@@ -308,11 +342,13 @@ pub(super) async fn get_connection_credential(
     };
     let principal = request.principal.clone();
     let connection = request.connection.clone();
+    let accepted = admitted.profile_names();
     match management_store_call(&context, move |store| {
         let credential =
             store.credential_by_tuple(&principal, &connection, CONNECTION_CREDENTIAL_NAME)?;
-        // A row with another profile is retained, not this connection's token.
-        if credential.profile != admitted.profile {
+        // A row of a profile the owner's list does not accept is retained,
+        // not this connection's token.
+        if !accepted.contains(&credential.profile) {
             return Err(ManagedStoreError::CredentialNotFound);
         }
         Ok(credential)
@@ -324,7 +360,7 @@ pub(super) async fn get_connection_credential(
                 &context,
                 operation,
                 target,
-                connection_credential(credential),
+                connection_credential(&context.snapshot.runtime, credential),
             )
             .await
         }
@@ -343,22 +379,22 @@ pub(super) async fn connection_input_schema(
         Ok(admitted) => admitted,
         Err(response) => return *response,
     };
-    if query
-        .profile
-        .as_deref()
-        .is_some_and(|profile| profile != admitted.profile)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::InputInvalid,
-            "credential profile does not match the connection's token profile",
-            target,
-        )
-        .await;
-    }
-    let Some(schema) = connections::input_schema(&context.snapshot.runtime, &request.connection)
+    let profile = match admitted.choose(query.profile.as_deref()) {
+        Ok(profile) => profile,
+        Err(message) => {
+            return management_context_error_response(
+                &context,
+                StatusCode::BAD_REQUEST,
+                operation,
+                ReasonCode::InputInvalid,
+                &message,
+                target,
+            )
+            .await;
+        }
+    };
+    let Some(schema) =
+        connections::input_schema(&context.snapshot.runtime, &request.connection, profile)
     else {
         return management_context_error_response(
             &context,
@@ -385,21 +421,20 @@ pub(super) async fn put_connection_credential(
         Ok(admitted) => admitted,
         Err(response) => return *response,
     };
-    if body
-        .profile
-        .as_deref()
-        .is_some_and(|profile| profile != admitted.profile)
-    {
-        return management_context_error_response(
-            &context,
-            StatusCode::BAD_REQUEST,
-            operation,
-            ReasonCode::InputInvalid,
-            "credential profile does not match the connection's token profile",
-            target,
-        )
-        .await;
-    }
+    let (profile, credential_kind) = match admitted.choose(body.profile.as_deref()) {
+        Ok(profile) => (profile.profile.clone(), profile.credential_kind.to_string()),
+        Err(message) => {
+            return management_context_error_response(
+                &context,
+                StatusCode::BAD_REQUEST,
+                operation,
+                ReasonCode::InputInvalid,
+                &message,
+                target,
+            )
+            .await;
+        }
+    };
     let Some(key_ring) = context.snapshot.runtime.credential_key_ring().cloned() else {
         return management_context_error_response(
             &context,
@@ -426,8 +461,8 @@ pub(super) async fn put_connection_credential(
                 owner_principal_id,
                 service: connection,
                 name: CONNECTION_CREDENTIAL_NAME.to_string(),
-                profile: admitted.profile,
-                credential_kind: admitted.credential_kind,
+                profile,
+                credential_kind,
                 secret: body.secret,
                 metadata: body.metadata,
                 actor,
@@ -441,7 +476,7 @@ pub(super) async fn put_connection_credential(
             &context,
             operation,
             target,
-            connection_credential(credential),
+            connection_credential(&context.snapshot.runtime, credential),
         ),
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
@@ -601,14 +636,14 @@ pub(super) async fn verify_connection_credential(
     }
     let principal = request.principal.clone();
     let connection = request.connection.clone();
-    let profile = admitted.profile.clone();
+    let profiles = admitted.profile_names();
     let candidate = match management_store_call(&context, move |store| {
         store.resolve_user_credential_for_verification(
             &key_ring,
             &principal,
             &connection,
             CONNECTION_CREDENTIAL_NAME,
-            &profile,
+            &profiles,
             purpose,
         )
     })
@@ -729,7 +764,7 @@ pub(super) async fn verify_connection_credential(
     .await
     {
         Ok(credential) => {
-            let mut result = connection_credential(credential);
+            let mut result = connection_credential(&context.snapshot.runtime, credential);
             if let Value::Object(object) = &mut result {
                 object.insert("probeService".to_string(), json!(probe_service));
             }
@@ -757,8 +792,9 @@ pub(super) async fn delete_connection_credential(
     }
     let principal = request.principal.clone();
     let connection = request.connection.clone();
+    let profiles = admitted.profile_names();
     match management_store_call(&context, move |store| {
-        store.delete_connection_credential(&principal, &connection, &admitted.profile, purpose)
+        store.delete_connection_credential(&principal, &connection, &profiles, purpose)
     })
     .await
     {
@@ -766,7 +802,7 @@ pub(super) async fn delete_connection_credential(
             &context,
             operation,
             target,
-            connection_credential(credential),
+            connection_credential(&context.snapshot.runtime, credential),
         ),
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }

@@ -425,8 +425,10 @@ fn authorization_asks_for_the_gateway_audience_and_consent_with_pkce() {
     assert!(!url.as_str().contains(CLIENT_SECRET));
 }
 
-/// Jira and Confluence declare their site's authority; only those routing
-/// through the gateway with the profile's cloud ID act where the grants do.
+/// Jira and Confluence declare their site's authority; only those with the
+/// profile's cloud ID, which gives them the gateway route whatever their
+/// allowlists say, act where the grants do. Route-coverage validation, not
+/// this check, reports an allowlist that does not reach the gateway.
 #[test]
 fn consumers_must_use_the_gateway_on_the_profiles_site() {
     let config = registration(CLOUD_ID);
@@ -461,19 +463,24 @@ fn consumers_must_use_the_gateway_on_the_profiles_site() {
             "it acts through the Atlassian gateway on cloud ID {OTHER_CLOUD_ID}, not cloud ID {CLOUD_ID}"
         )
     );
-    // The site route alone, with or without a cloud ID.
-    assert_eq!(
-        check(Some(site_authority(Some(CLOUD_ID), false))).unwrap_err(),
-        format!(
-            "it acts on https://example.atlassian.net (tenant {CLOUD_ID}) without the Atlassian gateway, and the grants act only through the gateway on cloud ID {CLOUD_ID}"
-        )
-    );
-    assert_eq!(
-        check(Some(site_authority(None, true))).unwrap_err(),
-        format!(
-            "it acts on https://example.atlassian.net without the Atlassian gateway, and the grants act only through the gateway on cloud ID {CLOUD_ID}"
-        )
-    );
+    // The cloud ID, not the allowlist, gives the gateway route.
+    check(Some(site_authority(Some(CLOUD_ID), false))).unwrap();
+    // Without a cloud ID, or with one that is not a UUID, there is no
+    // gateway route, whatever the allowlist says.
+    for gateway in [false, true] {
+        assert_eq!(
+            check(Some(site_authority(None, gateway))).unwrap_err(),
+            format!(
+                "it acts on https://example.atlassian.net without the Atlassian gateway, and the grants act only through the gateway on cloud ID {CLOUD_ID}"
+            )
+        );
+        assert_eq!(
+            check(Some(site_authority(Some("not-a-uuid"), gateway))).unwrap_err(),
+            format!(
+                "it acts on https://example.atlassian.net (tenant not-a-uuid) without the Atlassian gateway, and the grants act only through the gateway on cloud ID {CLOUD_ID}"
+            )
+        );
+    }
     // Another service, even one on the gateway's own origin.
     for other in ["https://gitlab.example.com", "https://api.atlassian.com"] {
         let consumer = UpstreamAuthority::from_base_url(other).unwrap();

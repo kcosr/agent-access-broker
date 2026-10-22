@@ -327,6 +327,42 @@ fn conformance_backend_configures_through_its_registration_alone() {
         unsupported.len() == 1 && unsupported[0].contains("missing"),
         "{unsupported:?}"
     );
+
+    // Its route-bound profile is its own: a Git gateway never consumes a
+    // connection that lists it, while the plain profile may be shared.
+    let shared = |profile: &str| {
+        let mut config = parse(&raw).unwrap();
+        let mut gateway = super::test_git_gateway_config();
+        gateway.credential_modes = vec!["per_user".to_string()];
+        config
+            .gateways
+            .insert("conformance_git".to_string(), gateway);
+        super::use_token_connection(
+            &mut config,
+            "conformance",
+            profile,
+            &["conformance", "conformance_git"],
+        );
+        match validate_broker_config(&config) {
+            Err(ConfigError::Invalid { errors }) => errors,
+            _ => Vec::new(),
+        }
+    };
+    let route_bound = "is route-bound: only the provider declaring it may present it, so the gateway conformance_git cannot consume this connection";
+    assert!(
+        shared("routed_token")
+            .iter()
+            .any(|error| error.contains("routed_token") && error.contains(route_bound)),
+        "{:?}",
+        shared("routed_token")
+    );
+    assert!(
+        shared("api_token")
+            .iter()
+            .all(|error| !error.contains("route-bound")),
+        "{:?}",
+        shared("api_token")
+    );
 }
 
 #[tokio::test]
@@ -660,6 +696,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
                 path: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
         );
         config.policy.resources.push(ResourceDefinition {

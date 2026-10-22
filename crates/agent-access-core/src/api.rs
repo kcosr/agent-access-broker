@@ -1442,11 +1442,11 @@ fn user_management_route_specs() -> Vec<HttpRouteSpec> {
             ExitPolicy::ManagementOk,
         ),
     ];
-    add_query_params(
+    set_query_params(
         &mut routes,
         "GET",
         "/v1/credentials/connections/{connection}/input-schema",
-        &["profile"],
+        vec![credential_input_schema_profile_param()],
     );
     set_request_body_schema(
         &mut routes,
@@ -2814,11 +2814,11 @@ fn right_token_credential_admin_routes() -> Vec<HttpRouteSpec> {
         "/v1/admin/principals/{principal}/agent-tokens",
         &["includeRevoked", "includeExpired"],
     );
-    add_query_params(
+    set_query_params(
         &mut routes,
         "GET",
         "/v1/admin/principals/{principal}/credentials/connections/{connection}/input-schema",
-        &["profile"],
+        vec![credential_input_schema_profile_param()],
     );
     set_request_body_schema(
         &mut routes,
@@ -2958,8 +2958,8 @@ fn credential_put_body_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false, "required": ["secret"],
         "properties": {
-            "profile": {"type": "string", "description": "Optional; must equal the connection's token profile."},
-            "secret": {"type": "object", "description": "The fields of the connection's input schema."},
+            "profile": {"type": "string", "description": "The token profile to store, one of the connection's tokenProfiles for the owner. Required when the connection accepts several; when it accepts one, optional but must equal it."},
+            "secret": {"type": "object", "description": "The fields of the chosen profile's input schema."},
             "metadata": {"type": "object"}
         }
     })
@@ -2975,6 +2975,18 @@ fn credential_verify_body_schema() -> Value {
     })
 }
 
+/// The input-schema route's `profile` query parameter.
+fn credential_input_schema_profile_param() -> RouteParamSpec {
+    RouteParamSpec {
+        name: "profile".to_string(),
+        required: false,
+        schema: json!({
+            "type": "string",
+            "description": "The token profile whose form to return, one of the connection's tokenProfiles for the owner. Required when the connection accepts several."
+        }),
+    }
+}
+
 fn credential_input_schema_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
@@ -2988,21 +3000,38 @@ fn credential_input_schema_schema() -> Value {
     })
 }
 
+/// The token profiles a connection accepts from the principal, in
+/// configuration order.
+fn token_profiles_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "The token profiles the principal may store, in configuration order: the connection's token_profiles, or its only possible type when it sets neither a list nor oauth; for a service account or system principal, service_account_token_profiles when set. A put names one as profile when there are several.",
+        "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["profile", "label", "credentialKind", "inputSchema"],
+            "properties": {
+                "profile": {"type": "string"},
+                "label": {"type": ["string", "null"], "description": "The name a consuming service declares for the profile; show the profile when null."},
+                "credentialKind": {"type": "string"},
+                "inputSchema": credential_input_schema_schema()
+            }
+        }
+    })
+}
+
 fn credential_targets_result_schema() -> Value {
     json!({
         "type": "array",
         "description": "Credential connections whose token can be stored now: the connection selects the token method for the principal's kind and, for Broker-issued callers, the principal holds a per_user grant on a consuming service.",
         "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["connection", "displayName", "consumers", "otherConsumers", "profile", "credentialKind", "inputSchema"],
+            "required": ["connection", "displayName", "consumers", "otherConsumers", "tokenProfiles"],
             "properties": {
                 "connection": {"type": "string"},
                 "displayName": {"type": "string"},
                 "consumers": connection_consumers_schema(),
                 "otherConsumers": {"type": "integer", "minimum": 0},
-                "profile": {"type": "string"},
-                "credentialKind": {"type": "string"},
-                "inputSchema": credential_input_schema_schema()
+                "tokenProfiles": token_profiles_schema()
             }
         }
     })
@@ -3027,24 +3056,23 @@ fn personal_credentials_result_schema() -> Value {
                 "description": "Credential connections the principal is entitled to through a consuming service, plus any connection whose active token the principal still owns, plus any OAuth connection whose remoteRevocation is pending, failed or unconfirmed.",
                 "items": {
                     "type": "object", "additionalProperties": false,
-                    "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "profile", "credentialKind", "registration", "remoteRevocation", "credential"],
+                    "required": ["connection", "displayName", "method", "consumers", "otherConsumers", "tokenProfiles", "registration", "remoteRevocation", "credential"],
                     "properties": {
                         "connection": {"type": "string"},
                         "displayName": {"type": "string"},
                         "method": {"enum": ["token", "oauth", "unavailable"]},
                         "consumers": connection_consumers_schema(),
                         "otherConsumers": {"type": "integer", "minimum": 0},
-                        "profile": {"type": ["string", "null"]},
-                        "credentialKind": {"type": ["string", "null"]},
+                        "tokenProfiles": token_profiles_schema(),
                         "registration": {"type": ["string", "null"]},
                         "remoteRevocation": {"enum": [null, "not_requested", "pending", "revoked", "failed", "unconfirmed"], "description": "For the OAuth method, the registration's remote revocation state as GET /v1/oauth/connections reports it; null for other methods or when OAuth is inactive."},
-                        "credential": {"type": ["object", "null"], "description": "The active token's metadata, keyed by connection."}
+                        "credential": {"type": ["object", "null"], "description": "The active token's metadata, keyed by connection, with its stored profile and that profile's label (null when no consumer declares one)."}
                     }
                 }
             },
             "retained": {
                 "type": "array",
-                "description": "Stored rows the current configuration does not select, read-only; delete them by credentialId.",
+                "description": "Stored rows the current configuration does not select, read-only, each with its stored profile and that profile's label (null when no consumer of its connection declares one); delete them by credentialId.",
                 "items": {"type": "object"}
             }
         }

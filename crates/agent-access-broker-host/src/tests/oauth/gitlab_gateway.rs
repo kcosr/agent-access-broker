@@ -524,7 +524,8 @@ async fn gateway_fixture(gitlab: &FakeGitlab) -> OAuthFixture {
                 CONNECTION.into(),
                 ConnectionConfig {
                     display_name: Some("GitLab".into()),
-                    token_profile: Some("git-bearer-token".into()),
+                    token_profiles: Some(vec!["git-bearer-token".into()]),
+                    service_account_token_profiles: None,
                     oauth: Some(ConnectionOAuthConfig {
                         registration: "gitlab".into(),
                         profile: "default".into(),
@@ -1249,7 +1250,7 @@ target = "https://gitlab.example.com"
 
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "git-bearer-token"
+token_profiles = ["git-bearer-token"]
 oauth = {{ registration = "gitlab", profile = "default" }}
 
 [credentials.per_user.gitlab_git]

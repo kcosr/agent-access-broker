@@ -1138,6 +1138,7 @@ fn cloudbees_ci_credentials_and_actions_use_job_scope() {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     let resources = select_resources(
@@ -2087,32 +2088,49 @@ fn rejects_unknown_jira_action_grant() {
     assert_contains(&errors, "action transition.run is unknown for service jira");
 }
 
+/// A cloud ID gives Jira its gateway route and with it the scoped API token
+/// and bearer profiles, whatever the allowlist says. A look-alike gateway
+/// host does not cover that route, so gateway credentials then fail
+/// validation naming the uncovered base.
 #[test]
-fn atlassian_bearer_profiles_require_the_exact_gateway_host() {
+fn atlassian_gateway_profiles_follow_the_cloud_id_and_need_the_exact_gateway_host() {
     let mut config = sample_broker();
     let jira = config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
         .unwrap();
-    jira.cloud_id = Some("11111111-2222-4333-8444-555555555555".to_string());
-    jira.allowed_upstream_hosts =
-        vec!["https://api.atlassian.com.example.net/ex/jira/**".to_string()];
-    assert_eq!(
-        profile_kind(&config, "jira", "atlassian-bearer-token"),
-        None
-    );
+    jira.cloud_id = None;
+    for profile in ["atlassian-scoped-api-token", "atlassian-bearer-token"] {
+        assert_eq!(profile_kind(&config, "jira", profile), None, "{profile}");
+    }
 
-    config
+    let jira = config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts = vec![
-        "https://api.atlassian.com/ex/jira/11111111-2222-4333-8444-555555555555/**".to_string(),
+        .unwrap();
+    jira.cloud_id = Some("11111111-2222-4333-8444-555555555555".to_string());
+    jira.allowed_upstream_hosts = vec![
+        "https://example.atlassian.net/rest/api/3/**".to_string(),
+        "https://api.atlassian.com.example.net/ex/jira/**".to_string(),
     ];
+    assert_eq!(
+        profile_kind(&config, "jira", "atlassian-scoped-api-token"),
+        Some("basic_api_token")
+    );
     assert_eq!(
         profile_kind(&config, "jira", "atlassian-bearer-token"),
         Some("bearer_token")
     );
+    use_bearer_service_and_lookup_credentials(&mut config, "jira");
+    let errors = validation_errors(validate_broker_config(&config));
+    for source in ["credentials.service.jira", "credentials.lookup.jira"] {
+        assert_contains(
+            &errors,
+            &format!(
+                "{source} (type bearer_token) takes the Atlassian gateway route, but providers.jira.allowed_upstream_hosts does not cover https://api.atlassian.com/ex/jira/11111111-2222-4333-8444-555555555555/rest/api/3/"
+            ),
+        );
+    }
 }
 
 #[test]
@@ -2325,20 +2343,26 @@ fn rejects_non_https_credentialed_upstream() {
     assert_contains(&errors, "must use https");
 }
 
+/// Classic service and lookup credentials take the site route beside the
+/// gateway: the sample allowlists both routes and its classic credentials
+/// validate.
 #[test]
-fn rejects_atlassian_gateway_with_basic_service_credentials() {
-    let mut config = sample_broker();
-    config
+fn accepts_classic_service_and_lookup_credentials_beside_the_gateway() {
+    let config = sample_broker();
+    let jira = config
         .providers
-        .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.service.jira does not resolve to a bearer_token credential",
+        .get::<agent_access_jira::JiraProviderConfig>()
+        .unwrap();
+    assert!(
+        jira.allowed_upstream_hosts
+            .iter()
+            .any(|pattern| pattern.starts_with("https://api.atlassian.com/"))
     );
+    for credentials in [&config.credentials.service, &config.credentials.lookup] {
+        assert_eq!(credentials["jira"].kind, "basic_api_token");
+        assert_eq!(credentials["confluence"].kind, "basic_api_token");
+    }
+    validate_broker_config(&config).unwrap();
 }
 
 #[test]
@@ -2355,16 +2379,30 @@ fn accepts_jira_per_user_grants_when_configured() {
 
 #[test]
 fn rejects_the_removed_per_user_credential_types_and_fields() {
-    // `credential_name` and `profile` are no longer credential fields.
-    for field in [
-        "credential_name = \"default\"",
-        "profile = \"atlassian-api-token\"",
-    ] {
-        let raw = format!(
-            "{MINIMAL_BROKER_CONFIG}\n[credentials.per_user.jira]\ntype = \"connection\"\nconnection = \"jira\"\n{field}\n"
-        );
-        assert!(parse_test_config(&raw).is_err(), "{field}");
-    }
+    // `credential_name` is no longer a credential field.
+    let raw = format!(
+        "{MINIMAL_BROKER_CONFIG}\n[credentials.per_user.jira]\ntype = \"connection\"\nconnection = \"jira\"\ncredential_name = \"default\"\n"
+    );
+    assert!(parse_test_config(&raw).is_err());
+    // `profile` names only a shared credential's token profile.
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut credential = connection_per_user_credential("jira");
+    credential.profile = Some("atlassian-api-token".to_string());
+    use_connection(
+        &mut config,
+        "jira",
+        token_connection("atlassian-api-token"),
+        &["jira"],
+    );
+    config
+        .credentials
+        .per_user
+        .insert("jira".to_string(), credential);
+    assert_contains(
+        &validation_errors(validate_broker_config(&config)),
+        "credentials.per_user.jira.profile is supported only for credentials.service and credentials.lookup entries of type basic_api_token or bearer_token",
+    );
     // The per-user `managed_store` and `oauth` types are gone.
     for kind in ["managed_store", "oauth"] {
         let mut config = sample_broker();
@@ -2402,6 +2440,7 @@ fn rejects_static_per_user_credentials() {
                 path: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
             CredentialConfig {
                 kind: "bearer_token".to_string(),
@@ -2411,6 +2450,7 @@ fn rejects_static_per_user_credentials() {
                 path: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
         ] {
             let mut config = sample_broker();
@@ -2878,94 +2918,217 @@ fn rejects_ambiguous_wildcard_and_finite_credential_mode_overlap() {
     assert_contains(&errors, "overlapping project scope values");
 }
 
+/// An allowlist that also covers the gateway needs no gateway credential:
+/// coverage is checked per configured credential source.
 #[test]
-fn rejects_atlassian_gateway_without_bearer_execution_credentials() {
+fn accepts_the_gateway_allowlisted_without_gateway_credentials() {
+    let mut config = sample_broker();
+    config.credentials.service.remove("jira");
+    config.credentials.per_user.remove("jira");
+    let errors = match validate_broker_config(&config) {
+        Ok(()) => Vec::new(),
+        Err(ConfigError::Invalid { errors }) => errors,
+        Err(error) => panic!("unexpected error: {error}"),
+    };
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.starts_with("providers.jira") || error.contains("gateway")),
+        "{errors:?}"
+    );
+}
+
+/// Each credential source must reach the route its token type takes: a
+/// bearer service credential with an allowlist covering only the tenant
+/// names the uncovered gateway base, and classic credentials with an
+/// allowlist covering only the gateway name the uncovered tenant base.
+#[test]
+fn rejects_atlassian_credentials_whose_route_is_not_covered() {
     let mut config = sample_broker();
     config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
         .unwrap()
-        .allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    config.credentials.service.remove("jira");
-    config.credentials.per_user.remove("jira");
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "no bearer_token or OAuth execution credential is configured",
-    );
-}
-
-#[test]
-fn rejects_atlassian_bearer_credentials_without_gateway_allowlist() {
-    let mut config = sample_broker();
+        .allowed_upstream_hosts = vec!["https://example.atlassian.net/rest/api/3/**".to_string()];
     let credential = config.credentials.service.get_mut("jira").unwrap();
     credential.kind = "bearer_token".to_string();
     credential.username_ref = None;
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com",
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.service.jira (type bearer_token) takes the Atlassian gateway route, but providers.jira.allowed_upstream_hosts does not cover https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/"
+        ]
     );
-}
 
-#[test]
-fn rejects_atlassian_gateway_without_valid_cloud_id() {
     let mut config = sample_broker();
-    let jira = config
+    config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap();
-    jira.allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    jira.cloud_id = None;
-    let credential = config.credentials.service.get_mut("jira").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "providers.jira.cloud_id is required when api.atlassian.com is allowed",
-    );
-
-    let mut config = sample_broker();
-    let jira = config
-        .providers
-        .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap();
-    jira.allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    jira.cloud_id = Some("not-a-uuid".to_string());
-    let credential = config.credentials.service.get_mut("jira").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "providers.jira.cloud_id must be a valid Atlassian cloud UUID",
+        .unwrap()
+        .allowed_upstream_hosts = vec!["https://api.atlassian.com/ex/jira/**".to_string()];
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.service.jira (type basic_api_token) takes the site route, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/",
+            "credentials.lookup.jira (type basic_api_token) takes the site route, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/",
+        ]
     );
 }
 
+/// Gateway credentials need a cloud ID, and a cloud ID must be a UUID
+/// whenever it is set, even where only classic tokens take the site route.
 #[test]
-fn backend_validation_passes_static_and_secret_store_kinds_as_written() {
-    let config = sample_broker();
+fn rejects_atlassian_cloud_ids_that_are_missing_or_not_uuids() {
+    let mut config = sample_broker();
+    config
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap()
+        .cloud_id = None;
+    let credential = config.credentials.service.get_mut("jira").unwrap();
+    credential.kind = "bearer_token".to_string();
+    credential.username_ref = None;
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.service.jira (type bearer_token) takes the Atlassian gateway route, which requires providers.jira.cloud_id"
+        ]
+    );
+
+    let mut config = sample_broker();
+    for cloud_id in ["not-a-uuid", "00000000-0000-0000-0000-00000000000"] {
+        config
+            .providers
+            .get_mut::<agent_access_jira::JiraProviderConfig>()
+            .unwrap()
+            .cloud_id = Some(cloud_id.to_string());
+        assert_eq!(
+            validation_errors(validate_broker_config(&config)),
+            ["providers.jira.cloud_id must be a valid Atlassian cloud UUID"],
+            "{cloud_id}"
+        );
+    }
+}
+
+/// `credentials.service` and `credentials.lookup` entries of a static type
+/// may name a token profile their service declares with that kind; no
+/// other entry names one.
+#[test]
+fn shared_credentials_name_a_declared_token_profile_of_their_kind() {
+    let base = sample_broker();
+    let errors_with = |edit: &dyn Fn(&mut BrokerConfig)| {
+        let mut config = base.clone();
+        edit(&mut config);
+        match validate_broker_config(&config) {
+            Ok(()) => Vec::new(),
+            Err(ConfigError::Invalid { errors }) => errors,
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+    };
+    let set = |config: &mut BrokerConfig, mode: &str, service: &str, profile: &str| {
+        let entries = match mode {
+            "service" => &mut config.credentials.service,
+            "lookup" => &mut config.credentials.lookup,
+            _ => &mut config.credentials.per_user,
+        };
+        entries.get_mut(service).unwrap().profile = Some(profile.to_string());
+    };
+    let baseline = errors_with(&|_| {});
+    let added = |edit: &dyn Fn(&mut BrokerConfig)| {
+        errors_with(edit)
+            .into_iter()
+            .filter(|error| !baseline.contains(error))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        added(&|config| set(config, "service", "jira", "atlassian-api-token")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        added(&|config| set(config, "lookup", "gitlab", "gitlab-access-token")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        added(&|config| set(config, "service", "gitlab", "atlassian-api-token")),
+        [
+            "credentials.service.gitlab.profile atlassian-api-token is not a token profile gitlab declares"
+        ]
+    );
+    assert_eq!(
+        added(&|config| set(config, "lookup", "jira", "gitlab-access-token")),
+        [
+            "credentials.lookup.jira.profile gitlab-access-token is not a token profile jira declares"
+        ]
+    );
+    let mismatch = added(&|config| {
+        let credential = config.credentials.lookup.get_mut("gitlab").unwrap();
+        credential.kind = "basic_api_token".to_string();
+        credential.username_ref = Some("env:GITLAB_USERNAME".to_string());
+        set(config, "lookup", "gitlab", "gitlab-access-token");
+    });
+    assert!(
+        mismatch.contains(
+            &"credentials.lookup.gitlab.profile gitlab-access-token stores bearer_token, not basic_api_token"
+                .to_string()
+        ),
+        "{mismatch:?}"
+    );
+    let per_user = added(&|config| {
+        config.credentials.per_user.insert(
+            "jira".to_string(),
+            jira_per_user_credential("/etc/agent-access/jira.json"),
+        );
+        set(config, "per_user", "jira", "atlassian-api-token");
+    });
+    assert!(
+        per_user.contains(
+            &"credentials.per_user.jira.profile is supported only for credentials.service and credentials.lookup entries of type basic_api_token or bearer_token"
+                .to_string()
+        ),
+        "{per_user:?}"
+    );
+
+    // Backend validation sees the profile beside the kind.
+    let mut config = base.clone();
+    set(&mut config, "service", "jira", "atlassian-api-token");
     let jira = configured_provider_descriptors(&config)
         .into_iter()
         .find(|descriptor| descriptor.service == "jira")
         .unwrap();
-    let resolve = |credential: CredentialConfig| {
-        resolved_credential_kind(&config.credentials, &credential, &jira).map(str::to_string)
-    };
+    let sources = BackendCredentials::new(&config.credentials, "jira", &jira);
     assert_eq!(
-        resolve(jira_per_user_credential("/etc/agent-access/jira.json")).as_deref(),
-        Some("secret_store")
+        sources.kinds().service,
+        Some(CredentialSource::static_profile(
+            "basic_api_token",
+            "atlassian-api-token"
+        ))
     );
-    let service = config.credentials.service.get("jira").unwrap().clone();
-    assert_eq!(resolve(service).as_deref(), Some("basic_api_token"));
+    assert_eq!(
+        sources.kinds().lookup,
+        Some(CredentialSource::static_kind("basic_api_token"))
+    );
+}
+
+#[test]
+fn backend_validation_sees_static_kinds_and_secret_stores() {
+    let mut config = sample_broker();
+    let jira = configured_provider_descriptors(&config)
+        .into_iter()
+        .find(|descriptor| descriptor.service == "jira")
+        .unwrap();
+    config.credentials.per_user.insert(
+        "jira".to_string(),
+        jira_per_user_credential("/etc/agent-access/jira.json"),
+    );
+    let sources = BackendCredentials::new(&config.credentials, "jira", &jira);
+    let kinds = sources.kinds();
+    assert!(kinds.per_user_secret_store);
+    assert!(kinds.per_user_profiles.is_empty() && !kinds.per_user_delegated);
+    assert_eq!(
+        kinds.service,
+        Some(CredentialSource::static_kind("basic_api_token"))
+    );
 }
 
 #[test]
@@ -3000,9 +3163,203 @@ fn accepts_a_shared_gitlab_connection_for_rest_and_the_git_gateway() {
     assert_eq!(connection.id, "gitlab");
     assert_eq!(
         connection.select(Some(crate::PrincipalKind::User)),
-        crate::Selection::Token("gitlab-access-token")
+        crate::Selection::Token(&["gitlab-access-token".to_string()])
     );
     assert!(config.credentials.personal_connection("jira").is_none());
+}
+
+/// The configured credentials as backend validation and the runtime see
+/// them, with each connection's implicit type resolved.
+fn effective_credentials(config: &BrokerConfig) -> CredentialsConfig {
+    let services = configured_service_descriptors(config);
+    crate::connections::validate_connections(config, &services, &mut Vec::new())
+}
+
+/// GitLab REST declares one token profile, which the Git gateway can
+/// present, so a connection they share needs no list: everyone stores a
+/// GitLab access token, and backend validation sees it.
+#[test]
+fn the_implicit_type_serves_gitlab_rest_and_its_git_gateway() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab",
+        implicit_connection(),
+        &["gitlab", "gitlab_git"],
+    );
+
+    validate_broker_config(&config).unwrap();
+    let effective = effective_credentials(&config);
+    let access = ["gitlab-access-token".to_string()];
+    assert_eq!(
+        effective.connections["gitlab"].token_profiles.as_deref(),
+        Some(&access[..])
+    );
+    // The configuration itself is unchanged.
+    assert_eq!(
+        config.credentials.connections["gitlab"],
+        implicit_connection()
+    );
+    for service in ["gitlab", "gitlab_git"] {
+        let connection = effective.personal_connection(service).unwrap();
+        for kind in [
+            crate::PrincipalKind::User,
+            crate::PrincipalKind::ServiceAccount,
+            crate::PrincipalKind::System,
+        ] {
+            assert_eq!(
+                connection.select(Some(kind)),
+                crate::Selection::Token(&access),
+                "{service} {kind:?}"
+            );
+        }
+    }
+    let descriptors = configured_service_descriptors(&config);
+    assert_eq!(
+        BackendCredentials::new(&effective, "gitlab", &descriptors["gitlab"])
+            .per_user_profiles
+            .iter()
+            .map(|profile| (profile.name.as_str(), profile.kind))
+            .collect::<Vec<_>>(),
+        [("gitlab-access-token", "bearer_token")]
+    );
+}
+
+/// Without a cloud ID, Jira and Confluence declare only the classic API
+/// token, so a connection they share implies it; backend validation then
+/// checks its site route.
+#[test]
+fn the_implicit_type_is_the_classic_atlassian_token_without_a_cloud_id() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    config
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap()
+        .cloud_id = None;
+    config
+        .providers
+        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+        .unwrap()
+        .cloud_id = None;
+    use_connection(
+        &mut config,
+        "atlassian",
+        implicit_connection(),
+        &["jira", "confluence"],
+    );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+
+    validate_broker_config(&config).unwrap();
+    let effective = effective_credentials(&config);
+    assert_eq!(
+        effective.connections["atlassian"].token_profiles,
+        Some(vec!["atlassian-api-token".to_string()])
+    );
+    let descriptors = configured_service_descriptors(&config);
+    for service in ["jira", "confluence"] {
+        assert_eq!(
+            BackendCredentials::new(&effective, service, &descriptors[service])
+                .per_user_profiles
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>(),
+            ["atlassian-api-token"],
+            "{service}"
+        );
+    }
+
+    // Backend validation sees the implied type: an allowlist that does not
+    // cover its site route fails.
+    config
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap()
+        .allowed_upstream_hosts = vec!["https://api.atlassian.com/**".to_string()];
+    let errors = validation_errors(validate_broker_config(&config));
+    assert!(
+        errors.iter().any(|error| error.starts_with(
+            "credentials.per_user.jira (profile atlassian-api-token) takes the site route, but"
+        )),
+        "{errors:?}"
+    );
+}
+
+/// With a cloud ID, Jira and Confluence declare three Atlassian token
+/// types, so a connection without OAuth must list the ones it accepts.
+#[test]
+fn an_atlassian_connection_with_a_cloud_id_must_list_its_token_types() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_connection(
+        &mut config,
+        "atlassian",
+        implicit_connection(),
+        &["jira", "confluence"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.starts_with("credentials.connections.atlassian"))
+            .collect::<Vec<_>>(),
+        [
+            "credentials.connections.atlassian must set token_profiles: its consumers accept several token profiles (atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token)"
+        ]
+    );
+    // The effective connection keeps no list, so it selects nothing.
+    let effective = effective_credentials(&config);
+    assert_eq!(effective.connections["atlassian"], implicit_connection());
+
+    use_connection(
+        &mut config,
+        "atlassian",
+        token_connection("atlassian-scoped-api-token"),
+        &["jira", "confluence"],
+    );
+    validate_broker_config(&config).unwrap();
+}
+
+/// A connection with no OAuth and no list whose consumers share no token
+/// profile they could all accept has no method.
+#[test]
+fn a_connection_with_no_possible_token_type_has_no_method() {
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    gateway.upstream_base_url = "https://example.atlassian.net".to_string();
+    gateway.allowed_upstream_hosts = vec!["https://example.atlassian.net/**".to_string()];
+    // Jira and GitLab declare different profiles; Jira's are route-bound,
+    // which a Git gateway cannot present.
+    for consumers in [&["jira", "gitlab"][..], &["jira", "atlassian_git"]] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        config
+            .providers
+            .get_mut::<agent_access_jira::JiraProviderConfig>()
+            .unwrap()
+            .cloud_id = None;
+        config
+            .gateways
+            .insert("atlassian_git".to_string(), gateway.clone());
+        use_connection(&mut config, "shared", implicit_connection(), consumers);
+
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.starts_with("credentials.connections.shared"))
+                .collect::<Vec<_>>(),
+            [
+                "credentials.connections.shared has no method: set oauth or token_profiles; its consumers declare no token profile it could accept"
+            ],
+            "{consumers:?}"
+        );
+    }
 }
 
 #[test]
@@ -3065,17 +3422,13 @@ fn accepts_one_atlassian_connection_for_jira_and_confluence_on_the_site_route() 
         ] {
             assert_eq!(
                 connection.select(Some(kind)),
-                crate::Selection::Token("atlassian-api-token"),
+                crate::Selection::Token(&["atlassian-api-token".to_string()]),
                 "{service}"
             );
         }
         assert_eq!(
-            resolved_credential_kind(
-                &config.credentials,
-                &config.credentials.per_user[service],
-                &descriptors[service],
-            ),
-            Some("basic_api_token"),
+            per_user_profile_kinds(&config, service, &descriptors[service]),
+            ["basic_api_token"],
             "{service}"
         );
     }
@@ -3119,13 +3472,13 @@ fn rejects_retired_atlassian_product_profiles() {
             assert_contains(
                 &errors,
                 &format!(
-                    "credentials.connections.atlassian.token_profile {retired} is unsupported for service {service}, which accepts atlassian-api-token"
+                    "credentials.connections.atlassian.token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token"
                 ),
             );
         }
     }
 
-    // On the gateway, the bearer profiles are retired alike.
+    // The bearer profiles are retired alike.
     for (service, retired) in [
         ("jira", "jira-bearer-token"),
         ("confluence", "confluence-bearer-token"),
@@ -3138,19 +3491,24 @@ fn rejects_retired_atlassian_product_profiles() {
         assert_contains(
             &errors,
             &format!(
-                "credentials.connections.{service}.token_profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-bearer-token"
+                "credentials.connections.{service}.token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token"
             ),
         );
     }
 }
 
-/// A connection must still be declared by every consumer: the bearer
-/// profile exists only where the site uses the gateway.
+/// A connection must still be declared by every consumer: the gateway
+/// profiles exist only where a cloud ID gives the site its gateway route.
+/// A consumer without the cloud ID also acts on another instance.
 #[test]
-fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
+fn rejects_a_shared_gateway_connection_when_a_consumer_has_no_cloud_id() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
-    use_atlassian_gateway_for_jira(&mut config);
+    config
+        .providers
+        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+        .unwrap()
+        .cloud_id = None;
     use_connection(
         &mut config,
         "atlassian",
@@ -3161,7 +3519,7 @@ fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.connections.atlassian.token_profile atlassian-bearer-token is unsupported for service confluence, which accepts atlassian-api-token",
+        "credentials.connections.atlassian.token_profiles profile atlassian-bearer-token is unsupported for service confluence, which accepts atlassian-api-token",
     );
     assert!(
         !errors
@@ -3169,6 +3527,82 @@ fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
             .any(|error| error.contains("unsupported for service jira")),
         "{errors:?}"
     );
+    assert_contains(
+        &errors,
+        "credentials.connections.atlassian: confluence acts on https://example.atlassian.net but jira acts on https://example.atlassian.net (tenant 00000000-0000-0000-0000-000000000000, gateway https://api.atlassian.com); a token connection's consumers must act on one upstream",
+    );
+}
+
+/// Jira and Confluence on one tenant host share a token connection only
+/// when they name the same cloud ID, whichever token types it accepts: with
+/// different cloud IDs one stored credential would reach two gateway
+/// tenants. Equivalent UUID spellings name the same cloud ID.
+#[test]
+fn shared_atlassian_token_connections_need_one_cloud_id() {
+    for profile in [
+        "atlassian-api-token",
+        "atlassian-scoped-api-token",
+        "atlassian-bearer-token",
+    ] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        use_connection(
+            &mut config,
+            "atlassian",
+            token_connection(profile),
+            &["jira", "confluence"],
+        );
+        config.policy.grants[0].credential_mode = "per_user".to_string();
+        let confluence = |config: &mut BrokerConfig, cloud_id: &str| {
+            config
+                .providers
+                .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+                .unwrap()
+                .cloud_id = Some(cloud_id.to_string());
+        };
+        validate_broker_config(&config).unwrap();
+        confluence(&mut config, "{00000000-0000-0000-0000-000000000000}");
+        validate_broker_config(&config).unwrap();
+        confluence(&mut config, "11111111-2222-4333-8444-555555555555");
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            "credentials.connections.atlassian: confluence acts on https://example.atlassian.net (tenant 11111111-2222-4333-8444-555555555555, gateway https://api.atlassian.com) but jira acts on https://example.atlassian.net (tenant 00000000-0000-0000-0000-000000000000, gateway https://api.atlassian.com); a token connection's consumers must act on one upstream",
+        );
+    }
+}
+
+/// Every Atlassian profile is route-bound: the Atlassian provider decides
+/// where it goes, so a Git gateway can never consume a connection listing
+/// one, even on the tenant's own origin.
+#[test]
+fn rejects_a_git_gateway_on_a_connection_listing_an_atlassian_profile() {
+    for profile in [
+        "atlassian-api-token",
+        "atlassian-scoped-api-token",
+        "atlassian-bearer-token",
+    ] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        let mut gateway = git_http_gateway_config();
+        gateway.credential_modes = vec!["per_user".to_string()];
+        gateway.upstream_base_url = "https://example.atlassian.net".to_string();
+        gateway.allowed_upstream_hosts = vec!["https://example.atlassian.net/**".to_string()];
+        config.gateways.insert("atlassian_git".to_string(), gateway);
+        use_connection(
+            &mut config,
+            "atlassian",
+            token_connection(profile),
+            &["jira", "atlassian_git"],
+        );
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            &format!(
+                "credentials.connections.atlassian.token_profiles profile {profile} is route-bound: only the provider declaring it may present it, so the gateway atlassian_git cannot consume this connection"
+            ),
+        );
+    }
 }
 
 /// Service accounts' scoped tokens use per-product bearer connections
@@ -3192,12 +3626,8 @@ fn accepts_per_product_bearer_connections_through_the_gateway() {
     let descriptors = configured_service_descriptors(&config);
     for service in ["jira", "confluence"] {
         assert_eq!(
-            resolved_credential_kind(
-                &config.credentials,
-                &config.credentials.per_user[service],
-                &descriptors[service],
-            ),
-            Some("bearer_token"),
+            per_user_profile_kinds(&config, service, &descriptors[service]),
+            ["bearer_token"],
             "{service}"
         );
     }
@@ -3220,7 +3650,46 @@ fn rejects_a_gateway_connection_profile_it_cannot_present() {
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(
         &errors,
-        "credentials.connections.repositories.token_profile not-declared-anywhere is not a token or basic profile the gateway gitlab_git can present",
+        "credentials.connections.repositories.token_profiles profile not-declared-anywhere is not a token or basic profile the gateway gitlab_git can present",
+    );
+}
+
+/// Connection validation reads every declaration of a profile: a
+/// route-bound declaration repeated after an unrestricted one still keeps a
+/// Git gateway off the connection. (Descriptor validation rejects the
+/// repeat itself.)
+#[test]
+fn a_repeated_route_bound_declaration_keeps_a_git_gateway_off_its_connection() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "repositories",
+        token_connection("routed-token"),
+        &["routed", "gitlab_git"],
+    );
+    let mut services = configured_service_descriptors(&config);
+    let shadowed = ServiceDescriptor::new("routed", "Routed").with_credentials(
+        CredentialDescriptor::default()
+            .profile("routed-token", "bearer_token")
+            .with_profile(
+                agent_access_provider::CredentialProfile::new("routed-token", "bearer_token")
+                    .route_bound(),
+            ),
+    );
+    assert_eq!(
+        shadowed.validate().unwrap_err(),
+        ["service routed declares token profile routed-token more than once"]
+    );
+    services.insert("routed".to_string(), Arc::new(shadowed));
+    let mut errors = Vec::new();
+    crate::connections::validate_connections(&config, &services, &mut errors);
+    assert_contains(
+        &errors,
+        "credentials.connections.repositories.token_profiles profile routed-token is route-bound: only the provider declaring it may present it, so the gateway gitlab_git cannot consume this connection",
     );
 }
 
@@ -3233,7 +3702,8 @@ fn rejects_connections_without_a_method_or_with_dangling_references() {
         "empty",
         ConnectionConfig {
             display_name: Some(" ".to_string()),
-            token_profile: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
             oauth: None,
         },
         &[],
@@ -3261,7 +3731,7 @@ fn rejects_connections_without_a_method_or_with_dangling_references() {
 
     let errors = validation_errors(validate_broker_config(&config));
     for needle in [
-        "credentials.connections.empty must set token_profile, oauth, or both",
+        "credentials.connections.empty has no method: set oauth or token_profiles; its consumers declare no token profile it could accept",
         "credentials.connections.empty.display_name must not be empty",
         "credentials.per_user.jira.connection missing must name a configured credentials.connections entry",
         "credentials.per_user.unconfigured uses a credential connection, but unconfigured is not a configured service",
@@ -3271,6 +3741,257 @@ fn rejects_connections_without_a_method_or_with_dangling_references() {
     ] {
         assert_contains(&errors, needle);
     }
+}
+
+/// A connection's token lists: each is non-empty without duplicates, and
+/// every entry follows the per-profile rules once, beside OAuth too.
+#[test]
+fn connection_token_lists_are_checked_entry_by_entry() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    use_connection(
+        &mut config,
+        "jira",
+        ConnectionConfig {
+            token_profiles: Some(vec![
+                "atlassian-api-token".to_string(),
+                "unknown-token".to_string(),
+                "atlassian-api-token".to_string(),
+            ]),
+            oauth: Some(connection_oauth("atlassian")),
+            ..implicit_connection()
+        },
+        &["jira"],
+    );
+    use_connection(
+        &mut config,
+        "confluence",
+        ConnectionConfig {
+            token_profiles: Some(vec!["atlassian-api-token".to_string()]),
+            service_account_token_profiles: Some(vec![]),
+            ..implicit_connection()
+        },
+        &["confluence"],
+    );
+    use_connection(
+        &mut config,
+        "gitlab",
+        ConnectionConfig {
+            service_account_token_profiles: Some(vec!["unknown-token".to_string()]),
+            ..token_connection("unknown-token")
+        },
+        &["gitlab"],
+    );
+    let errors = validation_errors(validate_broker_config(&config));
+    for needle in [
+        "credentials.connections.jira.token_profiles lists atlassian-api-token more than once",
+        "credentials.connections.jira.token_profiles profile unknown-token is unsupported for service jira, which accepts atlassian-api-token",
+        "credentials.connections.confluence.service_account_token_profiles must not be empty",
+    ] {
+        assert_contains(&errors, needle);
+    }
+    // A profile in both lists is checked once, under the first.
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.contains("unsupported for service gitlab"))
+            .collect::<Vec<_>>(),
+        [
+            "credentials.connections.gitlab.token_profiles profile unknown-token is unsupported for service gitlab, which accepts gitlab-access-token"
+        ]
+    );
+}
+
+/// The valid combinations of a connection's keys are nothing (the implicit
+/// type), `token_profiles`, `token_profiles` with
+/// `service_account_token_profiles`, `oauth`, and `oauth` with
+/// `token_profiles`; each selects per the method table. The override needs
+/// `token_profiles` and is rejected beside `oauth`. The keys of earlier
+/// releases are unknown fields.
+#[test]
+fn connection_keys_accept_only_the_valid_combinations() {
+    use crate::PrincipalKind::{ServiceAccount, System, User};
+    use crate::Selection::{OAuth, Token, Unavailable};
+    let access = vec!["gitlab-access-token".to_string()];
+    let both = vec![
+        "gitlab-access-token".to_string(),
+        "unused-token".to_string(),
+    ];
+    let oauth = connection_oauth("gitlab");
+    let check = |connection: ConnectionConfig| {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        use_connection(&mut config, "gitlab", connection, &["gitlab"]);
+        let services = configured_service_descriptors(&config);
+        let mut errors = Vec::new();
+        let effective = crate::connections::validate_connections(&config, &services, &mut errors);
+        // The sample configures no OAuth registration, and `unused-token`
+        // stands for a second type GitLab does not declare.
+        errors.retain(|error| {
+            !error.contains("configured registration") && !error.contains("unused-token")
+        });
+        (effective.connections["gitlab"].clone(), errors)
+    };
+    let selections = |connection: &ConnectionConfig| {
+        [Some(User), Some(ServiceAccount), Some(System), None]
+            .map(|kind| format!("{:?}", crate::select(connection, kind)))
+    };
+    let expect = |selections: [crate::Selection<'_>; 4]| selections.map(|s| format!("{s:?}"));
+
+    // Nothing: GitLab declares one token profile, which everyone uses.
+    let (effective, errors) = check(implicit_connection());
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(effective.token_profiles.as_ref(), Some(&access));
+    assert_eq!(
+        selections(&effective),
+        expect([Token(&access), Token(&access), Token(&access), Unavailable])
+    );
+    // `token_profiles` alone serves everyone.
+    let (effective, errors) = check(token_connection("gitlab-access-token"));
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(
+        selections(&effective),
+        expect([Token(&access), Token(&access), Token(&access), Unavailable])
+    );
+    // The override serves service accounts and system principals only.
+    let (effective, errors) = check(ConnectionConfig {
+        service_account_token_profiles: Some(both.clone()),
+        ..token_connection("gitlab-access-token")
+    });
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(
+        selections(&effective),
+        expect([Token(&access), Token(&both), Token(&both), Unavailable])
+    );
+    // `oauth` alone: people use OAuth; nothing is implied for service
+    // accounts and system principals, who have no method.
+    let (effective, errors) = check(ConnectionConfig {
+        oauth: Some(oauth.clone()),
+        ..implicit_connection()
+    });
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(effective.token_profiles, None);
+    assert_eq!(
+        selections(&effective),
+        expect([OAuth(&oauth), Unavailable, Unavailable, Unavailable])
+    );
+    // `oauth` with `token_profiles`: service accounts and system principals
+    // use those types.
+    let (effective, errors) = check(ConnectionConfig {
+        oauth: Some(oauth.clone()),
+        token_profiles: Some(both.clone()),
+        ..implicit_connection()
+    });
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(
+        selections(&effective),
+        expect([OAuth(&oauth), Token(&both), Token(&both), Unavailable])
+    );
+
+    // Every other combination fails with the remedy.
+    let beside_oauth = "credentials.connections.gitlab.service_account_token_profiles cannot be set beside oauth: there token_profiles applies only to service accounts and system principals";
+    for (connection, error) in [
+        (
+            ConnectionConfig {
+                service_account_token_profiles: Some(access.clone()),
+                ..implicit_connection()
+            },
+            "credentials.connections.gitlab.service_account_token_profiles requires token_profiles, which it overrides for service accounts and system principals",
+        ),
+        (
+            ConnectionConfig {
+                service_account_token_profiles: Some(access.clone()),
+                oauth: Some(oauth.clone()),
+                ..implicit_connection()
+            },
+            beside_oauth,
+        ),
+        (
+            ConnectionConfig {
+                service_account_token_profiles: Some(access.clone()),
+                oauth: Some(oauth.clone()),
+                ..token_connection("gitlab-access-token")
+            },
+            beside_oauth,
+        ),
+    ] {
+        assert_eq!(check(connection.clone()).1, [error], "{connection:?}");
+    }
+    for removed in [
+        "user_token_profiles = [\"gitlab-access-token\"]",
+        "token_profile = \"gitlab-access-token\"",
+    ] {
+        let raw = format!("{MINIMAL_BROKER_CONFIG}\n[credentials.connections.gitlab]\n{removed}\n");
+        let error = parse_test_config(&raw).unwrap_err().to_string();
+        assert!(error.contains("unknown field"), "{removed}: {error}");
+    }
+}
+
+/// A Git gateway accepts a list mixing basic and bearer profiles, so service
+/// accounts may store either type for one connection.
+#[test]
+fn accepts_a_git_gateway_connection_mixing_token_kinds() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "repositories",
+        ConnectionConfig {
+            display_name: None,
+            token_profiles: Some(vec!["git-bearer-token".to_string()]),
+            service_account_token_profiles: Some(vec![
+                "git-bearer-token".to_string(),
+                "git-basic-api-token".to_string(),
+            ]),
+            oauth: None,
+        },
+        &["gitlab_git"],
+    );
+
+    validate_broker_config(&config).unwrap();
+    let connection = config
+        .credentials
+        .personal_connection("gitlab_git")
+        .unwrap();
+    assert_eq!(
+        connection.select(Some(crate::PrincipalKind::System)),
+        crate::Selection::Token(&[
+            "git-bearer-token".to_string(),
+            "git-basic-api-token".to_string()
+        ])
+    );
+}
+
+/// The shared-upstream check applies to the implicit type as to a list.
+#[test]
+fn rejects_an_implicit_token_connection_across_upstreams() {
+    let mut config = sample_broker();
+    enable_test_managed_store(&mut config);
+    let mut gateway = git_http_gateway_config();
+    gateway.credential_modes = vec!["per_user".to_string()];
+    gateway.upstream_base_url = "https://git.other.example".to_string();
+    gateway.allowed_upstream_hosts = vec!["https://git.other.example/**".to_string()];
+    config.gateways.insert("gitlab_git".to_string(), gateway);
+    use_connection(
+        &mut config,
+        "gitlab",
+        implicit_connection(),
+        &["gitlab", "gitlab_git"],
+    );
+
+    let errors = validation_errors(validate_broker_config(&config));
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.starts_with("credentials.connections.gitlab"))
+            .collect::<Vec<_>>(),
+        [
+            "credentials.connections.gitlab: gitlab acts on https://gitlab.example.com but gitlab_git acts on https://git.other.example; a token connection's consumers must act on one upstream"
+        ]
+    );
 }
 
 #[test]
@@ -3334,7 +4055,8 @@ fn rejects_oauth_connections_consumers_cannot_use() {
         "gitlab",
         ConnectionConfig {
             display_name: None,
-            token_profile: Some("gitlab-access-token".to_string()),
+            token_profiles: Some(vec!["gitlab-access-token".to_string()]),
+            service_account_token_profiles: None,
             oauth: Some(oauth("default")),
         },
         &["gitlab", "gitlab_git"],
@@ -3344,7 +4066,8 @@ fn rejects_oauth_connections_consumers_cannot_use() {
         "gitlab_projects",
         ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(oauth("projects")),
         },
         &[],
@@ -3399,10 +4122,7 @@ fn backend_validation_resolves_connection_token_profiles() {
     config.credentials.connections.insert(
         "both".to_string(),
         ConnectionConfig {
-            oauth: Some(ConnectionOAuthConfig {
-                registration: "atlassian".to_string(),
-                profile: "default".to_string(),
-            }),
+            oauth: Some(connection_oauth("atlassian")),
             ..token_connection("atlassian-api-token")
         },
     );
@@ -3410,7 +4130,8 @@ fn backend_validation_resolves_connection_token_profiles() {
         "oauth_only".to_string(),
         ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(ConnectionOAuthConfig {
                 registration: "atlassian".to_string(),
                 profile: "default".to_string(),
@@ -3422,20 +4143,30 @@ fn backend_validation_resolves_connection_token_profiles() {
         .connections
         .insert("unknown_profile".to_string(), token_connection("unknown"));
     let resolve = |connection: &str| {
-        resolved_credential_kind(
-            &config.credentials,
-            &connection_per_user_credential(connection),
-            &jira,
+        let mut config = config.clone();
+        config.credentials.per_user.insert(
+            "jira".to_string(),
+            connection_per_user_credential(connection),
+        );
+        let sources = BackendCredentials::new(&config.credentials, "jira", &jira);
+        let kinds = sources.kinds();
+        (
+            kinds
+                .per_user_profiles
+                .iter()
+                .map(|profile| (profile.name.clone(), profile.kind))
+                .collect::<Vec<_>>(),
+            kinds.per_user_delegated,
         )
-        .map(str::to_string)
     };
+    let api_token = || vec![("atlassian-api-token".to_string(), "basic_api_token")];
 
-    assert_eq!(resolve("jira").as_deref(), Some("basic_api_token"));
-    // The token profile's kind, even when OAuth is also configured.
-    assert_eq!(resolve("both").as_deref(), Some("basic_api_token"));
-    assert_eq!(resolve("oauth_only").as_deref(), Some("oauth"));
-    assert_eq!(resolve("unknown_profile"), None);
-    assert_eq!(resolve("missing"), None);
+    assert_eq!(resolve("jira"), (api_token(), false));
+    // The token profiles, even when OAuth is also configured.
+    assert_eq!(resolve("both"), (api_token(), true));
+    assert_eq!(resolve("oauth_only"), (vec![], true));
+    assert_eq!(resolve("unknown_profile"), (vec![], false));
+    assert_eq!(resolve("missing"), (vec![], false));
 }
 
 #[test]
@@ -3447,10 +4178,7 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
         &mut config,
         "jira",
         ConnectionConfig {
-            oauth: Some(ConnectionOAuthConfig {
-                registration: "atlassian".to_string(),
-                profile: "default".to_string(),
-            }),
+            oauth: Some(connection_oauth("atlassian")),
             ..token_connection("atlassian-bearer-token")
         },
         &["jira"],
@@ -3467,22 +4195,23 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
         "{errors:?}"
     );
 
-    // A basic site token beside OAuth is rejected.
+    // People on OAuth through the gateway beside service accounts' classic
+    // tokens on the site and service-account tokens on the gateway.
     config
         .credentials
         .connections
         .get_mut("jira")
         .unwrap()
-        .token_profile = Some("atlassian-api-token".to_string());
+        .token_profiles = Some(vec![
+        "atlassian-api-token".to_string(),
+        "atlassian-bearer-token".to_string(),
+    ]);
     let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira combines OAuth with a basic_api_token profile",
-    );
     assert!(
         !errors
             .iter()
-            .any(|error| error.contains("does not resolve to a bearer_token credential")),
+            .any(|error| error.starts_with("providers.jira")
+                || error.starts_with("credentials.per_user.jira")),
         "{errors:?}"
     );
 }
@@ -3503,8 +4232,10 @@ fn accepts_atlassian_gateway_with_bearer_connection_per_user_credentials() {
     validate_broker_config(&config).unwrap();
 }
 
+/// Classic connection tokens take the site route beside gateway service
+/// and lookup credentials.
 #[test]
-fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
+fn accepts_classic_connection_tokens_beside_gateway_credentials() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
     use_atlassian_gateway_for_jira(&mut config);
@@ -3514,12 +4245,9 @@ fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
         token_connection("atlassian-api-token"),
         &["jira"],
     );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
 
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira does not resolve to a bearer_token credential",
-    );
+    validate_broker_config(&config).unwrap();
 }
 
 #[test]
@@ -3537,95 +4265,105 @@ fn accepts_confluence_gateway_with_bearer_connection_per_user_credentials() {
     validate_broker_config(&config).unwrap();
 }
 
-/// The shared lookup credential reaches the site by its kind like any
-/// static token, so the gateway requires a bearer lookup credential too, and
-/// a bearer one requires the gateway; it is never execution material.
+/// Sets `service`'s allowlist to `patterns`.
+fn set_atlassian_allowlist(config: &mut BrokerConfig, service: &str, patterns: &[&str]) {
+    let patterns = patterns.iter().map(|pattern| pattern.to_string()).collect();
+    match service {
+        "jira" => {
+            config
+                .providers
+                .get_mut::<agent_access_jira::JiraProviderConfig>()
+                .unwrap()
+                .allowed_upstream_hosts = patterns;
+        }
+        _ => {
+            config
+                .providers
+                .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+                .unwrap()
+                .allowed_upstream_hosts = patterns;
+        }
+    }
+}
+
+/// The shared lookup credential takes the route its own token type
+/// selects, independently of the execution credentials: a classic lookup
+/// credential beside gateway credentials, a bearer one beside classic
+/// credentials and a scoped one naming its profile all validate when the
+/// allowlist covers both routes. An uncovered route is reported for the
+/// lookup credential.
 #[test]
-fn atlassian_gateway_holds_the_lookup_credential_to_its_route() {
-    for service in ["jira", "confluence"] {
-        let gateway_basic_lookup = format!(
-            "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but credentials.lookup.{service} does not resolve to a bearer_token credential"
-        );
+fn atlassian_lookup_credentials_take_their_own_route() {
+    for (service, tenant, gateway_bases) in [
+        (
+            "jira",
+            "https://example.atlassian.net/rest/api/3/**",
+            "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/",
+        ),
+        (
+            "confluence",
+            "https://example.atlassian.net/wiki/**",
+            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/rest/api/ and https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/api/v2/",
+        ),
+    ] {
+        // Classic lookup credentials beside gateway service credentials.
         let mut config = sample_broker();
         route_both_atlassian_products_through_the_gateway(&mut config);
         validate_broker_config(&config).unwrap();
-
-        // A basic lookup credential beside the gateway.
         let lookup = config.credentials.lookup.get_mut(service).unwrap();
         lookup.kind = "basic_api_token".to_string();
         lookup.username_ref = Some(format!("env:{}_LOOKUP_USERNAME", service.to_uppercase()));
-        let errors = validation_errors(validate_broker_config(&config));
-        assert_eq!(
-            errors,
-            std::slice::from_ref(&gateway_basic_lookup),
-            "{service}"
-        );
+        validate_broker_config(&config).unwrap();
 
-        // The same beside OAuth-only per-user access.
-        config.credentials.service.remove(service);
-        use_connection(
-            &mut config,
-            service,
-            ConnectionConfig {
-                display_name: None,
-                token_profile: None,
-                oauth: Some(ConnectionOAuthConfig {
-                    registration: "atlassian".to_string(),
-                    profile: "default".to_string(),
-                }),
-            },
-            &[service],
-        );
-        let errors = validation_errors(validate_broker_config(&config));
-        assert_contains(&errors, &gateway_basic_lookup);
-
-        // A bearer lookup credential is not an execution credential.
-        let mut config = sample_broker();
-        route_both_atlassian_products_through_the_gateway(&mut config);
-        config.credentials.service.remove(service);
-        let errors = validation_errors(validate_broker_config(&config));
-        assert_contains(
-            &errors,
-            &format!(
-                "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured"
-            ),
-        );
-        assert!(
-            !errors
-                .iter()
-                .any(|error| error.contains("credentials.lookup")),
-            "{errors:?}"
-        );
-
-        // A bearer lookup credential without the gateway.
+        // A bearer lookup credential beside classic execution credentials,
+        // and a scoped one naming its profile.
         let mut config = sample_broker();
         let lookup = config.credentials.lookup.get_mut(service).unwrap();
         lookup.kind = "bearer_token".to_string();
         lookup.username_ref = None;
-        let errors = validation_errors(validate_broker_config(&config));
+        validate_broker_config(&config).unwrap();
+        let lookup = config.credentials.lookup.get_mut(service).unwrap();
+        lookup.kind = "basic_api_token".to_string();
+        lookup.username_ref = Some(format!("env:{}_LOOKUP_USERNAME", service.to_uppercase()));
+        lookup.profile = Some("atlassian-scoped-api-token".to_string());
+        validate_broker_config(&config).unwrap();
+
+        // The tenant alone does not cover the scoped lookup credential.
+        set_atlassian_allowlist(&mut config, service, &[tenant]);
         assert_eq!(
-            errors,
+            validation_errors(validate_broker_config(&config)),
             [format!(
-                "credentials.lookup.{service}.type bearer_token requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
+                "credentials.lookup.{service} (profile atlassian-scoped-api-token) takes the Atlassian gateway route, but providers.{service}.allowed_upstream_hosts does not cover {gateway_bases}"
             )],
             "{service}"
         );
     }
 }
 
+/// A secret store's records route by their own kind at run time; offline,
+/// only the site route is checked, so a secret store validates beside the
+/// gateway and fails only when the tenant is not covered.
 #[test]
-fn rejects_atlassian_gateway_with_secret_store_per_user_credentials() {
+fn secret_store_per_user_credentials_are_checked_on_the_site_route() {
     let mut config = sample_broker();
     use_atlassian_gateway_for_jira(&mut config);
     config.credentials.per_user.insert(
         "jira".to_string(),
         jira_per_user_credential("/etc/agent-access/jira-user-credentials.json"),
     );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+    validate_broker_config(&config).unwrap();
 
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira does not resolve to a bearer_token credential",
+    set_atlassian_allowlist(
+        &mut config,
+        "jira",
+        &["https://api.atlassian.com/ex/jira/**"],
+    );
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.per_user.jira (secret_store) takes the site route its basic_api_token records take, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/"
+        ]
     );
 }
 
@@ -3688,6 +4426,7 @@ fn rejects_secret_store_outside_per_user_and_relative_store_paths() {
             path: Some("relative-users.json".to_string()),
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.policy.grants[0].credential_mode = "per_user".to_string();
@@ -3816,6 +4555,7 @@ fn fake_service_requires_explicit_non_production_enablement() {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     config.policy.grants[0].service = "fake".to_string();
@@ -5646,14 +6386,49 @@ fn connection_per_user_credential(connection: &str) -> CredentialConfig {
         path: None,
         read_only: None,
         connection: Some(connection.to_string()),
+        profile: None,
     }
 }
 
+/// The kinds of the per-user token profiles backend validation sees for
+/// `service`.
+fn per_user_profile_kinds(
+    config: &BrokerConfig,
+    service: &str,
+    descriptor: &ServiceDescriptor,
+) -> Vec<&'static str> {
+    BackendCredentials::new(&config.credentials, service, descriptor)
+        .per_user_profiles
+        .iter()
+        .map(|profile| profile.kind)
+        .collect()
+}
+
+/// A connection accepting `profile` from everyone who uses tokens: people
+/// and service accounts alike, or service accounts only beside OAuth.
 fn token_connection(profile: &str) -> ConnectionConfig {
     ConnectionConfig {
+        token_profiles: Some(vec![profile.to_string()]),
+        ..implicit_connection()
+    }
+}
+
+/// A connection with neither OAuth nor a token list: its implicit type.
+fn implicit_connection() -> ConnectionConfig {
+    ConnectionConfig {
         display_name: None,
-        token_profile: Some(profile.to_string()),
+        token_profiles: None,
+        service_account_token_profiles: None,
         oauth: None,
+    }
+}
+
+/// The OAuth binding of a connection to the `registration` registration's
+/// default permission profile.
+fn connection_oauth(registration: &str) -> ConnectionOAuthConfig {
+    ConnectionOAuthConfig {
+        registration: registration.to_string(),
+        profile: "default".to_string(),
     }
 }
 
@@ -5686,7 +6461,7 @@ fn enable_test_managed_store(config: &mut BrokerConfig) {
 }
 
 /// Makes the sample's static `service` credential and shared lookup
-/// credential bearer tokens, as the Atlassian gateway requires of both.
+/// credential bearer tokens, which take the Atlassian gateway route.
 fn use_bearer_service_and_lookup_credentials(config: &mut BrokerConfig, service: &str) {
     for credentials in [
         &mut config.credentials.service,
@@ -5698,38 +6473,22 @@ fn use_bearer_service_and_lookup_credentials(config: &mut BrokerConfig, service:
     }
 }
 
-/// Routes the sample Jira service through the Atlassian gateway with static
-/// bearer service and lookup credentials.
+/// Gives the sample Jira service static bearer service and lookup
+/// credentials, which take the Atlassian gateway route the sample's
+/// allowlist covers.
 fn use_atlassian_gateway_for_jira(config: &mut BrokerConfig) {
-    config
-        .providers
-        .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push(
-            "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**"
-                .to_string(),
-        );
     use_bearer_service_and_lookup_credentials(config, "jira");
 }
 
-/// Routes the sample Confluence service through the Atlassian gateway with
-/// static bearer service and lookup credentials.
+/// Gives the sample Confluence service static bearer service and lookup
+/// credentials, which take the Atlassian gateway route the sample's
+/// allowlist covers.
 fn use_atlassian_gateway_for_confluence(config: &mut BrokerConfig) {
-    config
-        .providers
-        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push(
-            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
-                .to_string(),
-        );
     use_bearer_service_and_lookup_credentials(config, "confluence");
 }
 
-/// Routes the sample Jira and Confluence services through the Atlassian
-/// gateway with static bearer service and lookup credentials.
+/// Gives the sample Jira and Confluence services static bearer service and
+/// lookup credentials on the Atlassian gateway route.
 fn route_both_atlassian_products_through_the_gateway(config: &mut BrokerConfig) {
     use_atlassian_gateway_for_jira(config);
     use_atlassian_gateway_for_confluence(config);
@@ -5744,6 +6503,7 @@ fn jira_per_user_credential(path: &str) -> CredentialConfig {
         path: Some(path.to_string()),
         read_only: None,
         connection: None,
+        profile: None,
     }
 }
 
@@ -6235,7 +6995,8 @@ fn oauth_connections_need_consumers_that_accept_delegation() {
         "records".to_string(),
         ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(ConnectionOAuthConfig {
                 registration: "missing".to_string(),
                 profile: "read".to_string(),

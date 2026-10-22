@@ -352,6 +352,7 @@ fn credential_value(credential: &CredentialConfig) -> Value {
         path,
         read_only,
         connection,
+        profile,
     } = credential;
     Fields::default()
         .put("type", kind.as_str())
@@ -361,18 +362,24 @@ fn credential_value(credential: &CredentialConfig) -> Value {
         .opt("path", path.clone())
         .opt("read_only", *read_only)
         .opt("connection", connection.clone())
+        .opt("profile", profile.clone())
         .value()
 }
 
 fn connection_value(connection: &ConnectionConfig) -> Value {
     let ConnectionConfig {
         display_name,
-        token_profile,
+        token_profiles,
+        service_account_token_profiles,
         oauth,
     } = connection;
     Fields::default()
         .opt("display_name", display_name.clone())
-        .opt("token_profile", token_profile.clone())
+        .opt("token_profiles", token_profiles.clone())
+        .opt(
+            "service_account_token_profiles",
+            service_account_token_profiles.clone(),
+        )
         .opt(
             "oauth",
             oauth.as_ref().map(|oauth| {

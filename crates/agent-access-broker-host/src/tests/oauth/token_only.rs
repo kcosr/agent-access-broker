@@ -167,6 +167,7 @@ fn shared_credentials(dir: &Path, config: &mut BrokerConfig) {
             path: None,
             read_only,
             connection: None,
+            profile: None,
         }
     };
     config.credentials.service.insert(

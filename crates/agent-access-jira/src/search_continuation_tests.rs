@@ -190,7 +190,7 @@ async fn search_continuations_reject_changed_searches_callers_and_contexts() {
             base_scope(),
             Some(&token),
         ),
-        // Execution context, principal, authentication, mode and route.
+        // Execution context, principal, authentication and mode.
         search(base_inputs(), base_scope(), Some(&token)).execution_context("external"),
         search(base_inputs(), base_scope(), Some(&token)).principal("agent-two"),
         search(base_inputs(), base_scope(), Some(&token)).identity(crate::InvocationIdentity::new(
@@ -200,14 +200,24 @@ async fn search_continuations_reject_changed_searches_callers_and_contexts() {
         search(base_inputs(), base_scope(), Some(&token))
             .credential_mode(CredentialMode::Service)
             .credential(test_credential()),
-        search(base_inputs(), base_scope(), Some(&token))
-            .credential(bearer_credential("per-user-bearer-token")),
     ];
     let searches = harness.upstream_searches();
     for request in changed {
         let error = harness.provider.invoke(request.build()).await.unwrap_err();
         assert_rejected_token(error);
     }
+    // Without a cloud ID a bearer token has no route, so its continuation
+    // is refused before Jira sees anything.
+    let error = harness
+        .provider
+        .invoke(
+            search(base_inputs(), base_scope(), Some(&token))
+                .credential(bearer_credential("per-user-bearer-token"))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
     assert_eq!(harness.upstream_searches(), searches);
 
     // A text query and the JQL it lowers to are different searches.

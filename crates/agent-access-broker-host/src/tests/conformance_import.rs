@@ -184,7 +184,16 @@ impl Provider for ImportedConformanceProvider {
         // Tokens are synthetic test sentinels; responses never expose material.
         let authority = match credential {
             Some(token) if *token == bearer_credential("import-service-token") => "service",
-            Some(token) if *token == bearer_credential("import-user-token") => "per_user",
+            // A personal import token is lent as its connection's profile.
+            Some(token)
+                if *token
+                    == agent_access_provider::test_support::credential_with_profile(
+                        bearer_credential("import-user-token"),
+                        "token",
+                    ) =>
+            {
+                "per_user"
+            }
             _ => {
                 return Err(ProviderError::deny(
                     ReasonCode::CredentialNotProvisioned,

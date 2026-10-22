@@ -1,7 +1,7 @@
 //! Vendor-level Atlassian token profiles (design section 6.11): one
 //! `atlassian` connection serves Jira and Confluence with one stored
-//! classic API token on the site route, service accounts' scoped bearer
-//! tokens reach each product through the gateway, and rows stored under the
+//! classic API token on the site route, service accounts' bearer tokens
+//! reach each product through the gateway, and rows stored under the
 //! retired product profiles are listed as retained, still decrypt, and are
 //! never selected.
 use super::*;
@@ -384,8 +384,15 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
     assert_eq!(targets.len(), 1, "{targets:?}");
     let target = &targets[0];
     assert_eq!(target["connection"], "atlassian");
-    assert_eq!(target["profile"], "atlassian-api-token");
-    assert_eq!(target["credentialKind"], "basic_api_token");
+    assert_eq!(
+        target["tokenProfiles"],
+        json!([{
+            "profile": "atlassian-api-token",
+            "label": "Classic API token (site)",
+            "credentialKind": "basic_api_token",
+            "inputSchema": target["tokenProfiles"][0]["inputSchema"]
+        }])
+    );
     let consumers = target["consumers"]
         .as_array()
         .unwrap()
@@ -427,10 +434,14 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
         .await;
     assert_eq!(stored["connection"], "atlassian");
     assert_eq!(stored["profile"], "atlassian-api-token");
+    assert_eq!(stored["label"], "Classic API token (site)");
     for (status, body) in fixture.read_both(&fixture.alice_invoke).await {
         assert_eq!(status, StatusCode::OK, "{body}");
     }
-    let shared = basic_credential("alice@example.com", "shared-token");
+    let shared = credential_with_profile(
+        basic_credential("alice@example.com", "shared-token"),
+        "atlassian-api-token",
+    );
     assert_eq!(fixture.jira.invoked(), [Some(shared.clone())]);
     assert_eq!(fixture.confluence.invoked(), [Some(shared.clone())]);
     // A basic credential, which both products send to the site.
@@ -460,9 +471,15 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
         assert_eq!(
             fixture
                 .store
-                .resolve_user_credential(&fixture.ring, "alice", service, "default", profile)
+                .resolve_user_credential(
+                    &fixture.ring,
+                    "alice",
+                    service,
+                    "default",
+                    &[profile.to_string()],
+                )
                 .unwrap(),
-            basic_credential("alice@example.com", token),
+            credential_with_profile(basic_credential("alice@example.com", token), profile),
             "{service}"
         );
     }
@@ -521,7 +538,10 @@ async fn a_service_account_uses_its_scoped_bearer_token_through_the_gateway() {
     let [(jira_status, jira), (confluence_status, confluence)] =
         fixture.read_both(&fixture.robot_invoke).await;
     assert_eq!(jira_status, StatusCode::OK, "{jira}");
-    let token = bearer_credential("robot-jira-token");
+    let token = credential_with_profile(
+        bearer_credential("robot-jira-token"),
+        "atlassian-bearer-token",
+    );
     assert_eq!(fixture.jira.invoked(), [Some(token.clone())]);
     // A bearer credential, which Jira sends through the gateway.
     assert_eq!(token.kind(), StaticCredentialKind::BearerToken);

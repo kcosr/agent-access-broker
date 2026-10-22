@@ -430,11 +430,47 @@ fn only_current_signed_workflow_urls_and_nonsecret_exact_origins_are_accepted() 
             "production",
             "toml",
             &ProviderLimits::default(),
-            ServiceCredentialKinds::new(Some("bearer"), None),
+            ServiceCredentialKinds::default()
+                .with_service(Some(CredentialSource::static_kind("bearer_token"))),
         ),
         &mut errors,
     );
     assert_eq!(errors.len(), 2);
+}
+
+/// Teams takes no execution credential: a shared credential, any per-user
+/// token profile, delegated access and a secret store are each rejected.
+#[test]
+fn validation_rejects_every_execution_credential_source() {
+    const REJECTED: &str =
+        "providers.teams does not accept service or per-user execution credentials";
+    let profiles = [agent_access_provider::CredentialProfile::new(
+        "teams-token",
+        "bearer_token",
+    )];
+    let errors = |credentials: ServiceCredentialKinds<'_>| {
+        let mut errors = vec![];
+        config().validate(
+            &ValidationContext::new(
+                "production",
+                "managed",
+                &ProviderLimits::default(),
+                credentials,
+            ),
+            &mut errors,
+        );
+        errors
+    };
+    assert!(errors(ServiceCredentialKinds::default()).is_empty());
+    for credentials in [
+        ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_kind("bearer_token"))),
+        ServiceCredentialKinds::default().with_per_user_profiles(&profiles),
+        ServiceCredentialKinds::default().with_per_user_delegated(true),
+        ServiceCredentialKinds::default().with_per_user_secret_store(true),
+    ] {
+        assert_eq!(errors(credentials), [REJECTED], "{credentials:?}");
+    }
 }
 
 #[test]

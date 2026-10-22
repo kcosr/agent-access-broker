@@ -716,16 +716,19 @@ fn sorted(errors: impl IntoIterator<Item = String>) -> Vec<String> {
     errors
 }
 
-/// A per-product connection consumed by its own product.
-fn product_connections(
-    token_profile: Option<&str>,
-    registration: impl Fn(&str) -> String,
-) -> String {
+/// A per-product connection consumed by its own product: people use OAuth
+/// and service accounts the `token_profiles`.
+fn product_connections(token_profiles: &[&str], registration: impl Fn(&str) -> String) -> String {
     ["jira", "confluence"]
         .map(|product| {
-            let token = token_profile
-                .map(|profile| format!("token_profile = \"{profile}\"\n"))
-                .unwrap_or_default();
+            let token = if token_profiles.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "token_profiles = {}\n",
+                    serde_json::to_string(token_profiles).unwrap()
+                )
+            };
             format!(
                 "[credentials.connections.{product}]\n{token}oauth = {{ registration = \"{}\", profile = \"default\" }}\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n",
                 registration(product)
@@ -736,9 +739,20 @@ fn product_connections(
 
 /// One `atlassian` connection both products consume.
 fn shared_connection(token_profile: Option<&str>, oauth: bool) -> String {
-    let token = token_profile
-        .map(|profile| format!("token_profile = \"{profile}\"\n"))
-        .unwrap_or_default();
+    shared_connection_with(token_profile.as_slice(), oauth)
+}
+
+/// One `atlassian` connection both products consume, accepting
+/// `token_profiles` (beside OAuth, from service accounts only).
+fn shared_connection_with(token_profiles: &[&str], oauth: bool) -> String {
+    let token = if token_profiles.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "token_profiles = {}\n",
+            serde_json::to_string(token_profiles).unwrap()
+        )
+    };
     let oauth = if oauth {
         "oauth = { registration = \"atlassian\", profile = \"default\" }\n"
     } else {
@@ -749,30 +763,28 @@ fn shared_connection(token_profile: Option<&str>, oauth: bool) -> String {
     )
 }
 
-/// Every row of the Atlassian connection table, including simultaneous
-/// bearer service credentials, through offline validation of full
-/// configurations: supported rows validate, and rejected rows report only
-/// their own errors.
+/// Every row of the Atlassian connection table through offline validation
+/// of full configurations: each credential source takes the route its
+/// token type selects, people on OAuth and service accounts on classic and
+/// service-account tokens coexist, and an allowlist that does not cover a
+/// source's route reports only that source.
 #[test]
 fn atlassian_oauth_connections_follow_the_validation_table() {
     let none: Vec<String> = Vec::new();
-    let basic_with_oauth = |service: &str| {
+    let oauth_uncovered = |service: &str| {
+        let bases = match service {
+            "jira" => format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/"),
+            _ => format!(
+                "https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/ and https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/api/v2/"
+            ),
+        };
         format!(
-            "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent"
-        )
-    };
-    let oauth_needs_gateway = |service: &str| {
-        format!(
-            "credentials.per_user.{service} offers delegated (OAuth) access, which requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
-        )
-    };
-    let site_route = |connection: &str, service: &str| {
-        format!(
-            "credentials.connections.{connection}.oauth: {service} does not act on the upstream registration atlassian grants access to: it acts on https://example.atlassian.net (tenant {CLOUD_ID}) without the Atlassian gateway, and the grants act only through the gateway on cloud ID {CLOUD_ID}"
+            "credentials.per_user.{service} (OAuth) takes the Atlassian gateway route, but providers.{service}.allowed_upstream_hosts does not cover {bases}"
         )
     };
 
-    // Token only, atlassian-api-token, gateway off: the site route.
+    // Token only, atlassian-api-token, the tenant alone allowed: the site
+    // route.
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
             gateway: false,
@@ -782,11 +794,11 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
         })),
         none
     );
-    // Token only, atlassian-bearer-token, gateway on.
+    // Token only, atlassian-bearer-token, through the gateway.
     let bearer_tokens = ["jira", "confluence"]
         .map(|product| {
             format!(
-                "[credentials.connections.{product}]\ntoken_profile = \"atlassian-bearer-token\"\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n"
+                "[credentials.connections.{product}]\ntoken_profiles = [\"atlassian-bearer-token\"]\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n"
             )
         })
         .join("\n");
@@ -798,8 +810,21 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
         })),
         none
     );
-    // OAuth only, gateway on, with and without bearer service credentials.
-    for service in [None, Some("bearer_token")] {
+    // People's scoped API tokens beside classic tokens, one connection for
+    // both products.
+    assert_eq!(
+        validation_errors(&atlassian_config(Deployment {
+            service: Some("basic_api_token"),
+            connections: &shared_connection_with(
+                &["atlassian-scoped-api-token", "atlassian-api-token"],
+                false
+            ),
+            ..Deployment::default()
+        })),
+        none
+    );
+    // OAuth only, with and without bearer or classic service credentials.
+    for service in [None, Some("bearer_token"), Some("basic_api_token")] {
         assert_eq!(
             validation_errors(&atlassian_config(Deployment {
                 service,
@@ -810,43 +835,54 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
             "{service:?}"
         );
     }
-    // OAuth only requires the gateway.
+    // OAuth takes the gateway route, which the tenant alone does not cover;
+    // the cloud ID still matches the registration.
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
             gateway: false,
             connections: &shared_connection(None, true),
             ..Deployment::default()
         })),
-        sorted([
-            oauth_needs_gateway("jira"),
-            oauth_needs_gateway("confluence"),
-            site_route("atlassian", "jira"),
-            site_route("atlassian", "confluence"),
-        ])
+        sorted([oauth_uncovered("jira"), oauth_uncovered("confluence")])
     );
     // atlassian-bearer-token and OAuth on per-product connections sharing
-    // one registration, with simultaneous bearer service credentials:
-    // people use OAuth, service accounts bearer tokens, all through the
-    // gateway.
+    // one registration, with simultaneous bearer service credentials.
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
             service: Some("bearer_token"),
-            connections: &product_connections(Some("atlassian-bearer-token"), |_| {
+            connections: &product_connections(&["atlassian-bearer-token"], |_| {
                 "atlassian".into()
             }),
             ..Deployment::default()
         })),
         none
     );
-    // atlassian-api-token and OAuth is rejected, with the gateway on or off.
-    assert_eq!(
-        validation_errors(&atlassian_config(Deployment {
-            service: Some("bearer_token"),
-            connections: &shared_connection(Some("atlassian-api-token"), true),
-            ..Deployment::default()
-        })),
-        sorted([basic_with_oauth("jira"), basic_with_oauth("confluence")])
-    );
+    // People on OAuth; service accounts on classic API tokens (site) and
+    // service-account tokens (gateway), on one connection or one per
+    // product, with classic or bearer service credentials.
+    for service in [Some("basic_api_token"), Some("bearer_token")] {
+        for profiles in [
+            &["atlassian-api-token"][..],
+            &["atlassian-api-token", "atlassian-bearer-token"],
+        ] {
+            for connections in [
+                shared_connection_with(profiles, true),
+                product_connections(profiles, |_| "atlassian".into()),
+            ] {
+                assert_eq!(
+                    validation_errors(&atlassian_config(Deployment {
+                        service,
+                        connections: &connections,
+                        ..Deployment::default()
+                    })),
+                    none,
+                    "{service:?} {profiles:?}"
+                );
+            }
+        }
+    }
+    // With the tenant alone allowed, only OAuth's gateway route is
+    // uncovered; classic tokens and service credentials reach the site.
     assert_eq!(
         validation_errors(&atlassian_config(Deployment {
             gateway: false,
@@ -854,14 +890,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
             connections: &shared_connection(Some("atlassian-api-token"), true),
             ..Deployment::default()
         })),
-        sorted([
-            basic_with_oauth("jira"),
-            basic_with_oauth("confluence"),
-            oauth_needs_gateway("jira"),
-            oauth_needs_gateway("confluence"),
-            site_route("atlassian", "jira"),
-            site_route("atlassian", "confluence"),
-        ])
+        sorted([oauth_uncovered("jira"), oauth_uncovered("confluence")])
     );
 }
 
@@ -881,7 +910,7 @@ fn per_product_registrations_validate_for_single_product_deployments() {
         "{}{}{}",
         atlassian_config(Deployment {
             service: Some("bearer_token"),
-            connections: &product_connections(Some("atlassian-bearer-token"), |product| {
+            connections: &product_connections(&["atlassian-bearer-token"], |product| {
                 format!("atlassian_{product}")
             }),
             ..Deployment::default()

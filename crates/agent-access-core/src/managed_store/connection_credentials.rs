@@ -8,14 +8,15 @@ use super::*;
 use std::collections::BTreeSet;
 
 impl ManagedStore {
-    /// Deletes `owner`'s `(connection, default)` row when it has `profile`,
-    /// the token profile the connection selects for the owner. A row with
-    /// another profile is retained and reports `CredentialNotFound` here.
+    /// Deletes `owner`'s `(connection, default)` row when its profile is
+    /// one of `accepted_profiles`, the token profiles the connection selects
+    /// for the owner. A row with another profile is retained and reports
+    /// `CredentialNotFound` here.
     pub fn delete_connection_credential(
         &self,
         owner_principal_id: &str,
         connection: &str,
-        profile: &str,
+        accepted_profiles: &[String],
         purpose: CredentialManagementPurpose,
     ) -> Result<CredentialMetadata, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
@@ -33,7 +34,7 @@ impl ManagedStore {
             connection,
             crate::CONNECTION_CREDENTIAL_NAME,
         )?;
-        if metadata.profile != profile {
+        if !accepted_profiles.contains(&metadata.profile) {
             return Err(ManagedStoreError::CredentialNotFound);
         }
         tx.execute(

@@ -4,6 +4,15 @@ use super::*;
 
 const PROFILE: &str = "atlassian-api-token";
 
+/// A connection's basic token as the runtime lends it: as its stored
+/// profile.
+fn stored_credential(username: &str, token: &str) -> ExecutionCredential {
+    agent_access_provider::test_support::credential_with_profile(
+        basic_credential(username, token),
+        PROFILE,
+    )
+}
+
 /// Jira on the lookup-trace provider with a per-user connection `connection`
 /// and a per-user grant for `agents`.
 fn connection_config(connection: &str) -> (BrokerConfig, PathBuf) {
@@ -20,7 +29,8 @@ fn connection_config(connection: &str) -> (BrokerConfig, PathBuf) {
         connection.into(),
         crate::ConnectionConfig {
             display_name: None,
-            token_profile: Some(PROFILE.into()),
+            token_profiles: Some(vec![PROFILE.into()]),
+            service_account_token_profiles: None,
             oauth: None,
         },
     );
@@ -34,6 +44,7 @@ fn connection_config(connection: &str) -> (BrokerConfig, PathBuf) {
             path: None,
             read_only: None,
             connection: Some(connection.into()),
+            profile: None,
         },
     );
     config.policy.grants = vec![lookup_trace_grant("per_user", None, &["project-PROJ"])];
@@ -108,7 +119,7 @@ async fn a_connection_token_serves_lookups_and_execution_for_every_managed_kind(
     let runtime = BrokerRuntime::with_providers(config, vec![provider]).unwrap();
     store_token(&runtime, "tracker", "connection-token");
     store_token(&runtime, "jira", "per-service-token");
-    let connection = basic_credential("synthetic-user", "connection-token");
+    let connection = stored_credential("synthetic-user", "connection-token");
 
     for kind in [
         crate::PrincipalKind::User,
@@ -204,17 +215,126 @@ fn discovery_distinguishes_an_unselected_method_from_a_missing_token() {
     assert!(discover(None).actions.is_empty());
 }
 
+/// A connection with neither OAuth nor a list: each publication gives the
+/// effective connection the one type its consumers could accept, while the
+/// configuration keeps no list. Everyone then uses that type, so one stored
+/// token serves every managed kind, and a kind change between service
+/// account and system keeps it usable. A reload recomputes the type: one
+/// under which Jira offers several types (with a cloud ID) fails until the
+/// connection lists them, and a reload back resolves the type again.
+#[test]
+fn publication_resolves_the_implicit_type_and_reload_recomputes_it() {
+    use crate::PrincipalKind::{ServiceAccount, System, User};
+    const CLOUD_ID: &str = "00000000-0000-0000-0000-000000000000";
+    let (mut config, _store) = connection_config("tracker");
+    config.credentials.connections.insert(
+        "tracker".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
+            oauth: None,
+        },
+    );
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let token_profiles = |runtime: &BrokerRuntime| {
+        runtime.effective_credentials().connections["tracker"]
+            .token_profiles
+            .clone()
+    };
+    assert_eq!(token_profiles(&runtime), Some(vec![PROFILE.to_string()]));
+    assert_eq!(
+        runtime.config.credentials.connections["tracker"].token_profiles,
+        None
+    );
+    let available = |runtime: &BrokerRuntime, kind| {
+        runtime
+            .service_capabilities(&identity(Some(kind)), &default_execution_context(), "jira")
+            .unwrap()
+            .availability
+            .state
+    };
+    store_token(&runtime, "tracker", "implied-token");
+    for kind in [User, ServiceAccount, System] {
+        assert_eq!(
+            available(&runtime, kind),
+            AvailabilityState::Available,
+            "{kind:?}"
+        );
+    }
+
+    let mut gateway = config.clone();
+    let jira = gateway
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap();
+    jira.cloud_id = Some(CLOUD_ID.into());
+    jira.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/**"
+    ));
+    match BrokerRuntime::new_for_reload(gateway.clone(), &runtime) {
+        Err(RuntimeError::Config(ConfigError::Invalid { errors })) => assert_eq!(
+            errors,
+            [
+                "credentials.connections.tracker must set token_profiles: its consumers accept several token profiles (atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token)"
+            ]
+        ),
+        other => panic!("several types need a list: {:?}", other.err()),
+    }
+    gateway
+        .credentials
+        .connections
+        .get_mut("tracker")
+        .unwrap()
+        .token_profiles = Some(vec!["atlassian-bearer-token".into()]);
+    let listed = BrokerRuntime::new_for_reload(gateway, &runtime).unwrap();
+    assert_eq!(
+        token_profiles(&listed),
+        Some(vec!["atlassian-bearer-token".to_string()])
+    );
+    // The stored classic token is not accepted under that list.
+    assert_eq!(
+        available(&listed, ServiceAccount),
+        AvailabilityState::Unavailable
+    );
+
+    let back = BrokerRuntime::new_for_reload(config, &listed).unwrap();
+    assert_eq!(token_profiles(&back), Some(vec![PROFILE.to_string()]));
+    for kind in [User, ServiceAccount, System] {
+        assert_eq!(
+            available(&back, kind),
+            AvailabilityState::Available,
+            "{kind:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn readiness_checks_connection_configuration_without_principals() {
     let (config, _store) = connection_config("tracker");
     let runtime = BrokerRuntime::new(config).unwrap();
     runtime.readiness().await.unwrap();
-    // Management resolves a connection's token form by its ID.
+    // Management resolves a connection's token form by its ID, with the
+    // label Jira declares for the profile.
+    for kind in [
+        crate::PrincipalKind::User,
+        crate::PrincipalKind::ServiceAccount,
+        crate::PrincipalKind::System,
+    ] {
+        assert_eq!(
+            runtime.connection_token_profiles("tracker", Some(kind)),
+            Some(vec![crate::ConnectionTokenProfile {
+                profile: PROFILE.into(),
+                label: Some("Classic API token (site)".into()),
+                credential_kind: "basic_api_token",
+            }])
+        );
+    }
+    assert_eq!(runtime.connection_token_profiles("tracker", None), None);
     assert_eq!(
-        runtime.connection_token_profile("tracker"),
-        Some((PROFILE, "basic_api_token"))
+        runtime.connection_token_profiles("jira", Some(crate::PrincipalKind::User)),
+        None
     );
-    assert_eq!(runtime.connection_token_profile("jira"), None);
 }
 
 #[tokio::test]
@@ -324,7 +444,7 @@ async fn a_denial_after_a_personal_lookup_names_the_connection_it_used() {
             .collect::<Vec<_>>(),
         [(
             "pre_scope",
-            Some(basic_credential("synthetic-user", "connection-token"))
+            Some(stored_credential("synthetic-user", "connection-token"))
         )]
     );
 
@@ -525,7 +645,7 @@ async fn assert_selected(
                 "{ingress} {principal}"
             );
             assert_eq!(response.status, 200, "{ingress} {principal}");
-            let token = basic_credential(principal, &format!("{principal}-token"));
+            let token = stored_credential(principal, &format!("{principal}-token"));
             assert!(
                 observations
                     .lock()
@@ -661,7 +781,7 @@ async fn static_principals_carry_their_managed_rows_kind() {
     observations.lock().unwrap().clear();
     let response = invoke_as(&runtime, identity).await;
     assert_eq!(response.status, 200, "{:?}", response.envelope);
-    let token = basic_credential("synthetic-user", "static-token");
+    let token = stored_credential("synthetic-user", "static-token");
     assert!(
         observations
             .lock()
@@ -762,5 +882,450 @@ async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
     assert_eq!(
         runtime.command_caller(&current).await.unwrap().kind,
         "system"
+    );
+}
+
+/// A personal Git token for `agent-one` through the connection `gitlab`,
+/// stored as `profile`: basic for `git-basic-api-token`, bearer otherwise.
+fn store_git_token(runtime: &BrokerRuntime, profile: &str) {
+    let store = runtime.managed_store().unwrap();
+    store
+        .create_or_update_principal(crate::PrincipalWriteRequest {
+            role: crate::PrincipalRole::User,
+            self_service_enabled: None,
+            principal_id: "agent-one".into(),
+            kind: "user".into(),
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    let basic = matches!(
+        profile,
+        "git-basic-api-token" | "atlassian-api-token" | "atlassian-scoped-api-token"
+    );
+    let (credential_kind, secret) = if basic {
+        (
+            "basic_api_token",
+            json!({"username": "deploy-user", "token": "personal-git-token"}),
+        )
+    } else {
+        ("bearer_token", json!({"token": "personal-git-token"}))
+    };
+    store
+        .upsert_user_credential(
+            runtime.credential_key_ring().unwrap(),
+            crate::CredentialWriteRequest {
+                owner_principal_id: "agent-one".into(),
+                service: "gitlab".into(),
+                name: "default".into(),
+                profile: profile.into(),
+                credential_kind: credential_kind.into(),
+                secret,
+                metadata: json!({}),
+                actor: "admin".into(),
+            },
+            crate::CredentialManagementPurpose::Administrative,
+        )
+        .unwrap();
+}
+
+/// A per_user Git gateway on the connection `gitlab`, whose
+/// `token_profiles` are `people` and whose service-account override is
+/// `machines` unless empty, with a fetch grant for `agent-one`. Nothing
+/// listens at the upstream it is then pointed at: a request that got
+/// through would fail to connect instead of being refused.
+fn git_connection_runtime(people: &[&str], machines: &[&str]) -> BrokerRuntime {
+    let identity_token_path = write_temp_secret("agent-one-token");
+    let mut config = base_fake_config();
+    config.identity =
+        static_identity_config("required", &identity_token_path, "agent-one", Vec::new());
+    config.managed_store = Some(ManagedStoreConfig {
+        kind: "sqlite".into(),
+        path: temp_path("gateway-connection.sqlite").display().to_string(),
+        require_registered_principal_for_invocation: false,
+        auto_migrate: true,
+    });
+    let list = |profiles: &[&str]| {
+        (!profiles.is_empty()).then(|| profiles.iter().map(|profile| (*profile).into()).collect())
+    };
+    config.credentials.connections.insert(
+        "gitlab".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profiles: list(people),
+            service_account_token_profiles: list(machines),
+            oauth: None,
+        },
+    );
+    config.credentials.per_user.insert(
+        "gitlab_git".into(),
+        CredentialConfig {
+            kind: "connection".into(),
+            username_ref: None,
+            token_ref: None,
+            provider: None,
+            path: None,
+            read_only: None,
+            connection: Some("gitlab".into()),
+            profile: None,
+        },
+    );
+    let mut gateway = git_gateway_config();
+    gateway.credential_modes = vec!["per_user".into()];
+    config.gateways.insert("gitlab_git".into(), gateway);
+    config.policy.grants.push(PolicyGrantConfig {
+        subjects: vec!["user:agent-one".into()],
+        service: "gitlab_git".into(),
+        actions: vec!["repo.fetch".into()],
+        resources: resource_selection(&["repository-sip-service"]),
+        execution_contexts: None,
+        credential_mode: "per_user".into(),
+        priority: None,
+    });
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let mut unreachable = (*runtime.config).clone();
+    let gateway = unreachable.gateways.get_mut("gitlab_git").unwrap();
+    gateway.upstream_base_url = "http://127.0.0.1:9".into();
+    gateway.allowed_upstream_hosts = vec!["http://127.0.0.1:9/**".into()];
+    runtime_with_replaced_config(&runtime, unreachable)
+}
+
+fn agent_one(runtime: &BrokerRuntime, kind: Option<crate::PrincipalKind>) -> IdentityContext {
+    runtime.identity_from_principal_groups(
+        "agent-one".into(),
+        kind,
+        Some("agent-one".into()),
+        Vec::new(),
+        None,
+        None,
+    )
+}
+
+/// Prepares a Git fetch through the gateway as `identity`, returning the
+/// static credential it would present or the refusal.
+async fn git_fetch_credential(
+    runtime: &BrokerRuntime,
+    identity: IdentityContext,
+) -> Result<ExecutionCredential, Box<BrokerResponse<Value>>> {
+    let prepared = runtime
+        .prepare_gateway_operation(
+            governed(OperationContext {
+                agent_request_id: "gateway-agent-request".into(),
+                broker_request_id: "gateway-broker-request".into(),
+                identity,
+                service: "gitlab_git".into(),
+                action: "repo.fetch".into(),
+                source: SourceContext::unknown(),
+            }),
+            ResourceScopes::from([
+                ("repository".to_string(), vec!["sip/service".to_string()]),
+                ("namespace".to_string(), vec!["sip".to_string()]),
+            ]),
+        )
+        .await?;
+    match &prepared.access {
+        super::super::gateway_access::GatewayAccess::Static(credential) => Ok(credential.clone()),
+        _ => panic!("a stored token is presented as stored"),
+    }
+}
+
+/// People and machines each read the stored row only when their own list
+/// accepts its profile, and it is lent as that profile. Service accounts
+/// and system principals share a list, so a kind change between them keeps
+/// the token usable. A row of a profile removed from the list is kept and
+/// used again, without re-entry, once the list accepts it again.
+#[tokio::test]
+async fn each_kind_reads_the_stored_row_only_under_a_profile_its_list_accepts() {
+    use crate::PrincipalKind::{ServiceAccount, System, User};
+    let runtime = git_connection_runtime(
+        &["git-bearer-token"],
+        &["git-bearer-token", "git-basic-api-token"],
+    );
+    let basic = agent_access_provider::test_support::credential_with_profile(
+        basic_credential("deploy-user", "personal-git-token"),
+        "git-basic-api-token",
+    );
+    let bearer = agent_access_provider::test_support::credential_with_profile(
+        bearer_credential("personal-git-token"),
+        "git-bearer-token",
+    );
+    let refused = |result: Result<ExecutionCredential, Box<BrokerResponse<Value>>>| {
+        let response = result.expect_err("the row must not be read");
+        assert_eq!(response.status, 403, "{:?}", response.envelope);
+        response.envelope.reason_code
+    };
+
+    store_git_token(&runtime, "git-basic-api-token");
+    for kind in [ServiceAccount, System] {
+        assert_eq!(
+            git_fetch_credential(&runtime, agent_one(&runtime, Some(kind)))
+                .await
+                .unwrap(),
+            basic,
+            "{kind:?}"
+        );
+    }
+    // `token_profiles` does not accept the basic profile for people: the row
+    // is retained.
+    assert_eq!(
+        refused(git_fetch_credential(&runtime, agent_one(&runtime, Some(User))).await),
+        Some(ReasonCode::CredentialInvalid.into())
+    );
+    assert_eq!(
+        refused(git_fetch_credential(&runtime, agent_one(&runtime, None)).await),
+        Some(ReasonCode::CredentialNotProvisioned.into())
+    );
+
+    // Replacing it with the bearer type serves every managed kind.
+    store_git_token(&runtime, "git-bearer-token");
+    for kind in [User, ServiceAccount, System] {
+        assert_eq!(
+            git_fetch_credential(&runtime, agent_one(&runtime, Some(kind)))
+                .await
+                .unwrap(),
+            bearer,
+            "{kind:?}"
+        );
+    }
+
+    // Removing the profile from the service-account override keeps the row
+    // stored but unused; adding it back uses it again as stored.
+    let with_machines = |machines: &[&str]| {
+        let mut reconfigured = runtime.clone();
+        let mut credentials = (*reconfigured.effective_credentials).clone();
+        credentials
+            .connections
+            .get_mut("gitlab")
+            .unwrap()
+            .service_account_token_profiles =
+            Some(machines.iter().map(|profile| (*profile).into()).collect());
+        reconfigured.effective_credentials = Arc::new(credentials);
+        reconfigured
+    };
+    let removed = with_machines(&["git-basic-api-token"]);
+    assert_eq!(
+        refused(git_fetch_credential(&removed, agent_one(&removed, Some(System))).await),
+        Some(ReasonCode::CredentialInvalid.into())
+    );
+    let restored = with_machines(&["git-basic-api-token", "git-bearer-token"]);
+    assert_eq!(
+        git_fetch_credential(&restored, agent_one(&restored, Some(System)))
+            .await
+            .unwrap(),
+        bearer
+    );
+}
+
+/// The Git gateway presents a personal token only under a token profile
+/// some published service declares and none marks route-bound. Forwarding
+/// and Git verification both refuse any other before anything is sent.
+#[tokio::test]
+async fn the_git_gateway_refuses_route_bound_and_undeclared_token_profiles() {
+    let runtime = git_connection_runtime(&["git-bearer-token"], &["git-bearer-token"]);
+    store_git_token(&runtime, "git-bearer-token");
+    let identity = agent_one(&runtime, Some(crate::PrincipalKind::User));
+    let prepare = |runtime: BrokerRuntime| {
+        let identity = identity.clone();
+        async move { git_fetch_credential(&runtime, identity).await }
+    };
+    let verify = |runtime: BrokerRuntime, credential: ExecutionCredential| {
+        let identity = identity.clone();
+        async move {
+            runtime
+                .verify_execution_credential(
+                    "gitlab_git",
+                    &credential,
+                    &identity,
+                    CredentialVerificationInput {
+                        repository: Some("sip/service".into()),
+                    },
+                    CorrelationContext::for_tests(),
+                )
+                .await
+        }
+    };
+    let token = |profile: &str| {
+        agent_access_provider::test_support::credential_with_profile(
+            bearer_credential("personal-git-token"),
+            profile,
+        )
+    };
+
+    // The gateway's own declaration makes the stored profile presentable.
+    assert_eq!(
+        prepare(runtime.clone()).await.unwrap(),
+        token("git-bearer-token")
+    );
+
+    // A published fixture service marks the same profile route-bound, alone
+    // or in a repeated declaration after an unrestricted one (which
+    // descriptor validation rejects; the guard stays fail-closed).
+    const ROUTE_BOUND: &str = "the credential's token profile is route-bound: only the service declaring it may present it, so the Git gateway refuses it";
+    let route_bound = || {
+        agent_access_provider::CredentialProfile::new("git-bearer-token", "bearer_token")
+            .route_bound()
+    };
+    for credentials in [
+        CredentialDescriptor::default().with_profile(route_bound()),
+        CredentialDescriptor::default()
+            .profile("git-bearer-token", "bearer_token")
+            .with_profile(route_bound()),
+    ] {
+        let mut routed = runtime.clone();
+        let mut services = (*routed.services).clone();
+        services.insert(
+            "routed_fixture".into(),
+            Arc::new(
+                ServiceDescriptor::new("routed_fixture", "Routed fixture")
+                    .with_credentials(credentials),
+            ),
+        );
+        routed.services = Arc::new(services);
+        let refused = *prepare(routed.clone()).await.err().unwrap();
+        assert_eq!(refused.status, 403, "{:?}", refused.envelope);
+        assert_eq!(
+            refused.envelope.reason_code,
+            Some(ReasonCode::CredentialInvalid.into())
+        );
+        assert_eq!(refused.envelope.reason.as_deref(), Some(ROUTE_BOUND));
+        let refused = verify(routed, token("git-bearer-token")).await.unwrap_err();
+        assert_eq!(refused.reason_code(), ReasonCode::CredentialInvalid);
+        assert_eq!(refused.message, ROUTE_BOUND);
+    }
+
+    // A profile no published service declares is refused the same way.
+    const UNDECLARED: &str = "no configured service declares the credential's token profile, so the Git gateway refuses it";
+    let mut retired = runtime.clone();
+    let mut credentials = (*retired.effective_credentials).clone();
+    credentials
+        .connections
+        .get_mut("gitlab")
+        .unwrap()
+        .token_profiles = Some(vec!["git-retired-token".into()]);
+    retired.effective_credentials = Arc::new(credentials);
+    store_git_token(&retired, "git-retired-token");
+    let refused = *prepare(retired.clone()).await.err().unwrap();
+    assert_eq!(
+        refused.envelope.reason_code,
+        Some(ReasonCode::CredentialInvalid.into())
+    );
+    assert_eq!(refused.envelope.reason.as_deref(), Some(UNDECLARED));
+    let refused = verify(retired.clone(), token("git-retired-token"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason_code(), ReasonCode::CredentialInvalid);
+    assert_eq!(refused.message, UNDECLARED);
+
+    // A credential without a profile is presented by its kind, so its
+    // verification reaches the (absent) upstream.
+    let unprofiled = verify(retired, bearer_credential("personal-git-token"))
+        .await
+        .unwrap_err();
+    assert_ne!(unprofiled.reason_code(), ReasonCode::CredentialInvalid);
+}
+
+/// Jira's real descriptor marks every Atlassian profile route-bound, so with
+/// Jira published the Git gateway refuses a stored classic, scoped or
+/// service-account Atlassian token in forwarding and in verification,
+/// before anything is sent, even when the connection's list accepts it
+/// (which configuration validation rejects; the guard stays fail-closed).
+#[tokio::test]
+async fn the_git_gateway_refuses_atlassian_token_profiles() {
+    use crate::PrincipalKind::User;
+    let runtime = git_connection_runtime(&["git-bearer-token"], &[]);
+    let jira: agent_access_jira::JiraProviderConfig = serde_json::from_value(json!({
+        "tenant_host": "example.atlassian.net",
+        "cloud_id": "00000000-0000-0000-0000-000000000000",
+        "allowed_upstream_hosts": ["https://example.atlassian.net/rest/api/3/**"],
+    }))
+    .unwrap();
+    let mut services = (*runtime.services).clone();
+    services.insert(
+        "jira".into(),
+        Arc::new(agent_access_jira::jira_descriptor(&jira)),
+    );
+    const ROUTE_BOUND: &str = "the credential's token profile is route-bound: only the service declaring it may present it, so the Git gateway refuses it";
+    for (profile, credential) in [
+        (
+            "atlassian-api-token",
+            basic_credential("agent@example.com", "personal-git-token"),
+        ),
+        (
+            "atlassian-scoped-api-token",
+            basic_credential("agent@example.com", "personal-git-token"),
+        ),
+        (
+            "atlassian-bearer-token",
+            bearer_credential("personal-git-token"),
+        ),
+    ] {
+        let mut routed = runtime.clone();
+        routed.services = Arc::new(services.clone());
+        let mut credentials = (*routed.effective_credentials).clone();
+        credentials
+            .connections
+            .get_mut("gitlab")
+            .unwrap()
+            .token_profiles = Some(vec![profile.into()]);
+        routed.effective_credentials = Arc::new(credentials);
+        store_git_token(&routed, profile);
+        let identity = agent_one(&routed, Some(User));
+
+        let refused = *git_fetch_credential(&routed, identity.clone())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.status, 403, "{profile}: {:?}", refused.envelope);
+        assert_eq!(
+            refused.envelope.reason_code,
+            Some(ReasonCode::CredentialInvalid.into()),
+            "{profile}"
+        );
+        assert_eq!(refused.envelope.reason.as_deref(), Some(ROUTE_BOUND));
+        let refused = routed
+            .verify_execution_credential(
+                "gitlab_git",
+                &agent_access_provider::test_support::credential_with_profile(credential, profile),
+                &identity,
+                CredentialVerificationInput {
+                    repository: Some("sip/service".into()),
+                },
+                CorrelationContext::for_tests(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.reason_code(),
+            ReasonCode::CredentialInvalid,
+            "{profile}"
+        );
+        assert_eq!(refused.message, ROUTE_BOUND);
+    }
+}
+
+/// Runtime admission validates every published descriptor, so one that
+/// repeats a token profile, such as an unrestricted declaration followed by
+/// a route-bound one, fails before any credential is presented.
+#[test]
+fn admission_rejects_a_descriptor_repeating_a_token_profile() {
+    let (config, _store) = connection_config("tracker");
+    let provider = LookupTraceProvider::default();
+    let descriptor = agent_access_provider::test_support::DescribedProvider::descriptor(&provider)
+        .with_credentials(
+            CredentialDescriptor::default()
+                .profile(PROFILE, "basic_api_token")
+                .with_profile(
+                    agent_access_provider::CredentialProfile::new(PROFILE, "basic_api_token")
+                        .route_bound(),
+                ),
+        );
+    assert_runtime_config_error_contains(
+        BrokerRuntime::with_providers(
+            config,
+            vec![ServiceProvider::new(descriptor, Arc::new(provider))],
+        ),
+        "service jira declares token profile atlassian-api-token more than once",
     );
 }

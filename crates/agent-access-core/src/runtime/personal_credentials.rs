@@ -1,9 +1,22 @@
 //! The caller's personal (`per_user`) credential through a credential
 //! connection: [`crate::select`] picks the method for the caller's principal
 //! kind from configuration, and a token method reads the connection's
-//! stored row `(connection, default)`. There is no fallback between methods.
+//! stored row `(connection, default)` when its stored profile is one the
+//! selected list accepts. There is no fallback between methods.
 use super::*;
-use crate::{CONNECTION_CREDENTIAL_NAME, PersonalConnection, Selection};
+use crate::{CONNECTION_CREDENTIAL_NAME, PersonalConnection, PrincipalKind, Selection};
+
+/// One token profile a credential connection accepts from a principal, as
+/// management offers it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionTokenProfile {
+    pub profile: String,
+    /// The label a consumer declares for it; management falls back to the
+    /// profile name.
+    pub label: Option<String>,
+    /// The credential kind its consumers agree on.
+    pub credential_kind: &'static str,
+}
 
 impl BrokerRuntime {
     /// The connection `service` consumes and the method `identity` selects
@@ -18,22 +31,48 @@ impl BrokerRuntime {
         Some((connection, connection.select(identity.principal_kind)))
     }
 
-    /// The token profile of the effective credential connection
-    /// `connection` and the credential kind its consumers declare for it;
-    /// `None` for an unknown connection or one without a token profile.
-    pub fn connection_token_profile(&self, connection: &str) -> Option<(&str, &'static str)> {
-        let profile = self
-            .effective_credentials
-            .connections
-            .get(connection)?
-            .token_profile
-            .as_deref()?;
-        let kind = crate::connections::connection_token_kind(
+    /// The token profiles the effective credential connection `connection`
+    /// accepts from a principal of `kind`, in configuration order, each
+    /// with the credential kind its consumers declare and its label; `None`
+    /// for an unknown connection or one that selects no token method for
+    /// `kind`. A listed profile whose kind the consumers do not settle,
+    /// which validation rejects, is left out.
+    pub fn connection_token_profiles(
+        &self,
+        connection: &str,
+        kind: Option<PrincipalKind>,
+    ) -> Option<Vec<ConnectionTokenProfile>> {
+        let config = self.effective_credentials.connections.get(connection)?;
+        let Selection::Token(profiles) = crate::select(config, kind) else {
+            return None;
+        };
+        let accepted = profiles
+            .iter()
+            .filter_map(|profile| {
+                Some(ConnectionTokenProfile {
+                    credential_kind: crate::connections::connection_profile_kind(
+                        &self.effective_credentials,
+                        &self.services,
+                        connection,
+                        profile,
+                    )?,
+                    label: self.connection_profile_label(connection, profile),
+                    profile: profile.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        (!accepted.is_empty()).then_some(accepted)
+    }
+
+    /// The label the consumers of `connection` declare for `profile`, for a
+    /// stored row of that profile; `None` when none declares one.
+    pub fn connection_profile_label(&self, connection: &str, profile: &str) -> Option<String> {
+        crate::connections::connection_profile_label(
             &self.effective_credentials,
             &self.services,
             connection,
-        )?;
-        Some((profile, kind))
+            profile,
+        )
     }
 
     /// The credential connection a call's audit record names: the one a
@@ -78,8 +117,8 @@ impl BrokerRuntime {
         let (connection, selection) = self
             .personal_selection(service, identity)
             .ok_or_else(personal_credential_unconfigured)?;
-        let profile = match selection {
-            Selection::Token(profile) => profile,
+        let profiles = match selection {
+            Selection::Token(profiles) => profiles,
             Selection::OAuth(_) => {
                 return Err(ProviderError::deny(
                     ReasonCode::CredentialNotProvisioned,
@@ -88,16 +127,16 @@ impl BrokerRuntime {
             }
             Selection::Unavailable => return Err(personal_method_unavailable()),
         };
-        self.resolve_stored_connection_token(connection.id, profile, identity)
+        self.resolve_stored_connection_token(connection.id, profiles, identity)
             .await
     }
 
     /// Reads and records the use of `identity`'s token row for
-    /// `connection`, which must have `profile`.
+    /// `connection`, whose stored profile must be one of `profiles`.
     async fn resolve_stored_connection_token(
         &self,
         connection: &str,
-        profile: &str,
+        profiles: &[String],
         identity: &IdentityContext,
     ) -> Result<ExecutionCredential, ProviderError> {
         let identity = identity.authenticated.then_some(identity).ok_or_else(|| {
@@ -118,10 +157,10 @@ impl BrokerRuntime {
                 "credential encryption key ring is not configured",
             )
         })?;
-        let (principal, connection, profile) = (
+        let (principal, connection, profiles) = (
             identity.principal.clone(),
             connection.to_owned(),
-            profile.to_owned(),
+            profiles.to_vec(),
         );
         managed_store_blocking(move || {
             store.resolve_user_credential(
@@ -129,7 +168,7 @@ impl BrokerRuntime {
                 &principal,
                 &connection,
                 CONNECTION_CREDENTIAL_NAME,
-                &profile,
+                &profiles,
             )
         })
         .await

@@ -992,6 +992,7 @@ mod tests {
                 token_ref: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
         );
         let runtime = BrokerRuntime::new(config.clone()).unwrap();

@@ -1,8 +1,9 @@
 // Credential connections as the portal presents them: a principal's
-// connections (one credential slot several services consume), its stored rows
-// the configuration no longer selects, an administered principal's OAuth
+// connections (one credential slot several services consume), the token types
+// they accept and the token form's choice among them, its stored rows the
+// configuration no longer selects, an administered principal's OAuth
 // registrations, and the wording that names consumers.
-import type { ConnectionConsumer, CredentialConnection, CredentialList, RemoteRevocation } from "../types";
+import type { ConnectionConsumer, CredentialConnection, CredentialList, CredentialTokenProfile, RemoteRevocation } from "../types";
 import { plural } from "../workbench";
 
 export const EMPTY_CREDENTIAL_LIST: CredentialList = { connections: [], retained: [] };
@@ -75,4 +76,52 @@ export function consumerSummary(consumers: ConnectionConsumer[], otherConsumers:
 /** The consumers whose verification needs a repository (Git gateways). */
 export function repositoryConsumers(consumers: ConnectionConsumer[]): ConnectionConsumer[] {
   return consumers.filter((consumer) => consumer.credentialVerificationInputs.includes("repository"));
+}
+
+/** A token type (profile) as the portal names it: its label, else its profile ID. */
+export function tokenTypeName(entry: { profile: string; label: string | null }): string {
+  return entry.label ?? entry.profile;
+}
+
+/**
+ * The token type a token connection's row and drawer show: the stored
+ * token's; without one, the only type the connection accepts, or how many
+ * it accepts when the saver chooses.
+ */
+export function connectionTokenType(connection: CredentialConnection): string {
+  if (connection.credential) return tokenTypeName(connection.credential);
+  const accepted = connection.tokenProfiles;
+  if (accepted.length > 1) return `${accepted.length} token types`;
+  return accepted[0] ? tokenTypeName(accepted[0]) : "";
+}
+
+/**
+ * The token type a token form starts with: the only one the connection
+ * accepts; with several, the stored token's while the connection still
+ * accepts it, else none, so the saver chooses explicitly.
+ */
+export function initialTokenType(accepted: CredentialTokenProfile[], stored: string | undefined): string {
+  if (accepted.length === 1) return accepted[0].profile;
+  return accepted.find((entry) => entry.profile === stored)?.profile ?? "";
+}
+
+/** The accepted token type `chosen` names; the only one when there is no choice, and undefined until one is chosen. */
+export function chosenTokenType(accepted: CredentialTokenProfile[], chosen: string): CredentialTokenProfile | undefined {
+  return accepted.length === 1 ? accepted[0] : accepted.find((entry) => entry.profile === chosen);
+}
+
+/**
+ * The values of `type`'s fields among `values`, empty where none was
+ * entered: the secret a save sends, and what a form keeps when the saver
+ * switches to `type` (the fields both types share, such as the token).
+ */
+export function tokenTypeValues(type: CredentialTokenProfile, values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(type.inputSchema.fields.map((field) => [field.name, values[field.name] ?? ""]));
+}
+
+/** Whether a token form can save: a type is chosen, a value entered, and every required field filled. */
+export function tokenFormReady(type: CredentialTokenProfile | undefined, values: Record<string, string>): type is CredentialTokenProfile {
+  if (!type) return false;
+  const fields = type.inputSchema.fields;
+  return fields.some((field) => values[field.name]) && fields.every((field) => !field.required || values[field.name]);
 }

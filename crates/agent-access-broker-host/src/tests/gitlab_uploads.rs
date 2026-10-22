@@ -182,6 +182,7 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
         path: None,
         read_only: None,
         connection: None,
+        profile: None,
     };
     config
         .credentials

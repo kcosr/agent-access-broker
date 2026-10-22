@@ -51,7 +51,15 @@ impl BackendConfig for GmailConfig {
         "gmail"
     }
     fn validate(&self, context: &ValidationContext<'_>, errors: &mut Vec<String>) {
-        if context.credentials.service.is_some() || context.credentials.per_user != Some("oauth") {
+        // Gmail acts only through a person's Google connection: the per-user
+        // connection offers OAuth and accepts no token profile, and no
+        // shared or secret-store credential stands in for it.
+        let credentials = context.credentials;
+        if credentials.service.is_some()
+            || !credentials.per_user_profiles.is_empty()
+            || credentials.per_user_secret_store
+            || !credentials.per_user_delegated
+        {
             errors.push("providers.gmail requires credentials.per_user.gmail of kind oauth and no service credential".into());
         }
     }

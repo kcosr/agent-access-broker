@@ -276,9 +276,17 @@ fn gitlab_validation_accepts_delegated_per_user_connections() {
     }))
     .unwrap();
     let limits = ProviderLimits::default();
+    let profiles = [agent_access_provider::CredentialProfile::new(
+        "gitlab-access-token",
+        "bearer_token",
+    )];
     for credentials in [
-        ServiceCredentialKinds::new(None, Some("oauth")).with_per_user_delegated(true),
-        ServiceCredentialKinds::new(Some("bearer_token"), Some("bearer_token"))
+        ServiceCredentialKinds::default().with_per_user_delegated(true),
+        ServiceCredentialKinds::default()
+            .with_service(Some(agent_access_provider::CredentialSource::static_kind(
+                "bearer_token",
+            )))
+            .with_per_user_profiles(&profiles)
             .with_per_user_delegated(true),
     ] {
         let mut errors = Vec::new();

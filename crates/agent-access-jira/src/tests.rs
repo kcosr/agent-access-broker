@@ -7236,26 +7236,31 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
     assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
 }
 
-/// Jira declares the vendor-level Atlassian profiles Confluence declares:
-/// the classic API token on every site, reaching the site route, and the
-/// service-account bearer token only when the site uses the gateway,
-/// reaching it. It accepts delegated (OAuth) access on every site; validation
-/// requires the gateway for it.
+/// Jira declares the vendor-level Atlassian profiles Confluence declares,
+/// labeled and route-bound: the classic API token on every site, reaching
+/// the site route, and the scoped API token and service-account bearer
+/// token whenever a cloud ID gives the site its gateway route, reaching it.
+/// It accepts delegated (OAuth) access on every site; validation requires
+/// the cloud ID for it.
 #[test]
-fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
+fn descriptor_declares_vendor_profiles_whose_types_select_the_route() {
     let mut config = jira_config();
     let site = jira_descriptor(&config);
     assert_eq!(
         site.credentials,
         agent_access_provider::CredentialDescriptor::default()
-            .profile("atlassian-api-token", "basic_api_token")
+            .with_profile(
+                agent_access_provider::CredentialProfile::new(
+                    "atlassian-api-token",
+                    "basic_api_token"
+                )
+                .with_label("Classic API token (site)")
+                .route_bound()
+            )
             .delegated(JIRA_OAUTH_CONNECTION)
     );
     let cloud_id = "11111111-1111-1111-1111-111111111111";
     config.cloud_id = Some(cloud_id.to_string());
-    config.allowed_upstream_hosts.push(format!(
-        "https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/**"
-    ));
     let descriptor = jira_descriptor(&config);
     let backend = HttpJiraBackend::for_tests(config, ProviderLimits::default());
     for (profile, credential, base) in [
@@ -7263,6 +7268,11 @@ fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
             "atlassian-api-token",
             test_credential(),
             "https://example.atlassian.net/rest/api/3/".to_string(),
+        ),
+        (
+            "atlassian-scoped-api-token",
+            test_credential(),
+            format!("https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/"),
         ),
         (
             "atlassian-bearer-token",
@@ -7275,9 +7285,20 @@ fn descriptor_declares_vendor_profiles_whose_kinds_select_the_route() {
             Some(credential.kind().as_str()),
             "{profile}"
         );
+        assert!(
+            descriptor
+                .credential_profile(profile)
+                .is_some_and(|declared| declared.route_bound && declared.label.is_some()),
+            "{profile}"
+        );
         assert_eq!(
             backend
-                .api_base(&AtlassianCredential::from_static(credential.clone()))
+                .api_base(&AtlassianCredential::from_static(
+                    agent_access_provider::test_support::credential_with_profile(
+                        credential.clone(),
+                        profile
+                    )
+                ))
                 .unwrap()
                 .as_str(),
             base,

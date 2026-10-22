@@ -21,6 +21,8 @@
 //!   service-scoped signing key to a backend's build.
 //! - **Admitted request values**: [`scope_request`] for scope resolution,
 //!   [`basic_credential`] and [`bearer_credential`] for static material,
+//!   with [`credential_with_profile`] naming the token profile it was stored
+//!   or configured as,
 //!   [`admitted_request`] for the admission decision, [`spooled_body_part`] and
 //!   [`spooled_body_file`] for body parts the host spooled to disk, and
 //!   [`invocation`] for the final invocation built after staging.
@@ -298,6 +300,15 @@ pub fn basic_credential(username: String, token: String) -> ExecutionCredential 
 /// A `bearer_token` credential from the host's validated material.
 pub fn bearer_credential(token: String) -> ExecutionCredential {
     ExecutionCredential::bearer(token)
+}
+
+/// `credential` as the token profile `profile` it was stored or configured
+/// as, which [`ExecutionCredential::profile`] reports.
+pub fn credential_with_profile(
+    credential: ExecutionCredential,
+    profile: impl Into<String>,
+) -> ExecutionCredential {
+    credential.with_profile(profile.into())
 }
 
 /// The host's admission decision for one operation: the admitted context, the

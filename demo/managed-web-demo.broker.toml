@@ -111,9 +111,11 @@ read_only = true
 
 # Jira and Confluence share the atlassian connection: one stored account
 # email and classic API token per principal serves both products on the site.
+# With the providers' cloud_id they also offer gateway token types, so the
+# connection lists the one it accepts.
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-token_profile = "atlassian-api-token"
+token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.jira]
 type = "connection"
@@ -143,9 +145,10 @@ type = "bearer_token"
 token_ref = "env:AAB_DEMO_GITLAB_LOOKUP_TOKEN"
 read_only = true
 
+# GitLab access tokens are the only type GitLab REST and the Git gateway
+# both accept, so the connection needs no list.
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
 
 [credentials.per_user.gitlab]
 type = "connection"

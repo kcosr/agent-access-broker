@@ -1,10 +1,12 @@
 //! The `atlassian` OAuth dialect ([`ATLASSIAN_OAUTH_DIALECT`]) and the
-//! helpers the Jira and Confluence backends share: configuration
-//! validation, the credential each request presents ([`AtlassianCredential`],
+//! helpers the Jira and Confluence backends share: the vendor-level token
+//! profiles and the route each credential's token type takes, the
+//! tenant/gateway client routes, route-coverage validation per credential
+//! source, the credential each request presents ([`AtlassianCredential`],
 //! with delegated access pinned per request and one 401 recovery, and
 //! attachment downloads whose redirects keep it on the route's site), the
-//! tenant/gateway client routes, the credential binding of their
-//! continuations and the receipts of writes whose verification failed.
+//! credential binding of their continuations and the receipts of writes
+//! whose verification failed.
 mod access;
 mod oauth;
 
@@ -16,10 +18,10 @@ pub use oauth::{ATLASSIAN_OAUTH_AUDIENCE, ATLASSIAN_OAUTH_DIALECT};
 
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ClientProfile, ContinuationBinding, ContinuationStage, CredentialDescriptor, EgressDeclaration,
-    EgressProxyConfig, ExecutionAccess, ProviderBuildError, ProviderError, ReasonCode,
-    ServiceCredentialKinds, StaticCredentialKind, UpstreamAuthority, UpstreamClient,
-    UpstreamClientSpec,
+    ClientProfile, ContinuationBinding, ContinuationStage, CredentialDescriptor, CredentialProfile,
+    CredentialSource, EgressDeclaration, EgressProxyConfig, ExecutionAccess, ExecutionCredential,
+    ProviderBuildError, ProviderError, ReasonCode, ServiceCredentialKinds, StaticCredentialKind,
+    UpstreamAuthority, UpstreamClient, UpstreamClientSpec, base_covered_by_patterns,
 };
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -27,116 +29,8 @@ use std::fmt;
 use std::sync::Arc;
 use url::Url;
 
-/// Checks an Atlassian provider's execution credentials against its route.
-///
-/// The site route takes Basic API tokens; the Atlassian gateway, enabled by
-/// `api.atlassian.com` in the allowlist, takes bearer tokens and delegated
-/// (OAuth) access, and then every credential must use it:
-///
-/// | Per-user connection | Gateway | Result |
-/// | --- | --- | --- |
-/// | `basic_api_token` profile only | off | valid: site route |
-/// | `bearer_token` profile only | on | valid: gateway |
-/// | OAuth only | on (required) | valid: gateway |
-/// | `bearer_token` profile and OAuth | on | valid: OAuth for people, bearer tokens for service accounts, both through the gateway |
-/// | `basic_api_token` profile and OAuth | either | rejected: site tokens would mix with gateway OAuth |
-///
-/// A `credentials.service` credential must be a bearer token when the
-/// gateway is on, and a bearer credential requires the gateway. The same
-/// holds for the `credentials.lookup` credential, which reaches the site by
-/// its kind like any static token, but it is not execution material: the
-/// gateway still needs a bearer or OAuth execution credential beside it.
-pub fn validate_atlassian_gateway_credential(
-    service: &str,
-    patterns: &[String],
-    cloud_id: Option<&str>,
-    credentials: ServiceCredentialKinds<'_>,
-    errors: &mut Vec<String>,
-) {
-    let uses_gateway = uses_atlassian_gateway_host(patterns);
-    let delegated = credentials.per_user_delegated;
-    if delegated {
-        if credentials.per_user == Some("basic_api_token") {
-            errors.push(format!(
-                "credentials.per_user.{service} combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent"
-            ));
-        }
-        if !uses_gateway {
-            errors.push(format!(
-                "credentials.per_user.{service} offers delegated (OAuth) access, which requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
-            ));
-        }
-    }
-    // Beside OAuth, the per-user kind is `oauth` for a connection without a
-    // token profile, whose access is the delegated credential checked above,
-    // or a basic profile, already rejected above.
-    let per_user_static = credentials
-        .per_user
-        .filter(|kind| !(delegated && matches!(*kind, "oauth" | "basic_api_token")));
-    // Each static credential with whether it is execution material.
-    let static_credentials = [
-        ("credentials.service", credentials.service, true),
-        ("credentials.per_user", per_user_static, true),
-        ("credentials.lookup", credentials.lookup, false),
-    ];
-    let mut has_gateway_execution_credential = delegated;
-    let mut bearer_mode = None;
-
-    for (mode, credential, execution) in static_credentials {
-        if let Some(kind) = credential {
-            if kind == "bearer_token" {
-                has_gateway_execution_credential |= execution;
-                bearer_mode.get_or_insert(mode);
-            } else if uses_gateway {
-                errors.push(format!(
-                    "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but {mode}.{service} does not resolve to a bearer_token credential"
-                ));
-            }
-        }
-    }
-
-    if let Some(mode) = bearer_mode.filter(|_| !uses_gateway) {
-        errors.push(format!(
-            "{mode}.{service}.type bearer_token requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
-        ));
-    }
-
-    if !uses_gateway {
-        return;
-    }
-
-    match cloud_id {
-        Some(value) if uuid::Uuid::parse_str(value).is_ok() => {}
-        Some(_) => errors.push(format!(
-            "providers.{service}.cloud_id must be a valid Atlassian cloud UUID when api.atlassian.com is allowed"
-        )),
-        None => errors.push(format!(
-            "providers.{service}.cloud_id is required when api.atlassian.com is allowed"
-        )),
-    }
-
-    if !has_gateway_execution_credential {
-        errors.push(format!(
-            "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured"
-        ));
-    }
-}
-
 /// The Atlassian API gateway's origin.
 pub const ATLASSIAN_GATEWAY_ORIGIN: &str = "https://api.atlassian.com";
-
-/// A configured cloud ID in the one form the site declares, routes and
-/// binds: Atlassian's own, a lowercase hyphenated UUID. Configuration
-/// accepts a UUID in any form [`uuid::Uuid::parse_str`] does, such as
-/// uppercase or braced, so an OAuth registration's `target` matches it
-/// however it is written. A value that is not a UUID, which validation
-/// rejects whenever the gateway is on, is kept as written.
-fn canonical_cloud_id(cloud_id: &str) -> Cow<'_, str> {
-    match uuid::Uuid::parse_str(cloud_id) {
-        Ok(id) => Cow::Owned(id.hyphenated().to_string()),
-        Err(_) => Cow::Borrowed(cloud_id),
-    }
-}
 
 /// The stored token profile for an Atlassian account's email address and
 /// classic API token, presented as HTTP Basic on the site route. Classic
@@ -144,19 +38,244 @@ fn canonical_cloud_id(cloud_id: &str) -> Cow<'_, str> {
 /// can serve Jira and Confluence on one site.
 pub const ATLASSIAN_API_TOKEN_PROFILE: &str = "atlassian-api-token";
 
-/// The stored token profile for an Atlassian service account's scoped API
-/// token, presented as a bearer token through the Atlassian gateway.
+/// The stored token profile for an Atlassian account's email address and
+/// scoped API token, presented as HTTP Basic through the Atlassian gateway:
+/// a person's scoped token, or a service account's token used with its
+/// email address.
+pub const ATLASSIAN_SCOPED_API_TOKEN_PROFILE: &str = "atlassian-scoped-api-token";
+
+/// The stored token profile for a bearer token, such as an Atlassian
+/// service account's token, presented as a bearer token through the
+/// Atlassian gateway.
 pub const ATLASSIAN_BEARER_TOKEN_PROFILE: &str = "atlassian-bearer-token";
 
-/// Whether an Atlassian provider allowlist routes through the Atlassian API
-/// gateway. Only an exact `api.atlassian.com` host counts.
-pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
-    allowed_upstream_hosts.iter().any(|pattern| {
-        Url::parse(pattern)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_string))
-            .is_some_and(|host| host == "api.atlassian.com")
-    })
+/// The route an Atlassian credential takes, decided by its token type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtlassianRoute {
+    /// The tenant host: `https://<tenant_host>/`.
+    Site,
+    /// The Atlassian gateway on the configured cloud ID:
+    /// `https://api.atlassian.com/ex/<product>/<cloud_id>/`.
+    Gateway,
+}
+
+impl AtlassianRoute {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Site => "site route",
+            Self::Gateway => "Atlassian gateway route",
+        }
+    }
+}
+
+/// Why a credential has no Atlassian route. Nothing is presented on any
+/// route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtlassianRouteError {
+    /// A static credential kind Atlassian providers do not present.
+    UnsupportedKind,
+    /// A token profile Atlassian providers do not declare.
+    UnknownProfile,
+    /// A token profile declared with another kind than the credential's.
+    ProfileKindMismatch,
+    /// The gateway route, which needs a configured cloud ID that is a valid
+    /// UUID, is not available.
+    GatewayUnavailable,
+}
+
+/// One vendor-level token profile: its kind, the route it takes and the
+/// label people choose it by.
+struct AtlassianProfile {
+    name: &'static str,
+    kind: StaticCredentialKind,
+    route: AtlassianRoute,
+    label: &'static str,
+}
+
+/// Every token profile Atlassian providers declare, in picker order.
+const ATLASSIAN_PROFILES: [AtlassianProfile; 3] = [
+    AtlassianProfile {
+        name: ATLASSIAN_API_TOKEN_PROFILE,
+        kind: StaticCredentialKind::BasicApiToken,
+        route: AtlassianRoute::Site,
+        label: "Classic API token (site)",
+    },
+    AtlassianProfile {
+        name: ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+        kind: StaticCredentialKind::BasicApiToken,
+        route: AtlassianRoute::Gateway,
+        label: "Scoped API token (gateway)",
+    },
+    AtlassianProfile {
+        name: ATLASSIAN_BEARER_TOKEN_PROFILE,
+        kind: StaticCredentialKind::BearerToken,
+        route: AtlassianRoute::Gateway,
+        label: "Service account token (gateway)",
+    },
+];
+
+/// The one route classifier every Atlassian decision uses: requests and
+/// verification ([`AtlassianRoutes::for_credential`]), presentation,
+/// continuation binding ([`bind_atlassian_access`]) and validation. A static
+/// credential of `kind` lent as `profile`:
+///
+/// - without a profile takes its kind's route: a Basic API token the site, a
+///   bearer token the gateway;
+/// - with a vendor-level profile takes that profile's route, provided the
+///   profile is declared with the credential's kind;
+/// - with any other profile, or of any other kind, has no route.
+fn static_route(kind: &str, profile: Option<&str>) -> Result<AtlassianRoute, AtlassianRouteError> {
+    let Some(profile) = profile else {
+        return match kind {
+            "basic_api_token" => Ok(AtlassianRoute::Site),
+            "bearer_token" => Ok(AtlassianRoute::Gateway),
+            _ => Err(AtlassianRouteError::UnsupportedKind),
+        };
+    };
+    let declared = ATLASSIAN_PROFILES
+        .iter()
+        .find(|declared| declared.name == profile)
+        .ok_or(AtlassianRouteError::UnknownProfile)?;
+    if declared.kind.as_str() != kind {
+        return Err(AtlassianRouteError::ProfileKindMismatch);
+    }
+    Ok(declared.route)
+}
+
+/// [`static_route`] for a static credential the host lent.
+pub(crate) fn credential_route(
+    credential: &ExecutionCredential,
+) -> Result<AtlassianRoute, AtlassianRouteError> {
+    static_route(credential.kind().as_str(), credential.profile())
+}
+
+/// `cloud_id` in the one form the site declares, routes and binds:
+/// Atlassian's own, a lowercase hyphenated UUID. Configuration accepts a
+/// UUID in any form [`uuid::Uuid::parse_str`] does, such as uppercase or
+/// braced, so an OAuth registration's `target` matches it however it is
+/// written. `None` for a value that is not a UUID, which validation rejects.
+fn canonical_cloud_id(cloud_id: &str) -> Option<String> {
+    uuid::Uuid::parse_str(cloud_id)
+        .ok()
+        .map(|id| id.hyphenated().to_string())
+}
+
+/// Checks that every configured credential source of an Atlassian provider
+/// reaches the route its token type takes:
+///
+/// - `providers.<p>.cloud_id`, when set, is a valid UUID; the gateway route
+///   exists only then;
+/// - each source's route is covered by `allowed_upstream_hosts` for every
+///   API base the product uses on it ([`AtlassianProduct::api_paths`]), as
+///   [`base_covered_by_patterns`] decides; a gateway source also requires
+///   the cloud ID.
+///
+/// The sources are the `credentials.service` and `credentials.lookup`
+/// credentials (by profile when they name one, else by kind), each token
+/// profile the per-user connection accepts, its OAuth (always the gateway)
+/// and a per-user secret store, whose records route by their own kind at
+/// run time and are checked offline on the site route only. A shared
+/// credential naming a profile the service does not declare with its kind
+/// is reported by credential validation, not here. Errors name the source,
+/// its type, the route and the uncovered bases.
+pub fn validate_atlassian_routes(
+    product: AtlassianProduct,
+    site: &AtlassianSite<'_>,
+    credentials: ServiceCredentialKinds<'_>,
+    errors: &mut Vec<String>,
+) {
+    let service = product.provider;
+    let gateway_cloud_id = match site.cloud_id {
+        Some(cloud_id) => {
+            let canonical = canonical_cloud_id(cloud_id);
+            if canonical.is_none() {
+                errors.push(format!(
+                    "providers.{service}.cloud_id must be a valid Atlassian cloud UUID"
+                ));
+            }
+            canonical
+        }
+        None => None,
+    };
+    // Each source: its configuration key, its type and its route; `None`
+    // for a secret store, whose records' kinds are known only at run time.
+    let mut sources = Vec::<(String, String, Option<AtlassianRoute>)>::new();
+    let mut shared = |mode: &str, source: Option<CredentialSource<'_>>| {
+        let label = format!("{mode}.{service}");
+        match source {
+            None => {}
+            Some(CredentialSource::Static { kind, profile, .. }) => {
+                if let Ok(route) = static_route(kind, profile) {
+                    let kind = match profile {
+                        Some(profile) => format!("profile {profile}"),
+                        None => format!("type {kind}"),
+                    };
+                    sources.push((label, kind, Some(route)));
+                }
+            }
+            Some(CredentialSource::SecretStore) => {
+                sources.push((label, "secret_store".to_string(), None));
+            }
+            Some(_) => errors.push(format!(
+                "{label} is a credential source Atlassian providers do not support"
+            )),
+        }
+    };
+    shared("credentials.service", credentials.service);
+    shared("credentials.lookup", credentials.lookup);
+    let per_user = format!("credentials.per_user.{service}");
+    for profile in credentials.per_user_profiles {
+        if let Ok(route) = static_route(profile.kind, Some(&profile.name)) {
+            sources.push((
+                per_user.clone(),
+                format!("profile {}", profile.name),
+                Some(route),
+            ));
+        }
+    }
+    if credentials.per_user_secret_store {
+        sources.push((per_user.clone(), "secret_store".to_string(), None));
+    }
+    if credentials.per_user_delegated {
+        sources.push((per_user, "OAuth".to_string(), Some(AtlassianRoute::Gateway)));
+    }
+
+    for (source, kind, route) in sources {
+        let (route, bases) = match route {
+            Some(AtlassianRoute::Gateway) => match &gateway_cloud_id {
+                Some(cloud_id) => (AtlassianRoute::Gateway, product.gateway_api_bases(cloud_id)),
+                None => {
+                    if site.cloud_id.is_none() {
+                        errors.push(format!(
+                            "{source} ({kind}) takes the Atlassian gateway route, which requires providers.{service}.cloud_id"
+                        ));
+                    }
+                    continue;
+                }
+            },
+            Some(AtlassianRoute::Site) | None => (
+                AtlassianRoute::Site,
+                product.site_api_bases(site.tenant_host),
+            ),
+        };
+        let uncovered = bases
+            .iter()
+            .filter(|base| !base_covered_by_patterns(base, site.allowed_upstream_hosts))
+            .map(Url::as_str)
+            .collect::<Vec<_>>();
+        if !uncovered.is_empty() {
+            let records = if kind == "secret_store" {
+                " its basic_api_token records take"
+            } else {
+                ""
+            };
+            errors.push(format!(
+                "{source} ({kind}) takes the {}{records}, but providers.{service}.allowed_upstream_hosts does not cover {}",
+                route.name(),
+                uncovered.join(" and ")
+            ));
+        }
+    }
 }
 
 /// Binds a continuation or handle to the execution material that reaches an
@@ -165,49 +284,52 @@ pub fn uses_atlassian_gateway_host(allowed_upstream_hosts: &[String]) -> bool {
 ///
 /// - the credential method: a static credential (a stored or service token)
 ///   or delegated (OAuth) access;
-/// - for a static credential, its kind, which selects the route: a Basic API
-///   token reaches the tenant host and a bearer token the gateway;
+/// - for a static credential, its kind;
 /// - for delegated access, the lease's delegated binding (the OAuth
 ///   connection and its generation, never the access version), target and
 ///   audience. Routine refresh keeps them; reconnecting, replacing the
 ///   account or new consent changes the binding;
-/// - for a route through the Atlassian gateway (a bearer token or delegated
-///   access), the configured `cloud_id`, the site the gateway reaches, in its
-///   lowercase hyphenated form, however the configuration writes it.
+/// - for a credential whose token type takes the Atlassian gateway route
+///   (delegated access, a bearer token or a scoped API token), the
+///   configured `cloud_id`, the site the gateway reaches, in its lowercase
+///   hyphenated form, however the configuration writes it. Its absence is
+///   bound too, so a scoped API token (Basic on the gateway) never opens what
+///   a classic one (Basic on the site) sealed, or the reverse.
 ///
-/// A token sealed under one method, account, connection generation or
+/// A token sealed under one method, account, connection generation, route or
 /// gateway site therefore never opens under another. Every input is fixed by
 /// configuration or the host's selection, so a token survives a restart
 /// whenever its family's key does. Execution material Atlassian providers do
-/// not accept, including none, fails closed.
+/// not accept, including none, material with no route, and a gateway route
+/// without a valid `cloud_id`, fail closed.
 pub fn bind_atlassian_access<Stage: ContinuationStage>(
     binding: ContinuationBinding<Stage>,
     access: &ExecutionAccess,
     cloud_id: Option<&str>,
 ) -> Result<ContinuationBinding<Stage>, ProviderError> {
-    let (binding, through_gateway) = match access {
-        ExecutionAccess::Static(credential) => {
-            let through_gateway = match credential.kind() {
-                StaticCredentialKind::BasicApiToken => false,
-                StaticCredentialKind::BearerToken => true,
-                _ => return Err(atlassian_access_unavailable()),
-            };
-            (
-                binding
-                    .text("credentialMethod", "static")
-                    .text("credentialKind", credential.kind().as_str()),
-                through_gateway,
-            )
-        }
+    let (binding, route) = match access {
+        ExecutionAccess::Static(credential) => (
+            binding
+                .text("credentialMethod", "static")
+                .text("credentialKind", credential.kind().as_str()),
+            credential_route(credential),
+        ),
         ExecutionAccess::Delegated(credential) => (
             binding
                 .text("credentialMethod", "delegated")
                 .delegated(credential),
-            true,
+            Ok(AtlassianRoute::Gateway),
         ),
         _ => return Err(atlassian_access_unavailable()),
     };
-    let gateway_cloud_id = cloud_id.filter(|_| through_gateway).map(canonical_cloud_id);
+    let gateway_cloud_id = match route.map_err(|_| atlassian_access_unavailable())? {
+        AtlassianRoute::Site => None,
+        AtlassianRoute::Gateway => Some(
+            cloud_id
+                .and_then(canonical_cloud_id)
+                .ok_or_else(atlassian_access_unavailable)?,
+        ),
+    };
     Ok(binding.optional_text("gatewayCloudId", gateway_cloud_id.as_deref()))
 }
 
@@ -233,14 +355,47 @@ pub mod test_support {
 
 /// One Atlassian product's REST API: its provider name, which also names its
 /// configuration section and gateway product, its display name, the API path
-/// below the tenant host and the gateway site, and statuses with
-/// product-specific reasons.
+/// below the tenant host and the gateway site, the other API paths its
+/// requests use there, and statuses with product-specific reasons.
 #[derive(Debug, Clone, Copy)]
 pub struct AtlassianProduct {
     pub provider: &'static str,
     pub name: &'static str,
     pub api_path: &'static str,
+    /// API paths below the site root that requests use besides
+    /// `api_path`, such as Confluence's `wiki/api/v2/`. Route coverage
+    /// requires each of them.
+    pub other_api_paths: &'static [&'static str],
     pub status_reasons: &'static [(u16, ReasonCode)],
+}
+
+impl AtlassianProduct {
+    /// Every API path below the site root: `api_path`, then the others.
+    pub fn api_paths(&self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.api_path).chain(self.other_api_paths.iter().copied())
+    }
+
+    /// The API bases on the site route: `https://<tenant_host>/<path>`.
+    /// Empty for a tenant host that is not a valid host.
+    fn site_api_bases(&self, tenant_host: &str) -> Vec<Url> {
+        self.api_paths()
+            .filter_map(|path| Url::parse(&format!("https://{tenant_host}/{path}")).ok())
+            .collect()
+    }
+
+    /// The API bases on the gateway route for `cloud_id`:
+    /// `https://api.atlassian.com/ex/<provider>/<cloud_id>/<path>`.
+    fn gateway_api_bases(&self, cloud_id: &str) -> Vec<Url> {
+        self.api_paths()
+            .filter_map(|path| {
+                Url::parse(&format!(
+                    "{ATLASSIAN_GATEWAY_ORIGIN}/ex/{}/{cloud_id}/{path}",
+                    self.provider
+                ))
+                .ok()
+            })
+            .collect()
+    }
 }
 
 /// The site configuration an Atlassian provider routes by.
@@ -248,59 +403,60 @@ pub struct AtlassianProduct {
 pub struct AtlassianSite<'a> {
     pub tenant_host: &'a str,
     /// The cloud ID as configured. The site declares, routes, fingerprints
-    /// and binds its lowercase hyphenated form.
+    /// and binds its lowercase hyphenated form; the gateway route exists
+    /// only when it is a valid UUID.
     pub cloud_id: Option<&'a str>,
     pub egress_proxy: Option<&'a EgressProxyConfig>,
     pub allowed_upstream_hosts: &'a [String],
 }
 
 impl AtlassianSite<'_> {
-    /// Whether bearer credentials and delegated access route through the
-    /// Atlassian gateway: a cloud ID is configured and `api.atlassian.com`
-    /// is allowed.
-    pub fn uses_gateway(&self) -> bool {
-        self.cloud_id.is_some() && uses_atlassian_gateway_host(self.allowed_upstream_hosts)
-    }
-
     /// The cloud ID of the site's gateway route as the route names it, a
     /// lowercase hyphenated UUID: what delegated access is pinned to before
-    /// each request. `None` when the site does not use the gateway or its
-    /// cloud ID is not a UUID, which validation rejects.
+    /// each request and what gateway routes bind. The gateway route is
+    /// available exactly when this is set: `None` without a cloud ID or
+    /// with one that is not a UUID, which validation rejects.
     pub fn gateway_cloud_id(&self) -> Option<Arc<str>> {
-        self.cloud_id
-            .filter(|_| self.uses_gateway())
-            .and_then(|cloud_id| uuid::Uuid::parse_str(cloud_id).ok())
-            .map(|cloud_id| Arc::from(cloud_id.hyphenated().to_string()))
+        self.cloud_id.and_then(canonical_cloud_id).map(Arc::from)
     }
 
-    /// The credentials Jira and Confluence declare for this site: the
-    /// vendor-level [`ATLASSIAN_API_TOKEN_PROFILE`] (`basic_api_token`,
-    /// site route) and, when the site uses the gateway,
-    /// [`ATLASSIAN_BEARER_TOKEN_PROFILE`] (`bearer_token`, gateway route).
-    /// Both products declare the same profiles, so one credential connection
-    /// can serve both.
+    /// The credentials Jira and Confluence declare for this site, each
+    /// route-bound (only the declaring provider presents it, because the
+    /// token type decides where it goes) and labeled for pickers:
+    /// [`ATLASSIAN_API_TOKEN_PROFILE`] (`basic_api_token`, site route)
+    /// always, and with the gateway route available,
+    /// [`ATLASSIAN_SCOPED_API_TOKEN_PROFILE`] (`basic_api_token`) and
+    /// [`ATLASSIAN_BEARER_TOKEN_PROFILE`] (`bearer_token`) through it. Both
+    /// products declare the same profiles, so one credential connection can
+    /// serve both.
     pub fn credential_descriptor(&self) -> CredentialDescriptor {
-        let credentials =
-            CredentialDescriptor::default().profile(ATLASSIAN_API_TOKEN_PROFILE, "basic_api_token");
-        if self.uses_gateway() {
-            credentials.profile(ATLASSIAN_BEARER_TOKEN_PROFILE, "bearer_token")
-        } else {
-            credentials
-        }
+        let gateway = self.gateway_cloud_id().is_some();
+        ATLASSIAN_PROFILES
+            .iter()
+            .filter(|profile| gateway || profile.route == AtlassianRoute::Site)
+            .fold(CredentialDescriptor::default(), |credentials, profile| {
+                credentials.with_profile(
+                    CredentialProfile::new(profile.name, profile.kind.as_str())
+                        .with_label(profile.label)
+                        .route_bound(),
+                )
+            })
     }
 
     /// The site's upstream authority: the tenant host's origin, the cloud
     /// ID when configured, in its lowercase hyphenated form, and the
-    /// Atlassian gateway when it routes through it. Jira and Confluence on
-    /// one site therefore act on the same instance. `None` for a tenant host
-    /// that is not a valid host.
+    /// Atlassian gateway when the gateway route is available. Jira and
+    /// Confluence on one site with one cloud ID therefore act on the same
+    /// instance, and with different cloud IDs on different ones. `None` for
+    /// a tenant host that is not a valid host.
     pub fn upstream_authority(&self) -> Option<UpstreamAuthority> {
         let mut authority =
             UpstreamAuthority::from_base_url(&format!("https://{}", self.tenant_host)).ok()?;
         if let Some(cloud_id) = self.cloud_id {
-            authority = authority.with_tenant(canonical_cloud_id(cloud_id));
+            authority = authority
+                .with_tenant(canonical_cloud_id(cloud_id).unwrap_or_else(|| cloud_id.to_owned()));
         }
-        if self.uses_gateway() {
+        if self.gateway_cloud_id().is_some() {
             authority = authority
                 .with_tenant_gateway(ATLASSIAN_GATEWAY_ORIGIN)
                 .ok()?;
@@ -309,14 +465,16 @@ impl AtlassianSite<'_> {
     }
 
     /// A digest of the configuration an upstream cursor's route depends on:
-    /// the tenant host, the cloud ID in its lowercase hyphenated form and
-    /// whether `api.atlassian.com` is allowed. Continuations relaying a
-    /// cursor bind it, beside the execution material [`bind_atlassian_access`]
-    /// binds, whose method and kind select the route.
+    /// the tenant host and the cloud ID in its lowercase hyphenated form.
+    /// Continuations relaying a cursor bind it, beside the execution
+    /// material [`bind_atlassian_access`] binds, whose method and token type
+    /// select the route.
     pub fn route_fingerprint(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
-        digest.update(b"agent-access/atlassian-route/v1\0");
-        let cloud_id = self.cloud_id.map(canonical_cloud_id);
+        digest.update(b"agent-access/atlassian-route/v2\0");
+        let cloud_id = self.cloud_id.map(|cloud_id| {
+            canonical_cloud_id(cloud_id).map_or(Cow::Borrowed(cloud_id), Cow::Owned)
+        });
         for field in [Some(self.tenant_host), cloud_id.as_deref()] {
             match field {
                 Some(value) => {
@@ -327,9 +485,6 @@ impl AtlassianSite<'_> {
                 None => digest.update([0]),
             }
         }
-        digest.update([u8::from(uses_atlassian_gateway_host(
-            self.allowed_upstream_hosts,
-        ))]);
         digest.finalize().into()
     }
 }
@@ -397,9 +552,9 @@ impl AtlassianClients {
     }
 }
 
-/// An Atlassian provider's routes: Basic API-token credentials use the
-/// tenant host; bearer credentials and delegated (OAuth) access use the
-/// Atlassian gateway when the site enables it.
+/// An Atlassian provider's routes: the tenant host, and the Atlassian
+/// gateway when the site configures a valid cloud ID. Each credential takes
+/// the route its token type selects ([`AtlassianCredential::route`]).
 #[derive(Clone)]
 pub struct AtlassianRoutes {
     product: AtlassianProduct,
@@ -409,7 +564,8 @@ pub struct AtlassianRoutes {
 
 impl AtlassianRoutes {
     /// The tenant route `https://<tenant_host>/<api_path>` and, when the
-    /// site uses the gateway, `https://api.atlassian.com/ex/<provider>/<cloud_id>/<api_path>`.
+    /// site sets a cloud ID, `https://api.atlassian.com/ex/<provider>/<cloud_id>/<api_path>`.
+    /// A cloud ID that is not a UUID fails the build.
     pub fn new(
         product: AtlassianProduct,
         site: &AtlassianSite<'_>,
@@ -426,7 +582,7 @@ impl AtlassianRoutes {
             ))
         })?;
         let tenant = AtlassianClients::new(product, site, tenant_base, factory)?;
-        let gateway = match site.cloud_id.filter(|_| site.uses_gateway()) {
+        let gateway = match site.cloud_id {
             Some(cloud_id) => {
                 let cloud_id = uuid::Uuid::parse_str(cloud_id).map_err(|error| {
                     ProviderBuildError::invalid(format!(
@@ -434,7 +590,7 @@ impl AtlassianRoutes {
                     ))
                 })?;
                 let gateway_base = Url::parse(&format!(
-                    "https://api.atlassian.com/ex/{provider}/{}/{}",
+                    "{ATLASSIAN_GATEWAY_ORIGIN}/ex/{provider}/{}/{}",
                     cloud_id.hyphenated(),
                     product.api_path
                 ))
@@ -464,19 +620,25 @@ impl AtlassianRoutes {
         }
     }
 
-    /// The clients for `credential`'s route: the gateway for delegated
-    /// access and bearer tokens, whatever else the site allows, and the
-    /// tenant host otherwise.
+    /// The clients for `credential`'s route ([`AtlassianCredential::route`]):
+    /// the tenant host for a classic API token or an unprofiled Basic
+    /// token, the gateway for delegated access, a scoped API token or a
+    /// bearer token. A credential without a route, or one for the gateway
+    /// when the site has none, is refused, so nothing is sent.
     pub fn for_credential(
         &self,
         credential: &AtlassianCredential,
     ) -> Result<&AtlassianClients, AtlassianRouteUnavailable> {
-        if credential.routes_through_gateway() {
-            self.gateway.as_ref().ok_or(AtlassianRouteUnavailable {
-                product: self.product,
-            })
-        } else {
-            Ok(&self.tenant)
+        let unavailable = |reason| AtlassianRouteUnavailable {
+            product: self.product,
+            reason,
+        };
+        match credential.route().map_err(unavailable)? {
+            AtlassianRoute::Site => Ok(&self.tenant),
+            AtlassianRoute::Gateway => self
+                .gateway
+                .as_ref()
+                .ok_or_else(|| unavailable(AtlassianRouteError::GatewayUnavailable)),
         }
     }
 
@@ -486,20 +648,57 @@ impl AtlassianRoutes {
     }
 }
 
-/// A bearer credential or delegated access with no gateway route
-/// configured.
+/// A credential [`AtlassianRoutes::for_credential`] refused: one without a
+/// route, or one for the gateway when the site has no gateway route.
 #[derive(Debug, Clone, Copy)]
 pub struct AtlassianRouteUnavailable {
     product: AtlassianProduct,
+    reason: AtlassianRouteError,
+}
+
+impl AtlassianRouteUnavailable {
+    /// `product`'s refusal of a credential without a route, such as one
+    /// [`AtlassianCredential::present`] reports.
+    pub fn new(product: AtlassianProduct, reason: AtlassianRouteError) -> Self {
+        Self { product, reason }
+    }
+
+    /// Why the credential has no route.
+    pub fn reason(&self) -> AtlassianRouteError {
+        self.reason
+    }
+
+    /// The refusal as the provider reports it: a `credential_not_provisioned`
+    /// denial, as continuation binding reports the same credential, naming
+    /// why. Nothing was sent.
+    pub fn provider_error(&self) -> ProviderError {
+        ProviderError::deny(ReasonCode::CredentialNotProvisioned, self.to_string())
+    }
 }
 
 impl fmt::Display for AtlassianRouteUnavailable {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let AtlassianProduct { provider, name, .. } = self.product;
-        write!(
-            formatter,
-            "{name} bearer tokens and OAuth connections require providers.{provider}.cloud_id and api.atlassian.com in allowed_upstream_hosts"
-        )
+        match self.reason {
+            AtlassianRouteError::GatewayUnavailable => write!(
+                formatter,
+                "{name} OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.{provider}.cloud_id"
+            ),
+            AtlassianRouteError::UnsupportedKind => {
+                write!(
+                    formatter,
+                    "{name} does not present the selected credential's kind"
+                )
+            }
+            AtlassianRouteError::UnknownProfile => write!(
+                formatter,
+                "{name} does not present the selected credential's token profile"
+            ),
+            AtlassianRouteError::ProfileKindMismatch => write!(
+                formatter,
+                "the selected credential's kind does not match its {name} token profile"
+            ),
+        }
     }
 }
 
@@ -508,15 +707,27 @@ impl std::error::Error for AtlassianRouteUnavailable {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::{TestHost, basic_credential, bearer_credential};
+    use agent_access_provider::CredentialProfile;
+    use agent_access_provider::test_support::{
+        TestHost, basic_credential, bearer_credential, credential_with_profile,
+    };
 
     const PRODUCT: AtlassianProduct = AtlassianProduct {
         provider: "confluence",
         name: "Confluence",
         api_path: "wiki/rest/api/",
+        other_api_paths: &["wiki/api/v2/"],
         status_reasons: &[(409, ReasonCode::VersionConflict)],
     };
+    const JIRA: AtlassianProduct = AtlassianProduct {
+        provider: "jira",
+        name: "Jira",
+        api_path: "rest/api/3/",
+        other_api_paths: &[],
+        status_reasons: &[],
+    };
     const CLOUD_ID: &str = "00000000-0000-0000-0000-000000000001";
+    const OTHER_CLOUD_ID: &str = "00000000-0000-0000-0000-000000000002";
 
     fn hosts(gateway: bool) -> Vec<String> {
         let mut hosts = vec!["https://example.atlassian.net/wiki/**".to_string()];
@@ -535,24 +746,43 @@ mod tests {
         }
     }
 
+    /// A static token lent as `profile`, as the host lends a stored row or
+    /// a configured shared credential that names one.
+    fn profiled(credential: ExecutionCredential, profile: &str) -> AtlassianCredential {
+        AtlassianCredential::from_static(credential_with_profile(credential, profile))
+    }
+
+    /// A site declares its tenant host, its cloud ID in canonical form and,
+    /// whenever that cloud ID is a valid UUID, the gateway, whatever the
+    /// allowlist says. Jira and Confluence on one site act on the same
+    /// instance exactly when they agree on the cloud ID.
     #[test]
     fn a_site_declares_its_host_cloud_id_and_gateway_route() {
         let site_only = hosts(false);
+        let gateway = hosts(true);
         let authority = site(None, &site_only).upstream_authority().unwrap();
         assert_eq!(authority.origin(), "https://example.atlassian.net");
         assert_eq!(
             (authority.tenant(), authority.tenant_gateway()),
             (None, None)
         );
-        let routed_hosts = hosts(true);
-        let routed = site(Some(CLOUD_ID), &routed_hosts)
-            .upstream_authority()
-            .unwrap();
-        assert_eq!(routed.tenant(), Some(CLOUD_ID));
-        assert_eq!(routed.tenant_gateway(), Some(ATLASSIAN_GATEWAY_ORIGIN));
-        // Jira and Confluence on one site act on the same instance.
-        assert!(authority.same_instance(&routed));
-        assert!(site(None, &site_only).upstream_authority().is_some());
+        for allowed in [&site_only, &gateway] {
+            let routed = site(Some(CLOUD_ID), allowed).upstream_authority().unwrap();
+            assert_eq!(routed.tenant(), Some(CLOUD_ID));
+            assert_eq!(routed.tenant_gateway(), Some(ATLASSIAN_GATEWAY_ORIGIN));
+        }
+        let routed = site(Some(CLOUD_ID), &gateway).upstream_authority().unwrap();
+        let braced = format!("{{{CLOUD_ID}}}");
+        assert!(
+            routed.same_instance(
+                &site(Some(&braced), &site_only)
+                    .upstream_authority()
+                    .unwrap()
+            )
+        );
+        for other in [site(None, &gateway), site(Some(OTHER_CLOUD_ID), &gateway)] {
+            assert!(!routed.same_instance(&other.upstream_authority().unwrap()));
+        }
         let invalid = AtlassianSite {
             tenant_host: "not a host",
             ..site(None, &site_only)
@@ -601,54 +831,73 @@ mod tests {
                 format!("https://api.atlassian.com/ex/confluence/{CANONICAL}/wiki/rest/api/")
             );
         }
-        // A value that is not a UUID is invalid with the gateway; without it,
-        // it is kept as written.
-        let tenant_only = hosts(false);
-        let unvalidated = site(Some("not-a-uuid"), &tenant_only);
-        assert_eq!(
-            unvalidated.upstream_authority().unwrap().tenant(),
-            Some("not-a-uuid")
-        );
-        assert_ne!(
-            unvalidated.route_fingerprint(),
-            site(None, &tenant_only).route_fingerprint()
-        );
+        // A value that is not a UUID, which validation rejects, has no
+        // gateway route, whatever the allowlist says; it is declared as
+        // written, so it never matches another site's cloud ID.
+        for allowed in [hosts(false), hosts(true)] {
+            let unvalidated = site(Some("not-a-uuid"), &allowed);
+            let authority = unvalidated.upstream_authority().unwrap();
+            assert_eq!(authority.tenant(), Some("not-a-uuid"));
+            assert_eq!(authority.tenant_gateway(), None);
+            assert_eq!(unvalidated.gateway_cloud_id(), None);
+            assert_eq!(
+                unvalidated.credential_descriptor(),
+                site(None, &allowed).credential_descriptor()
+            );
+        }
     }
 
     /// Every site declares the classic API token profile for the site route;
-    /// only a site that uses the gateway adds the bearer profile, whose kind
-    /// routes through it.
+    /// a site with a cloud ID, and so a gateway route, also declares the
+    /// scoped API token and bearer profiles through it, whatever its
+    /// allowlist says. Each is labeled for pickers and route-bound, and its
+    /// stored profile, not its kind, selects the route.
     #[test]
-    fn sites_declare_vendor_profiles_whose_kinds_select_the_route() {
-        let site_only = hosts(false);
-        assert_eq!(
-            site(Some(CLOUD_ID), &site_only).credential_descriptor(),
-            CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token")
-        );
+    fn sites_declare_route_bound_profiles_whose_types_select_the_route() {
+        let classic = CredentialProfile::new("atlassian-api-token", "basic_api_token")
+            .with_label("Classic API token (site)")
+            .route_bound();
+        let scoped = CredentialProfile::new("atlassian-scoped-api-token", "basic_api_token")
+            .with_label("Scoped API token (gateway)")
+            .route_bound();
+        let bearer = CredentialProfile::new("atlassian-bearer-token", "bearer_token")
+            .with_label("Service account token (gateway)")
+            .route_bound();
+        for allowed in [hosts(false), hosts(true)] {
+            assert_eq!(
+                site(None, &allowed).credential_descriptor(),
+                CredentialDescriptor::default().with_profile(classic.clone())
+            );
+            assert_eq!(
+                site(Some(CLOUD_ID), &allowed).credential_descriptor(),
+                CredentialDescriptor::default()
+                    .with_profile(classic.clone())
+                    .with_profile(scoped.clone())
+                    .with_profile(bearer.clone())
+            );
+        }
         let gateway = hosts(true);
-        assert_eq!(
-            site(None, &gateway).credential_descriptor(),
-            CredentialDescriptor::default().profile("atlassian-api-token", "basic_api_token")
-        );
         let routed = site(Some(CLOUD_ID), &gateway);
         let credentials = routed.credential_descriptor();
-        assert_eq!(
-            credentials,
-            CredentialDescriptor::default()
-                .profile("atlassian-api-token", "basic_api_token")
-                .profile("atlassian-bearer-token", "bearer_token")
-        );
         let routes = AtlassianRoutes::new(PRODUCT, &routed, &TestHost::default()).unwrap();
+        let site_base = "https://example.atlassian.net/wiki/rest/api/".to_string();
+        let gateway_base =
+            format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/");
         for (profile, credential, base) in [
             (
                 ATLASSIAN_API_TOKEN_PROFILE,
                 basic_credential("agent@example.com", "token"),
-                "https://example.atlassian.net/wiki/rest/api/".to_string(),
+                &site_base,
+            ),
+            (
+                ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+                basic_credential("agent@example.com", "token"),
+                &gateway_base,
             ),
             (
                 ATLASSIAN_BEARER_TOKEN_PROFILE,
                 bearer_credential("token"),
-                format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/"),
+                &gateway_base,
             ),
         ] {
             let declared = credentials
@@ -659,215 +908,461 @@ mod tests {
             assert_eq!(declared.kind, credential.kind().as_str(), "{profile}");
             assert_eq!(
                 routes
-                    .for_credential(&AtlassianCredential::from_static(credential.clone()))
+                    .for_credential(&profiled(credential, profile))
                     .unwrap()
                     .api_base
                     .as_str(),
-                base,
+                base.as_str(),
                 "{profile}"
             );
         }
     }
 
-    /// Every row of the Atlassian validation and routing table, with and
-    /// without simultaneous service credentials: the gateway takes bearer
-    /// tokens and OAuth, the site takes Basic tokens, and a connection never
-    /// mixes Basic site tokens with gateway OAuth.
+    /// The one route classifier: a static token without a profile takes its
+    /// kind's route, one with a vendor profile that profile's route when the
+    /// kinds agree, and anything else has no route; delegated access takes
+    /// the gateway. A gateway credential on a site without a gateway route
+    /// is refused too. Nothing is sent on a guessed route.
     #[test]
-    fn gateway_validation_follows_the_connection_table() {
-        const SITE_BEARER: &str = "credentials.per_user.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
-        const SERVICE_SITE_BEARER: &str = "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
-        const OAUTH_SITE: &str = "credentials.per_user.jira offers delegated (OAuth) access, which requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
-        const BASIC_WITH_OAUTH: &str = "credentials.per_user.jira combines OAuth with a basic_api_token profile; OAuth acts through the Atlassian gateway, so the connection's token_profile must be atlassian-bearer-token or absent";
-        const GATEWAY_PER_USER_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.per_user.jira does not resolve to a bearer_token credential";
-        const GATEWAY_SERVICE_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.service.jira does not resolve to a bearer_token credential";
-        const GATEWAY_NONE: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured";
-
-        let validate = |gateway: bool, credentials: ServiceCredentialKinds<'_>| {
-            let mut errors = Vec::new();
-            validate_atlassian_gateway_credential(
-                "jira",
-                &hosts(gateway),
-                Some(CLOUD_ID),
-                credentials,
-                &mut errors,
-            );
-            errors
-        };
-        let kinds = |service, per_user, delegated| {
-            ServiceCredentialKinds::new(service, per_user).with_per_user_delegated(delegated)
-        };
-        let none: [&str; 0] = [];
-        let basic = Some("basic_api_token");
-        let bearer = Some("bearer_token");
-        let oauth = Some("oauth");
-        for (gateway, service, per_user, delegated, expected) in [
-            // atlassian-api-token only: the site route.
-            (false, None, basic, false, &none[..]),
-            (false, basic, basic, false, &none[..]),
+    fn credentials_route_by_token_type_and_fail_closed() {
+        use AtlassianRoute::{Gateway, Site};
+        use AtlassianRouteError::{GatewayUnavailable, ProfileKindMismatch, UnknownProfile};
+        let basic = || basic_credential("agent@example.com", "token");
+        let bearer = || bearer_credential("token");
+        let allowed = hosts(true);
+        let with_gateway = AtlassianRoutes::new(
+            PRODUCT,
+            &site(Some(CLOUD_ID), &allowed),
+            &TestHost::default(),
+        )
+        .unwrap();
+        let without_gateway =
+            AtlassianRoutes::new(PRODUCT, &site(None, &allowed), &TestHost::default()).unwrap();
+        let site_base = "https://example.atlassian.net/wiki/rest/api/";
+        let gateway_base =
+            format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/");
+        for (credential, expected) in [
+            (AtlassianCredential::from_static(basic()), Ok(Site)),
+            (AtlassianCredential::from_static(bearer()), Ok(Gateway)),
+            (profiled(basic(), ATLASSIAN_API_TOKEN_PROFILE), Ok(Site)),
             (
-                true,
-                None,
-                basic,
-                false,
-                &[GATEWAY_PER_USER_BASIC, GATEWAY_NONE][..],
-            ),
-            // atlassian-bearer-token only: the gateway.
-            (true, None, bearer, false, &none[..]),
-            (true, bearer, bearer, false, &none[..]),
-            (false, None, bearer, false, &[SITE_BEARER][..]),
-            // OAuth only: the gateway, which it requires.
-            (true, None, oauth, true, &none[..]),
-            (true, bearer, oauth, true, &none[..]),
-            (true, basic, oauth, true, &[GATEWAY_SERVICE_BASIC][..]),
-            (false, None, oauth, true, &[OAUTH_SITE][..]),
-            (
-                false,
-                bearer,
-                oauth,
-                true,
-                &[OAUTH_SITE, SERVICE_SITE_BEARER][..],
-            ),
-            // atlassian-bearer-token and OAuth: people use OAuth and
-            // service accounts bearer tokens, both through the gateway.
-            (true, None, bearer, true, &none[..]),
-            (true, bearer, bearer, true, &none[..]),
-            (true, basic, bearer, true, &[GATEWAY_SERVICE_BASIC][..]),
-            // atlassian-api-token and OAuth: rejected either way.
-            (true, None, basic, true, &[BASIC_WITH_OAUTH][..]),
-            (true, bearer, basic, true, &[BASIC_WITH_OAUTH][..]),
-            (
-                false,
-                None,
-                basic,
-                true,
-                &[BASIC_WITH_OAUTH, OAUTH_SITE][..],
+                profiled(basic(), ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                Ok(Gateway),
             ),
             (
-                false,
-                basic,
-                basic,
-                true,
-                &[BASIC_WITH_OAUTH, OAUTH_SITE][..],
+                profiled(bearer(), ATLASSIAN_BEARER_TOKEN_PROFILE),
+                Ok(Gateway),
             ),
-            // Service credentials alone keep their rules.
-            (true, bearer, None, false, &none[..]),
             (
-                true,
-                basic,
-                None,
-                false,
-                &[GATEWAY_SERVICE_BASIC, GATEWAY_NONE][..],
+                profiled(bearer(), ATLASSIAN_API_TOKEN_PROFILE),
+                Err(ProfileKindMismatch),
             ),
-            (true, None, None, false, &[GATEWAY_NONE][..]),
-            (false, bearer, None, false, &[SERVICE_SITE_BEARER][..]),
-            // A secret store's records carry their own kinds.
             (
-                true,
-                None,
-                Some("secret_store"),
-                false,
-                &[GATEWAY_PER_USER_BASIC, GATEWAY_NONE][..],
+                profiled(bearer(), ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                Err(ProfileKindMismatch),
             ),
+            (
+                profiled(basic(), ATLASSIAN_BEARER_TOKEN_PROFILE),
+                Err(ProfileKindMismatch),
+            ),
+            (
+                profiled(basic(), "gitlab-access-token"),
+                Err(UnknownProfile),
+            ),
+            (
+                profiled(bearer(), "atlassian-bearer-token-v2"),
+                Err(UnknownProfile),
+            ),
+            (
+                profiled(basic(), "Atlassian-API-Token"),
+                Err(UnknownProfile),
+            ),
+            (profiled(basic(), ""), Err(UnknownProfile)),
         ] {
+            assert_eq!(credential.route(), expected, "{credential:?}");
+            let route = |routes: &AtlassianRoutes| {
+                routes
+                    .for_credential(&credential)
+                    .map(|clients| clients.api_base.to_string())
+                    .map_err(|error| error.reason())
+            };
+            match expected {
+                Ok(Site) => {
+                    assert_eq!(route(&with_gateway).unwrap(), site_base);
+                    assert_eq!(route(&without_gateway).unwrap(), site_base);
+                }
+                Ok(Gateway) => {
+                    assert_eq!(route(&with_gateway).unwrap(), gateway_base);
+                    assert_eq!(route(&without_gateway), Err(GatewayUnavailable));
+                }
+                Err(reason) => {
+                    assert_eq!(route(&with_gateway), Err(reason));
+                    assert_eq!(route(&without_gateway), Err(reason));
+                }
+            }
+        }
+        let messages = [
+            (
+                profiled(basic(), ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                &without_gateway,
+                "Confluence OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.confluence.cloud_id",
+            ),
+            (
+                profiled(basic(), "gitlab-access-token"),
+                &with_gateway,
+                "Confluence does not present the selected credential's token profile",
+            ),
+            (
+                profiled(bearer(), ATLASSIAN_API_TOKEN_PROFILE),
+                &with_gateway,
+                "the selected credential's kind does not match its Confluence token profile",
+            ),
+        ];
+        // Each refusal is reported as the credential denial continuation
+        // binding reports for the same credential.
+        for (credential, routes, message) in messages {
+            let refusal = routes.for_credential(&credential).err().unwrap();
+            assert_eq!(refusal.to_string(), message);
             assert_eq!(
-                validate(gateway, kinds(service, per_user, delegated)),
-                expected,
-                "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}"
+                refusal.provider_error(),
+                ProviderError::deny(ReasonCode::CredentialNotProvisioned, message)
+            );
+            assert_eq!(
+                AtlassianRouteUnavailable::new(PRODUCT, refusal.reason()).provider_error(),
+                refusal.provider_error()
             );
         }
     }
 
-    /// The shared lookup credential reaches the site by its kind like any
-    /// static token: the gateway requires a bearer lookup credential and a
-    /// bearer one requires the gateway. It is never execution material, so
-    /// it does not stand in for a gateway execution credential.
-    #[test]
-    fn gateway_validation_holds_the_lookup_credential_to_the_route() {
-        const GATEWAY_LOOKUP_BASIC: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but credentials.lookup.jira does not resolve to a bearer_token credential";
-        const LOOKUP_SITE_BEARER: &str = "credentials.lookup.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
-        const SERVICE_SITE_BEARER: &str = "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com";
-        const GATEWAY_NONE: &str = "providers.jira.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured";
+    /// Validates `credentials` for Confluence on `site(cloud_id, allowed)`.
+    fn validate(
+        product: AtlassianProduct,
+        cloud_id: Option<&str>,
+        allowed: &[String],
+        credentials: ServiceCredentialKinds<'_>,
+    ) -> Vec<String> {
+        let mut errors = Vec::new();
+        validate_atlassian_routes(product, &site(cloud_id, allowed), credentials, &mut errors);
+        errors
+    }
 
-        let validate = |gateway: bool, credentials: ServiceCredentialKinds<'_>| {
-            let mut errors = Vec::new();
-            validate_atlassian_gateway_credential(
-                "jira",
-                &hosts(gateway),
+    fn declared(names: &[&str]) -> Vec<CredentialProfile> {
+        let descriptor = site(Some(CLOUD_ID), &[]).credential_descriptor();
+        names
+            .iter()
+            .map(|name| {
+                descriptor
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.name == *name)
+                    .unwrap()
+                    .clone()
+            })
+            .collect()
+    }
+
+    /// Each configured source must reach the route its token type takes,
+    /// for every API base the product uses on it: people on OAuth and
+    /// service accounts on classic and service-account tokens coexist when
+    /// the allowlist covers both routes, and an uncovered base is reported
+    /// for the source, its type and its route. The removed all-or-nothing
+    /// rules do not return: classic tokens beside OAuth, the gateway
+    /// allowed without a gateway credential and a classic lookup credential
+    /// beside gateway credentials are all valid.
+    #[test]
+    fn route_coverage_holds_each_credential_source_to_its_route() {
+        let site_v1 = "https://example.atlassian.net/wiki/rest/api/";
+        let site_v2 = "https://example.atlassian.net/wiki/api/v2/";
+        let gateway_v1 =
+            format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/rest/api/");
+        let gateway_v2 = format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/wiki/api/v2/");
+        let site_patterns = hosts(false);
+        let gateway_patterns = vec!["https://api.atlassian.com/ex/confluence/**".to_string()];
+        let both = hosts(true);
+        let site_gap = format!(
+            "providers.confluence.allowed_upstream_hosts does not cover {site_v1} and {site_v2}"
+        );
+        let gateway_gap = format!(
+            "providers.confluence.allowed_upstream_hosts does not cover {gateway_v1} and {gateway_v2}"
+        );
+        let none: Vec<String> = Vec::new();
+
+        // The motivating deployment: people on OAuth, service accounts on
+        // classic and service-account tokens, a classic service credential
+        // and a service-account lookup credential.
+        let accepted = declared(&[ATLASSIAN_API_TOKEN_PROFILE, ATLASSIAN_BEARER_TOKEN_PROFILE]);
+        let mixed = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_kind("basic_api_token")))
+            .with_lookup(Some(CredentialSource::static_profile(
+                "bearer_token",
+                ATLASSIAN_BEARER_TOKEN_PROFILE,
+            )))
+            .with_per_user_profiles(&accepted)
+            .with_per_user_delegated(true);
+        assert_eq!(validate(PRODUCT, Some(CLOUD_ID), &both, mixed), none);
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &site_patterns, mixed),
+            [
+                format!(
+                    "credentials.lookup.confluence (profile atlassian-bearer-token) takes the Atlassian gateway route, but {gateway_gap}"
+                ),
+                format!(
+                    "credentials.per_user.confluence (profile atlassian-bearer-token) takes the Atlassian gateway route, but {gateway_gap}"
+                ),
+                format!(
+                    "credentials.per_user.confluence (OAuth) takes the Atlassian gateway route, but {gateway_gap}"
+                ),
+            ]
+        );
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &gateway_patterns, mixed),
+            [
+                format!(
+                    "credentials.service.confluence (type basic_api_token) takes the site route, but {site_gap}"
+                ),
+                format!(
+                    "credentials.per_user.confluence (profile atlassian-api-token) takes the site route, but {site_gap}"
+                ),
+            ]
+        );
+
+        // A scoped API token is Basic on the gateway: per user, or as a
+        // shared credential naming its profile.
+        let scoped = declared(&[ATLASSIAN_SCOPED_API_TOKEN_PROFILE]);
+        let scoped_sources = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_profile(
+                "basic_api_token",
+                ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+            )))
+            .with_per_user_profiles(&scoped);
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &gateway_patterns, scoped_sources),
+            none
+        );
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &site_patterns, scoped_sources),
+            [
+                format!(
+                    "credentials.service.confluence (profile atlassian-scoped-api-token) takes the Atlassian gateway route, but {gateway_gap}"
+                ),
+                format!(
+                    "credentials.per_user.confluence (profile atlassian-scoped-api-token) takes the Atlassian gateway route, but {gateway_gap}"
+                ),
+            ]
+        );
+
+        // Without a cloud ID there is no gateway route: gateway sources
+        // name the missing cloud ID, and site sources still validate.
+        let classic = declared(&[ATLASSIAN_API_TOKEN_PROFILE]);
+        let without_cloud_id = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_kind("bearer_token")))
+            .with_per_user_profiles(&classic)
+            .with_per_user_delegated(true);
+        assert_eq!(
+            validate(PRODUCT, None, &both, without_cloud_id),
+            [
+                "credentials.service.confluence (type bearer_token) takes the Atlassian gateway route, which requires providers.confluence.cloud_id",
+                "credentials.per_user.confluence (OAuth) takes the Atlassian gateway route, which requires providers.confluence.cloud_id",
+            ]
+        );
+
+        // A cloud ID must be a UUID whenever it is set; its gateway sources
+        // are not reported again.
+        assert_eq!(
+            validate(PRODUCT, Some("not-a-uuid"), &both, without_cloud_id),
+            ["providers.confluence.cloud_id must be a valid Atlassian cloud UUID"]
+        );
+        assert_eq!(
+            validate(
+                PRODUCT,
+                Some("not-a-uuid"),
+                &site_patterns,
+                ServiceCredentialKinds::default()
+            ),
+            ["providers.confluence.cloud_id must be a valid Atlassian cloud UUID"]
+        );
+
+        // Removed rules: classic tokens beside OAuth, the gateway allowed
+        // without any gateway credential, and a classic lookup credential
+        // beside gateway execution credentials.
+        let classic_with_oauth = ServiceCredentialKinds::default()
+            .with_per_user_profiles(&classic)
+            .with_per_user_delegated(true);
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &both, classic_with_oauth),
+            none
+        );
+        let classic_only = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_kind("basic_api_token")));
+        assert_eq!(validate(PRODUCT, Some(CLOUD_ID), &both, classic_only), none);
+        let bearer = declared(&[ATLASSIAN_BEARER_TOKEN_PROFILE]);
+        let classic_lookup = ServiceCredentialKinds::default()
+            .with_lookup(Some(CredentialSource::static_kind("basic_api_token")))
+            .with_per_user_profiles(&bearer)
+            .with_per_user_delegated(true);
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &both, classic_lookup),
+            none
+        );
+
+        // A shared credential naming a profile Atlassian does not declare
+        // with its kind has no route; credential validation reports it.
+        let undeclared = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_profile(
+                "bearer_token",
+                ATLASSIAN_API_TOKEN_PROFILE,
+            )))
+            .with_lookup(Some(CredentialSource::static_profile(
+                "basic_api_token",
+                "gitlab-access-token",
+            )));
+        assert_eq!(validate(PRODUCT, Some(CLOUD_ID), &none, undeclared), none);
+
+        // No credential source, no route to cover.
+        assert_eq!(
+            validate(
+                PRODUCT,
                 Some(CLOUD_ID),
-                credentials,
-                &mut errors,
-            );
-            errors
+                &none,
+                ServiceCredentialKinds::default()
+            ),
+            none
+        );
+    }
+
+    /// A secret store's records each carry their own kind, known only at
+    /// run time, and no profile: offline validation checks the site route,
+    /// which the common Basic record takes. A bearer record whose gateway
+    /// route is unavailable or uncovered is refused at run time, before
+    /// anything is sent.
+    #[test]
+    fn secret_store_records_are_checked_offline_on_the_site_route() {
+        let secret_store = ServiceCredentialKinds::default().with_per_user_secret_store(true);
+        let none: Vec<String> = Vec::new();
+        assert_eq!(validate(PRODUCT, None, &hosts(false), secret_store), none);
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &hosts(true), secret_store),
+            none
+        );
+        let gateway_only = vec!["https://api.atlassian.com/ex/confluence/**".to_string()];
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &gateway_only, secret_store),
+            [
+                "credentials.per_user.confluence (secret_store) takes the site route its basic_api_token records take, but providers.confluence.allowed_upstream_hosts does not cover https://example.atlassian.net/wiki/rest/api/ and https://example.atlassian.net/wiki/api/v2/"
+            ]
+        );
+        let shared = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::SecretStore))
+            .with_lookup(Some(CredentialSource::SecretStore));
+        assert_eq!(
+            validate(PRODUCT, Some(CLOUD_ID), &gateway_only, shared).len(),
+            2
+        );
+
+        // At run time a bearer record without a gateway route is refused
+        // before anything is sent; a Basic record takes the site.
+        let allowed = hosts(false);
+        let routes =
+            AtlassianRoutes::new(PRODUCT, &site(None, &allowed), &TestHost::default()).unwrap();
+        assert_eq!(
+            routes
+                .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                    "record"
+                )))
+                .err()
+                .unwrap()
+                .reason(),
+            AtlassianRouteError::GatewayUnavailable
+        );
+        assert_eq!(
+            routes
+                .for_credential(&AtlassianCredential::from_static(basic_credential(
+                    "agent@example.com",
+                    "record"
+                )))
+                .unwrap()
+                .api_base
+                .as_str(),
+            "https://example.atlassian.net/wiki/rest/api/"
+        );
+    }
+
+    /// Coverage uses the runtime allowlist grammar: wildcards before and
+    /// after the product, cloud ID and API-base segments are accepted when
+    /// they can match some request below the base, and query constraints
+    /// are ignored. A pattern for another product, another cloud ID,
+    /// another port or an unrelated path covers nothing, and the error
+    /// names the source.
+    #[test]
+    fn route_coverage_accepts_narrow_and_wildcard_patterns() {
+        let oauth = ServiceCredentialKinds::default().with_per_user_delegated(true);
+        let classic = ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_kind("basic_api_token")));
+        let check = |credentials: ServiceCredentialKinds<'_>, pattern: String| {
+            validate(JIRA, Some(CLOUD_ID), &[pattern], credentials)
         };
-        let none: [&str; 0] = [];
-        let basic = Some("basic_api_token");
-        let bearer = Some("bearer_token");
-        let oauth = Some("oauth");
-        for (gateway, service, per_user, delegated, lookup, expected) in [
-            // Through the gateway, a bearer lookup credential beside each
-            // gateway execution credential.
-            (true, bearer, None, false, bearer, &none[..]),
-            (true, None, bearer, false, bearer, &none[..]),
-            (true, None, oauth, true, bearer, &none[..]),
-            (true, bearer, bearer, true, bearer, &none[..]),
-            // A basic lookup credential is rejected beside every one.
-            (
-                true,
-                bearer,
-                None,
-                false,
-                basic,
-                &[GATEWAY_LOOKUP_BASIC][..],
-            ),
-            (
-                true,
-                None,
-                bearer,
-                false,
-                basic,
-                &[GATEWAY_LOOKUP_BASIC][..],
-            ),
-            (true, None, oauth, true, basic, &[GATEWAY_LOOKUP_BASIC][..]),
-            (
-                true,
-                bearer,
-                bearer,
-                true,
-                basic,
-                &[GATEWAY_LOOKUP_BASIC][..],
-            ),
-            // A lookup credential alone is no execution credential.
-            (true, None, None, false, bearer, &[GATEWAY_NONE][..]),
-            (
-                true,
-                None,
-                None,
-                false,
-                basic,
-                &[GATEWAY_LOOKUP_BASIC, GATEWAY_NONE][..],
-            ),
-            // On the site route, a basic lookup credential; a bearer one
-            // needs the gateway.
-            (false, basic, None, false, basic, &none[..]),
-            (false, None, basic, false, basic, &none[..]),
-            (false, basic, None, false, bearer, &[LOOKUP_SITE_BEARER][..]),
-            (
-                false,
-                bearer,
-                None,
-                false,
-                bearer,
-                &[SERVICE_SITE_BEARER][..],
+        for pattern in [
+            format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/**"),
+            format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issue/**"),
+            format!("https://api.atlassian.com/ex/*/{CLOUD_ID}/rest/api/3/issue/**"),
+            "https://api.atlassian.com/ex/jira/*/rest/api/3/**".to_string(),
+            format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/*/api/3/search/**"),
+            format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/*"),
+            "https://api.atlassian.com/ex/**/issue".to_string(),
+            "https://api.atlassian.com/**".to_string(),
+            "https://api.atlassian.com:443/ex/jira/**".to_string(),
+            format!(
+                "https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/search/jql?maxResults=50"
             ),
         ] {
-            let credentials = ServiceCredentialKinds::new(service, per_user)
-                .with_per_user_delegated(delegated)
-                .with_lookup(lookup);
             assert_eq!(
-                validate(gateway, credentials),
-                expected,
-                "gateway {gateway}, service {service:?}, per-user {per_user:?}, delegated {delegated}, lookup {lookup:?}"
+                check(oauth, pattern.clone()),
+                Vec::<String>::new(),
+                "{pattern}"
+            );
+        }
+        let gateway_base = format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/");
+        for pattern in [
+            "https://api.atlassian.com/ex/confluence/**".to_string(),
+            format!("https://api.atlassian.com/ex/*/{OTHER_CLOUD_ID}/**"),
+            "https://api.atlassian.com:8443/ex/jira/**".to_string(),
+            "http://api.atlassian.com/ex/jira/**".to_string(),
+            "https://api.atlassian.com/admin/**".to_string(),
+            format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/2/**"),
+            format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}"),
+            "https://example.atlassian.net/**".to_string(),
+        ] {
+            assert_eq!(
+                check(oauth, pattern.clone()),
+                [format!(
+                    "credentials.per_user.jira (OAuth) takes the Atlassian gateway route, but providers.jira.allowed_upstream_hosts does not cover {gateway_base}"
+                )],
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            "https://example.atlassian.net/rest/api/3/issue/**",
+            "https://example.atlassian.net/*/api/3/**",
+            "https://example.atlassian.net/**",
+        ] {
+            assert_eq!(
+                check(classic, pattern.to_string()),
+                Vec::<String>::new(),
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            "https://example.atlassian.net/wiki/**",
+            "https://other.atlassian.net/rest/api/3/**",
+            "https://example.atlassian.net:8443/rest/api/3/**",
+            "https://api.atlassian.com/ex/jira/**",
+        ] {
+            assert_eq!(
+                check(classic, pattern.to_string()),
+                [
+                    "credentials.service.jira (type basic_api_token) takes the site route, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/"
+                ],
+                "{pattern}"
             );
         }
     }
@@ -909,24 +1404,33 @@ mod tests {
         assert!(built.iter().all(|client| client.provider == "confluence"
             && client.label == "providers.confluence.egress_proxy"));
 
-        // Without a cloud ID or the gateway host, bearer credentials have no
-        // route.
-        for (cloud_id, gateway) in [(None, true), (Some(CLOUD_ID), false)] {
-            let allowed = hosts(gateway);
-            let routes =
-                AtlassianRoutes::new(PRODUCT, &site(cloud_id, &allowed), &TestHost::default())
-                    .unwrap();
-            assert_eq!(
-                routes
-                    .for_credential(&AtlassianCredential::from_static(bearer_credential(
-                        "token"
-                    )))
-                    .err()
-                    .unwrap()
-                    .to_string(),
-                "Confluence bearer tokens and OAuth connections require providers.confluence.cloud_id and api.atlassian.com in allowed_upstream_hosts"
-            );
-        }
+        // A cloud ID alone builds the gateway route; the allowlist is
+        // enforced on each request. Without one, gateway credentials have
+        // no route.
+        let site_only = hosts(false);
+        let host = TestHost::default();
+        let routes =
+            AtlassianRoutes::new(PRODUCT, &site(Some(CLOUD_ID), &site_only), &host).unwrap();
+        assert!(
+            routes
+                .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                    "token"
+                )))
+                .is_ok()
+        );
+        assert_eq!(host.built_clients().len(), 4);
+        let routes =
+            AtlassianRoutes::new(PRODUCT, &site(None, &allowed), &TestHost::default()).unwrap();
+        assert_eq!(
+            routes
+                .for_credential(&AtlassianCredential::from_static(bearer_credential(
+                    "token"
+                )))
+                .err()
+                .unwrap()
+                .to_string(),
+            "Confluence OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.confluence.cloud_id"
+        );
     }
 
     #[test]
@@ -953,22 +1457,26 @@ mod tests {
         }
     }
 
+    /// A cloud ID that is not a UUID fails the build whatever the
+    /// allowlist says, as does an invalid tenant host.
     #[test]
     fn invalid_sites_fail_to_build() {
+        for allowed in [hosts(true), hosts(false)] {
+            let error = AtlassianRoutes::new(
+                PRODUCT,
+                &site(Some("not-a-uuid"), &allowed),
+                &TestHost::default(),
+            )
+            .err()
+            .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("providers.confluence.cloud_id is invalid"),
+                "{error}"
+            );
+        }
         let allowed = hosts(true);
-        let error = AtlassianRoutes::new(
-            PRODUCT,
-            &site(Some("not-a-uuid"), &allowed),
-            &TestHost::default(),
-        )
-        .err()
-        .unwrap();
-        assert!(
-            error
-                .to_string()
-                .contains("providers.confluence.cloud_id is invalid"),
-            "{error}"
-        );
         let mut bad_tenant = site(None, &allowed);
         bad_tenant.tenant_host = "exa mple";
         let error = AtlassianRoutes::new(PRODUCT, &bad_tenant, &TestHost::default())
@@ -982,19 +1490,44 @@ mod tests {
         );
     }
 
+    /// The fingerprint follows the tenant host and the canonical cloud ID,
+    /// not the allowlist, which no longer selects a route. It differs from
+    /// the earlier format, which also bound whether `api.atlassian.com` was
+    /// allowed, so list and search continuations issued before are refused
+    /// once.
     #[test]
-    fn route_fingerprints_follow_tenant_cloud_id_and_gateway_use() {
+    fn route_fingerprints_follow_the_tenant_and_cloud_id() {
+        /// The fingerprint list and search continuations bound before.
+        fn earlier(site: &AtlassianSite<'_>, gateway_allowed: bool) -> [u8; 32] {
+            let mut digest = Sha256::new();
+            digest.update(b"agent-access/atlassian-route/v1\0");
+            let cloud_id = site.cloud_id.and_then(canonical_cloud_id);
+            for field in [Some(site.tenant_host), cloud_id.as_deref()] {
+                match field {
+                    Some(value) => {
+                        digest.update([1]);
+                        digest.update((value.len() as u64).to_be_bytes());
+                        digest.update(value.as_bytes());
+                    }
+                    None => digest.update([0]),
+                }
+            }
+            digest.update([u8::from(gateway_allowed)]);
+            digest.finalize().into()
+        }
+
         let gateway = hosts(true);
         let tenant_only = hosts(false);
         let base = site(Some(CLOUD_ID), &gateway).route_fingerprint();
-        assert_eq!(base, site(Some(CLOUD_ID), &gateway).route_fingerprint());
+        assert_eq!(base, site(Some(CLOUD_ID), &tenant_only).route_fingerprint());
+        let simple = CLOUD_ID.replace('-', "");
+        assert_eq!(base, site(Some(&simple), &gateway).route_fingerprint());
         let mut other_tenant = site(Some(CLOUD_ID), &gateway);
         other_tenant.tenant_host = "other.atlassian.net";
         for changed in [
             other_tenant,
             site(None, &gateway),
-            site(Some("00000000-0000-0000-0000-000000000002"), &gateway),
-            site(Some(CLOUD_ID), &tenant_only),
+            site(Some(OTHER_CLOUD_ID), &gateway),
         ] {
             assert_ne!(changed.route_fingerprint(), base);
         }
@@ -1007,6 +1540,19 @@ mod tests {
         let mut proxied = site(Some(CLOUD_ID), &gateway);
         proxied.egress_proxy = Some(&proxy);
         assert_eq!(proxied.route_fingerprint(), base);
+
+        for configured in [
+            site(Some(CLOUD_ID), &gateway),
+            site(Some(CLOUD_ID), &tenant_only),
+            site(None, &tenant_only),
+        ] {
+            for gateway_allowed in [false, true] {
+                assert_ne!(
+                    configured.route_fingerprint(),
+                    earlier(&configured, gateway_allowed)
+                );
+            }
+        }
     }
 
     mod access_binding {
@@ -1029,7 +1575,6 @@ mod tests {
             ContinuationLifetime::StableWhenConfigured,
             16,
         );
-        const OTHER_CLOUD_ID: &str = "00000000-0000-0000-0000-000000000002";
 
         /// A lease on the OAuth connection `binding` (the connection and its
         /// generation) holding access `version` for the gateway site
@@ -1204,22 +1749,46 @@ mod tests {
             }
         }
 
+        /// A stored or configured token, lent as `profile` when set.
+        fn stored(credential: ExecutionCredential, profile: Option<&str>) -> ExecutionAccess {
+            ExecutionAccess::Static(match profile {
+                Some(profile) => credential_with_profile(credential, profile),
+                None => credential,
+            })
+        }
+
+        /// Static tokens bind their kind, and the gateway's site whenever
+        /// their token type takes the gateway route. A classic token binds
+        /// as an unprofiled Basic token did and a service-account token as
+        /// an unprofiled bearer token did; a scoped API token binds Basic
+        /// with the gateway's site, so a classic and a scoped token never
+        /// open each other's continuations.
         #[test]
         fn static_tokens_bind_their_kind_and_only_gateway_routes_bind_the_cloud_id() {
             let signer = ContinuationSigner::new(None);
             let alice = request("alice");
-            let basic = ExecutionAccess::Static(basic_credential("alice@example.com", "token"));
-            let bearer = ExecutionAccess::Static(bearer_credential("token"));
-            let token = seal(&signer, &alice, &basic, Some(CLOUD_ID));
+            let basic = || basic_credential("alice@example.com", "token");
+            let classic = stored(basic(), Some(ATLASSIAN_API_TOKEN_PROFILE));
+            let scoped = stored(basic(), Some(ATLASSIAN_SCOPED_API_TOKEN_PROFILE));
+            let unprofiled_bearer = stored(bearer_credential("token"), None);
+            let bearer = stored(
+                bearer_credential("token"),
+                Some(ATLASSIAN_BEARER_TOKEN_PROFILE),
+            );
+            let token = seal(&signer, &alice, &stored(basic(), None), Some(CLOUD_ID));
             // The site route does not depend on the gateway's site, and the
             // stored token is not bound: the principal owns the token.
             for (cloud_id, access) in [
-                (Some(CLOUD_ID), basic.clone()),
-                (Some(OTHER_CLOUD_ID), basic.clone()),
-                (None, basic.clone()),
+                (Some(CLOUD_ID), classic.clone()),
+                (Some(OTHER_CLOUD_ID), classic.clone()),
+                (None, classic.clone()),
+                (Some("not-a-uuid"), classic.clone()),
                 (
                     Some(CLOUD_ID),
-                    ExecutionAccess::Static(basic_credential("alice@example.com", "rotated")),
+                    stored(
+                        basic_credential("alice@example.com", "rotated"),
+                        Some(ATLASSIAN_API_TOKEN_PROFILE),
+                    ),
                 ),
             ] {
                 assert_eq!(
@@ -1228,32 +1797,100 @@ mod tests {
                 );
             }
             for (request, access) in [
+                (alice.clone(), scoped.clone()),
                 (alice.clone(), bearer.clone()),
                 (alice.clone(), delegated("alice-oauth-1", "v1")),
-                (request("bob"), basic.clone()),
+                (request("bob"), classic.clone()),
             ] {
                 assert_eq!(
                     open(&signer, &request, &access, Some(CLOUD_ID), &token),
                     Err(ContinuationError::Invalid)
                 );
             }
-            // A bearer token routes through the gateway, so its site is bound.
+            // Gateway tokens bind the gateway's site; a service-account
+            // token binds as an unprofiled bearer token.
+            for minted in [&scoped, &bearer, &unprofiled_bearer] {
+                let token = seal(&signer, &alice, minted, Some(CLOUD_ID));
+                assert_eq!(
+                    open(&signer, &alice, minted, Some(CLOUD_ID), &token).unwrap(),
+                    b"next"
+                );
+                for (access, cloud_id) in [
+                    (minted.clone(), Some(OTHER_CLOUD_ID)),
+                    (classic.clone(), Some(CLOUD_ID)),
+                    (delegated("alice-oauth-1", "v1"), Some(CLOUD_ID)),
+                ] {
+                    assert_eq!(
+                        open(&signer, &alice, &access, cloud_id, &token),
+                        Err(ContinuationError::Invalid)
+                    );
+                }
+            }
             let token = seal(&signer, &alice, &bearer, Some(CLOUD_ID));
             assert_eq!(
-                open(&signer, &alice, &bearer, Some(CLOUD_ID), &token).unwrap(),
+                open(&signer, &alice, &unprofiled_bearer, Some(CLOUD_ID), &token).unwrap(),
                 b"next"
             );
-            for (access, cloud_id) in [
-                (bearer.clone(), Some(OTHER_CLOUD_ID)),
-                (bearer.clone(), None),
-                (basic, Some(CLOUD_ID)),
-                (delegated("alice-oauth-1", "v1"), Some(CLOUD_ID)),
-            ] {
+            assert_eq!(
+                open(&signer, &alice, &scoped, Some(CLOUD_ID), &token),
+                Err(ContinuationError::Invalid)
+            );
+            let token = seal(&signer, &alice, &scoped, Some(CLOUD_ID));
+            for other in [&bearer, &unprofiled_bearer, &stored(basic(), None)] {
                 assert_eq!(
-                    open(&signer, &alice, &access, cloud_id, &token),
+                    open(&signer, &alice, other, Some(CLOUD_ID), &token),
                     Err(ContinuationError::Invalid)
                 );
             }
+        }
+
+        /// Binding uses the route classifier: material with no route, and a
+        /// gateway route without a valid cloud ID, fail closed instead of
+        /// binding a guessed route.
+        #[test]
+        fn access_without_a_route_fails_closed() {
+            let bind = |access: &ExecutionAccess, cloud_id: Option<&str>| {
+                bind_atlassian_access(
+                    PAGES.bind(request("alice").context(), "route"),
+                    access,
+                    cloud_id,
+                )
+                .map(|_| ())
+                .map_err(|error| (error.reason_code(), error.message))
+            };
+            let refused = Err((
+                ReasonCode::CredentialNotProvisioned.into(),
+                "selected credential material is unavailable".to_string(),
+            ));
+            let basic = || basic_credential("alice@example.com", "token");
+            for access in [
+                stored(basic(), Some("gitlab-access-token")),
+                stored(basic(), Some(ATLASSIAN_BEARER_TOKEN_PROFILE)),
+                stored(
+                    bearer_credential("token"),
+                    Some(ATLASSIAN_API_TOKEN_PROFILE),
+                ),
+                stored(
+                    bearer_credential("token"),
+                    Some(ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                ),
+            ] {
+                assert_eq!(bind(&access, Some(CLOUD_ID)), refused, "{access:?}");
+            }
+            for access in [
+                stored(basic(), Some(ATLASSIAN_SCOPED_API_TOKEN_PROFILE)),
+                stored(bearer_credential("token"), None),
+                delegated("alice-oauth-1", "v1"),
+            ] {
+                assert_eq!(bind(&access, Some(CLOUD_ID)), Ok(()));
+                for cloud_id in [None, Some("not-a-uuid")] {
+                    assert_eq!(bind(&access, cloud_id), refused, "{access:?} {cloud_id:?}");
+                }
+            }
+            assert_eq!(
+                bind(&stored(basic(), Some(ATLASSIAN_API_TOKEN_PROFILE)), None),
+                Ok(())
+            );
         }
 
         /// The gateway's site is bound in its lowercase hyphenated form, so
@@ -1267,6 +1904,10 @@ mod tests {
             let simple = CLOUD_ID.replace('-', "");
             for access in [
                 ExecutionAccess::Static(bearer_credential("token")),
+                stored(
+                    basic_credential("alice@example.com", "token"),
+                    Some(ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                ),
                 delegated("alice-oauth-1", "v1"),
             ] {
                 let token = seal(&signer, &alice, &access, Some(CLOUD_ID));
@@ -1311,6 +1952,16 @@ mod tests {
                 (
                     ExecutionAccess::Static(bearer_credential("token")),
                     ExecutionAccess::Static(bearer_credential("token")),
+                ),
+                (
+                    stored(
+                        basic_credential("alice@example.com", "token"),
+                        Some(ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                    ),
+                    stored(
+                        basic_credential("alice@example.com", "rotated"),
+                        Some(ATLASSIAN_SCOPED_API_TOKEN_PROFILE),
+                    ),
                 ),
             ] {
                 let token = seal(&before, &alice, &sealed, Some(CLOUD_ID));

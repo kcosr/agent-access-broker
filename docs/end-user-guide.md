@@ -69,12 +69,19 @@ that uses OAuth.
 **My access > Credentials** lists one row per connection, naming the services you
 are granted that use it and counting any others. Select a connection, enter the
 requested fields, save, and verify when supported. Use the token form the broker
-offers. Verification probes as you through one of those services; a Git gateway
-needs a repository you can fetch. A connection that uses OAuth is one row per
+offers. When your administrator accepts several token types for a connection,
+choose the type of your token in **Token type** first: nothing is preselected,
+and the form asks for that type's fields, such as an account email and token, or
+a token alone. Replacing a stored token starts on its type; choosing another
+replaces it with a token of that type. Rows and the drawer name a token type by
+its label, or by its profile when it has none. Verification probes as you
+through one of those services; a Git gateway needs a repository you can fetch. A connection that uses OAuth is one row per
 OAuth registration, with **Connect account**, **Reconnect** and **Disconnect**.
 Rows marked **Not used** are stored credentials the configuration no longer
 selects, for example a token you stored before two services began sharing a
-connection; no service reads them, and you can delete them.
+connection, or a token of a type your administrator no longer accepts; no
+service reads them, and you can delete them. A token kept for its type is used
+again, without re-entry, if the connection accepts its type again.
 Storing a credential does not create a grant: each service that uses the
 connection still needs its own grant. Service-mode actions use the configured
 shared identity and may not require a personal credential. Teams destination
@@ -174,11 +181,13 @@ with the variable's name, not its expanded secret value. You can instead use
 `--field-file token=/secure/path` or `--field-stdin token`.
 
 `credentials targets` lists the connections you can store a token for, with
-their fields. Each command names the connection, which may be shared: the
-`atlassian` connection's one account email and API token serves Jira and
-Confluence, and the `gitlab` connection's one token serves GitLab REST and Git,
-when your administrator shares them. Use the connection IDs `credentials
-targets` shows.
+the token types (`tokenProfiles`) each accepts and their fields. Each command
+names the connection, which may be shared: the `atlassian` connection's one
+account email and API token serves Jira and Confluence, and the `gitlab`
+connection's one token serves GitLab REST and Git, when your administrator
+shares them. Use the connection IDs `credentials targets` shows. When a
+connection accepts several token types, choose one with `--profile <profile>`,
+such as `--profile git-basic-api-token`; with one type, omit it.
 
 ```bash
 agent-access --config ~/.config/agent-access/setup.toml credentials targets

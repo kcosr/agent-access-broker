@@ -28,6 +28,7 @@ mod lookup_access;
 mod mcp_views;
 mod owned;
 mod personal_credentials;
+pub use personal_credentials::ConnectionTokenProfile;
 #[cfg(test)]
 mod provider_contract_tests;
 #[cfg(test)]
@@ -2216,10 +2217,12 @@ impl BrokerRuntime {
         }
         let source_config = config.clone();
         imports::effective_credentials(&mut config, &imported_catalog);
-        // Imports add connections offline validation cannot see.
-        let connection_errors = crate::connections::effective_connection_errors(
-            &config.credentials,
+        // Imports add connections offline validation cannot see. The
+        // published connections hold their implicit types.
+        let connection_errors = crate::connections::resolve_effective_connections(
+            &mut config.credentials,
             &services,
+            &config.gateways,
             &config.oauth,
             config.providers.registry(),
         );
@@ -4449,6 +4452,7 @@ impl BrokerRuntime {
                 "git credential verification requires repository",
             )
         })?;
+        self.check_gateway_presentable(credential)?;
 
         let upstream_url = git_discovery_verification_url(gateway, repository)?;
         if !agent_access_provider::url_allowed_by_patterns(
@@ -8231,13 +8235,22 @@ fn load_execution_credential(
     identity: Option<&IdentityContext>,
 ) -> Result<ExecutionCredential, ProviderError> {
     match credential.kind.as_str() {
-        "basic_api_token" | "bearer_token" => load_materialized_credential(
-            service,
-            credential_mode,
-            &credential.kind,
-            credential.username_ref.as_deref(),
-            credential.token_ref.as_deref(),
-        ),
+        "basic_api_token" | "bearer_token" => {
+            let loaded = load_materialized_credential(
+                service,
+                credential_mode,
+                &credential.kind,
+                credential.username_ref.as_deref(),
+                credential.token_ref.as_deref(),
+            )?;
+            // A shared credential is lent as the token profile it names.
+            Ok(match &credential.profile {
+                Some(profile) => {
+                    agent_access_provider::host::credential_with_profile(loaded, profile.clone())
+                }
+                None => loaded,
+            })
+        }
         "secret_store" => {
             load_secret_store_credential(service, credential_mode, credential, identity)
         }
@@ -10290,6 +10303,7 @@ pub fn fake_service_credential(token_ref: impl Into<String>) -> CredentialConfig
         path: None,
         read_only: None,
         connection: None,
+        profile: None,
     }
 }
 

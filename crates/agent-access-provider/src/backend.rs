@@ -2,9 +2,9 @@
 //! builds a backend from its `[providers.<kind>]` table.
 use crate::host::UpstreamClientFactory;
 use crate::{
-    EgressProxyConfig, ModuleMetadata, Provider, ProviderAttributionConfig, ProviderBuildError,
-    ProviderLimits, ProviderReasonDefinition, ResourceTypeDescriptor, ServiceDescriptor,
-    StableSigningKey,
+    CredentialProfile, EgressProxyConfig, ModuleMetadata, Provider, ProviderAttributionConfig,
+    ProviderBuildError, ProviderLimits, ProviderReasonDefinition, ResourceTypeDescriptor,
+    ServiceDescriptor, StableSigningKey,
 };
 use serde::de::DeserializeOwned;
 use std::any::Any;
@@ -210,43 +210,51 @@ impl<'a> ValidationContext<'a> {
     }
 }
 
-/// The credential kinds configured under `credentials.service.<service>`,
-/// `credentials.per_user.<service>` and `credentials.lookup.<service>`.
+/// The credential sources configured for a service under
+/// `credentials.service.<service>`, `credentials.per_user.<service>` and
+/// `credentials.lookup.<service>`, as backend validation sees them.
 ///
-/// - `service` is `basic_api_token` or `bearer_token` for a static
-///   credential.
-/// - `per_user` is the kind of the per-user credential connection's token
-///   profile (`basic_api_token` or `bearer_token`), `oauth` for a connection
-///   that offers only delegated access, or `secret_store` when each stored
-///   record carries its own kind.
-/// - `per_user_delegated` is set when the per-user connection also offers
-///   delegated (OAuth) access, whether or not it has a token profile. A
-///   backend that cannot accept delegated access must reject it.
-/// - `lookup` is `basic_api_token` or `bearer_token` for the shared,
-///   read-only metadata-lookup credential that service-mode lookups use. It
-///   is not an execution credential: a backend that requires one must not
-///   count it.
+/// - `service` is the shared execution credential: a static kind with the
+///   token profile it names, if any.
+/// - `per_user_profiles` are the token profiles the service's per-user
+///   credential connection accepts, from its `token_profiles` (or the
+///   implicit type, when it sets neither a list nor `oauth`) and
+///   `service_account_token_profiles` together, in configuration order and
+///   each once, as this service declares them (name, kind, label and
+///   route-bound flag). A listed profile the service does not declare is
+///   left out; credential validation reports it.
+/// - `per_user_delegated` is set when the per-user connection offers
+///   delegated (OAuth) access, whether or not it also accepts token
+///   profiles. A backend that cannot accept delegated access must reject it.
+/// - `per_user_secret_store` is set for a `secret_store` per-user entry,
+///   whose records each carry their own kind, known only at run time.
+/// - `lookup` is the shared, read-only metadata-lookup credential that
+///   service-mode lookups use. It is not an execution credential: a backend
+///   that requires one must not count it.
 ///
-/// `None` means the mode is not configured, or its connection's token
-/// profile is unsupported (credential validation reports that separately).
+/// An absent source is not configured, or is of a type credential
+/// validation rejects.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceCredentialKinds<'a> {
-    pub service: Option<&'a str>,
-    pub per_user: Option<&'a str>,
+    pub service: Option<CredentialSource<'a>>,
+    pub per_user_profiles: &'a [CredentialProfile],
     pub per_user_delegated: bool,
-    pub lookup: Option<&'a str>,
+    pub per_user_secret_store: bool,
+    pub lookup: Option<CredentialSource<'a>>,
 }
 
 impl<'a> ServiceCredentialKinds<'a> {
-    /// Kinds without delegated per-user access or a lookup credential.
-    pub fn new(service: Option<&'a str>, per_user: Option<&'a str>) -> Self {
-        Self {
-            service,
-            per_user,
-            per_user_delegated: false,
-            lookup: None,
-        }
+    /// Reports the shared execution credential.
+    pub fn with_service(mut self, service: Option<CredentialSource<'a>>) -> Self {
+        self.service = service;
+        self
+    }
+
+    /// Reports the token profiles the per-user connection accepts.
+    pub fn with_per_user_profiles(mut self, profiles: &'a [CredentialProfile]) -> Self {
+        self.per_user_profiles = profiles;
+        self
     }
 
     /// Reports whether the per-user connection offers delegated access.
@@ -255,10 +263,68 @@ impl<'a> ServiceCredentialKinds<'a> {
         self
     }
 
-    /// Reports the kind of the service's lookup credential.
-    pub fn with_lookup(mut self, lookup: Option<&'a str>) -> Self {
+    /// Reports whether the per-user entry is a `secret_store`.
+    pub fn with_per_user_secret_store(mut self, secret_store: bool) -> Self {
+        self.per_user_secret_store = secret_store;
+        self
+    }
+
+    /// Reports the shared lookup credential.
+    pub fn with_lookup(mut self, lookup: Option<CredentialSource<'a>>) -> Self {
         self.lookup = lookup;
         self
+    }
+}
+
+/// One configured shared credential (`credentials.service` or
+/// `credentials.lookup`) as backend validation sees it. A consumer matches
+/// it with a fallback arm that rejects what it does not support.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialSource<'a> {
+    /// A static credential of `kind` (`basic_api_token` or `bearer_token`),
+    /// lent as `profile` when the entry names one.
+    #[non_exhaustive]
+    Static {
+        kind: &'a str,
+        profile: Option<&'a str>,
+    },
+    /// A `secret_store` entry, whose records each carry their own kind,
+    /// known only at run time.
+    SecretStore,
+}
+
+impl<'a> CredentialSource<'a> {
+    /// A static credential of `kind` without a profile.
+    pub const fn static_kind(kind: &'a str) -> Self {
+        Self::Static {
+            kind,
+            profile: None,
+        }
+    }
+
+    /// A static credential of `kind` lent as `profile`.
+    pub const fn static_profile(kind: &'a str, profile: &'a str) -> Self {
+        Self::Static {
+            kind,
+            profile: Some(profile),
+        }
+    }
+
+    /// The static kind; `None` for a secret store.
+    pub fn kind(&self) -> Option<&'a str> {
+        match self {
+            Self::Static { kind, .. } => Some(kind),
+            Self::SecretStore => None,
+        }
+    }
+
+    /// The token profile a static credential names.
+    pub fn profile(&self) -> Option<&'a str> {
+        match self {
+            Self::Static { profile, .. } => *profile,
+            Self::SecretStore => None,
+        }
     }
 }
 

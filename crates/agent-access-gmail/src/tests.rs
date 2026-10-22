@@ -1023,3 +1023,36 @@ fn page_token_failures_pass_the_invocation_contract() {
         assert_eq!(hook.check_failure(&failure), Ok(()), "{failure:?}");
     }
 }
+
+/// Gmail needs a per-user connection offering only OAuth: a token profile,
+/// a secret store or a shared credential beside or instead of it is
+/// rejected.
+#[test]
+fn validation_requires_an_oauth_only_personal_connection() {
+    const REJECTED: &str = "providers.gmail requires credentials.per_user.gmail of kind oauth and no service credential";
+    let profiles = [CredentialProfile::new("gmail-token", "bearer_token")];
+    let errors = |credentials: ServiceCredentialKinds<'_>| {
+        let mut errors = vec![];
+        GmailConfig {}.validate(
+            &ValidationContext::new(
+                "production",
+                "managed",
+                &ProviderLimits::default(),
+                credentials,
+            ),
+            &mut errors,
+        );
+        errors
+    };
+    let oauth = ServiceCredentialKinds::default().with_per_user_delegated(true);
+    assert!(errors(oauth).is_empty());
+    for credentials in [
+        ServiceCredentialKinds::default(),
+        ServiceCredentialKinds::default().with_per_user_secret_store(true),
+        oauth.with_per_user_secret_store(true),
+        oauth.with_per_user_profiles(&profiles),
+        oauth.with_service(Some(CredentialSource::static_kind("bearer_token"))),
+    ] {
+        assert_eq!(errors(credentials), [REJECTED], "{credentials:?}");
+    }
+}

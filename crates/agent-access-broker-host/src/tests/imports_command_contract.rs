@@ -2567,8 +2567,11 @@ async fn personal_mode_added_after_acceptance_is_provisioned_and_verified_from_a
     assert_eq!(status, StatusCode::OK, "{targets}");
     let target = &targets["result"][0];
     assert_eq!(target["connection"], "tickets", "{targets}");
-    assert_eq!(target["profile"], "username-token");
-    assert_eq!(target["credentialKind"], "basic_api_token");
+    assert_eq!(target["tokenProfiles"][0]["profile"], "username-token");
+    assert_eq!(
+        target["tokenProfiles"][0]["credentialKind"],
+        "basic_api_token"
+    );
     assert_eq!(
         target["consumers"],
         json!([{"service": "tickets", "displayName": "tickets command",

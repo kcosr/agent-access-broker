@@ -44,8 +44,7 @@ const connection = (id: string, consumers: ConnectionConsumer[], otherConsumers 
   method: "token",
   consumers,
   otherConsumers,
-  profile: "token",
-  credentialKind: "bearer_token",
+  tokenProfiles: [{ profile: "token", label: null, credentialKind: "bearer_token", inputSchema: { connection: id, profile: "token", credentialKind: "bearer_token", fields: [] } }],
   registration: null,
   remoteRevocation: null,
   credential: null

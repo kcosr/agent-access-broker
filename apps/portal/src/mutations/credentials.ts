@@ -2,12 +2,13 @@
 // principal. Every mutation rejects on failure; callers show the error.
 import { useMemo } from "react";
 import { brokerApi } from "../api";
-import type { ConnectionConsumer, CredentialMetadata, CredentialTarget, CredentialVerificationInput } from "../types";
+import type { ConnectionConsumer, CredentialMetadata, CredentialTokenProfile, CredentialVerificationInput } from "../types";
 import { useToast } from "../workbench";
 import { useSession } from "../app/session";
 import type { AccountSubject } from "../app/active-route";
 import { usePortalInvalidation } from "../data/invalidation";
 import { credentialVerifiedMessage } from "../lib/helpers";
+import { tokenTypeValues } from "../lib/credentials";
 
 /** Whether verifying through this consumer needs a repository to check access against. */
 export function credentialVerificationNeedsRepository(consumer: ConnectionConsumer) {
@@ -26,12 +27,13 @@ export function useCredentialActions(subject: AccountSubject) {
       if (administered) invalidate.admin();
     }
 
-    async function save(target: CredentialTarget, values: Record<string, string>) {
-      const secret = Object.fromEntries(target.inputSchema.fields.map((field) => [field.name, values[field.name] ?? ""]));
+    /** Stores a token of the chosen `type` for `connection`, replacing any stored one, its type included. */
+    async function save(connection: string, type: CredentialTokenProfile, values: Record<string, string>) {
+      const secret = tokenTypeValues(type, values);
       await attempt((current) =>
         administered
-          ? brokerApi.adminPrincipalSaveCredential(current, principalId, target.connection, target.profile, secret)
-          : brokerApi.saveCredential(current, target.connection, target.profile, secret)
+          ? brokerApi.adminPrincipalSaveCredential(current, principalId, connection, type.profile, secret)
+          : brokerApi.saveCredential(current, connection, type.profile, secret)
       );
       toast("Credential saved", { tone: "success" });
       refresh();

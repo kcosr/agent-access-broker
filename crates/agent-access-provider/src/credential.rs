@@ -81,15 +81,17 @@ impl StaticCredentialKind {
 /// [`UpstreamAuthorization`] with [`Self::authorization`], in the kind's own
 /// HTTP authentication scheme, or [`Self::authorization_as`], in a
 /// [`CredentialPlacement`] the upstream requires, and hand it to the upstream
-/// client's send methods, which add it to the request. [`Self::kind`] is the
-/// only fact about it they can inspect. The value does not serialize and
-/// never appears in Debug output. Only with the `test-support` feature does
-/// it compare (`==`), in constant time over digests of its kind and
-/// material, so tests can check which credential a double received; release
-/// builds have no comparison.
+/// client's send methods, which add it to the request. [`Self::kind`] and
+/// [`Self::profile`] are the only facts about it they can inspect. The
+/// material does not serialize and never appears in Debug output, which
+/// names only the kind and profile. Only with the `test-support` feature
+/// does it compare (`==`): the profiles must be equal, and the kind and
+/// material compare in constant time over their digests, so tests can check
+/// which credential a double received; release builds have no comparison.
 #[derive(Clone)]
 pub struct ExecutionCredential {
     material: CredentialMaterial,
+    profile: Option<String>,
 }
 
 #[derive(Clone)]
@@ -102,13 +104,20 @@ impl ExecutionCredential {
     pub(crate) fn basic(username: String, token: String) -> Self {
         Self {
             material: CredentialMaterial::Basic { username, token },
+            profile: None,
         }
     }
 
     pub(crate) fn bearer(token: String) -> Self {
         Self {
             material: CredentialMaterial::Bearer { token },
+            profile: None,
         }
+    }
+
+    pub(crate) fn with_profile(mut self, profile: String) -> Self {
+        self.profile = Some(profile);
+        self
     }
 
     pub fn kind(&self) -> StaticCredentialKind {
@@ -116,6 +125,18 @@ impl ExecutionCredential {
             CredentialMaterial::Basic { .. } => StaticCredentialKind::BasicApiToken,
             CredentialMaterial::Bearer { .. } => StaticCredentialKind::BearerToken,
         }
+    }
+
+    /// The token profile the credential was stored or configured as: a
+    /// stored credential connection token's own profile, or the `profile` a
+    /// `credentials.service` or `credentials.lookup` entry names. `None` for
+    /// a configured credential without one and for `secret_store` records,
+    /// whose kind alone describes them. A provider whose profiles need
+    /// different handling, such as different upstream routes, may branch on
+    /// it; it must refuse a profile it does not recognize rather than treat
+    /// it as another.
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
     }
 
     /// The credential in its kind's own HTTP authentication scheme:
@@ -145,13 +166,17 @@ impl ExecutionCredential {
     }
 }
 
-/// Test support only: equal when the kind and material are, compared in
-/// constant time over digests so that no secret byte decides how long the
-/// comparison takes.
+/// Test support only: equal when the profiles, kind and material are; the
+/// kind and material compare in constant time over digests so that no
+/// secret byte decides how long the comparison takes.
 #[cfg(any(test, feature = "test-support"))]
 impl PartialEq for ExecutionCredential {
     fn eq(&self, other: &Self) -> bool {
-        crate::authorization::digests_equal(&self.material().digest(), &other.material().digest())
+        let material = crate::authorization::digests_equal(
+            &self.material().digest(),
+            &other.material().digest(),
+        );
+        material && self.profile == other.profile
     }
 }
 
@@ -163,6 +188,7 @@ impl fmt::Debug for ExecutionCredential {
         formatter
             .debug_struct("ExecutionCredential")
             .field("kind", &self.kind().as_str())
+            .field("profile", &self.profile)
             .finish_non_exhaustive()
     }
 }
@@ -331,6 +357,23 @@ mod tests {
             ExecutionCredential::basic("ab".into(), "c".into()),
             ExecutionCredential::basic("a".into(), "bc".into())
         );
+        // So is the profile: the same material stored as another profile is
+        // another credential.
+        let profiled = basic.clone().with_profile("site-token".into());
+        assert_eq!(profiled.profile(), Some("site-token"));
+        assert_eq!(basic.profile(), None);
+        assert_ne!(basic, profiled);
+        assert_ne!(profiled, basic.clone().with_profile("gateway-token".into()));
+        assert_eq!(profiled, basic.with_profile("site-token".into()));
+    }
+
+    #[test]
+    fn debug_names_the_profile_but_never_the_material() {
+        let credential =
+            ExecutionCredential::bearer("bearer-secret".into()).with_profile("api-token".into());
+        let rendered = format!("{credential:?}");
+        assert!(rendered.contains("bearer_token") && rendered.contains("api-token"));
+        assert!(!rendered.contains("bearer-secret"), "{rendered}");
     }
 
     #[test]

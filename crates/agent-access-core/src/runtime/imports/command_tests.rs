@@ -221,7 +221,8 @@ fn credentialed_command_imports_need_their_slot_and_declare_their_profile() {
             effective.credentials.connections["ticketing"],
             crate::ConnectionConfig {
                 display_name: Some("Ticketing".into()),
-                token_profile: Some(profile.into()),
+                token_profiles: Some(vec![profile.into()]),
+                service_account_token_profiles: None,
                 oauth: None,
             }
         );
@@ -237,7 +238,7 @@ fn credentialed_command_imports_need_their_slot_and_declare_their_profile() {
         ] {
             assert_eq!(
                 connection.select(Some(principal_kind)),
-                crate::Selection::Token(profile)
+                crate::Selection::Token(&[profile.to_string()])
             );
         }
         assert_eq!(connection.select(None), crate::Selection::Unavailable);

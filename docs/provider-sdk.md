@@ -188,15 +188,23 @@ derives `Deserialize`. Reject unknown fields with
 - `validate(&ValidationContext, &mut errors)` pushes messages that name fields
   under `providers.<kind>`. The context exposes only `deployment.environment`
   (with `production()`), the policy authority, the Broker limits and the
-  credential kinds configured for this service under `credentials.service`,
-  `credentials.per_user` and `credentials.lookup` (`ServiceCredentialKinds`).
-  A per-user credential connection reports its token profile's kind, or
-  `oauth` when it offers only delegated access, and `per_user_delegated` is set
-  whenever it offers delegated access; a backend that cannot use delegated
-  access rejects it. `lookup` is the kind of the shared read-only lookup
-  credential, which is never execution material: a backend that requires an
-  execution credential does not count it. The context does not expose the
-  rest of the configuration or any store.
+  credential sources configured for this service under `credentials.service`,
+  `credentials.per_user` and `credentials.lookup` (`ServiceCredentialKinds`):
+  - `service` and `lookup` are each a `CredentialSource`: `Static` with the
+    configured kind and the token profile the entry names, if any, or
+    `SecretStore`. Match it with a fallback arm that rejects other sources.
+    `lookup` is the shared read-only lookup credential, which is never
+    execution material: a backend that requires an execution credential does
+    not count it.
+  - `per_user_profiles` are the token profiles the per-user credential
+    connection accepts, from both of its lists, as this service declares them
+    (`CredentialProfile`: name, kind, label and route-bound flag).
+  - `per_user_delegated` is set whenever the connection offers delegated
+    access; a backend that cannot use delegated access rejects it.
+  - `per_user_secret_store` is set for a `secret_store` per-user entry, whose
+    records each carry their own kind, known only at run time.
+
+  The context does not expose the rest of the configuration or any store.
 - `validate_resource_attributes` checks private resource values against the
   active configuration. Its diagnostics must not contain the supplied values,
   because administrators see them.
@@ -216,9 +224,14 @@ other list of URL patterns, such as destinations a provider lets the upstream
 deliver to, `validate_url_patterns` applies the allowlist grammar (a fixed
 host, no embedded credentials, path segments that are literal, `*` or `**`)
 under a `UrlPatternPolicy` that chooses the schemes, whether the list may be
-empty, and whether queries, fragments and normalized repeats are rejected. None
-of them reads files, the process environment or secret references; the host
-resolves secret references such as a proxy's `password_ref`.
+empty, and whether queries, fragments and normalized repeats are rejected.
+`base_covered_by_patterns` checks offline that an allowlist reaches an API base
+the provider uses: some pattern on the base's scheme, host and port must be able
+to match a path at or under it (its path glob intersects `base/**`, with `*` and
+`**` anywhere), and query constraints are ignored. Coverage is not permission:
+each request is still checked against the allowlist. None of them reads files,
+the process environment or secret references; the host resolves secret
+references such as a proxy's `password_ref`.
 
 ### Building a provider
 
@@ -277,19 +290,50 @@ discovery, OpenAPI and the send schema carry but MCP tool definitions omit.
 `CredentialDescriptor` states whether invocations need a broker-selected
 execution credential (`CredentialDescriptor::without_execution_credential()`
 when they do not), which static kinds `credentials.service.<service>` accepts,
-the token profiles a per-user credential connection may store, inputs that
-credential verification needs, and, with `.delegated(description)`, that
-per-user delegated OAuth credentials are accepted.
+the token profiles a credential connection may store, inputs that credential
+verification needs, and, with `.delegated(description)`, that per-user
+delegated OAuth credentials are accepted.
+
+Declare a token profile with `.profile(name, kind)`, or with
+`.with_profile(CredentialProfile::new(name, kind))` to add the options below.
+Declare each name once: descriptor validation rejects a repeated profile.
+
+- `.with_label(label)`, the name people see where they choose a token type
+  (management falls back to the profile name);
+- `.route_bound()`, which marks a profile only this provider may present,
+  because the provider decides where it goes (for example, by its upstream
+  route). The host never lets a Git gateway present a route-bound profile:
+  configuration rejects a connection that lists one beside a Git gateway
+  consumer, and the gateway and Git verification refuse such a credential, or
+  one whose profile no service declares, before sending anything.
+
+```rust check
+use agent_access_provider::{CredentialDescriptor, CredentialProfile};
+
+/// A site token and a route-bound token the provider sends elsewhere.
+fn credentials() -> CredentialDescriptor {
+    CredentialDescriptor::default()
+        .profile("notes-api-token", "basic_api_token")
+        .with_profile(
+            CredentialProfile::new("notes-gateway-token", "bearer_token")
+                .with_label("Gateway token")
+                .route_bound(),
+        )
+}
+```
 
 `.with_upstream_authority(authority)` declares the upstream instance the
 service's credentials act on, derived from its configuration alone: an
 `UpstreamAuthority` built with `UpstreamAuthority::from_base_url` (a normalized
 origin and instance path), optionally `.with_tenant(id)` and
 `.with_tenant_gateway(url)`. Services that consume one credential connection
-with a token profile must declare authorities naming the same instance, and an
-OAuth connection's dialect checks each consumer's authority (see
-[delegated access](#delegated-access)). A service that declares none cannot
-share a token connection with another service.
+with token profiles must declare authorities naming the same instance
+(`UpstreamAuthority::same_instance`): the same origin and instance path, and
+the same tenant and tenant gateway, or neither. Declare a tenant in one
+canonical spelling, since it is compared exactly. An OAuth connection's dialect
+checks each consumer's authority (see [delegated access](#delegated-access)). A
+service that declares none cannot share a token connection with another
+service.
 
 ### Token-only actions
 
@@ -652,9 +696,15 @@ well as through synthetic invocations.
 
 Static and delegated material never coexist. The static kinds are exactly
 `basic_api_token` and `bearer_token`, and `ExecutionCredential::kind()` returns
-the `StaticCredentialKind`. Only the host constructs credentials, so the
-material a kind requires is always present. Provider-defined kinds and
-credential JSON are not supported.
+the `StaticCredentialKind`. `ExecutionCredential::profile()` returns the token
+profile the credential was stored or configured as: a credential connection
+token's own stored profile, or the `profile` a `credentials.service` or
+`credentials.lookup` entry names. It is `None` for a configured credential
+without one and for `secret_store` records. A provider whose profiles need
+different handling, such as different upstream routes, may branch on it, and
+must refuse a profile it does not recognize rather than treat it as another.
+Only the host constructs credentials, so the material a kind requires is
+always present. Provider-defined kinds and credential JSON are not supported.
 
 Provider code never reads credential material and never holds a request that
 carries it. Neither an `ExecutionCredential` nor `DelegatedAccess` has a
@@ -1826,11 +1876,12 @@ behavior:
   `ProviderInvocation` (`build()`) the way the host admits them: authority,
   credential mode, static or delegated credentials and lookup access, body
   parts, private attributes and state.
-- `basic_credential`, `bearer_credential`, `delegated_binding_id` and
-  `test_signing_key` construct host values. Test support reads no credential
-  material either: with this feature, compare a credential a test double
-  received with `==` (constant time, over digests), or assert the header a
-  mock upstream received.
+- `basic_credential`, `bearer_credential`, `credential_with_profile`,
+  `delegated_binding_id` and `test_signing_key` construct host values. Test
+  support reads no credential material either: with this feature, compare a
+  credential a test double received with `==` (its profile, then its kind and
+  material in constant time over digests), or assert the header a mock
+  upstream received.
 - `in_invocation_hook(service, action, future)` runs a future as the host runs
   an invocation hook, so upstream traces are checked as they would be in the
   Broker. It does not include the provider's domain reasons.

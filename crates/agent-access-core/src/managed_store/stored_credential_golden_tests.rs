@@ -143,7 +143,7 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
     store.check_ready(Some(&ring)).unwrap();
     for golden in &GOLDEN_STORED_CREDENTIALS {
         let credential = store
-            .resolve_user_credential(&ring, "alice", golden.service, "default", golden.profile)
+            .resolve_user_credential(&ring, "alice", golden.service, "default", &[golden.profile.to_string()])
             .unwrap();
         assert_eq!(
             credential.kind().as_str(),
@@ -151,10 +151,14 @@ fn stored_credential_rows_from_baseline_resolve_without_reentry() {
             "{}",
             golden.service
         );
-        let expected = match golden.username {
-            Some(username) => basic_credential(username, golden.token),
-            None => bearer_credential(golden.token),
-        };
+        // Lent as the row's own stored profile.
+        let expected = credential_with_profile(
+            match golden.username {
+                Some(username) => basic_credential(username, golden.token),
+                None => bearer_credential(golden.token),
+            },
+            golden.profile,
+        );
         assert_eq!(credential, expected, "{}", golden.service);
     }
 }
@@ -164,7 +168,7 @@ fn imported_username_token_row_from_baseline_resolves_for_a_command() {
     let (_temp, store) = store_with_golden_stored_credentials();
     let ring = key_ring("k1");
     let credential = store
-        .resolve_user_command_credential(&ring, "alice", "ticketing", "default", "username-token")
+        .resolve_user_command_credential(&ring, "alice", "ticketing", "default", &["username-token".to_string()])
         .unwrap();
     assert_eq!(
         credential.kind(),
@@ -281,10 +285,13 @@ fn store_with_golden_atlassian_stored_credentials() -> (TempDir, ManagedStore) {
 }
 
 fn expected_golden_credential(golden: &GoldenStoredCredential) -> ExecutionCredential {
-    match golden.username {
-        Some(username) => basic_credential(username, golden.token),
-        None => bearer_credential(golden.token),
-    }
+    credential_with_profile(
+        match golden.username {
+            Some(username) => basic_credential(username, golden.token),
+            None => bearer_credential(golden.token),
+        },
+        golden.profile,
+    )
 }
 
 #[test]
@@ -294,7 +301,7 @@ fn vendor_atlassian_rows_resolve_beside_the_product_profile_row() {
     store.check_ready(Some(&ring)).unwrap();
     for golden in &GOLDEN_ATLASSIAN_STORED_CREDENTIALS {
         let credential = store
-            .resolve_user_credential(&ring, "alice", golden.service, "default", golden.profile)
+            .resolve_user_credential(&ring, "alice", golden.service, "default", &[golden.profile.to_string()])
             .unwrap();
         assert_eq!(
             credential.kind().as_str(),
@@ -314,13 +321,13 @@ fn vendor_atlassian_rows_resolve_beside_the_product_profile_row() {
     let product = &GOLDEN_STORED_CREDENTIALS[0];
     assert_eq!(
         store
-            .resolve_user_credential(&ring, "alice", "jira", "default", product.profile)
+            .resolve_user_credential(&ring, "alice", "jira", "default", &[product.profile.to_string()])
             .unwrap(),
         expected_golden_credential(product)
     );
     for profile in ["atlassian-api-token", "atlassian-bearer-token"] {
         let error = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", profile)
+            .resolve_user_credential(&ring, "alice", "jira", "default", &[profile.to_string()])
             .unwrap_err();
         assert!(
             matches!(error, ManagedStoreError::CredentialInvalid(_)),
@@ -380,7 +387,7 @@ fn rewrap_covers_product_and_vendor_atlassian_rows() {
                     "alice",
                     golden.service,
                     "default",
-                    golden.profile
+                    &[golden.profile.to_string()]
                 )
                 .unwrap(),
             expected_golden_credential(golden),
@@ -388,4 +395,149 @@ fn rewrap_covers_product_and_vendor_atlassian_rows() {
             golden.service
         );
     }
+}
+
+
+// The scoped API token row. `upsert_user_credential` wrote it for `alice`
+// with key `k1` at de99fcc: an `atlassian-scoped-api-token`/`basic_api_token`
+// row (email and token, presented as Basic through the Atlassian gateway)
+// under an `atlassian_scoped` connection. Its profile spelling is a durable
+// contract; it is frozen like the rows above.
+const GOLDEN_SCOPED_ATLASSIAN_STORED_CREDENTIAL: GoldenStoredCredential = GoldenStoredCredential {
+    credential_id: "133cd375-eae6-4dc5-bcae-52fcde06b56f",
+    service: "atlassian_scoped",
+    profile: "atlassian-scoped-api-token",
+    credential_kind: "basic_api_token",
+    metadata_json: r#"{"displayName":"Golden atlassian_scoped"}"#,
+    secret_ref: "sqlite:b0c81448-ce22-4e03-adda-60db086d66d1",
+    material_version: "704666a7-430e-452a-b726-c246ffe75d87",
+    nonce_hex: "947880b70b621843cba1afd7",
+    ciphertext_hex: "a48dc72de8ca75ec23ffea8eb9c09d01f170ee75372437d603ca9aa7a5341ba592598538bdd8909d5b203b58cf9d12e94e9b4be370170e4f3ef570f8d40604650c0bd6be190adeab815ec22317fbfe14782fbd07c5920c6429440cb20984f31bf56f7262b826dabb3277",
+    username: Some("golden-scoped-user@example.test"),
+    token: "golden-atlassian-scoped-api-token",
+};
+
+/// The baseline and vendor-level stores with the scoped API token row
+/// added, inserted with the same columns.
+fn store_with_golden_scoped_atlassian_stored_credential() -> (TempDir, ManagedStore) {
+    let (temp, store) = store_with_golden_atlassian_stored_credentials();
+    {
+        let golden = &GOLDEN_SCOPED_ATLASSIAN_STORED_CREDENTIAL;
+        let conn = store.connection.lock().unwrap();
+        conn.execute(
+            "INSERT INTO credentials
+             (credential_id, owner_principal_id, owner_kind, service, name, profile,
+              credential_kind, metadata_json, secret_backend, secret_ref, material_version,
+              status, created_at, updated_at, created_by, updated_by, verification_status)
+             VALUES (?1, 'alice', 'user', ?2, 'default', ?3, ?4, ?5, 'sqlite_encrypted', ?6, ?7,
+                     'active', '2026-10-21T00:00:00Z', '2026-10-21T00:00:00Z', 'admin', 'admin',
+                     'not_verified')",
+            params![
+                golden.credential_id,
+                golden.service,
+                golden.profile,
+                golden.credential_kind,
+                golden.metadata_json,
+                golden.secret_ref,
+                golden.material_version,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credential_secret_material
+             (secret_ref, credential_id, backend, secret_ciphertext, secret_nonce, key_id,
+              created_at, updated_at)
+             VALUES (?1, ?2, 'sqlite_encrypted', ?3, ?4, 'k1', '2026-10-21T00:00:00Z',
+                     '2026-10-21T00:00:00Z')",
+            params![
+                golden.secret_ref,
+                golden.credential_id,
+                golden_hex(golden.ciphertext_hex),
+                golden_hex(golden.nonce_hex),
+            ],
+        )
+        .unwrap();
+    }
+    (temp, store)
+}
+
+/// The scoped API token row decrypts as a Basic credential lent as its own
+/// profile, is never read under the classic profile of the same kind, has
+/// frozen AAD bytes and survives rewrap like every other row.
+#[test]
+fn scoped_atlassian_row_resolves_under_its_own_profile_only() {
+    let golden = &GOLDEN_SCOPED_ATLASSIAN_STORED_CREDENTIAL;
+    let (_temp, store) = store_with_golden_scoped_atlassian_stored_credential();
+    let ring = key_ring("k1");
+    store.check_ready(Some(&ring)).unwrap();
+    let credential = store
+        .resolve_user_credential(
+            &ring,
+            "alice",
+            golden.service,
+            "default",
+            &[golden.profile.to_string()],
+        )
+        .unwrap();
+    assert_eq!(credential.kind().as_str(), "basic_api_token");
+    assert_eq!(credential.profile(), Some("atlassian-scoped-api-token"));
+    assert_eq!(credential, expected_golden_credential(golden));
+    // Accepted beside the classic profile, it is still lent as itself.
+    assert_eq!(
+        store
+            .resolve_user_credential(
+                &ring,
+                "alice",
+                golden.service,
+                "default",
+                &[
+                    "atlassian-api-token".to_string(),
+                    golden.profile.to_string()
+                ],
+            )
+            .unwrap(),
+        expected_golden_credential(golden)
+    );
+    for profile in ["atlassian-api-token", "atlassian-bearer-token"] {
+        let error = store
+            .resolve_user_credential(&ring, "alice", golden.service, "default", &[profile.to_string()])
+            .unwrap_err();
+        assert!(
+            matches!(error, ManagedStoreError::CredentialInvalid(_)),
+            "{profile}: {error:?}"
+        );
+    }
+    {
+        let conn = store.connection.lock().unwrap();
+        let row = encrypted_credential_by_tuple(&conn, "alice", golden.service, "default").unwrap();
+        assert_eq!(
+            credential_aad(&row).bytes(),
+            "schema_version=002_credential_secret_material;\
+             credential_id=133cd375-eae6-4dc5-bcae-52fcde06b56f;owner_kind=user;\
+             owner_principal=alice;service=atlassian_scoped;name=default;\
+             credential_profile=atlassian-scoped-api-token;credential_kind=basic_api_token;\
+             secret_backend=sqlite_encrypted;secret_ref=sqlite:b0c81448-ce22-4e03-adda-60db086d66d1;\
+             material_version=704666a7-430e-452a-b726-c246ffe75d87;key_id=k1"
+        );
+    }
+    let rewrap_ring = key_ring_with_keys("k2", &[("k1", 7), ("k2", 8)]);
+    let summary = store
+        .rewrap_credentials(&rewrap_ring, "k1", "k2", "admin")
+        .unwrap();
+    assert_eq!(
+        summary.rewrapped,
+        (GOLDEN_STORED_CREDENTIALS.len() + GOLDEN_ATLASSIAN_STORED_CREDENTIALS.len() + 1) as u64
+    );
+    assert_eq!(
+        store
+            .resolve_user_credential(
+                &key_ring_with_keys("k2", &[("k2", 8)]),
+                "alice",
+                golden.service,
+                "default",
+                &[golden.profile.to_string()],
+            )
+            .unwrap(),
+        expected_golden_credential(golden)
+    );
 }

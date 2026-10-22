@@ -728,8 +728,14 @@ entitled to, which the connection serves too.
         {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationInputs": ["repository"]}
       ],
       "otherConsumers": 0,
-      "profile": "gitlab-access-token",
-      "credentialKind": "bearer_token",
+      "tokenProfiles": [
+        {
+          "profile": "gitlab-access-token",
+          "label": null,
+          "credentialKind": "bearer_token",
+          "inputSchema": {"connection": "gitlab", "profile": "gitlab-access-token", "credentialKind": "bearer_token", "fields": ["…"]}
+        }
+      ],
       "registration": null,
       "remoteRevocation": null,
       "credential": {
@@ -738,6 +744,7 @@ entitled to, which the connection serves too.
         "ownerPrincipal": "alice",
         "ownerKind": "user",
         "profile": "gitlab-access-token",
+        "label": null,
         "credentialKind": "bearer_token",
         "metadata": {},
         "status": "active",
@@ -751,8 +758,7 @@ entitled to, which the connection serves too.
       "method": "oauth",
       "consumers": [{"service": "gmail", "displayName": "Gmail", "credentialVerificationInputs": []}],
       "otherConsumers": 0,
-      "profile": null,
-      "credentialKind": null,
+      "tokenProfiles": [],
       "registration": "google",
       "remoteRevocation": "not_requested",
       "credential": null
@@ -766,6 +772,7 @@ entitled to, which the connection serves too.
       "service": "gitlab_git",
       "name": "default",
       "profile": "git-basic-api-token",
+      "label": null,
       "credentialKind": "basic_api_token",
       "…": "…"
     }
@@ -776,17 +783,27 @@ entitled to, which the connection serves too.
 `connections` lists every connection the caller is entitled to through a
 consumer, whatever its method and whether or not a token is stored, plus any
 connection whose active token the caller still owns after losing its grants, so
-the owner can delete it. `credential` is the active token's metadata, keyed by
-`connection` instead of a stored service and name, or `null` until a token is
-stored. An OAuth-method row's `remoteRevocation` is its registration's
+the owner can delete it. `tokenProfiles` lists the token profiles (token types)
+the caller may store for a `token`-method connection, in configuration order,
+each with its `label` (the name a consuming service declares, or `null`; show
+the profile then), its `credentialKind` and the `inputSchema` storing it takes;
+it is empty for the other methods. They come from the connection's
+`token_profiles`, or its implicit type when it sets neither a list nor `oauth`;
+a service account's or `system` principal's come from its
+`service_account_token_profiles` instead when set. `credential` is the active
+token's metadata, keyed by `connection` instead of a stored service and name, with its stored
+`profile` and that profile's `label`, or `null` until a token is stored. An OAuth-method row's `remoteRevocation` is its registration's
 [remote revocation](oauth.md#remote-revocation) state, as
 `GET /v1/oauth/connections` reports it; it is `null` for other methods and while
 OAuth is inactive. An OAuth connection whose `remoteRevocation` is `pending`,
-`failed` or `unconfirmed` stays listed after its owner lost every grant on it. `retained` lists the caller's stored rows the current configuration does
-not select, read-only, with their stored `service` value, `name` and `profile`:
-for example a row with a non-default name, a retired profile, a row of a service
-that no longer has its own connection, or a token row of a connection that now
-uses OAuth for the caller. `DELETE /v1/credentials/retained/{credentialId}`
+`failed` or `unconfirmed` stays listed after its owner lost every grant on it.
+`retained` lists the caller's stored rows the current configuration does not
+select, read-only, with their stored `service` value, `name`, `profile` and the
+profile's `label`: for example a row with a non-default name, a row of a profile
+the caller's list no longer accepts, a row of a service that no longer has its
+own connection, or a token row of a connection that now uses OAuth for the
+caller. A row becomes the active token again, without re-entry, when the
+configuration accepts its profile again. `DELETE /v1/credentials/retained/{credentialId}`
 deletes one of them; it returns HTTP 404 `credential_not_found` for another
 owner's row and HTTP 403 `credential_invalid` for a connection's active token,
 which is deleted through its connection. The check runs inside the deleting
@@ -803,17 +820,27 @@ store now, with the schema-driven input form:
     "displayName": "GitLab",
     "consumers": [{"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []}],
     "otherConsumers": 1,
-    "profile": "gitlab-access-token",
-    "credentialKind": "bearer_token",
-    "inputSchema": {
-      "connection": "gitlab",
-      "profile": "gitlab-access-token",
-      "credentialKind": "bearer_token",
-      "fields": [{"name": "token", "required": true, "secret": true, "prompt": "GitLab bearer token", "inputMethods": ["prompt", "env", "file", "stdin"]}]
-    }
+    "tokenProfiles": [
+      {
+        "profile": "gitlab-access-token",
+        "label": null,
+        "credentialKind": "bearer_token",
+        "inputSchema": {
+          "connection": "gitlab",
+          "profile": "gitlab-access-token",
+          "credentialKind": "bearer_token",
+          "fields": [{"name": "token", "required": true, "secret": true, "prompt": "GitLab bearer token", "inputMethods": ["prompt", "env", "file", "stdin"]}]
+        }
+      }
+    ]
   }
 ]
 ```
+
+`tokenProfiles` has the shape the credential list uses: one entry per token
+profile the caller may store, in configuration order. A `basic_api_token`
+profile's form takes `username` (the account name, such as an email) and
+`token`; a `bearer_token` profile's takes `token`.
 
 `displayName` is the connection's configured `display_name`, or its ID; a
 consumer's name never stands in for it, since the caller may not be entitled to
@@ -829,9 +856,13 @@ the token method for its kind with a consumer it holds a `per_user` grant on.
 
 `GET`, `PUT` and `DELETE /v1/credentials/connections/{connection}` read, store
 and delete the caller's active token, and return its connection-keyed metadata.
-`PUT` takes `{"secret": {…}, "metadata": {…}}` with the fields of
-`GET …/input-schema`; an optional `profile`, in the body or the input-schema
-query, must equal the connection's token profile. Storing and reading the input
+`PUT` takes `{"profile": "…", "secret": {…}, "metadata": {…}}` with the fields
+of `GET …/input-schema?profile=…`. `profile` chooses the token profile to store
+among the caller's `tokenProfiles`: it is required when there are several, and
+may be omitted when there is one, which it must then equal. The same rule
+applies to the input-schema `profile` query. A profile the caller's list does
+not accept is refused with HTTP 400 `input_invalid`, naming the accepted
+profiles. A put replaces the stored token in place, including its profile. Storing and reading the input
 schema need a current `per_user` grant on a consumer (or, for classless callers,
 `credentials:self:write`); reading metadata and deleting stay available to the
 owner after grant loss (classless callers need `credentials:self:read_metadata`
@@ -1078,8 +1109,14 @@ owner lost every grant on its connection stays listed as the connection's
       "method": "token",
       "consumers": [],
       "otherConsumers": 2,
-      "profile": "atlassian-api-token",
-      "credentialKind": "basic_api_token",
+      "tokenProfiles": [
+        {
+          "profile": "atlassian-api-token",
+          "label": "Classic API token (site)",
+          "credentialKind": "basic_api_token",
+          "inputSchema": {"connection": "atlassian", "profile": "atlassian-api-token", "credentialKind": "basic_api_token", "fields": ["…"]}
+        }
+      ],
       "registration": null,
       "remoteRevocation": null,
       "credential": {
@@ -1088,6 +1125,7 @@ owner lost every grant on its connection stays listed as the connection's
         "ownerPrincipal": "bob",
         "ownerKind": "user",
         "profile": "atlassian-api-token",
+        "label": "Classic API token (site)",
         "credentialKind": "basic_api_token",
         "metadata": {},
         "status": "active",

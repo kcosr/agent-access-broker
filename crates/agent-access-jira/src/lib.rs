@@ -21,7 +21,7 @@ use validation::*;
 
 pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
-    AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_gateway_credential,
+    AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_routes,
 };
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
@@ -72,7 +72,8 @@ pub struct JiraProvider {
     search_pages: SearchPages,
     search_configuration: [u8; 32],
     /// The cloud ID of the site's gateway route, which delegated access is
-    /// pinned to; `None` when the site does not use the gateway.
+    /// pinned to; `None` when the site has no gateway route (no valid
+    /// cloud ID).
     gateway_cloud_id: Option<Arc<str>>,
 }
 
@@ -167,8 +168,8 @@ pub mod test_support {
     /// The production Jira provider for `config`'s site, built with `host`,
     /// whose Atlassian gateway route is served below `gateway`, an origin
     /// such as a stub server's, instead of `https://api.atlassian.com`:
-    /// `{gateway}/ex/jira/{cloud_id}/rest/api/3/`. The site must use the
-    /// gateway, and `config.allowed_upstream_hosts` must also admit that
+    /// `{gateway}/ex/jira/{cloud_id}/rest/api/3/`. The site must set a
+    /// cloud ID, and `config.allowed_upstream_hosts` must also admit that
     /// route. Everything else, including the descriptor, is the production
     /// provider's.
     pub fn provider_with_gateway(
@@ -3023,10 +3024,13 @@ impl JiraProvider {
                         "attachment": upload_audit,
                     }));
                 }
-                // Delegated access that could not be presented, or that Jira
-                // rejected, uploaded nothing: before any upload applied, the
-                // batch fails with the connection's own failure.
-                Err(JiraBackendError::Credential(error)) if successes.is_empty() => {
+                // A credential without a route, or delegated access that
+                // could not be presented or that Jira rejected, uploaded
+                // nothing: before any upload applied, the batch fails with
+                // that failure.
+                Err(JiraBackendError::Credential(error) | JiraBackendError::Unroutable(error))
+                    if successes.is_empty() =>
+                {
                     return Err(error);
                 }
                 Err(error) => {
@@ -5956,8 +5960,9 @@ impl JiraWrite {
             | JiraBackendError::IssueCreateResponseInvalid { .. } => {
                 jira_backend_error(error).with_mutation_receipt(self.receipt())
             }
-            // Delegated access that could not be presented, or that Jira
-            // rejected, applied nothing and keeps its own reason.
+            // A credential without a route, and delegated access that could
+            // not be presented or that Jira rejected, applied nothing and keep
+            // their own reasons.
             JiraBackendError::Unauthorized
             | JiraBackendError::Forbidden
             | JiraBackendError::NotFound
@@ -5968,7 +5973,8 @@ impl JiraWrite {
             | JiraBackendError::Timeout
             | JiraBackendError::ResponseTooLarge
             | JiraBackendError::Protocol(_)
-            | JiraBackendError::Credential(_) => jira_backend_error(error),
+            | JiraBackendError::Credential(_)
+            | JiraBackendError::Unroutable(_) => jira_backend_error(error),
         }
     }
 }
@@ -6023,6 +6029,7 @@ fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
         | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => "upstream_protocol_failed",
         JiraBackendError::Credential(_) => "delegated_access_failed",
+        JiraBackendError::Unroutable(_) => "credential_not_provisioned",
     }
 }
 

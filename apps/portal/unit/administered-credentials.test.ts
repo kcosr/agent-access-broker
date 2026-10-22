@@ -40,14 +40,14 @@ const mail = { service: "gmail", displayName: "Gmail", credentialVerificationInp
 const jira = { service: "jira", displayName: "Jira", credentialVerificationInputs: [] };
 const confluence = { service: "confluence", displayName: "Confluence", credentialVerificationInputs: [] };
 const oauthConnection = (connection: string, displayName: string, registration: string, consumers: ConnectionConsumer[], otherConsumers: number, remoteRevocation: RemoteRevocation | null) => ({
-  connection, displayName, method: "oauth" as const, consumers, otherConsumers, profile: null, credentialKind: null, registration, remoteRevocation, credential: null
+  connection, displayName, method: "oauth" as const, consumers, otherConsumers, tokenProfiles: [], registration, remoteRevocation, credential: null
 });
-const token = { credentialId: "credential-ci", ownerPrincipal: "morgan", ownerKind: "user", connection: "ci", profile: "ci-token", credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
+const token = { credentialId: "credential-ci", ownerPrincipal: "morgan", ownerKind: "user", connection: "ci", profile: "ci-token", label: null, credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
 /** Morgan's administrator credential list, with GitLab's remote revocation in `state`. */
 function morgan(state: RemoteRevocation | null): CredentialList {
   return {
     connections: [
-      { connection: "ci", displayName: "CI", method: "token", consumers: [], otherConsumers: 0, profile: "ci-token", credentialKind: "bearer_token", registration: null, remoteRevocation: null, credential: token },
+      { connection: "ci", displayName: "CI", method: "token", consumers: [], otherConsumers: 0, tokenProfiles: [{ profile: "ci-token", label: null, credentialKind: "bearer_token", inputSchema: { connection: "ci", profile: "ci-token", credentialKind: "bearer_token", fields: [] } }], registration: null, remoteRevocation: null, credential: token },
       oauthConnection("gitlab", "GitLab", "gitlab", [rest, git], 0, state),
       oauthConnection("gmail", "Gmail", "google", [mail], 0, "not_requested"),
       // Jira and Confluence share one Atlassian registration through two connections.
@@ -56,7 +56,7 @@ function morgan(state: RemoteRevocation | null): CredentialList {
       // Cleanup-only: Morgan lost every grant on it, and its revocation failed.
       oauthConnection("gitlab_ops", "GitLab Ops", "gitlab-ops", [], 2, "failed")
     ],
-    retained: [{ credentialId: "credential-old", ownerPrincipal: "morgan", ownerKind: "user", service: "ci", name: "legacy", profile: "ci-token", credentialKind: "bearer_token", metadata: {}, status: "active", ...stamp }]
+    retained: [{ credentialId: "credential-old", ownerPrincipal: "morgan", ownerKind: "user", service: "ci", name: "legacy", profile: "ci-token", label: null, credentialKind: "bearer_token", metadata: {}, status: "active", ...stamp }]
   };
 }
 
