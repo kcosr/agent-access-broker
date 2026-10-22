@@ -135,10 +135,13 @@ and a token, and the Broker never falls back from one method to the other:
 | `system` principal | Stores its own token, of a `service_account_token_profiles` type | The same |
 
 Without the list for its kind, a principal has no personal credential for the
-connection. With several types in a list, whoever stores the token picks one;
-with one, there is nothing to pick. A stored token whose type the list no
-longer accepts is kept but not used, and listed as retained until it is
-deleted or the type is accepted again.
+connection. With several types in a list, whoever stores the token picks one:
+the portal's token form asks for a **Token type**, with none preselected for a
+first save and the stored token's type for a replacement, and the CLI takes
+`--profile`. With one, there is nothing to pick. The portal names each type by
+the label its consuming services declare, or by its profile. A stored token
+whose type the list no longer accepts is kept but not used, and listed as
+**Not used** (retained) until it is deleted or the type is accepted again.
 
 OAuth is available for services that accept delegated credentials: Gmail,
 GitLab REST and GitLab Git gateways, which share one GitLab OAuth connection
@@ -334,7 +337,9 @@ An administrator acting through **Admin > Principals > Credentials** or
 `agent-access admin credentials ...` uses administrative authority to manage the
 target's stored tokens. An administrator can store a token only for a
 connection that selects a token for that principal: service accounts' and
-`system` principals' tokens, and people's for connections without OAuth. That
+`system` principals' tokens, and people's for connections without OAuth, of a
+type the principal's list accepts, chosen in **Token type** when it accepts
+several. That
 does not grant the target personal rights or complete the user's OAuth consent. The
 tab lists a person's OAuth connections read-only, one row per registration, for
 administrators and auditors alike; the row's drawer shows its remote revocation,
@@ -422,9 +427,10 @@ management tokens. Administrators manage their credentials, groups, grants, and
 bounded `agent_invoke` tokens. A service account always uses a token you
 provision for each credential connection that sets
 `service_account_token_profiles`, even when people connect that connection
-through OAuth; with several types listed, choose one with
-`admin credentials put --profile`. A connection without that list gives it no
-personal credential. Assign an operational owner and rotation schedule.
+through OAuth; with several types listed, choose one in **Token type** on
+its **Credentials** tab, or with `admin credentials put --profile`. A
+connection without that list gives it no personal credential. Assign an
+operational owner and rotation schedule.
 
 ```bash
 agent-access admin principals create build-agent \

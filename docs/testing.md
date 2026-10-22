@@ -110,9 +110,20 @@ repository, one row per OAuth registration whose disconnect confirmation names
 the affected services and whose status shows a failed or unconfirmed remote
 revocation beside the connection status, an administered user's OAuth
 registrations shown read-only to administrators and auditors with their remote
-revocation, and deletion of a retained stored credential by ID. The
-real-broker `portal.spec.ts` and `my-access-metadata.spec.ts` store, verify and
-delete connection tokens for a user and for an administered principal.
+revocation, and deletion of a retained stored credential by ID. It also covers
+token types: a connection accepting one type keeps its plain form; one accepting
+several asks for a **Token type** with none preselected, marks the select invalid
+when left empty, shows the chosen type's fields, and sends the chosen `profile`;
+a replacement starts on the stored type and may change it; labels name stored
+and retained types; and an administrator chooses a service account's type. The
+unit suite (`unit/credential-token-types.test.ts`) checks the same form states
+and labels. The real-broker `portal.spec.ts` and `my-access-metadata.spec.ts`
+store, verify and delete connection tokens for a user and for an administered
+principal. The real-broker `credential-token-types.spec.ts` gives a Git gateway
+connection two token types: a user saves one, replaces it with the other, sees
+it become a **Not used** row when a reload stops accepting its type and active
+again when the type is accepted again, and an administrator saves a service
+account's token of a chosen type.
 
 `apps/portal/tests/resource-audit.spec.ts` uses a real temporary Broker and
 SQLite audit store, with no mocked API responses or seeded audit rows. Its
