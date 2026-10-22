@@ -539,6 +539,7 @@ async fn service_limits_cover_gateway_services_and_every_principal_kind() {
                 path: None,
                 read_only: None,
                 connection: None,
+                profile: None,
             },
         );
         config

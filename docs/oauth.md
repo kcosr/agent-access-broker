@@ -36,10 +36,12 @@ names a registration and one of its permission profiles; each service that uses
 it names the connection from its `credentials.per_user` entry. Only `user`
 principals use OAuth: a person connects their upstream account, and the Broker
 never reads a stored token for them through that connection. Service accounts
-and `system` principals cannot complete browser consent. They use the
-connection's `token_profile` when it sets one, and otherwise have no personal
-credential for its services. Nobody chooses between a token and OAuth, and the
-Broker never falls back from one to the other.
+and `system` principals cannot complete browser consent. They use a token of
+the connection's `token_profiles` when it sets that list, and otherwise have no
+personal credential for its services: no token type is implied beside `oauth`.
+A connection with `oauth` does not set `service_account_token_profiles`, since
+its `token_profiles` already applies only to them. Nobody chooses between a
+token and OAuth, and the Broker never falls back from one to the other.
 
 Some upstream operations accept only a token, and their providers mark those
 actions token-only. Where a person's winning grant is `per_user` and their
@@ -211,7 +213,7 @@ target = "https://gitlab.example.com"
 
 [credentials.connections.gitlab]
 display_name = "GitLab"
-token_profile = "gitlab-access-token"
+token_profiles = ["gitlab-access-token"]
 oauth = { registration = "gitlab", profile = "default" }
 
 [credentials.per_user.gitlab]
@@ -243,10 +245,10 @@ connection = "gitlab"
   GitLab instance <target>`.
 
 People always use their OAuth connection and never store a GitLab token
-through it. With `token_profile` set, service accounts keep tokens an
+through it. With `token_profiles` set, service accounts keep tokens an
 administrator provisions, because GitLab service accounts authenticate only
 with personal access tokens, and `system` principals store their own. Without
-`token_profile`, only people have a GitLab credential.
+it, only people have a GitLab credential.
 
 ### GitLab scopes
 
@@ -407,7 +409,9 @@ Confluence on one Atlassian Cloud site. Its grants act through the Atlassian
 API gateway, `api.atlassian.com`, on the site's cloud ID, so Jira and
 Confluence reach the site through the gateway for every OAuth connection. One
 registration can serve both products, so a person connects once, and each
-service's own grants still decide what it may do.
+service's own grants still decide what it may do. Service accounts never use
+OAuth: beside it, a connection accepts their stored tokens, each taking the
+route its type selects.
 
 ### Atlassian administrator setup
 
@@ -463,16 +467,17 @@ scopes = ["read:me", "offline_access",
 audience = "api.atlassian.com"
 target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
 
-# People connect through OAuth; service accounts keep each product's
-# administrator-provisioned scoped token.
+# People connect through OAuth; service accounts keep administrator-provisioned
+# classic API tokens (site) or service-account tokens (gateway), the
+# administrator choosing the type for each.
 [credentials.connections.jira]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-token_profile = "atlassian-bearer-token"
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]
@@ -484,10 +489,24 @@ type = "connection"
 connection = "confluence"
 ```
 
-Both providers set `cloud_id` to the profile's `target` and include
-`api.atlassian.com` in `allowed_upstream_hosts` (see
-[`[providers.jira]`](configuration.md#providersjira)). `config validate`,
-startup and reload check, without contacting Atlassian:
+Both providers set `cloud_id` to the profile's `target`, which gives them the
+gateway route, and their `allowed_upstream_hosts` cover the routes their
+credentials take: the gateway for OAuth and service-account tokens, the tenant
+host for classic API tokens, and Atlassian's media host for attachment
+downloads (see [`[providers.jira]`](configuration.md#providersjira)):
+
+```toml
+[providers.jira]
+tenant_host = "example.atlassian.net"
+cloud_id = "00000000-0000-0000-0000-000000000000"
+allowed_upstream_hosts = [
+  "https://example.atlassian.net/rest/api/3/**",
+  "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**",
+  "https://api.media.atlassian.com/**",
+]
+```
+
+`config validate`, startup and reload check, without contacting Atlassian:
 
 - `base_url` is `https://auth.atlassian.com`, with
   `client_auth = "client_secret_post"`, `encoding = "json"`, no
@@ -500,36 +519,38 @@ startup and reload check, without contacting Atlassian:
   may write the same UUID in another form, such as uppercase or braced; the
   Broker compares, routes and binds its lowercase hyphenated form.
 - Every service using the connection acts through the gateway on that cloud
-  ID: Jira and Confluence whose `cloud_id` is the target and whose
-  `allowed_upstream_hosts` include `api.atlassian.com`. Any other consumer
+  ID: Jira and Confluence whose `cloud_id` is the target. Any other consumer
   fails with `credentials.connections.<id>.oauth: <service> does not act on
   the upstream registration <registration> grants access to: <reason>`, such
   as `it acts through the Atlassian gateway on cloud ID <cloud ID>, not cloud
   ID <target>`.
+- Every credential source reaches its route: OAuth the gateway, and each
+  token type the route it selects. An allowlist that does not cover the
+  gateway fails with `credentials.per_user.<service> (OAuth) takes the
+  Atlassian gateway route, but providers.<service>.allowed_upstream_hosts does
+  not cover <base>`.
 
-A connection's method and route follow this table:
+Each credential takes the route its type selects, so types mix freely in one
+deployment:
 
-| Connection | Gateway | Result |
+| Connection | People | Service accounts and `system` principals |
 | --- | --- | --- |
-| `token_profile = "atlassian-api-token"` only | Off | Valid: the site route |
-| `token_profile = "atlassian-bearer-token"` only | On | Valid: the gateway |
-| `oauth` only | On, required | Valid: the gateway |
-| `atlassian-bearer-token` and `oauth` | On | Valid: people use OAuth and service accounts bearer tokens, both through the gateway |
-| `atlassian-api-token` and `oauth` | Either | Rejected: `credentials.per_user.<service> combines OAuth with a basic_api_token profile; ...` |
+| `oauth` only | OAuth (gateway) | No Atlassian credential |
+| `oauth` and `token_profiles = ["atlassian-api-token"]` | OAuth (gateway) | Classic API tokens (site) |
+| `oauth` and `token_profiles = ["atlassian-bearer-token"]` | OAuth (gateway) | Service-account tokens (gateway) |
+| `oauth` and `token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]` | OAuth (gateway) | Either, chosen per account when the token is saved |
+| `token_profiles` only | The `token_profiles` types | The same types |
+| `token_profiles` and `service_account_token_profiles` | The `token_profiles` types | The `service_account_token_profiles` types |
 
-A `credentials.service` or `credentials.lookup` entry must also be a
-`bearer_token` when the gateway is on; the lookup credential serves only
-metadata lookups and never counts as the gateway's execution credential. An
-`oauth` connection on a provider without the gateway fails with
-`credentials.per_user.<service> offers delegated (OAuth) access, which
-requires providers.<service>.allowed_upstream_hosts to include
-api.atlassian.com`.
-
-People always use their OAuth connection and never store an Atlassian token
-through it. With `token_profile = "atlassian-bearer-token"`, service accounts
-keep the scoped tokens an administrator provisions, and `system` principals
-store their own. An OAuth-only connection, such as one `atlassian` connection
-that both products use, gives only people an Atlassian credential.
+`credentials.service` and `credentials.lookup` entries route by their own
+type, independently of the connection. People always use their OAuth
+connection when the connection sets `oauth`, and never store an Atlassian
+token through it; `service_account_token_profiles` cannot be set beside it.
+Service accounts keep the tokens an administrator provisions, and `system`
+principals store their own. With a `cloud_id`, Jira and Confluence accept
+several token types, so a connection without `oauth` must set
+`token_profiles`; without one, only the classic API token is possible and the
+list may be omitted.
 
 ### Atlassian scopes
 
@@ -567,7 +588,8 @@ reconnects.
 - **Route.** OAuth always reaches the site through the gateway,
   `https://api.atlassian.com/ex/jira/<cloud_id>/` and
   `https://api.atlassian.com/ex/confluence/<cloud_id>/`; stored and service
-  tokens keep routing by kind.
+  tokens take the route their type selects (see
+  [`[providers.jira]`](configuration.md#providersjira)).
 - **Access per request.** Before every request, including each lookup, page,
   read-back and attachment download redirect hop, the provider revalidates the
   invocation's lease and pins its access to the gateway route's cloud ID and
@@ -601,11 +623,11 @@ product connection its own registration:
 
 ```toml
 [credentials.connections.jira]
-token_profile = "atlassian-bearer-token"
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian_jira", profile = "default" }
 
 [credentials.connections.confluence]
-token_profile = "atlassian-bearer-token"
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian_confluence", profile = "default" }
 ```
 

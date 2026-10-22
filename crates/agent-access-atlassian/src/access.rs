@@ -14,17 +14,24 @@
 //! lookups and its execution, and decides whether recovery is still
 //! possible. A static token's 401 is reported as before and never repeated.
 //!
+//! A static token takes the route its token type selects
+//! ([`AtlassianCredential::route`]); one Atlassian providers cannot route is
+//! never presented.
+//!
 //! An attachment download follows Atlassian's redirects, presenting the
 //! credential only on hops within the route's site
 //! ([`AtlassianClients::site_base`]): on the gateway, which serves every
 //! site from one origin, a hop to another cloud ID is never sent. Each
 //! authorized hop presents freshly revalidated access.
-use crate::{ATLASSIAN_OAUTH_AUDIENCE, AtlassianClients};
+use crate::{
+    ATLASSIAN_OAUTH_AUDIENCE, AtlassianClients, AtlassianRoute, AtlassianRouteError,
+    credential_route,
+};
 use agent_access_provider::host::HostPort;
 use agent_access_provider::{
     DelegatedAccessError, DelegatedCredential, ExecutionAccess, ExecutionCredential, LookupAccess,
     MutationReceipt, ProviderError, ReasonCode, RedirectAuthorizer, RedirectRules,
-    StaticCredentialKind, UpstreamAuthorization, UpstreamError, complete_upstream_trace,
+    UpstreamAuthorization, UpstreamError, complete_upstream_trace,
 };
 use async_trait::async_trait;
 use reqwest::{Response, StatusCode};
@@ -42,7 +49,7 @@ pub struct AtlassianCredential(Material);
 enum Material {
     Static(ExecutionCredential),
     /// The operation's delegated credential and the cloud ID of the site's
-    /// gateway route, or `None` when the site does not use the gateway.
+    /// gateway route, or `None` when the site has no gateway route.
     Delegated {
         credential: DelegatedCredential,
         cloud_id: Option<Arc<str>>,
@@ -83,8 +90,10 @@ pub enum AtlassianDownloadError {
 /// Why a request's credential could not be presented. Nothing was sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AtlassianAccessError {
-    /// A static credential kind Atlassian providers do not accept.
-    UnsupportedKind,
+    /// A static credential Atlassian providers cannot route: a kind they do
+    /// not present, a token profile they do not declare, or a profile
+    /// declared with another kind.
+    Unroutable(AtlassianRouteError),
     /// Delegated access that could not be presented: the lease's own
     /// failure (a refresh busy, throttled or uncertain, consent pending, a
     /// reconnect required, or an operation that already recovered), passed
@@ -96,8 +105,7 @@ pub enum AtlassianAccessError {
 
 impl AtlassianCredential {
     /// A static token: the service's shared credential or the caller's
-    /// stored token. Basic API tokens reach the site; bearer tokens reach
-    /// the gateway.
+    /// stored token, routed by its token type ([`Self::route`]).
     pub fn from_static(credential: ExecutionCredential) -> Self {
         Self(Material::Static(credential))
     }
@@ -167,27 +175,29 @@ impl AtlassianCredential {
         matches!(self.0, Material::Delegated { .. })
     }
 
-    /// Whether requests go through the Atlassian gateway: delegated access
-    /// always does, as does a bearer token; a Basic API token reaches the
-    /// site.
-    pub fn routes_through_gateway(&self) -> bool {
+    /// The route this credential's requests take. Delegated access always
+    /// takes the gateway. A static token takes its token profile's route:
+    /// a classic API token the site, a scoped API token or a bearer token
+    /// the gateway; without a profile, its kind's (Basic the site, bearer
+    /// the gateway). Any other profile or kind, or a profile declared with
+    /// another kind, has no route.
+    pub fn route(&self) -> Result<AtlassianRoute, AtlassianRouteError> {
         match &self.0 {
-            Material::Static(credential) => credential.kind() == StaticCredentialKind::BearerToken,
-            Material::Delegated { .. } => true,
+            Material::Static(credential) => credential_route(credential),
+            Material::Delegated { .. } => Ok(AtlassianRoute::Gateway),
         }
     }
 
-    /// The authorization for the next request. Delegated access is
-    /// revalidated and pinned to the gateway route's cloud ID and the
+    /// The authorization for the next request. A static token Atlassian
+    /// providers cannot route is refused. Delegated access is revalidated
+    /// and pinned to the gateway route's cloud ID and the
     /// `api.atlassian.com` audience now; a lease failure passes through
     /// unchanged, and access for another site or audience fails before
     /// anything is sent.
     pub async fn present(&self) -> Result<PresentedAccess, AtlassianAccessError> {
         match &self.0 {
             Material::Static(credential) => {
-                if !presentable_kind(credential.kind()) {
-                    return Err(AtlassianAccessError::UnsupportedKind);
-                }
+                credential_route(credential).map_err(AtlassianAccessError::Unroutable)?;
                 Ok(PresentedAccess {
                     authorization: credential.authorization(),
                     version: None,
@@ -282,10 +292,10 @@ impl AtlassianCredential {
         product: &str,
     ) -> Result<Response, AtlassianDownloadError> {
         if let Material::Static(credential) = &self.0
-            && !presentable_kind(credential.kind())
+            && let Err(error) = credential_route(credential)
         {
             return Err(AtlassianDownloadError::Access(
-                AtlassianAccessError::UnsupportedKind,
+                AtlassianAccessError::Unroutable(error),
             ));
         }
         let mut attempt = 1;
@@ -326,14 +336,6 @@ impl AtlassianCredential {
     }
 }
 
-/// The static credential kinds Atlassian providers present.
-fn presentable_kind(kind: StaticCredentialKind) -> bool {
-    matches!(
-        kind,
-        StaticCredentialKind::BasicApiToken | StaticCredentialKind::BearerToken
-    )
-}
-
 /// Presents a download's credential on each authorized hop, revalidating
 /// delegated access immediately before each one, and remembers what the last
 /// one presented.
@@ -365,7 +367,7 @@ impl RedirectAuthorizer for HopPresenter<'_> {
             .await
             .map_err(|error| match error {
                 AtlassianAccessError::Credential(failure) => failure,
-                // `download` refuses an unsupported static kind before the chain.
+                // `download` refuses an unroutable static token before the chain.
                 _ => ProviderError::deny(
                     ReasonCode::CredentialNotProvisioned,
                     "selected credential material is unavailable",

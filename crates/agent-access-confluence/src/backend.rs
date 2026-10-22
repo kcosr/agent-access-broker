@@ -2,7 +2,7 @@
 use super::*;
 use agent_access_atlassian::{
     AtlassianAccessError, AtlassianClients, AtlassianCredential, AtlassianDownloadError,
-    AtlassianProduct, AtlassianRoutes,
+    AtlassianProduct, AtlassianRouteUnavailable, AtlassianRoutes,
 };
 use agent_access_provider::host::UpstreamClientFactory;
 
@@ -920,13 +920,21 @@ pub enum ConfluenceBackendError {
     /// sent, or Confluence's 401 applied nothing. Reported unchanged.
     #[error("Confluence credential could not be presented")]
     Credential(ProviderError),
+    /// The selected static credential or delegated access has no route on
+    /// this site: a token profile Confluence does not declare, a profile of
+    /// another kind, or a gateway route without a configured cloud ID.
+    /// Nothing was sent. Reported unchanged, as `credential_not_provisioned`.
+    #[error("Confluence has no route for the selected credential")]
+    Unroutable(ProviderError),
 }
 
 impl From<AtlassianAccessError> for ConfluenceBackendError {
     fn from(error: AtlassianAccessError) -> Self {
         match error {
             AtlassianAccessError::Credential(error) => Self::Credential(error),
-            _ => Self::Protocol("unsupported Confluence credential kind".to_string()),
+            AtlassianAccessError::Unroutable(reason) => Self::Unroutable(
+                AtlassianRouteUnavailable::new(CONFLUENCE_PRODUCT, reason).provider_error(),
+            ),
         }
     }
 }
@@ -998,7 +1006,9 @@ pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> Provide
                 "Confluence response protocol error",
             )
         }
-        ConfluenceBackendError::Credential(error) => error,
+        ConfluenceBackendError::Credential(error) | ConfluenceBackendError::Unroutable(error) => {
+            error
+        }
     }
 }
 
@@ -1032,8 +1042,9 @@ pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> 
         | ConfluenceBackendError::Redirected
         | ConfluenceBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
         // Never the outcome of reading a response; only presenting a
-        // credential reports it.
+        // credential reports them.
         ConfluenceBackendError::Credential(_) => ReasonCode::CredentialInvalid,
+        ConfluenceBackendError::Unroutable(_) => ReasonCode::CredentialNotProvisioned,
     }
 }
 
@@ -1043,6 +1054,7 @@ pub(crate) const CONFLUENCE_PRODUCT: AtlassianProduct = AtlassianProduct {
     provider: "confluence",
     name: "Confluence",
     api_path: "wiki/rest/api/",
+    other_api_paths: &["wiki/api/v2/"],
     status_reasons: &[(409, ReasonCode::VersionConflict)],
 };
 
@@ -1083,9 +1095,7 @@ impl HttpConfluenceBackend {
     ) -> Result<Self, ProviderBuildError> {
         let site = self.config.site();
         let cloud_id = site.gateway_cloud_id().ok_or_else(|| {
-            ProviderBuildError::invalid(
-                "the test Confluence site does not use the Atlassian gateway",
-            )
+            ProviderBuildError::invalid("the test Confluence site has no Atlassian gateway route")
         })?;
         let base = Url::parse(&format!(
             "{}/ex/confluence/{cloud_id}/{}",
@@ -1106,7 +1116,7 @@ impl HttpConfluenceBackend {
     ) -> Result<&AtlassianClients, ConfluenceBackendError> {
         self.routes
             .for_credential(credential)
-            .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))
+            .map_err(|refusal| ConfluenceBackendError::Unroutable(refusal.provider_error()))
     }
 
     /// Clients for one API base from the test host, routed through the

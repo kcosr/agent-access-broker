@@ -9,8 +9,9 @@ import { portalDist } from "./support/binaries";
 // Deterministic browser contract for the one Credentials list: one row per
 // credential connection naming the entitled services it serves, one row per
 // OAuth registration (read-only for an administered principal) whose status
-// flags a remote revocation that needs cleanup, and retained stored rows
-// deleted by ID. The real-store flows live in portal.spec.ts and
+// flags a remote revocation that needs cleanup, retained stored rows deleted
+// by ID, and the token type a connection accepting several asks the saver to
+// choose. The real-store flows live in portal.spec.ts and
 // my-access-metadata.spec.ts.
 let server: Server;
 let baseUrl: string;
@@ -20,16 +21,17 @@ const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerifica
 const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationInputs: ["repository"] };
 const mail = { service: "gmail", displayName: "Gmail", credentialVerificationInputs: [] };
 const fields = [{ name: "token", required: true, secret: true, prompt: "GitLab bearer token", inputMethods: ["prompt", "env", "file", "stdin"] }];
-const target = {
-  connection: "gitlab", displayName: "GitLab", consumers: [rest, git], otherConsumers: 1, profile: "gitlab-access-token", credentialKind: "bearer_token",
+const gitlabProfile = {
+  profile: "gitlab-access-token", label: null, credentialKind: "bearer_token",
   inputSchema: { connection: "gitlab", profile: "gitlab-access-token", credentialKind: "bearer_token", fields }
 };
-const token = { credentialId: "credential-gitlab", ownerPrincipal: "viewer", ownerKind: "user", connection: "gitlab", profile: "gitlab-access-token", credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
-const retained = { credentialId: "credential-old-git", ownerPrincipal: "viewer", ownerKind: "user", service: "gitlab_git", name: "default", profile: "git-basic-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", ...stamp };
+const target = { connection: "gitlab", displayName: "GitLab", consumers: [rest, git], otherConsumers: 1, tokenProfiles: [gitlabProfile] };
+const token = { credentialId: "credential-gitlab", ownerPrincipal: "viewer", ownerKind: "user", connection: "gitlab", profile: "gitlab-access-token", label: null, credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
+const retained = { credentialId: "credential-old-git", ownerPrincipal: "viewer", ownerKind: "user", service: "gitlab_git", name: "default", profile: "git-basic-api-token", label: null, credentialKind: "basic_api_token", metadata: {}, status: "active", ...stamp };
 const credentials = {
   connections: [
-    { connection: "gitlab", displayName: "GitLab", method: "token", consumers: [rest, git], otherConsumers: 1, profile: "gitlab-access-token", credentialKind: "bearer_token", registration: null, remoteRevocation: null, credential: token },
-    { connection: "gmail", displayName: "Gmail", method: "oauth", consumers: [mail], otherConsumers: 0, profile: null, credentialKind: null, registration: "google", remoteRevocation: "not_requested", credential: null }
+    { connection: "gitlab", displayName: "GitLab", method: "token", consumers: [rest, git], otherConsumers: 1, tokenProfiles: [gitlabProfile], registration: null, remoteRevocation: null, credential: token },
+    { connection: "gmail", displayName: "Gmail", method: "oauth", consumers: [mail], otherConsumers: 0, tokenProfiles: [], registration: "google", remoteRevocation: "not_requested", credential: null }
   ],
   retained: [retained]
 };
@@ -66,11 +68,24 @@ test.afterAll(async () => {
 });
 
 /**
+ * What the mocked Broker lists: the signed-in user's credentials and targets,
+ * and the service account `bot`'s. `onPut` sees each token save, by path and
+ * body, so a fixture can store it.
+ */
+type Lists = {
+  credentials: unknown;
+  targets: unknown[];
+  botCredentials: unknown;
+  botTargets: unknown[];
+  onPut?: (pathname: string, body: { profile: string; secret: Record<string, string> }) => void;
+};
+
+/**
  * A user with self-service, or an administrator or auditor managing the
  * service account `bot` or the user `morgan`; records every broker read path
  * and every write as `METHOD path` with its body.
  */
-async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", start = "/ui/credentials") {
+async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", start = "/ui/credentials", lists: Lists = { credentials, targets: [target], botCredentials, botTargets: [] }) {
   const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
   const writes: Array<{ request: string; body: unknown }> = [];
   const reads: string[] = [];
@@ -81,20 +96,22 @@ async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", 
     const pathname = new URL(request.url()).pathname;
     if (request.method() !== "GET") writes.push({ request: `${request.method()} ${pathname}`, body: request.postDataJSON() });
     else reads.push(pathname);
+    if (request.method() === "PUT") lists.onPut?.(pathname, request.postDataJSON());
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = session;
     else if (pathname === "/v1/resource-types") result = { resourceTypes: RESOURCE_TYPES };
     else if (pathname === "/v1/me") result = { serviceLimits: [] };
     else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [], resources: [], resourceGroups: [] };
-    else if (pathname === "/v1/credentials/targets") result = [target];
-    else if (pathname === "/v1/credentials") result = credentials;
+    else if (pathname === "/v1/credentials/targets") result = lists.targets;
+    else if (pathname === "/v1/credentials") result = lists.credentials;
     else if (pathname === "/v1/oauth/connections") result = oauthConnections;
     else if (pathname === "/v1/credentials/connections/gitlab/verify") result = { ...token, probeService: "gitlab_git" };
     else if (pathname === `/v1/credentials/retained/${retained.credentialId}`) result = retained;
     else if (pathname === "/v1/oauth/connections/google") result = { disconnected: true, remoteRevocation: "revoked" };
     else if (pathname === "/v1/admin/config/status") result = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
     else if (pathname === "/v1/admin/principals/bot") result = bot;
-    else if (pathname === "/v1/admin/principals/bot/credentials") result = botCredentials;
+    else if (pathname === "/v1/admin/principals/bot/credentials") result = lists.botCredentials;
+    else if (pathname === "/v1/admin/principals/bot/credentials/targets") result = lists.botTargets;
     else if (pathname === "/v1/admin/principals/bot/credentials/connections/jira") result = botToken;
     else if (pathname === "/v1/admin/principals/morgan") result = morgan;
     else if (pathname === "/v1/admin/principals/morgan/credentials") result = morganCredentials;
@@ -106,9 +123,9 @@ async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", 
 
 // A service account that lost every grant on the jira connection still owns its active token.
 const bot = { principalId: "bot", kind: "service_account", role: "user", selfServiceEnabled: false, displayName: "Build bot", groups: [], status: "active", ...stamp, signInMethods: { localPassword: "absent", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] };
-const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
+const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "atlassian-api-token", label: null, credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
 const botCredentials = {
-  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, profile: "atlassian-api-token", credentialKind: "basic_api_token", registration: null, credential: botToken }],
+  connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, tokenProfiles: [{ profile: "atlassian-api-token", label: null, credentialKind: "basic_api_token", inputSchema: { connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", fields: [] } }], registration: null, credential: botToken }],
   retained: []
 };
 
@@ -117,7 +134,7 @@ const botCredentials = {
 // failed, so it stays listed for the provider-side cleanup.
 const morgan = { ...bot, principalId: "morgan", kind: "user", selfServiceEnabled: true, displayName: "Morgan" };
 const oauthRow = (connection: string, displayName: string, registration: string, consumers: (typeof rest)[], otherConsumers: number, remoteRevocation: string) =>
-  ({ connection, displayName, method: "oauth", consumers, otherConsumers, profile: null, credentialKind: null, registration, remoteRevocation, credential: null });
+  ({ connection, displayName, method: "oauth", consumers, otherConsumers, tokenProfiles: [], registration, remoteRevocation, credential: null });
 const morganCredentials = {
   connections: [
     oauthRow("gitlab", "GitLab", "gitlab", [rest, git], 0, "unconfirmed"),
@@ -151,6 +168,11 @@ test("one row per connection names the services it serves and verifies through a
   await expect.poll(() => writes.find((write) => write.request === "POST /v1/credentials/connections/gitlab/verify")?.body).toEqual({ service: "gitlab_git", repository: "team/project" });
   await expect(drawer.getByLabel("GitLab bearer token", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("credentials-connection-drawer.png"), fullPage: true });
+  // One accepted token type: nothing to choose, and the replacement names that type.
+  await expect(drawer.getByLabel("Token type")).toHaveCount(0);
+  await drawer.getByLabel("GitLab bearer token", { exact: true }).fill("synthetic-gitlab-token");
+  await drawer.getByRole("button", { name: "Replace credential", exact: true }).click();
+  await expect.poll(() => writes.find((write) => write.request === "PUT /v1/credentials/connections/gitlab")?.body).toEqual({ profile: "gitlab-access-token", secret: { token: "synthetic-gitlab-token" }, metadata: {} });
   expect(errors).toEqual([]);
 });
 
@@ -271,3 +293,176 @@ for (const role of ["admin", "auditor"] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+// Token types. The Git gateway's two unlabelled types differ in kind: Basic
+// asks for a username and token, bearer for the token only. The conformance
+// provider's two types carry labels.
+const inputMethods = ["prompt", "env", "file", "stdin"];
+/** A token type with the fields the Broker's input schema gives its kind. */
+function tokenType(connection: string, display: string, profile: string, label: string | null, credentialKind: "basic_api_token" | "bearer_token") {
+  const tokenField = { name: "token", required: true, secret: true, prompt: `${display} ${credentialKind === "basic_api_token" ? "API" : "bearer"} token`, inputMethods };
+  const fields = credentialKind === "basic_api_token" ? [{ name: "username", required: true, secret: false, prompt: `${display} username`, inputMethods }, tokenField] : [tokenField];
+  return { profile, label, credentialKind, inputSchema: { connection, profile, credentialKind, fields } };
+}
+type TokenType = ReturnType<typeof tokenType>;
+const gitBearer = tokenType("git", "Git", "git-bearer-token", null, "bearer_token");
+const gitBasic = tokenType("git", "Git", "git-basic-api-token", null, "basic_api_token");
+const apiToken = tokenType("conformance", "Conformance", "api_token", "API token", "bearer_token");
+const routedToken = tokenType("conformance", "Conformance", "routed_token", "Routed token", "bearer_token");
+const conformance = { service: "conformance", displayName: "Conformance", credentialVerificationInputs: [] };
+const storedToken = (connection: string, type: TokenType, ownerPrincipal = "viewer") =>
+  ({ credentialId: `credential-${ownerPrincipal}-${connection}`, ownerPrincipal, ownerKind: "user", connection, profile: type.profile, label: type.label, credentialKind: type.credentialKind, metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp });
+const tokenRow = (connection: string, displayName: string, consumers: (typeof rest)[], tokenProfiles: TokenType[], credential: ReturnType<typeof storedToken> | null) =>
+  ({ connection, displayName, method: "token", consumers, otherConsumers: 0, tokenProfiles, registration: null, remoteRevocation: null, credential });
+const targetOf = (row: ReturnType<typeof tokenRow>) =>
+  ({ connection: row.connection, displayName: row.displayName, consumers: row.consumers, otherConsumers: row.otherConsumers, tokenProfiles: row.tokenProfiles });
+
+/**
+ * Lists whose `owner` connections are `rows`, with targets, retained rows and
+ * a PUT that stores the saved type as the connection's token, as the Broker
+ * does.
+ */
+function tokenTypeLists(owner: "viewer" | "bot", rows: ReturnType<typeof tokenRow>[], retainedRows: unknown[] = []): Lists {
+  const list = { connections: rows, retained: retainedRows };
+  const lists: Lists = {
+    credentials: owner === "viewer" ? list : { connections: [], retained: [] },
+    targets: owner === "viewer" ? rows.map(targetOf) : [],
+    botCredentials: owner === "bot" ? list : botCredentials,
+    botTargets: owner === "bot" ? rows.map(targetOf) : [],
+    onPut: (pathname, body) => {
+      const row = rows.find((candidate) => pathname.endsWith(`/credentials/connections/${candidate.connection}`));
+      const type = row?.tokenProfiles.find((candidate) => candidate.profile === body.profile);
+      if (row && type) row.credential = storedToken(row.connection, type, owner);
+    }
+  };
+  return lists;
+}
+
+test("a connection accepting several token types asks for one, and its fields and saved type follow the choice", async ({ page }, testInfo) => {
+  const gitRow = tokenRow("git", "Git", [git], [gitBearer, gitBasic], null);
+  const { writes, errors } = await fixture(page, "user", "/ui/credentials", tokenTypeLists("viewer", [gitRow]));
+  const gitConnection = row(page, "Git");
+  await expect(gitConnection).toContainText("Not saved");
+  await expect(gitConnection).toContainText("2 token types");
+  await gitConnection.getByRole("link", { name: "Git", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Git credential", exact: true });
+  const type = drawer.getByRole("combobox", { name: "Token type", exact: true });
+  const save = drawer.getByRole("button", { name: "Save credential", exact: true });
+
+  // A first save chooses explicitly: nothing is preselected, no fields show, and saving waits.
+  await expect(type).toHaveValue("");
+  await expect(type.locator("option")).toHaveText(["Choose a token type", "git-bearer-token", "git-basic-api-token"]);
+  await expect(drawer.getByRole("textbox")).toHaveCount(0);
+  await expect(save).toBeDisabled();
+  // Leaving the select without a type marks it invalid, keyboard only.
+  await type.focus();
+  await page.keyboard.press("Tab");
+  await expect(type).toHaveAttribute("aria-invalid", "true");
+  await expect(drawer.getByText("Choose a token type.", { exact: true })).toBeVisible();
+  await expect(type).toHaveAccessibleDescription(/Choose a token type\./);
+  await page.screenshot({ path: testInfo.outputPath("credentials-token-type-required.png"), fullPage: true });
+
+  // The keyboard chooses a type; the Basic type asks for a username and token.
+  await type.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(type).toHaveValue("git-bearer-token");
+  await expect(type).not.toHaveAttribute("aria-invalid", "true");
+  await expect(drawer.getByLabel("Git bearer token", { exact: true })).toBeVisible();
+  await expect(drawer.getByLabel("Git username", { exact: true })).toHaveCount(0);
+  await drawer.getByLabel("Git bearer token", { exact: true }).fill("synthetic-git-token");
+  await type.selectOption("git-basic-api-token");
+  await expect(drawer.getByLabel("Git username", { exact: true })).toHaveValue("");
+  // The token both types share keeps its value.
+  await expect(drawer.getByLabel("Git API token", { exact: true })).toHaveValue("synthetic-git-token");
+  await expect(save).toBeDisabled();
+  await drawer.getByLabel("Git username", { exact: true }).fill("casey@example.test");
+  await save.click();
+  await expect.poll(() => writes.filter((write) => write.request === "PUT /v1/credentials/connections/git").map((write) => write.body)).toEqual([
+    { profile: "git-basic-api-token", secret: { username: "casey@example.test", token: "synthetic-git-token" }, metadata: {} }
+  ]);
+  await expect(gitConnection).toContainText("Not verified");
+  await expect(gitConnection).toContainText("git-basic-api-token");
+
+  // Replacing preselects the stored type; another type replaces it, sending only that type's fields.
+  const replace = drawer.getByRole("button", { name: "Replace credential", exact: true });
+  await expect(type).toHaveValue("git-basic-api-token");
+  await expect(type.locator("option")).toHaveText(["git-bearer-token", "git-basic-api-token"]);
+  await expect(drawer.getByText("The fields to fill in follow the token type.", { exact: true })).toBeVisible();
+  await type.selectOption("git-bearer-token");
+  await expect(type).toHaveAccessibleDescription("Saving replaces the stored token, of type git-basic-api-token, with a token of this type.");
+  await expect(drawer.getByLabel("Git username", { exact: true })).toHaveCount(0);
+  await drawer.getByLabel("Git bearer token", { exact: true }).fill("synthetic-bearer-token");
+  await page.screenshot({ path: testInfo.outputPath("credentials-token-type-replace.png"), fullPage: true });
+  await replace.click();
+  await expect.poll(() => writes.filter((write) => write.request === "PUT /v1/credentials/connections/git").map((write) => write.body)).toHaveLength(2);
+  expect(writes.filter((write) => write.request === "PUT /v1/credentials/connections/git")[1].body).toEqual({ profile: "git-bearer-token", secret: { token: "synthetic-bearer-token" }, metadata: {} });
+  await expect(gitConnection).toContainText("git-bearer-token");
+  await expect(type).toHaveValue("git-bearer-token");
+  await expect(drawer.getByRole("definition").filter({ hasText: "git-bearer-token" })).toHaveText("git-bearer-token");
+  expect(errors).toEqual([]);
+});
+
+test("stored tokens show their type's label, and a token of a type no longer accepted is a Not used row", async ({ page }, testInfo) => {
+  const alerts = { service: "alerts", displayName: "Alerts", credentialVerificationInputs: [] };
+  // The conformance connection stores a routed token; the alerts connection
+  // now accepts only routed tokens, so its stored API token is kept but not used.
+  const rows = [
+    tokenRow("conformance", "Conformance", [conformance], [apiToken, routedToken], storedToken("conformance", routedToken)),
+    tokenRow("alerts", "Alerts", [alerts], [routedToken], null)
+  ];
+  const kept = { credentialId: "credential-old-alerts", ownerPrincipal: "viewer", ownerKind: "user", service: "alerts", name: "default", profile: "api_token", label: "API token", credentialKind: "bearer_token", metadata: {}, status: "active", ...stamp };
+  const { writes, errors } = await fixture(page, "user", "/ui/credentials", tokenTypeLists("viewer", rows, [kept]));
+  await expect(row(page, "Conformance")).toContainText("Routed token");
+  await expect(row(page, "Conformance")).not.toContainText("routed_token");
+  await expect(row(page, "Alerts")).toContainText("Not saved");
+  await expect(row(page, "Alerts")).toContainText("Routed token");
+  const notUsed = row(page, "alerts/default");
+  await expect(notUsed).toContainText("Not used");
+  await expect(notUsed).toContainText("API token");
+  // The filter matches a type's label and profile.
+  await page.getByPlaceholder("Filter credentials…").fill("api_token");
+  await expect(list(page).getByRole("row").filter({ has: page.getByRole("link") })).toHaveCount(2);
+  await page.getByPlaceholder("Filter credentials…").fill("");
+
+  await row(page, "Conformance").getByRole("link", { name: "Conformance", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Conformance credential", exact: true });
+  await expect(drawer.getByRole("definition").filter({ hasText: "Routed token" })).toHaveText("Routed token routed_token");
+  const type = drawer.getByRole("combobox", { name: "Token type", exact: true });
+  await expect(type).toHaveValue("routed_token");
+  await expect(type.locator("option")).toHaveText(["API token", "Routed token"]);
+  await page.screenshot({ path: testInfo.outputPath("credentials-token-type-label.png"), fullPage: true });
+
+  await notUsed.getByRole("link", { name: "alerts/default", exact: true }).click();
+  const retainedDrawer = page.getByRole("complementary", { name: "alerts/default credential", exact: true });
+  await expect(retainedDrawer).toContainText("its connection no longer accepts its token type from this account");
+  await expect(retainedDrawer.getByRole("definition").filter({ hasText: "API token" })).toHaveText("API token api_token");
+  await expect(retainedDrawer.getByRole("combobox")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("credentials-token-type-not-used.png"), fullPage: true });
+  await retainedDrawer.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Delete stored credential?", exact: true }).getByRole("button", { name: "Delete credential", exact: true }).click();
+  await expect.poll(() => writes.map((write) => write.request)).toContain("DELETE /v1/credentials/retained/credential-old-alerts");
+  expect(errors).toEqual([]);
+});
+
+test("an administrator chooses a service account's token type", async ({ page }) => {
+  const rows = [tokenRow("conformance", "Conformance", [conformance], [apiToken, routedToken], null)];
+  const { writes, errors } = await fixture(page, "admin", "/ui/admin/principals/bot/credentials", tokenTypeLists("bot", rows));
+  const connection = row(page, "Conformance");
+  await expect(connection).toContainText("2 token types");
+  await connection.getByRole("link", { name: "Conformance", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Conformance credential", exact: true });
+  const type = drawer.getByRole("combobox", { name: "Token type", exact: true });
+  await expect(type).toHaveValue("");
+  await expect(drawer.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
+  await type.selectOption({ label: "API token" });
+  await drawer.getByLabel("Conformance bearer token", { exact: true }).fill("synthetic-service-token");
+  await drawer.getByRole("button", { name: "Save credential", exact: true }).click();
+  await expect.poll(() => writes.find((write) => write.request === "PUT /v1/admin/principals/bot/credentials/connections/conformance")?.body).toEqual({
+    profile: "api_token",
+    secret: { token: "synthetic-service-token" },
+    metadata: {}
+  });
+  await expect(connection).toContainText("API token");
+  await expect(type).toHaveValue("api_token");
+  expect(errors).toEqual([]);
+});

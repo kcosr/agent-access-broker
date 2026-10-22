@@ -84,14 +84,22 @@ the upstream credential; give your agent only its Broker invocation token.
    row is one connection and lists the services you are granted that use it; a
    shared connection, such as Atlassian for Jira and Confluence or GitLab for
    GitLab REST and Git, needs one token.
-2. Check its profile and the services in **Used by**. Use the fields requested
-   by the connection; for example, the `atlassian-api-token` profile asks for
-   an Atlassian username, which is your Atlassian account email, and an API
-   token.
-3. Enter your upstream values and choose **Save credential** for an empty connection.
+2. Check its token type and the services in **Used by**. A token type shows
+   the label its services give it, or else its profile, such as
+   `atlassian-api-token`. Use the fields requested by the connection; for
+   example, the `atlassian-api-token` profile asks for an Atlassian username,
+   which is your Atlassian account email, and an API token.
+3. When the connection accepts several token types, choose the type of the
+   token you have in **Token type** first; nothing is chosen for a first save,
+   and **Save credential** stays unavailable until you choose. The fields follow
+   the type: a username-and-token type asks for both, a bearer type for the token
+   only. With one accepted type there is nothing to choose.
+4. Enter your upstream values and choose **Save credential** for an empty connection.
    If a credential already exists, the drawer shows **Replace secret** and the
-   button is **Replace credential**. Supply the required replacement fields.
-4. After saving, check the status and verify it as described below.
+   button is **Replace credential**, with the stored token's type chosen.
+   Supply the required replacement fields. Choosing another type replaces the
+   stored token with one of that type.
+5. After saving, check the status and verify it as described below.
 
 ![Credentials list with the shared Atlassian and GitLab connections](../images/portal/guide-annotated/user-credentials-light.png)
 
@@ -137,7 +145,9 @@ was lost, so GitLab may hold a token the Broker never received. A row stays
 listed while its revocation is pending, failed or unconfirmed, even after you
 lost the grant and disconnected, and **Needs attention** includes every row
 whose revocation failed or is unconfirmed. Rows marked **Not used** are stored credentials no service
-reads any more; delete them when you no longer need them. See the [end-user guide](../end-user-guide.md#store-a-credential-or-connect-oauth)
+reads any more, such as a token of a type its connection no longer accepts; delete them when you no longer
+need them. A token kept for its type is used again, without re-entry, if its connection accepts the type again.
+See the [end-user guide](../end-user-guide.md#store-a-credential-or-connect-oauth)
 if **Connect** or **Reconnect** is unavailable.
 
 ## 4. Verify the saved credential
@@ -357,7 +367,7 @@ does not revoke that credential with the upstream provider.
 | --- | --- |
 | My access is missing or `self_service_disabled` | Ask an administrator to enable self-service or manage credentials and tokens for you. |
 | No services, actions, or contexts to select | Ask the administrator to review active grants, group membership, and execution contexts. |
-| Credential is missing or unverified | Select the configured service/name/profile, save the needed credential, then Verify when supported. |
+| Credential is missing or unverified | Select the connection and, when it accepts several, the token type of your token; save the needed credential, then Verify when supported. |
 | `credential_not_found` during invocation | Check that the required personal credential exists, or reconnect the configured OAuth connection. |
 | **Revocation failed** or **Revocation unconfirmed** on an OAuth row | An ended connection's tokens may still be valid at the provider. Revoke the Broker application there, signed in to the account that connection used (GitLab: **Preferences**, **Applications**, **Authorized applications**); reconnect afterwards if your current connection uses that account. |
 | `service_action_denied` | Compare the requested action and resource with current grants and token restrictions. The example token cannot search. |

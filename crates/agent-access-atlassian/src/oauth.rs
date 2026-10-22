@@ -162,7 +162,8 @@ impl OAuthDialect for AtlassianDialect {
 
     /// Accepts only consumers that act through the Atlassian gateway on the
     /// site the profile's `target` names: Jira and Confluence with that
-    /// `cloud_id` and the gateway enabled.
+    /// `cloud_id`, which gives them the gateway route. Route-coverage
+    /// validation checks that their allowlists reach it.
     fn check_consumer_authority(
         &self,
         _config: &OAuthRegistrationConfig,

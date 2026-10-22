@@ -224,8 +224,8 @@ pub use attribution::{
 pub use authority::UpstreamAuthority;
 pub use authorization::{CredentialPlacement, CredentialPlacementError, UpstreamAuthorization};
 pub use backend::{
-    BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, ServiceCredentialKinds,
-    ValidationContext, parse_backend_config,
+    BackendConfig, BackendConfigParser, BackendRegistration, BuildContext, CredentialSource,
+    ServiceCredentialKinds, ValidationContext, parse_backend_config,
 };
 pub use capabilities::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamResourceOwnership,
@@ -311,7 +311,9 @@ pub use upstream::{
     UpstreamError, UpstreamRequestBudget, complete_upstream_trace, file_upload_body,
     read_bounded_body, read_bounded_body_with_budget, take_upstream_trace,
 };
-pub use upstream_allowlist::{path_matches_pattern, same_origin, url_allowed_by_patterns};
+pub use upstream_allowlist::{
+    base_covered_by_patterns, path_matches_pattern, same_origin, url_allowed_by_patterns,
+};
 pub use upstream_rate_limit::{
     UPSTREAM_RETRY_AFTER_MAX_SECONDS, UpstreamRetryAfter, mutation_unverified_after_throttling,
     mutation_unverified_after_throttling_message, upstream_rate_limited,

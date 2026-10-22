@@ -539,7 +539,7 @@ impl BrokerRuntime {
                         &principal,
                         &row.service,
                         &row.name,
-                        &row.profile,
+                        &row.profiles,
                     )
                 })
                 .await
@@ -569,10 +569,10 @@ impl BrokerRuntime {
         identity: &IdentityContext,
     ) -> Result<PersonalTokenRow, ProviderError> {
         match self.personal_selection(service, identity) {
-            Some((connection, crate::Selection::Token(profile))) => Ok(PersonalTokenRow {
+            Some((connection, crate::Selection::Token(profiles))) => Ok(PersonalTokenRow {
                 service: connection.id.to_owned(),
                 name: crate::CONNECTION_CREDENTIAL_NAME.to_owned(),
-                profile: profile.to_owned(),
+                profiles: profiles.to_vec(),
             }),
             _ => Err(credential_unavailable()),
         }
@@ -720,7 +720,7 @@ impl BrokerRuntime {
                     &principal,
                     &row.service,
                     &row.name,
-                    &row.profile,
+                    &row.profiles,
                     &target,
                 )
             }
@@ -882,10 +882,10 @@ fn request_authorization(
     })
 }
 
-/// The stored row `(service, name)` and expected profile of a personal
-/// command credential.
+/// The stored row `(service, name)` of a personal command credential and
+/// the profiles it may have.
 struct PersonalTokenRow {
     service: String,
     name: String,
-    profile: String,
+    profiles: Vec<String>,
 }

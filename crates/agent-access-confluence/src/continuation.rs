@@ -6,8 +6,8 @@
 //! reaches Confluence ([`bind_atlassian_access`]: the credential method, a
 //! static credential's kind or a delegated lease's binding, and the gateway
 //! cloud ID on gateway routes). List and search tokens bind the Atlassian
-//! route fingerprint (tenant host, gateway cloud ID and whether the gateway
-//! is enabled), because they relay Confluence's own route-relative cursors;
+//! route fingerprint (tenant host and cloud ID), because they relay
+//! Confluence's own route-relative cursors;
 //! draft handles bind the tenant host, because a draft's content ID names
 //! content on that tenant whichever route of the same method reaches it.
 //! Draft handles are read during scope resolution, before the host selects

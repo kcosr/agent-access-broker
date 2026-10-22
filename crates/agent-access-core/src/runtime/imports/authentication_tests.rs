@@ -268,7 +268,8 @@ fn an_approved_oauth_binding_publishes_an_oauth_only_connection() {
         credentials.connections["records"],
         crate::ConnectionConfig {
             display_name: Some("Records".into()),
-            token_profile: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(oauth.clone()),
         }
     );
@@ -359,7 +360,8 @@ fn synthesized_connections_sharing_a_registration_must_share_its_profile() {
         "configured".into(),
         crate::ConnectionConfig {
             display_name: None,
-            token_profile: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
             oauth: Some(crate::ConnectionOAuthConfig {
                 registration: "records".into(),
                 profile: "write".into(),

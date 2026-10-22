@@ -12,7 +12,7 @@ use agent_access_atlassian::ATLASSIAN_OAUTH_AUDIENCE;
 use agent_access_provider::host::{HostPort, delegated_credential, port_failure};
 use agent_access_provider::test_support::{
     InvocationBuilder, ScopeRequestFixture, TestHost, basic_credential, bearer_credential,
-    delegated_binding_id,
+    credential_with_profile, delegated_binding_id,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -389,6 +389,194 @@ async fn static_tokens_keep_routing_by_kind() {
     );
 }
 
+/// A scoped API token is Basic on the gateway: its lookup before policy,
+/// lookup at execution, execution, verification probe and attachment
+/// download all present it on the configured site's gateway route, never
+/// on the tenant. One whose route is unavailable, an unknown profile or a
+/// profile of another kind is refused before anything is sent.
+#[tokio::test]
+async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
+    let server = MockServer::start().await;
+    let basic = "Basic YWxpY2VAZXhhbXBsZS5jb206dG9rZW4=";
+    for route in [
+        format!("{GATEWAY}/issue/ENG-1"),
+        format!("{SITE}/issue/ENG-1"),
+    ] {
+        answer(&server, "GET", &route, basic, 200, issue("ENG-1")).await;
+    }
+    answer(
+        &server,
+        "GET",
+        &format!("{GATEWAY}/myself"),
+        basic,
+        200,
+        json!({ "accountId": "5b10ac8d82e05b22cc7d4ef5" }),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{GATEWAY}/attachment/content/10055")))
+        .and(header("authorization", basic))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_bytes(b"evidence".to_vec()),
+        )
+        .mount(&server)
+        .await;
+    let scoped = credential_with_profile(
+        basic_credential("alice@example.com", "token"),
+        "atlassian-scoped-api-token",
+    );
+    let provider = provider(&server);
+    let inputs = json!({ "issue": "ENG-1" });
+
+    let fixture = ScopeRequestFixture::new("jira", "issue.view", inputs.clone())
+        .lookup_credential(scoped.clone());
+    let resolution = provider.resolve_scopes(fixture.request()).await.unwrap();
+    assert_eq!(resolution.scopes(), &eng_scopes());
+    provider
+        .invoke(
+            InvocationBuilder::new("jira", "issue.view")
+                .inputs(inputs.clone())
+                .resources(eng_scopes())
+                .credential(scoped.clone())
+                .lookup_credential(scoped.clone())
+                .build(),
+        )
+        .await
+        .unwrap();
+    let verification = provider
+        .verify_execution_credential(&scoped, &crate::CorrelationContext::for_tests())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(verification.upstream_status, 200);
+    let response = provider
+        .backend
+        .attachment_content("10055", &AtlassianCredential::from_static(scoped.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    let route = format!("GET {GATEWAY}/issue/ENG-1 {basic}");
+    assert_eq!(
+        requests(&server).await,
+        [
+            route.clone(),
+            route.clone(),
+            route,
+            format!("GET {GATEWAY}/myself {basic}"),
+            format!("GET {GATEWAY}/attachment/content/10055 {basic}"),
+        ]
+    );
+
+    // Refused before anything is sent: no gateway route without a cloud
+    // ID, and tokens Jira cannot route on any site.
+    let sent = requests(&server).await.len();
+    let mut site_only: JiraProviderConfig = serde_json::from_value(json!({
+        "tenant_host": "example.atlassian.net",
+        "allowed_upstream_hosts": [format!("{}/**", server.uri())],
+    }))
+    .unwrap();
+    site_only
+        .attachments
+        .media_types
+        .push("text/plain".to_string());
+    let without_gateway = JiraProvider::from_backend(
+        site_only.clone(),
+        ProviderLimits::default(),
+        Arc::new(HttpJiraBackend::for_tests(
+            site_only,
+            ProviderLimits::default(),
+        )),
+    );
+    const GATEWAY_UNAVAILABLE: &str = "Jira OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.jira.cloud_id";
+    const UNKNOWN_PROFILE: &str = "Jira does not present the selected credential's token profile";
+    const KIND_MISMATCH: &str =
+        "the selected credential's kind does not match its Jira token profile";
+    let refused = [
+        (&without_gateway, scoped.clone(), GATEWAY_UNAVAILABLE),
+        // Such as a secret store's bearer record on a site without one.
+        (
+            &without_gateway,
+            bearer_credential("record"),
+            GATEWAY_UNAVAILABLE,
+        ),
+        (
+            &provider,
+            credential_with_profile(
+                basic_credential("alice@example.com", "token"),
+                "gitlab-access-token",
+            ),
+            UNKNOWN_PROFILE,
+        ),
+        (
+            &provider,
+            credential_with_profile(bearer_credential("token"), "atlassian-scoped-api-token"),
+            KIND_MISMATCH,
+        ),
+        (
+            &provider,
+            credential_with_profile(
+                basic_credential("alice@example.com", "token"),
+                "atlassian-bearer-token",
+            ),
+            KIND_MISMATCH,
+        ),
+    ];
+    // Each phase reports the same credential denial, as continuation
+    // binding does for the same credential.
+    for (provider, credential, message) in refused {
+        let denial = ProviderError::deny(ReasonCode::CredentialNotProvisioned, message);
+        let fixture = ScopeRequestFixture::new("jira", "issue.view", inputs.clone())
+            .lookup_credential(credential.clone());
+        assert_eq!(
+            provider
+                .resolve_scopes(fixture.request())
+                .await
+                .unwrap_err(),
+            denial
+        );
+        let error = provider
+            .invoke(
+                InvocationBuilder::new("jira", "issue.view")
+                    .inputs(inputs.clone())
+                    .resources(eng_scopes())
+                    .credential(credential.clone())
+                    .lookup_credential(credential.clone())
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, denial);
+        assert_eq!(
+            provider
+                .verify_execution_credential(&credential, &crate::CorrelationContext::for_tests())
+                .await
+                .unwrap_err(),
+            denial
+        );
+        assert_eq!(
+            provider
+                .backend
+                .attachment_content("10055", &AtlassianCredential::from_static(credential))
+                .await
+                .unwrap_err(),
+            JiraBackendError::Unroutable(denial)
+        );
+    }
+    assert_eq!(requests(&server).await.len(), sent);
+    // A presentation refusal reports the same denial.
+    assert_eq!(
+        JiraBackendError::from(agent_access_atlassian::AtlassianAccessError::Unroutable(
+            agent_access_atlassian::AtlassianRouteError::UnknownProfile
+        )),
+        JiraBackendError::Unroutable(ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            UNKNOWN_PROFILE
+        ))
+    );
+}
+
 /// A lookup's 401 spends the operation's one recovery: the rejected version
 /// is marked, the lookup repeats once with renewed access, and execution
 /// presents the renewed access. A later 401 in the same operation fails
@@ -752,11 +940,11 @@ async fn serve(server: &MockServer, route: &str) {
         .await;
 }
 
-/// An attachment download on the gateway presents OAuth access or a
-/// service account's bearer token only within the configured site. A
-/// redirect to another site's cloud ID, directly or back from a media host,
-/// fails before it is sent; a plain media redirect still works and carries
-/// no credential.
+/// An attachment download on the gateway presents OAuth access, a
+/// service account's bearer token or a scoped API token only within the
+/// configured site. A redirect to another site's cloud ID, directly or back
+/// from a media host, fails before it is sent; a plain media redirect still
+/// works and carries no credential.
 #[tokio::test]
 async fn attachment_downloads_never_present_credentials_to_another_site() {
     let lease = Lease::new(CLOUD_ID);
@@ -771,6 +959,13 @@ async fn attachment_downloads_never_present_credentials_to_another_site() {
         (
             AtlassianCredential::from_static(bearer_credential("service-token")),
             "Bearer service-token",
+        ),
+        (
+            AtlassianCredential::from_static(credential_with_profile(
+                basic_credential("alice@example.com", "token"),
+                "atlassian-scoped-api-token",
+            )),
+            "Basic YWxpY2VAZXhhbXBsZS5jb206dG9rZW4=",
         ),
     ];
     for (credential, presented) in credentials {

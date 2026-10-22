@@ -9,7 +9,8 @@ use agent_access_provider::{
     BackendConfig, BackendRegistration, BuildContext, CorrelationContext, EgressProxyConfig,
     ExecutionCredential, ProviderBuildError, ProviderCredentialVerification, ProviderFailureStatus,
     ProviderReasonDefinition, ScopeRequest, ScopeResolution, ValidationContext,
-    parse_backend_config, test_support::bearer_credential,
+    parse_backend_config,
+    test_support::{bearer_credential, credential_with_profile},
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
@@ -80,9 +81,10 @@ impl Provider for VerifierConfig {
         credential: &ExecutionCredential,
         _: &CorrelationContext,
     ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
-        let definition = if *credential == bearer_credential("maintenance-token") {
+        let stored = |token: &str| credential_with_profile(bearer_credential(token), PROFILE);
+        let definition = if *credential == stored("maintenance-token") {
             &MAINTENANCE
-        } else if *credential == bearer_credential("locked-token") {
+        } else if *credential == stored("locked-token") {
             &ACCOUNT_LOCKED
         } else {
             panic!("unexpected verifier credential {credential:?}")

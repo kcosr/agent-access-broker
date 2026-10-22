@@ -463,6 +463,7 @@ fn credential_availability_filters_the_selected_band_without_selecting_a_lower_m
             kind: "connection".into(),
             provider: None,
             connection: Some("fixture-personal".into()),
+            profile: None,
             username_ref: None,
             token_ref: None,
             path: None,

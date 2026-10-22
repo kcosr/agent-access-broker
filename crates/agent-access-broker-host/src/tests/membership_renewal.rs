@@ -206,6 +206,7 @@ async fn fixture_configured(
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     edit(&mut config);

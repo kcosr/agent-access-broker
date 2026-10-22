@@ -547,7 +547,7 @@ pub(crate) async fn user_credentials_list(
     let token_connections = active
         .iter()
         .map(|(connection, _)| connection.clone())
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     let stored = match management_store_call(&context, move |store| {
         let rows = store.list_credentials(Some(&principal))?;
         if access != CredentialAccess::ClasslessOwner {

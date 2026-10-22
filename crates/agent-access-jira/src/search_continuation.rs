@@ -596,10 +596,17 @@ mod tests {
                 refreshed.clone(),
                 Some("22222222-2222-4333-8444-555555555555"),
             ),
-            (refreshed.clone(), None),
         ] {
             assert_rejected(&request, cloud_id, &token);
         }
+        // Without a cloud ID, OAuth has no gateway route to bind.
+        assert_eq!(
+            search(&refreshed, None)
+                .open(&pages, &token, now())
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::CredentialNotProvisioned
+        );
 
         // A stored token's continuation does not open under OAuth either.
         let stored = with("agent-one", bearer());

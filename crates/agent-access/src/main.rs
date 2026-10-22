@@ -847,7 +847,7 @@ enum ActionsCommand {
 struct CredentialPutArgs {
     #[arg(
         long,
-        help = "Expected token profile; the broker rejects any other than the connection's"
+        help = "Token profile to store, from the connection's tokenProfiles in `credentials targets`; required when it accepts several"
     )]
     profile: Option<String>,
     #[arg(long, help_heading = "Credential Field Options")]
@@ -901,7 +901,8 @@ struct CredentialVerifyArgs {
 enum CredentialsCommand {
     /// List your credential connections and retained stored credentials.
     List,
-    /// List the connections whose token you can store now, with their input form.
+    /// List the connections whose token you can store now, with the token
+    /// profiles each accepts, their labels and input forms.
     Targets,
     /// Show your stored token's metadata for a connection.
     Inspect { connection: String },
@@ -1499,7 +1500,8 @@ enum AdminCredentialsCommand {
         #[arg(long)]
         principal: Option<String>,
     },
-    /// List the connections whose token you can store for a principal.
+    /// List the connections whose token you can store for a principal, with
+    /// the token profiles each accepts, their labels and input forms.
     Targets { principal: String },
     /// Show a principal's stored token metadata for a connection.
     Inspect {
@@ -11250,7 +11252,8 @@ fn append_query_value(
 }
 
 /// The input form of a credential connection's token, as its input-schema
-/// route returns it: the profile to store and the fields it takes.
+/// route returns it for the chosen (or only accepted) profile: the profile
+/// to store and the fields it takes.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CredentialInputSchema {

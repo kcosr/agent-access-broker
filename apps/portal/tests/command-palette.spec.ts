@@ -24,9 +24,10 @@ const catalog = { services: [service], subjects: { users: [principal], groups: [
 const config = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
 const grant = { grantRef: "engineering-read", grantId: "engineering-read", writable: true, version: 1, subjects: [`group:${userGroup.groupId}`], service: "jira", actions: [action.action], credentialMode: "service", executionContexts: ["default"], status: "active", resources: { resourceIds: [], resourceGroupIds: [] } };
 const consumers = [{ service: "jira", displayName: "Jira", credentialVerificationInputs: [] }];
-const target = { connection: "work-account", displayName: "Jira", consumers, otherConsumers: 0, profile: "personal", credentialKind: "bearer", inputSchema: { connection: "work-account", profile: "personal", credentialKind: "bearer", fields: [] } };
-const credential = { credentialId: "credential-123", ownerPrincipal: "viewer", ownerKind: "user", connection: target.connection, profile: "personal", credentialKind: "bearer", metadata: {}, status: "active", ...stamp };
-const credentialList = { connections: [{ connection: target.connection, displayName: "Jira", method: "token", consumers, otherConsumers: 0, profile: "personal", credentialKind: "bearer", registration: null, credential }], retained: [] };
+const personal = { profile: "personal", label: null, credentialKind: "bearer", inputSchema: { connection: "work-account", profile: "personal", credentialKind: "bearer", fields: [] } };
+const target = { connection: "work-account", displayName: "Jira", consumers, otherConsumers: 0, tokenProfiles: [personal] };
+const credential = { credentialId: "credential-123", ownerPrincipal: "viewer", ownerKind: "user", connection: target.connection, profile: "personal", label: null, credentialKind: "bearer", metadata: {}, status: "active", ...stamp };
+const credentialList = { connections: [{ connection: target.connection, displayName: "Jira", method: "token", consumers, otherConsumers: 0, tokenProfiles: [personal], registration: null, credential }], retained: [] };
 const draftImport = { definition: { service: "metrics-draft", displayName: "Metrics draft", adapterKind: "mcp_http", endpoint: "https://metrics.example.test/mcp", executionBindings: [], connectionSettings: {}, discovery: { kind: "anonymous" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, ...stamp };
 
 test.beforeAll(async () => {

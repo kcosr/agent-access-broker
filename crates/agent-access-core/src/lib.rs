@@ -1,8 +1,9 @@
 use agent_access_provider::{
-    BackendConfig, CredentialDescriptor, Decision, EgressProxyConfig, OAuthScopeMode,
-    ProviderLimits, ReasonCodeId, ResourceScopes, ResourceSelector, ResourceTypeRegistry,
-    ServiceCredentialKinds, ServiceDescriptor, ValidationContext, default_download_max_bytes,
-    is_action_name, is_env_name, is_loopback_or_localhost, is_secret_ref, is_service_name,
+    BackendConfig, CredentialDescriptor, CredentialSource, Decision, EgressProxyConfig,
+    OAuthScopeMode, ProviderLimits, ReasonCodeId, ResourceScopes, ResourceSelector,
+    ResourceTypeRegistry, ServiceCredentialKinds, ServiceDescriptor, ValidationContext,
+    default_download_max_bytes, is_action_name, is_env_name, is_loopback_or_localhost,
+    is_secret_ref, is_service_name,
     presentation::{ReadContentFormat, ResponseFormat},
     validate_egress_proxy_config, validate_upstream_allowlist,
 };
@@ -754,6 +755,10 @@ pub struct CredentialConfig {
     /// The credential connection a `type = "connection"` per-user entry
     /// names.
     pub connection: Option<String>,
+    /// The token profile a `credentials.service` or `credentials.lookup`
+    /// static credential is lent as; it must be one the service declares
+    /// with the same kind as `type`.
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1779,8 +1784,10 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_service_descriptors(&services, resource_types, &mut errors);
     validate_private_resource_consumers(config, &services, &effective_types, &mut errors);
     validate_credentials(config, &services, &mut errors);
-    connections::validate_connections(config, &services, &mut errors);
-    validate_backends(config, &mut errors);
+    // Backends see each connection's accepted token profiles, implicit
+    // types included.
+    let effective_credentials = connections::validate_connections(config, &services, &mut errors);
+    validate_backends(config, &effective_credentials, &mut errors);
     validate_gateways(config, &mut errors);
     validate_policy(config, &services, resource_types, &mut errors);
     validate_attribution_config(&config.attribution, &services, &mut errors);
@@ -3106,6 +3113,9 @@ fn validate_credential(
             "{mode}.{service}.connection is supported only for type connection"
         ));
     }
+    if let Some(profile) = credential.profile.as_deref() {
+        validate_shared_credential_profile(services, mode, service, credential, profile, errors);
+    }
     match credential.kind.as_str() {
         "connection" => {
             if mode != "credentials.per_user" {
@@ -3195,6 +3205,41 @@ fn validate_credential(
             "credentials.service.{service}.type must be {}",
             descriptor.credentials.service_kinds.join(" or ")
         ));
+    }
+}
+
+/// A shared credential's `profile`: only `credentials.service` and
+/// `credentials.lookup` entries of a static type name one, and the service
+/// must declare it with that type's kind, so the credential is lent as a
+/// profile the provider knows.
+fn validate_shared_credential_profile(
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    mode: &str,
+    service: &str,
+    credential: &CredentialConfig,
+    profile: &str,
+    errors: &mut Vec<String>,
+) {
+    if !matches!(mode, "credentials.service" | "credentials.lookup")
+        || !matches!(credential.kind.as_str(), "basic_api_token" | "bearer_token")
+    {
+        errors.push(format!(
+            "{mode}.{service}.profile is supported only for credentials.service and credentials.lookup entries of type basic_api_token or bearer_token"
+        ));
+        return;
+    }
+    let Some(descriptor) = services.get(service) else {
+        return;
+    };
+    match descriptor.credential_profile_kind(profile) {
+        Some(kind) if kind == credential.kind => {}
+        Some(kind) => errors.push(format!(
+            "{mode}.{service}.profile {profile} stores {kind}, not {}",
+            credential.kind
+        )),
+        None => errors.push(format!(
+            "{mode}.{service}.profile {profile} is not a token profile {service} declares"
+        )),
     }
 }
 
@@ -4367,8 +4412,14 @@ fn configured_provider_descriptors(config: &BrokerConfig) -> Vec<ServiceDescript
 }
 
 /// Checks each `[providers.<kind>]` table: its backend is registered, its
-/// development-only status fits the deployment, and the backend accepts it.
-fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
+/// development-only status fits the deployment, and the backend accepts it
+/// beside `credentials`, the configured credentials with each connection's
+/// implicit type resolved.
+fn validate_backends(
+    config: &BrokerConfig,
+    credentials: &CredentialsConfig,
+    errors: &mut Vec<String>,
+) {
     let limits = ProviderLimits::from(&config.limits);
     for backend in config.providers.iter() {
         let kind = backend.kind();
@@ -4384,59 +4435,89 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
             ));
         }
         let descriptor = backend.descriptor();
+        let credentials = BackendCredentials::new(credentials, kind, &descriptor);
         let context = ValidationContext::new(
             &config.deployment.environment,
             &config.policy.authority,
             &limits,
-            ServiceCredentialKinds::new(
-                config.credentials.service.get(kind).and_then(|credential| {
-                    resolved_credential_kind(&config.credentials, credential, &descriptor)
-                }),
-                config
-                    .credentials
-                    .per_user
-                    .get(kind)
-                    .and_then(|credential| {
-                        resolved_credential_kind(&config.credentials, credential, &descriptor)
-                    }),
-            )
-            .with_per_user_delegated(
-                config
-                    .credentials
-                    .personal_connection(kind)
-                    .is_some_and(|connection| connection.config.oauth.is_some()),
-            )
-            .with_lookup(config.credentials.lookup.get(kind).and_then(|credential| {
-                resolved_credential_kind(&config.credentials, credential, &descriptor)
-            })),
+            credentials.kinds(),
         );
         backend.validate(&context, errors);
     }
 }
 
-/// The credential kind backend validation sees for a configured credential:
-/// a `connection` entry resolves to its token profile's kind, or `oauth` for
-/// a connection with only OAuth; every other type (`basic_api_token`,
-/// `bearer_token`, `secret_store`) is passed as written. An unsupported
-/// profile or unknown connection resolves to nothing; credential validation
-/// reports it.
-fn resolved_credential_kind<'a>(
-    credentials: &'a CredentialsConfig,
-    credential: &'a CredentialConfig,
-    descriptor: &ServiceDescriptor,
-) -> Option<&'a str> {
-    match credential.kind.as_str() {
-        "connection" => {
-            let connection = credentials
-                .connections
-                .get(credential.connection.as_deref()?)?;
-            match (&connection.token_profile, &connection.oauth) {
-                (Some(profile), _) => descriptor.credential_profile_kind(profile),
-                (None, Some(_)) => Some("oauth"),
-                (None, None) => None,
-            }
+/// What backend validation sees of one service's configured credentials
+/// ([`ServiceCredentialKinds`]): its shared execution and lookup
+/// credentials, and the token profiles (with a connection's implicit type
+/// resolved), delegated access or secret store of its per-user entry.
+struct BackendCredentials<'a> {
+    service: Option<CredentialSource<'a>>,
+    per_user_profiles: Vec<agent_access_provider::CredentialProfile>,
+    per_user_delegated: bool,
+    per_user_secret_store: bool,
+    lookup: Option<CredentialSource<'a>>,
+}
+
+impl<'a> BackendCredentials<'a> {
+    /// The sources of `service`, whose descriptor is `descriptor`. A listed
+    /// token profile the service does not declare is left out, and so is a
+    /// shared entry of an unsupported type; credential validation reports
+    /// both.
+    fn new(
+        credentials: &'a CredentialsConfig,
+        service: &str,
+        descriptor: &ServiceDescriptor,
+    ) -> Self {
+        let connection = credentials.personal_connection(service);
+        Self {
+            service: credentials
+                .service
+                .get(service)
+                .and_then(shared_credential_source),
+            per_user_profiles: connection
+                .map(|connection| {
+                    connection
+                        .config
+                        .accepted_token_profiles()
+                        .into_iter()
+                        .filter_map(|profile| descriptor.credential_profile(profile).cloned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            per_user_delegated: connection
+                .is_some_and(|connection| connection.config.oauth.is_some()),
+            per_user_secret_store: credentials
+                .per_user
+                .get(service)
+                .is_some_and(|credential| credential.kind == "secret_store"),
+            lookup: credentials
+                .lookup
+                .get(service)
+                .and_then(shared_credential_source),
         }
-        other => Some(other),
+    }
+
+    fn kinds(&self) -> ServiceCredentialKinds<'_> {
+        ServiceCredentialKinds::default()
+            .with_service(self.service)
+            .with_per_user_profiles(&self.per_user_profiles)
+            .with_per_user_delegated(self.per_user_delegated)
+            .with_per_user_secret_store(self.per_user_secret_store)
+            .with_lookup(self.lookup)
+    }
+}
+
+/// A `credentials.service` or `credentials.lookup` entry as backend
+/// validation sees it: a static kind, or a secret store. Other types are
+/// rejected by credential validation and report nothing.
+fn shared_credential_source(credential: &CredentialConfig) -> Option<CredentialSource<'_>> {
+    match credential.kind.as_str() {
+        "basic_api_token" | "bearer_token" => Some(match credential.profile.as_deref() {
+            Some(profile) => CredentialSource::static_profile(&credential.kind, profile),
+            None => CredentialSource::static_kind(&credential.kind),
+        }),
+        "secret_store" => Some(CredentialSource::SecretStore),
+        _ => None,
     }
 }
 

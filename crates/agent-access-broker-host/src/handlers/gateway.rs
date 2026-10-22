@@ -6108,7 +6108,8 @@ mod tests {
             "gitlab".to_string(),
             agent_access_core::ConnectionConfig {
                 display_name: None,
-                token_profile: Some("git-bearer-token".to_string()),
+                token_profiles: Some(vec!["git-bearer-token".to_string()]),
+                service_account_token_profiles: None,
                 oauth: None,
             },
         );
@@ -6122,6 +6123,7 @@ mod tests {
                 path: None,
                 read_only: None,
                 connection: Some("gitlab".to_string()),
+                profile: None,
             },
         );
         config
@@ -6304,7 +6306,8 @@ mod tests {
             "gitlab".to_string(),
             agent_access_core::ConnectionConfig {
                 display_name: Some("GitLab".to_string()),
-                token_profile: Some("gitlab-access-token".to_string()),
+                token_profiles: Some(vec!["gitlab-access-token".to_string()]),
+                service_account_token_profiles: None,
                 oauth: None,
             },
         );
@@ -6319,6 +6322,7 @@ mod tests {
                     path: None,
                     read_only: None,
                     connection: Some("gitlab".to_string()),
+                    profile: None,
                 },
             );
         }
@@ -6399,7 +6403,10 @@ mod tests {
             )
             .await;
         assert_eq!(rest.status, 200, "{:?}", rest.envelope);
-        let token = agent_access_provider::test_support::bearer_credential("shared-gitlab-token");
+        let token = agent_access_provider::test_support::credential_with_profile(
+            agent_access_provider::test_support::bearer_credential("shared-gitlab-token"),
+            "gitlab-access-token",
+        );
         assert_eq!(
             *seen.lock().unwrap(),
             [Some(token.clone()), Some(token)],
@@ -6563,6 +6570,7 @@ mod tests {
                         path: None,
                         read_only: None,
                         connection: None,
+                        profile: None,
                     },
                 )]),
                 per_user: BTreeMap::new(),

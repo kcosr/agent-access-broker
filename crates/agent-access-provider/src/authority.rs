@@ -13,9 +13,11 @@ use url::Url;
 /// and an optional tenant gateway origin through which the same tenant is
 /// also reachable.
 ///
-/// Two services with the same origin and instance path act on the same
-/// instance, whatever their tenants or gateways; a dialect decides what an
-/// OAuth grant additionally requires of them.
+/// Two services act on the same instance when they agree on all four: the
+/// same origin and instance path, and the same tenant and tenant gateway,
+/// or neither declares one. A provider declares its tenant in one canonical
+/// spelling, so equivalent spellings compare equal. A dialect decides what
+/// an OAuth grant additionally requires of a consumer.
 ///
 /// ```
 /// # use agent_access_provider::UpstreamAuthority;
@@ -49,7 +51,8 @@ impl UpstreamAuthority {
     }
 
     /// Records the tenant identity the service is configured for, such as
-    /// an Atlassian cloud ID.
+    /// an Atlassian cloud ID, in the one canonical spelling the provider
+    /// uses for it, since [`Self::same_instance`] compares it exactly.
     pub fn with_tenant(mut self, tenant: impl Into<String>) -> Self {
         self.tenant = Some(tenant.into());
         self
@@ -84,19 +87,29 @@ impl UpstreamAuthority {
     }
 
     /// Whether both act on the same upstream instance: the same origin and
-    /// instance path. Tenants and gateways are not compared.
+    /// instance path, and the same tenant and tenant gateway. A tenant or
+    /// gateway that only one declares, or that both declare differently,
+    /// names another instance, so one credential never reaches two tenants
+    /// through a shared connection.
     pub fn same_instance(&self, other: &Self) -> bool {
-        self.origin == other.origin && self.instance_path == other.instance_path
+        self.origin == other.origin
+            && self.instance_path == other.instance_path
+            && self.tenant == other.tenant
+            && self.tenant_gateway == other.tenant_gateway
     }
 }
 
 impl std::fmt::Display for UpstreamAuthority {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}{}", self.origin, self.instance_path)?;
-        if let Some(tenant) = &self.tenant {
-            write!(formatter, " (tenant {tenant})")?;
+        match (&self.tenant, &self.tenant_gateway) {
+            (Some(tenant), Some(gateway)) => {
+                write!(formatter, " (tenant {tenant}, gateway {gateway})")
+            }
+            (Some(tenant), None) => write!(formatter, " (tenant {tenant})"),
+            (None, Some(gateway)) => write!(formatter, " (gateway {gateway})"),
+            (None, None) => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -148,8 +161,10 @@ mod tests {
         }
     }
 
+    /// Instances compare origin, instance path, tenant and tenant gateway;
+    /// one declared by only one side differs too.
     #[test]
-    fn instances_compare_origin_and_path_but_not_tenant_routes() {
+    fn instances_compare_origin_path_tenant_and_gateway() {
         let site = UpstreamAuthority::from_base_url("https://example.atlassian.net").unwrap();
         let routed = site
             .clone()
@@ -158,13 +173,48 @@ mod tests {
             .unwrap();
         assert_eq!(routed.tenant(), Some("cloud-one"));
         assert_eq!(routed.tenant_gateway(), Some("https://api.atlassian.com"));
-        assert!(site.same_instance(&routed));
+        let same = UpstreamAuthority::from_base_url("https://EXAMPLE.atlassian.net/")
+            .unwrap()
+            .with_tenant("cloud-one")
+            .with_tenant_gateway("https://api.atlassian.com/ex/confluence/cloud-one")
+            .unwrap();
+        assert!(routed.same_instance(&same) && same.same_instance(&routed));
+        assert!(site.same_instance(&site.clone()));
+        let other_tenant = same.clone().with_tenant("cloud-two");
+        let tenant_only = site.clone().with_tenant("cloud-one");
+        let other_gateway = site
+            .clone()
+            .with_tenant("cloud-one")
+            .with_tenant_gateway("https://gateway.example.com")
+            .unwrap();
         let other_path =
             UpstreamAuthority::from_base_url("https://example.atlassian.net/wiki").unwrap();
-        assert!(!site.same_instance(&other_path));
+        for (left, right) in [
+            (&site, &routed),
+            (&routed, &other_tenant),
+            (&routed, &tenant_only),
+            (&tenant_only, &site),
+            (&routed, &other_gateway),
+            (&site, &other_path),
+        ] {
+            assert!(!left.same_instance(right), "{left} and {right}");
+            assert!(!right.same_instance(left), "{right} and {left}");
+        }
         assert_eq!(
             routed.to_string(),
+            "https://example.atlassian.net (tenant cloud-one, gateway https://api.atlassian.com)"
+        );
+        assert_eq!(
+            tenant_only.to_string(),
             "https://example.atlassian.net (tenant cloud-one)"
         );
+        assert_eq!(
+            site.clone()
+                .with_tenant_gateway("https://api.atlassian.com")
+                .unwrap()
+                .to_string(),
+            "https://example.atlassian.net (gateway https://api.atlassian.com)"
+        );
+        assert_eq!(site.to_string(), "https://example.atlassian.net");
     }
 }

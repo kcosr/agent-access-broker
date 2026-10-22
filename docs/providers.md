@@ -159,13 +159,15 @@ are invoked through `/v1/invoke/{service}/{action}`, generic
 available. Their action contracts are reflected in `agent-access spec catalog`
 and `agent-access spec send-schema`.
 
-Jira and Confluence also support Atlassian `bearer_token` credentials routed
-through `https://api.atlassian.com/ex/...`. This requires
-`providers.<service>.cloud_id` and allowlisting `api.atlassian.com`.
-`basic_api_token` credentials use the tenant base instead. Credential *kind*
-selects gateway-vs-tenant routing; credential *mode* still comes from policy.
-With the gateway allowlisted, the service and lookup credentials must be
-`bearer_token` too (see [`[providers.jira]`](configuration.md#providersjira)).
+Jira and Confluence route each credential by its token type. Classic API tokens
+(`atlassian-api-token`), and `basic_api_token` credentials without a profile,
+use the tenant base. Scoped API tokens (`atlassian-scoped-api-token`, sent as
+Basic), `bearer_token` credentials and OAuth go through the Atlassian gateway,
+`https://api.atlassian.com/ex/...`, which requires
+`providers.<service>.cloud_id`. Types may be mixed in one deployment, and
+validation checks that the allowlist covers each configured credential's
+route; credential *mode* still comes from policy (see
+[`[providers.jira]`](configuration.md#providersjira)).
 
 ## Git HTTP gateway
 

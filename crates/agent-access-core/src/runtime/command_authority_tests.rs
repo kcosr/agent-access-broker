@@ -1841,6 +1841,101 @@ fn publish_retained(
     )
 }
 
+/// Every imported-catalog publication resolves the configured connections'
+/// implicit types again, from the descriptors it publishes, beside the
+/// import's synthesized connection, whose static binding sets
+/// `token_profiles` only. A publication under which a configured connection
+/// could accept several types is refused.
+#[test]
+fn imported_catalog_publication_resolves_configured_implicit_types() {
+    let publish = |profiles: &[&str]| {
+        let mut base = BrokerRuntime::new(config()).unwrap();
+        let mut config = import_config();
+        config.credentials.connections.insert(
+            "tracker_tokens".into(),
+            crate::ConnectionConfig {
+                display_name: None,
+                token_profiles: None,
+                service_account_token_profiles: None,
+                oauth: None,
+            },
+        );
+        config.credentials.per_user.insert(
+            "tracker".into(),
+            CredentialConfig {
+                kind: "connection".into(),
+                username_ref: None,
+                token_ref: None,
+                provider: None,
+                path: None,
+                read_only: None,
+                connection: Some("tracker_tokens".into()),
+                profile: None,
+            },
+        );
+        base.config = Arc::new(config);
+        let credentials = profiles
+            .iter()
+            .fold(CredentialDescriptor::default(), |credentials, profile| {
+                credentials.profile(*profile, "bearer_token")
+            });
+        let mut services = (*base.services).clone();
+        services.insert(
+            "tracker".into(),
+            Arc::new(ServiceDescriptor::new("tracker", "Tracker").with_credentials(credentials)),
+        );
+        base.services = Arc::new(services);
+        let mut record = record(
+            &[
+                ImportedCredentialMode::Service,
+                ImportedCredentialMode::PerUser,
+            ],
+            actions(),
+        );
+        record.slot_versions.insert(
+            crate::imports::ImportedCredentialPurpose::Execution,
+            "fixture".into(),
+        );
+        let prepared = base.prepare_imported_service_change(&record, None)?;
+        base.with_imported_catalog(
+            ImportedCatalog {
+                revision: 1,
+                services: vec![record],
+            },
+            prepared,
+        )
+    };
+
+    let published = publish(&["tracker-token"]).unwrap();
+    let connections = &published.effective_credentials().connections;
+    assert_eq!(
+        connections["tracker_tokens"].token_profiles,
+        Some(vec!["tracker-token".to_string()])
+    );
+    assert_eq!(
+        published.config.credentials.connections["tracker_tokens"].token_profiles,
+        None
+    );
+    assert_eq!(
+        connections[SERVICE],
+        crate::ConnectionConfig {
+            display_name: Some("Ticketing".into()),
+            token_profiles: Some(vec!["token".into()]),
+            service_account_token_profiles: None,
+            oauth: None,
+        }
+    );
+
+    let Err(error) = publish(&["tracker-token", "tracker-deploy-token"]) else {
+        panic!("a configured connection offering several types needs a list");
+    };
+    assert!(
+        matches!(&error, ManagedStoreError::InputInvalid(message)
+            if message == "credentials.connections.tracker_tokens must set token_profiles: its consumers accept several token profiles (tracker-token, tracker-deploy-token)"),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn refusals_name_each_retained_grant_once_by_the_reference_clients_resolve() {
     // A two-subject grant whose credential mode the action does not support

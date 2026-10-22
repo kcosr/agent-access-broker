@@ -5,13 +5,13 @@
 //! A connection's token rows live under the connection ID in the stored
 //! `service` column with the name [`CONNECTION_CREDENTIAL_NAME`]. A row is
 //! the principal's *active* row when its connection selects
-//! [`Selection::Token`] for the principal's kind with the row's profile;
-//! every other row the principal owns is *retained*: listed read-only and
-//! deletable only by its credential ID.
+//! [`Selection::Token`] for the principal's kind with a list that accepts
+//! the row's profile; every other row the principal owns is *retained*:
+//! listed read-only and deletable only by its credential ID.
 
 use agent_access_core::{
-    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, CredentialInputSchema, CredentialMetadata,
-    IdentityContext, PrincipalKind, RemoteRevocation, Selection,
+    BrokerRuntime, CONNECTION_CREDENTIAL_NAME, ConnectionTokenProfile, CredentialInputSchema,
+    CredentialMetadata, IdentityContext, PrincipalKind, RemoteRevocation, Selection,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -28,6 +28,18 @@ pub(super) struct ConnectionConsumer {
     pub(super) credential_verification_inputs: Vec<String>,
 }
 
+/// One token profile a connection accepts from the principal, with the
+/// form storing a token of it takes.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TokenProfileView {
+    pub(super) profile: String,
+    /// The label a consumer declares; clients show the profile otherwise.
+    pub(super) label: Option<String>,
+    pub(super) credential_kind: String,
+    pub(super) input_schema: CredentialInputSchema,
+}
+
 /// A connection whose token the principal can store now.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,9 +48,8 @@ pub(super) struct ConnectionTarget {
     pub(super) display_name: String,
     pub(super) consumers: Vec<ConnectionConsumer>,
     pub(super) other_consumers: usize,
-    pub(super) profile: String,
-    pub(super) credential_kind: String,
-    pub(super) input_schema: CredentialInputSchema,
+    /// The token profiles the principal may store, in configuration order.
+    pub(super) token_profiles: Vec<TokenProfileView>,
 }
 
 /// The method a connection selects for a principal, as a list row reports
@@ -70,10 +81,9 @@ pub(super) struct ConnectionRow {
     pub(super) method: ConnectionMethod,
     pub(super) consumers: Vec<ConnectionConsumer>,
     pub(super) other_consumers: usize,
-    /// The token profile, for the token method.
-    pub(super) profile: Option<String>,
-    /// The token profile's credential kind, for the token method.
-    pub(super) credential_kind: Option<String>,
+    /// The token profiles the principal may store, for the token method;
+    /// empty for the others.
+    pub(super) token_profiles: Vec<TokenProfileView>,
     /// The OAuth registration, for the OAuth method.
     pub(super) registration: Option<String>,
     /// What is known about revoking the principal's ended families of that
@@ -154,32 +164,49 @@ pub(super) fn selection<'a>(
         .map(|config| agent_access_core::select(config, kind))
 }
 
-/// The token profile and its credential kind when `connection` selects the
-/// token method for `kind`.
+/// The token profiles `connection` accepts from a principal of `kind`,
+/// when it selects the token method for that kind.
 pub(super) fn token_selection(
     runtime: &BrokerRuntime,
     connection: &str,
     kind: Option<PrincipalKind>,
-) -> Option<(String, String)> {
-    let Some(Selection::Token(_)) = selection(runtime, connection, kind) else {
-        return None;
-    };
-    let (profile, credential_kind) = runtime.connection_token_profile(connection)?;
-    Some((profile.to_string(), credential_kind.to_string()))
+) -> Option<Vec<ConnectionTokenProfile>> {
+    runtime.connection_token_profiles(connection, kind)
 }
 
-/// The input schema of `connection`'s token profile.
+/// The input schema of a token of `profile` for `connection`: its fields
+/// come from the profile's credential kind.
 pub(super) fn input_schema(
     runtime: &BrokerRuntime,
     connection: &str,
+    profile: &ConnectionTokenProfile,
 ) -> Option<CredentialInputSchema> {
-    let (profile, credential_kind) = runtime.connection_token_profile(connection)?;
     agent_access_core::credential_input_schema(
         connection,
         &display_name(runtime, connection),
-        profile,
-        credential_kind,
+        &profile.profile,
+        profile.credential_kind,
     )
+}
+
+/// The views of `profiles`, each with its input schema; a profile whose
+/// kind has no input form is left out.
+pub(super) fn token_profile_views(
+    runtime: &BrokerRuntime,
+    connection: &str,
+    profiles: &[ConnectionTokenProfile],
+) -> Vec<TokenProfileView> {
+    profiles
+        .iter()
+        .filter_map(|profile| {
+            Some(TokenProfileView {
+                profile: profile.profile.clone(),
+                label: profile.label.clone(),
+                credential_kind: profile.credential_kind.to_string(),
+                input_schema: input_schema(runtime, connection, profile)?,
+            })
+        })
+        .collect()
 }
 
 /// The setup target of `connection` for a principal of `kind` with the
@@ -191,17 +218,18 @@ pub(super) fn target(
     kind: Option<PrincipalKind>,
     entitled: &[String],
 ) -> Option<ConnectionTarget> {
-    let (profile, credential_kind) = token_selection(runtime, connection, kind)?;
-    let input_schema = input_schema(runtime, connection)?;
+    let profiles = token_selection(runtime, connection, kind)?;
+    let token_profiles = token_profile_views(runtime, connection, &profiles);
+    if token_profiles.is_empty() {
+        return None;
+    }
     let (consumers, other_consumers) = consumer_view(runtime, connection, entitled);
     Some(ConnectionTarget {
         connection: connection.to_string(),
         display_name: display_name(runtime, connection),
         consumers,
         other_consumers,
-        profile,
-        credential_kind,
-        input_schema,
+        token_profiles,
     })
 }
 
@@ -217,16 +245,18 @@ pub(super) fn connection_ids(runtime: &BrokerRuntime) -> Vec<String> {
 
 /// The `(connection, profile)` pairs whose `(connection, default)` row is
 /// active for a principal of `kind`: the connections selecting the token
-/// method for that kind, with their token profile.
+/// method for that kind, with each token profile their list accepts.
 pub(super) fn active_token_rows(
     runtime: &BrokerRuntime,
     kind: Option<PrincipalKind>,
 ) -> BTreeSet<(String, String)> {
     connection_ids(runtime)
         .into_iter()
-        .filter_map(|connection| {
-            let (profile, _) = token_selection(runtime, &connection, kind)?;
-            Some((connection, profile))
+        .flat_map(|connection| {
+            token_selection(runtime, &connection, kind)
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |profile| (connection.clone(), profile.profile))
         })
         .collect()
 }
@@ -241,14 +271,28 @@ pub(super) fn is_active_row(
 }
 
 /// Active token metadata keyed by its connection: the stored `service` and
-/// `name` are replaced by `connection`.
-pub(super) fn connection_credential(credential: CredentialMetadata) -> Value {
+/// `name` are replaced by `connection`, and its profile's `label` is added.
+pub(super) fn connection_credential(
+    runtime: &BrokerRuntime,
+    credential: CredentialMetadata,
+) -> Value {
     let connection = credential.service.clone();
-    let mut value = json!(credential);
+    let mut value = stored_credential(runtime, credential);
     if let Some(object) = value.as_object_mut() {
         object.remove("service");
         object.remove("name");
         object.insert("connection".to_string(), json!(connection));
+    }
+    value
+}
+
+/// A stored row's metadata with the `label` its connection's consumers
+/// declare for its profile, or `null`.
+pub(super) fn stored_credential(runtime: &BrokerRuntime, credential: CredentialMetadata) -> Value {
+    let label = runtime.connection_profile_label(&credential.service, &credential.profile);
+    let mut value = json!(credential);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("label".to_string(), json!(label));
     }
     value
 }
@@ -266,7 +310,8 @@ pub(super) fn audit_target(principal: &str, connection: &str) -> Value {
 #[serde(rename_all = "camelCase")]
 pub(super) struct CredentialList {
     pub(super) connections: Vec<ConnectionRow>,
-    pub(super) retained: Vec<CredentialMetadata>,
+    /// The retained rows' metadata, each with its profile's label.
+    pub(super) retained: Vec<Value>,
 }
 
 /// `identity`'s credential list from its stored `rows`: every connection
@@ -324,24 +369,29 @@ pub(super) fn credential_list(
             continue;
         }
         let (consumers, other_consumers) = consumer_view(runtime, &connection, &entitled);
-        let token = (method == ConnectionMethod::Token)
-            .then(|| token_selection(runtime, &connection, kind))
-            .flatten();
+        let token_profiles = match selection {
+            Selection::Token(_) => token_selection(runtime, &connection, kind)
+                .map(|profiles| token_profile_views(runtime, &connection, &profiles))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         listed.push(ConnectionRow {
             display_name: display_name(runtime, &connection),
             connection,
             method,
             consumers,
             other_consumers,
-            profile: token.as_ref().map(|(profile, _)| profile.clone()),
-            credential_kind: token.map(|(_, credential_kind)| credential_kind),
+            token_profiles,
             registration,
             remote_revocation,
-            credential: credential.map(connection_credential),
+            credential: credential.map(|credential| connection_credential(runtime, credential)),
         });
     }
     CredentialList {
         connections: listed,
-        retained,
+        retained: retained
+            .into_iter()
+            .map(|credential| stored_credential(runtime, credential))
+            .collect(),
     }
 }

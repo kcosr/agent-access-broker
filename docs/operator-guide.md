@@ -1381,8 +1381,8 @@ deploying it:
 
 | Before | After | Stored data | Action |
 | --- | --- | --- | --- |
-| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` other than an Atlassian product profile, and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `token_profile = P`, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
-| Jira or Confluence per-user credentials with a product profile: `jira-cloud-api-token`, `confluence-cloud-api-token`, `jira-bearer-token` or `confluence-bearer-token` | `[credentials.connections.atlassian]` with `token_profile = "atlassian-api-token"`, named by `[credentials.per_user.jira]` and `[credentials.per_user.confluence]`; through the Atlassian gateway, one connection per product with `token_profile = "atlassian-bearer-token"` | Tokens under the product profiles are not read, and stay listed for deletion | People store their Atlassian token once, one token where they stored two; administrators re-provision service accounts' tokens |
+| `[credentials.per_user.<svc>]` with `type = "managed_store"`, `profile = P` other than an Atlassian product profile, and `credential_name` `default` or unset | `[credentials.connections.<svc>]` with `token_profiles = ["P"]`, or no list when `P` is the only type its services accept, and `[credentials.per_user.<svc>]` with `type = "connection"` and `connection = "<svc>"` | Tokens read unchanged | None |
+| Jira or Confluence per-user credentials with a product profile: `jira-cloud-api-token`, `confluence-cloud-api-token`, `jira-bearer-token` or `confluence-bearer-token` | `[credentials.connections.atlassian]` listing `"atlassian-api-token"` in `token_profiles` (or no list without a `cloud_id`), named by `[credentials.per_user.jira]` and `[credentials.per_user.confluence]`; through the Atlassian gateway, one connection per product listing `"atlassian-bearer-token"` | Tokens under the product profiles are not read, and stay listed for deletion | People store their Atlassian token once, one token where they stored two; administrators re-provision service accounts' tokens |
 | `type = "managed_store"` with another `credential_name` | As above | Tokens under the other name are not read | People store their token again; administrators re-provision service accounts' |
 | `type = "oauth"` with `provider = R` and `profile = Q` | `[credentials.connections.<svc>]` with `oauth = { registration = "R", profile = "Q" }` | OAuth connections unchanged, because the registration is unchanged | None |
 | Separate `gitlab` and `gitlab_git` per-user credentials | One `gitlab` connection both name, with the gateway's `upstream_token_auth = { scheme = "basic", username = "oauth2" }` | `gitlab` tokens read; `gitlab_git` tokens not read | People who stored only a Git token store a GitLab token; administrators re-provision service accounts that had only Git tokens |
@@ -1391,8 +1391,10 @@ deploying it:
 
 Jira and Confluence declare only the vendor-level Atlassian profiles
 `atlassian-api-token` (an account email and classic API token, sent as Basic to
-the site) and `atlassian-bearer-token` (a service account's scoped token, sent
-through the Atlassian gateway). `config validate` rejects a connection naming a
+the site), `atlassian-scoped-api-token` (an account email and scoped API token,
+sent as Basic through the Atlassian gateway) and `atlassian-bearer-token` (a
+service account's bearer token, sent through the Atlassian gateway); see
+[connection token types](#connection-token-types). `config validate` rejects a connection naming a
 product profile and lists the profiles its services accept. Classic tokens are
 account-wide, so one `atlassian` connection serves both products. Introduce it
 under that new ID: the product rows then stay untouched until deleted, which
@@ -1406,11 +1408,14 @@ users start consent again, and stored OAuth connections are unaffected. A connec
 equal an imported service ID or a configured service or gateway that does not
 use it, so choose new IDs accordingly.
 
-A principal's kind now selects each connection's method. A connection with only
-`token_profile` behaves as the per-service token did, for every kind of
-principal. Adding `oauth` to a connection later moves people to OAuth: their
-stored tokens for it stay stored but are no longer read, and remain listed for
-deletion, while service accounts and `system` principals keep using tokens.
+A principal's kind now selects each connection's method. A connection whose
+`token_profiles` lists one profile, or that implies it, behaves as the
+per-service token did, for every kind of principal. Adding `oauth` to a
+connection later moves people to OAuth: their stored tokens for it stay stored
+but are no longer read, and remain listed for deletion, while service accounts
+and `system` principals keep using tokens of `token_profiles`. No type is
+implied beside `oauth`, so a connection that relied on its implicit type lists
+it when `oauth` is added.
 Stored tokens are not bound to an upstream: changing the base URL of a
 connection's services sends the existing tokens to the new host, as changing a
 provider's base URL always has.
@@ -1446,9 +1451,79 @@ needs the backup taken before it.
   profile and secret. Deleting unselected tokens removes them, and reconnecting
   replaces an OAuth connection's tokens. Restore the backup, or have people store
   their tokens again.
-- When a connection needs a different token profile than the tokens stored
-  under its service, introduce it under a new connection ID. The old tokens then
-  stay untouched until you delete them, which keeps rollback cheap.
+- When a connection moves to a different token profile, listing both profiles
+  during the change keeps existing tokens usable until each one is replaced. A
+  connection holds one token per principal, so saving the new type replaces the
+  old token in place, and that token is not kept for rollback. To keep the old
+  tokens untouched until you delete them, introduce the new profile under a new
+  connection ID instead.
+
+### Connection token types
+
+A credential connection lists the token profiles (token types) it accepts in
+`token_profiles`, which applies to people when the connection has no `oauth`
+and to service accounts and `system` principals unless
+`service_account_token_profiles` overrides it. A connection without `oauth`
+whose services accept only one type needs no list: that
+[implicit type](configuration.md#the-implicit-token-type) applies to everyone. The
+single `token_profile` key is removed and the new binary rejects it, so rewrite
+each connection before deploying it:
+
+| Before | After |
+| --- | --- |
+| `token_profile = P`, no `oauth` | `token_profiles = ["P"]`, or nothing when `P` is the connection's only possible type (such as `gitlab-access-token`, or `atlassian-api-token` without a `cloud_id`) |
+| `token_profile = P` with `oauth` | `token_profiles = ["P"]` (people use OAuth) |
+| `oauth` only | Unchanged |
+| Atlassian `cloud_id` that is not a UUID | Fix it or remove it: `cloud_id` must be a UUID whenever it is set |
+| Atlassian allowlist that does not cover an API base its credentials use | Add the base (see [route coverage](configuration.md#providersjira)) |
+| Jira and Confluence sharing a token connection with different `cloud_id` values | Make the cloud IDs agree, or give each product its own connection |
+| A Git gateway sharing a connection that lists an Atlassian profile | Give the Git gateway its own connection |
+| Scripts and clients reading `profile`, `credentialKind` or `inputSchema` on `GET /v1/credentials/targets` targets and `GET /v1/credentials` connection rows, or the administrator equivalents | Read `tokenProfiles[]`: each accepted profile with its `label`, `credentialKind` and `inputSchema` |
+| CLI scripts running `credentials put` or `admin credentials put` | Add `--profile <profile>` where the connection accepts several types |
+
+`service_account_token_profiles` requires `token_profiles` and is rejected
+beside `oauth`, where `token_profiles` already applies only to service accounts
+and `system` principals. No type is implied beside `oauth`. A connection that
+relies on its implicit type fails validation when a change gives its services
+another possible type, such as setting an Atlassian `cloud_id`; list the
+accepted types then. There is no managed-store migration. Stored tokens, credential rights
+and OAuth connections are unchanged, and a token is read when its owner's list
+accepts the profile it was stored as. A stored token whose type the owner's list
+does not accept is kept, listed as retained and never read; listing the type
+again uses it without re-entry. Service accounts and `system` principals share
+one list, so changing a principal between those kinds keeps its token usable.
+
+To move service accounts from one token type to another, list both types in
+the list they use (`token_profiles`, or `service_account_token_profiles` where
+it overrides it) during the move: each service account keeps
+working with its stored type until an administrator stores the new one, which
+replaces it in place. Then remove the old type; tokens still of it are retained
+for review and deletion.
+
+**Atlassian routes follow the token type.** Jira and Confluence no longer have
+a provider-wide gateway mode switched on by `api.atlassian.com` in the
+allowlist. Each credential takes its type's route: classic API tokens the
+tenant host; scoped API tokens (`atlassian-scoped-api-token`, new),
+service-account tokens and OAuth the Atlassian gateway, which `cloud_id`
+enables. People on OAuth may therefore sit beside service accounts' classic
+tokens, and classic and service-account tokens may coexist during a move
+between them. Validation instead checks that the allowlist covers every API
+base each configured credential uses on its route, which is new for site-only
+deployments: an allowlist that misses a base, such as Confluence's
+`wiki/api/v2/`, now fails `config validate` where those requests already
+failed at run time. Allow `api.atlassian.com` for gateway credentials, the
+tenant for classic tokens and Atlassian's media host for attachment downloads.
+After the upgrade, outstanding Jira and Confluence list and search
+continuations are refused once, because their route binding changed; repeat
+the request without the token. Confluence draft handles keep working, except
+gateway (bearer or OAuth) handles minted by 0.2.0 under a non-canonical
+`cloud_id` spelling, which were already refused after the cloud ID became
+canonical.
+
+Rollback needs the previous binary and its previous configuration. Tokens
+stored with a type the previous configuration does not name are listed there as
+retained and not used, and a token replaced in place by another type is not
+restored.
 
 ### GitLab remote revocation
 

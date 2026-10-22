@@ -242,6 +242,7 @@ async fn fixture() -> Fixture {
             path: None,
             read_only: None,
             connection: None,
+            profile: None,
         },
     );
     // Grants name the provider fixture's actions, so they are created

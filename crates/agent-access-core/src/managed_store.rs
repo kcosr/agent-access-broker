@@ -4313,14 +4313,15 @@ impl ManagedStore {
         owner_principal_id: &str,
         service: &str,
         name: &str,
-        expected_profile: &str,
+        accepted_profiles: &[String],
     ) -> Result<ExecutionCredential, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
-        validate_profile(expected_profile)?;
+        validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        let credential = execution_credential_from_encrypted_row(key_ring, &row, expected_profile)?;
+        let credential =
+            execution_credential_from_encrypted_row(key_ring, &row, accepted_profiles)?;
         conn.execute(
             "UPDATE credentials SET last_used_at = ?2 WHERE credential_id = ?1",
             params![row.credential_id, now_string()],
@@ -4337,14 +4338,14 @@ impl ManagedStore {
         owner_principal_id: &str,
         service: &str,
         name: &str,
-        expected_profile: &str,
+        accepted_profiles: &[String],
     ) -> Result<(), ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
-        validate_profile(expected_profile)?;
+        validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        execution_credential_from_encrypted_row(key_ring, &row, expected_profile).map(drop)
+        execution_credential_from_encrypted_row(key_ring, &row, accepted_profiles).map(drop)
     }
 
     /// The caller's personal credential as a command import receives it,
@@ -4356,14 +4357,14 @@ impl ManagedStore {
         owner_principal_id: &str,
         service: &str,
         name: &str,
-        expected_profile: &str,
+        accepted_profiles: &[String],
     ) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
-        validate_profile(expected_profile)?;
+        validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        let credential = command_credential_from_encrypted_row(key_ring, &row, expected_profile)?;
+        let credential = command_credential_from_encrypted_row(key_ring, &row, accepted_profiles)?;
         conn.execute(
             "UPDATE credentials SET last_used_at = ?2 WHERE credential_id = ?1",
             params![row.credential_id, now_string()],
@@ -4381,12 +4382,12 @@ impl ManagedStore {
         owner_principal_id: &str,
         service: &str,
         name: &str,
-        expected_profile: &str,
+        accepted_profiles: &[String],
         target: &CredentialVerificationTarget,
     ) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
-        validate_profile(expected_profile)?;
+        validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
         if row.credential_id != target.credential_id
@@ -4394,7 +4395,7 @@ impl ManagedStore {
         {
             return Err(ManagedStoreError::VersionConflict);
         }
-        command_credential_from_encrypted_row(key_ring, &row, expected_profile)
+        command_credential_from_encrypted_row(key_ring, &row, accepted_profiles)
     }
 
     pub fn resolve_user_credential_for_verification(
@@ -4403,17 +4404,18 @@ impl ManagedStore {
         owner_principal_id: &str,
         service: &str,
         name: &str,
-        expected_profile: &str,
+        accepted_profiles: &[String],
         purpose: CredentialManagementPurpose,
     ) -> Result<CredentialVerificationCandidate, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
-        validate_profile(expected_profile)?;
+        validate_profiles(accepted_profiles)?;
         let mut connection = self.connection.lock().unwrap();
         let conn = connection.transaction().map_err(sql_unavailable)?;
         purpose.check_active_owner(&conn, owner_principal_id)?;
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        let credential = execution_credential_from_encrypted_row(key_ring, &row, expected_profile)?;
+        let credential =
+            execution_credential_from_encrypted_row(key_ring, &row, accepted_profiles)?;
         Ok(CredentialVerificationCandidate {
             credential,
             target: CredentialVerificationTarget {
@@ -4429,7 +4431,7 @@ impl ManagedStore {
         owner_principal_id: &str,
         service: &str,
         name: &str,
-        expected_profile: &str,
+        accepted_profiles: &[String],
         purpose: CredentialManagementPurpose,
     ) -> Result<CredentialMetadata, ManagedStoreError> {
         let candidate = self.resolve_user_credential_for_verification(
@@ -4437,7 +4439,7 @@ impl ManagedStore {
             owner_principal_id,
             service,
             name,
-            expected_profile,
+            accepted_profiles,
             purpose,
         )?;
         self.mark_user_credential_verified_if_current(&candidate.target, "local_verified", purpose)
@@ -6770,6 +6772,16 @@ fn validate_profile(profile: &str) -> Result<(), ManagedStoreError> {
     } else {
         Err(input_invalid("credential profile is invalid"))
     }
+}
+
+/// The profiles a read accepts: at least one, each a valid profile.
+fn validate_profiles(profiles: &[String]) -> Result<(), ManagedStoreError> {
+    if profiles.is_empty() {
+        return Err(input_invalid("credential profile is invalid"));
+    }
+    profiles
+        .iter()
+        .try_for_each(|profile| validate_profile(profile))
 }
 
 fn validate_credential_verification_status(status: &str) -> Result<(), ManagedStoreError> {
@@ -9152,9 +9164,9 @@ fn encrypted_credential_from_row(
 fn execution_credential_from_encrypted_row(
     key_ring: &CredentialKeyRing,
     row: &EncryptedCredentialRow,
-    expected_profile: &str,
+    accepted_profiles: &[String],
 ) -> Result<ExecutionCredential, ManagedStoreError> {
-    check_usable_encrypted_row(row, expected_profile)?;
+    check_usable_encrypted_row(row, accepted_profiles)?;
     decrypt_execution_credential(key_ring, row)
 }
 
@@ -9163,26 +9175,27 @@ fn execution_credential_from_encrypted_row(
 fn command_credential_from_encrypted_row(
     key_ring: &CredentialKeyRing,
     row: &EncryptedCredentialRow,
-    expected_profile: &str,
+    accepted_profiles: &[String],
 ) -> Result<crate::imports::CommandCredential, ManagedStoreError> {
-    check_usable_encrypted_row(row, expected_profile)?;
+    check_usable_encrypted_row(row, accepted_profiles)?;
     let aad = credential_aad(row);
     let secret = key_ring.decrypt(&row.key_id, &row.secret_nonce, &row.secret_ciphertext, &aad)?;
     command_credential_from_secret(&row.credential_kind, secret)
 }
 
-/// A stored row execution may use: enabled, of the configured profile and
-/// backend, with a valid secret reference and version, and not expired.
+/// A stored row execution may use: enabled, of a profile the selected list
+/// accepts and of the supported backend, with a valid secret reference and
+/// version, and not expired. The row is then lent as its own profile.
 fn check_usable_encrypted_row(
     row: &EncryptedCredentialRow,
-    expected_profile: &str,
+    accepted_profiles: &[String],
 ) -> Result<(), ManagedStoreError> {
     if row.status == "disabled" {
         return Err(ManagedStoreError::CredentialNotFound);
     }
-    if row.profile != expected_profile {
+    if !accepted_profiles.contains(&row.profile) {
         return Err(ManagedStoreError::CredentialInvalid(
-            "stored credential profile does not match configured profile".to_string(),
+            "stored credential profile is not one the configuration accepts".to_string(),
         ));
     }
     if row.secret_backend != SQLITE_ENCRYPTED_BACKEND {
@@ -9216,13 +9229,17 @@ fn credential_aad(row: &EncryptedCredentialRow) -> CredentialAad {
     }
 }
 
+/// The row's credential, lent as the row's own stored token profile, so
+/// execution, both lookup phases and verification present it as stored.
 fn decrypt_execution_credential(
     key_ring: &CredentialKeyRing,
     row: &EncryptedCredentialRow,
 ) -> Result<ExecutionCredential, ManagedStoreError> {
     let aad = credential_aad(row);
     let secret = key_ring.decrypt(&row.key_id, &row.secret_nonce, &row.secret_ciphertext, &aad)?;
-    execution_credential_from_secret(&row.credential_kind, secret)
+    execution_credential_from_secret(&row.credential_kind, secret).map(|credential| {
+        agent_access_provider::host::credential_with_profile(credential, row.profile.clone())
+    })
 }
 
 fn collect_rows<T>(
@@ -9343,7 +9360,17 @@ use sqlite_support::sqlite_sidecar_paths;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::{basic_credential, bearer_credential};
+    use agent_access_provider::test_support::{
+        basic_credential, bearer_credential, credential_with_profile,
+    };
+
+    /// The Jira credential the test rows store, lent as their profile.
+    fn jira_cloud_credential(token: &str) -> ExecutionCredential {
+        credential_with_profile(
+            basic_credential("alice@example.com", token),
+            "jira-cloud-api-token",
+        )
+    }
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/group_auto_enrollment_tests.rs");
@@ -13599,17 +13626,23 @@ PRAGMA foreign_keys = ON;
         assert!(metadata.last_verification_attempt_at.is_none());
         assert!(metadata.last_verification_error_code.is_none());
         let credential = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
+            .resolve_user_credential(
+                &ring,
+                "alice",
+                "jira",
+                "default",
+                &["jira-cloud-api-token".to_string()],
+            )
             .unwrap();
         assert_eq!(credential.kind().as_str(), "basic_api_token");
-        assert_eq!(credential, basic_credential("alice@example.com", "pat"));
+        assert_eq!(credential, jira_cloud_credential("pat"));
         let verified = store
             .verify_user_credential(
                 &ring,
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
@@ -13626,7 +13659,7 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
@@ -13662,7 +13695,7 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
@@ -13770,7 +13803,7 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
@@ -13789,9 +13822,15 @@ PRAGMA foreign_keys = ON;
         assert!(second.last_verification_error_code.is_none());
 
         let credential = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
+            .resolve_user_credential(
+                &ring,
+                "alice",
+                "jira",
+                "default",
+                &["jira-cloud-api-token".to_string()],
+            )
             .unwrap();
-        assert_eq!(credential, basic_credential("alice@example.com", "new-pat"));
+        assert_eq!(credential, jira_cloud_credential("new-pat"));
     }
 
     #[test]
@@ -13882,7 +13921,7 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
@@ -13901,9 +13940,15 @@ PRAGMA foreign_keys = ON;
         assert_eq!(after.updated_at, before.updated_at);
         assert_eq!(after.updated_by, before.updated_by);
         let credential = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
+            .resolve_user_credential(
+                &ring,
+                "alice",
+                "jira",
+                "default",
+                &["jira-cloud-api-token".to_string()],
+            )
             .unwrap();
-        assert_eq!(credential, basic_credential("alice@example.com", "pat"));
+        assert_eq!(credential, jira_cloud_credential("pat"));
         let verified = store
             .mark_user_credential_verified_if_current(
                 &verification_candidate.target,
@@ -13970,7 +14015,13 @@ PRAGMA foreign_keys = ON;
             .unwrap();
         }
         let error = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
+            .resolve_user_credential(
+                &ring,
+                "alice",
+                "jira",
+                "default",
+                &["jira-cloud-api-token".to_string()],
+            )
             .unwrap_err();
         assert!(matches!(error, ManagedStoreError::CredentialDecryptFailed));
 
@@ -13995,7 +14046,13 @@ PRAGMA foreign_keys = ON;
             .unwrap();
         }
         let error = store
-            .resolve_user_credential(&ring, "alice", "jira", "default", "jira-cloud-api-token")
+            .resolve_user_credential(
+                &ring,
+                "alice",
+                "jira",
+                "default",
+                &["jira-cloud-api-token".to_string()],
+            )
             .unwrap_err();
         assert!(matches!(error, ManagedStoreError::CredentialDecryptFailed));
     }
@@ -14145,7 +14202,7 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token"
+                &["jira-cloud-api-token".to_string()]
             ),
             Err(ManagedStoreError::CredentialExpired)
         ));
@@ -14210,14 +14267,11 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
-        assert_eq!(
-            old_candidate.credential,
-            basic_credential("alice@example.com", "old-pat")
-        );
+        assert_eq!(old_candidate.credential, jira_cloud_credential("old-pat"));
         let verified = store
             .mark_user_credential_verified_if_current(
                 &old_candidate.target,
@@ -14286,13 +14340,13 @@ PRAGMA foreign_keys = ON;
                 "alice",
                 "jira",
                 "default",
-                "jira-cloud-api-token",
+                &["jira-cloud-api-token".to_string()],
                 crate::CredentialManagementPurpose::Administrative,
             )
             .unwrap();
         assert_eq!(
             current_candidate.credential,
-            basic_credential("alice@example.com", "new-pat")
+            jira_cloud_credential("new-pat")
         );
         let current_verified = store
             .mark_user_credential_verified_if_current(

@@ -219,6 +219,16 @@ pub fn bearer_credential(token: &str) -> ExecutionCredential {
     ExecutionCredential::bearer(token.to_owned())
 }
 
+/// `credential` stored or configured as the token profile `profile`, as the
+/// host lends a credential connection's token or a configured credential
+/// that names a profile. Credentials compare their profiles too.
+pub fn credential_with_profile(
+    credential: ExecutionCredential,
+    profile: &str,
+) -> ExecutionCredential {
+    credential.with_profile(profile.to_owned())
+}
+
 /// Runs `future` as the invocation hook of `service`'s `action`, as the host
 /// runs a provider's invoke, so upstream traces it starts are checked against
 /// that hook. The backend's registered domain reasons are not included.

@@ -95,8 +95,13 @@ Review the breadth of the delegation before saving it. Use the
    to retire it. Changing its restrictions requires a replacement token.
 4. Open **Credentials** to inspect the account's credential connections that use
    a stored token, and any stored credentials the configuration no longer
-   selects (**Not used**). Replace or delete a token when its purpose changes;
-   provision a service account's tokens here. Delete unused rows by ID.
+   selects (**Not used**), such as a token of a type its connection no longer
+   accepts for this kind of account. Replace or delete a token when its purpose
+   changes; provision a service account's tokens here. When a connection
+   accepts several token types for the account, choose one in **Token type**
+   before entering the fields it asks for; a replacement starts on the stored
+   token's type, and choosing another replaces the token with one of that type.
+   Delete unused rows by ID.
    A person's OAuth connections are listed read-only, one row per OAuth
    registration marked **Managed by user**, with the services using it. Its
    drawer shows the remote revocation of the connections the Broker ended:

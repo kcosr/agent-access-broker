@@ -212,6 +212,7 @@ pub fn agent_access_provider::host::basic_credential(alloc::string::String, allo
 pub fn agent_access_provider::host::bearer_credential(alloc::string::String) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::build_context<'a>(&'a agent_access_provider::ProviderLimits, &'a dyn agent_access_provider::host::UpstreamClientFactory, agent_access_provider::ProviderAttributionConfig, core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> agent_access_provider::BuildContext<'a>
 pub fn agent_access_provider::host::configure_client_profile(reqwest::async_impl::client::ClientBuilder, agent_access_provider::ClientProfile, &agent_access_provider::ProviderLimits) -> reqwest::async_impl::client::ClientBuilder
+pub fn agent_access_provider::host::credential_with_profile(agent_access_provider::ExecutionCredential, impl core::convert::Into<alloc::string::String>) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::delegated_binding_id([u8; 32]) -> agent_access_provider::DelegatedBindingId
 pub fn agent_access_provider::host::delegated_credential(alloc::sync::Arc<dyn agent_access_provider::DelegatedLease>) -> agent_access_provider::DelegatedCredential
 pub fn agent_access_provider::host::hook_context(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::HookPhase, &'static [&'static agent_access_provider::ProviderReasonDefinition]) -> agent_access_provider::host::HookContext
@@ -831,6 +832,32 @@ impl core::marker::Unpin for agent_access_provider::CredentialPlacementError
 impl core::marker::UnsafeUnpin for agent_access_provider::CredentialPlacementError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialPlacementError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialPlacementError
+#[non_exhaustive] pub enum agent_access_provider::CredentialSource<'a>
+pub agent_access_provider::CredentialSource::SecretStore
+#[non_exhaustive] pub agent_access_provider::CredentialSource::Static
+pub agent_access_provider::CredentialSource::Static::kind: &'a str
+pub agent_access_provider::CredentialSource::Static::profile: core::option::Option<&'a str>
+impl<'a> agent_access_provider::CredentialSource<'a>
+pub fn agent_access_provider::CredentialSource<'a>::kind(&self) -> core::option::Option<&'a str>
+pub fn agent_access_provider::CredentialSource<'a>::profile(&self) -> core::option::Option<&'a str>
+pub const fn agent_access_provider::CredentialSource<'a>::static_kind(&'a str) -> Self
+pub const fn agent_access_provider::CredentialSource<'a>::static_profile(&'a str, &'a str) -> Self
+impl<'a> core::clone::Clone for agent_access_provider::CredentialSource<'a>
+pub fn agent_access_provider::CredentialSource<'a>::clone(&self) -> agent_access_provider::CredentialSource<'a>
+impl<'a> core::cmp::Eq for agent_access_provider::CredentialSource<'a>
+impl<'a> core::cmp::PartialEq for agent_access_provider::CredentialSource<'a>
+pub fn agent_access_provider::CredentialSource<'a>::eq(&self, &agent_access_provider::CredentialSource<'a>) -> bool
+impl<'a> core::fmt::Debug for agent_access_provider::CredentialSource<'a>
+pub fn agent_access_provider::CredentialSource<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for agent_access_provider::CredentialSource<'a>
+impl<'a> core::marker::StructuralPartialEq for agent_access_provider::CredentialSource<'a>
+impl<'a> core::marker::Freeze for agent_access_provider::CredentialSource<'a>
+impl<'a> core::marker::Send for agent_access_provider::CredentialSource<'a>
+impl<'a> core::marker::Sync for agent_access_provider::CredentialSource<'a>
+impl<'a> core::marker::Unpin for agent_access_provider::CredentialSource<'a>
+impl<'a> core::marker::UnsafeUnpin for agent_access_provider::CredentialSource<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::CredentialSource<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialSource<'a>
 pub enum agent_access_provider::Decision
 pub agent_access_provider::Decision::Allow
 pub agent_access_provider::Decision::Deny
@@ -2280,6 +2307,7 @@ pub fn agent_access_provider::CredentialDescriptor::delegated(self, &'static str
 pub fn agent_access_provider::CredentialDescriptor::profile(self, impl core::convert::Into<alloc::string::String>, &'static str) -> Self
 pub fn agent_access_provider::CredentialDescriptor::service_kinds(self, &[&'static str]) -> Self
 pub fn agent_access_provider::CredentialDescriptor::verification_input(self, &'static str) -> Self
+pub fn agent_access_provider::CredentialDescriptor::with_profile(self, agent_access_provider::CredentialProfile) -> Self
 pub fn agent_access_provider::CredentialDescriptor::without_execution_credential() -> Self
 impl core::clone::Clone for agent_access_provider::CredentialDescriptor
 pub fn agent_access_provider::CredentialDescriptor::clone(&self) -> agent_access_provider::CredentialDescriptor
@@ -2320,9 +2348,13 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Credenti
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::CredentialPlacement
 #[non_exhaustive] pub struct agent_access_provider::CredentialProfile
 pub agent_access_provider::CredentialProfile::kind: &'static str
+pub agent_access_provider::CredentialProfile::label: core::option::Option<alloc::string::String>
 pub agent_access_provider::CredentialProfile::name: alloc::string::String
+pub agent_access_provider::CredentialProfile::route_bound: bool
 impl agent_access_provider::CredentialProfile
 pub fn agent_access_provider::CredentialProfile::new(impl core::convert::Into<alloc::string::String>, &'static str) -> Self
+pub fn agent_access_provider::CredentialProfile::route_bound(self) -> Self
+pub fn agent_access_provider::CredentialProfile::with_label(self, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::CredentialProfile
 pub fn agent_access_provider::CredentialProfile::clone(&self) -> agent_access_provider::CredentialProfile
 impl core::cmp::Eq for agent_access_provider::CredentialProfile
@@ -2460,6 +2492,7 @@ impl agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::ExecutionCredential::authorization(&self) -> agent_access_provider::UpstreamAuthorization
 pub fn agent_access_provider::ExecutionCredential::authorization_as(&self, &agent_access_provider::CredentialPlacement) -> core::result::Result<agent_access_provider::UpstreamAuthorization, agent_access_provider::CredentialPlacementError>
 pub fn agent_access_provider::ExecutionCredential::kind(&self) -> agent_access_provider::StaticCredentialKind
+pub fn agent_access_provider::ExecutionCredential::profile(&self) -> core::option::Option<&str>
 impl core::clone::Clone for agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::ExecutionCredential::clone(&self) -> agent_access_provider::ExecutionCredential
 impl core::fmt::Debug for agent_access_provider::ExecutionCredential
@@ -3766,14 +3799,17 @@ impl core::marker::UnsafeUnpin for agent_access_provider::ServiceCapabilities
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ServiceCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ServiceCapabilities
 #[non_exhaustive] pub struct agent_access_provider::ServiceCredentialKinds<'a>
-pub agent_access_provider::ServiceCredentialKinds::lookup: core::option::Option<&'a str>
-pub agent_access_provider::ServiceCredentialKinds::per_user: core::option::Option<&'a str>
+pub agent_access_provider::ServiceCredentialKinds::lookup: core::option::Option<agent_access_provider::CredentialSource<'a>>
 pub agent_access_provider::ServiceCredentialKinds::per_user_delegated: bool
-pub agent_access_provider::ServiceCredentialKinds::service: core::option::Option<&'a str>
+pub agent_access_provider::ServiceCredentialKinds::per_user_profiles: &'a [agent_access_provider::CredentialProfile]
+pub agent_access_provider::ServiceCredentialKinds::per_user_secret_store: bool
+pub agent_access_provider::ServiceCredentialKinds::service: core::option::Option<agent_access_provider::CredentialSource<'a>>
 impl<'a> agent_access_provider::ServiceCredentialKinds<'a>
-pub fn agent_access_provider::ServiceCredentialKinds<'a>::new(core::option::Option<&'a str>, core::option::Option<&'a str>) -> Self
-pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_lookup(self, core::option::Option<&'a str>) -> Self
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_lookup(self, core::option::Option<agent_access_provider::CredentialSource<'a>>) -> Self
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_per_user_delegated(self, bool) -> Self
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_per_user_profiles(self, &'a [agent_access_provider::CredentialProfile]) -> Self
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_per_user_secret_store(self, bool) -> Self
+pub fn agent_access_provider::ServiceCredentialKinds<'a>::with_service(self, core::option::Option<agent_access_provider::CredentialSource<'a>>) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::ServiceCredentialKinds<'a>
 pub fn agent_access_provider::ServiceCredentialKinds<'a>::clone(&self) -> agent_access_provider::ServiceCredentialKinds<'a>
 impl<'a> core::default::Default for agent_access_provider::ServiceCredentialKinds<'a>
@@ -3802,6 +3838,7 @@ pub fn agent_access_provider::ServiceDescriptor::action(&self, &str) -> core::op
 pub fn agent_access_provider::ServiceDescriptor::action_resource_scope(&self, &str) -> core::option::Option<(&str, &agent_access_provider::ResourceScopeCapabilities)>
 pub fn agent_access_provider::ServiceDescriptor::broker_hosts(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ServiceDescriptor::capabilities(&self) -> agent_access_provider::ServiceCapabilities
+pub fn agent_access_provider::ServiceDescriptor::credential_profile(&self, &str) -> core::option::Option<&agent_access_provider::CredentialProfile>
 pub fn agent_access_provider::ServiceDescriptor::credential_profile_kind(&self, &str) -> core::option::Option<&'static str>
 pub fn agent_access_provider::ServiceDescriptor::credential_verification_inputs(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ServiceDescriptor::is_gateway(&self) -> bool
@@ -4191,6 +4228,7 @@ pub fn agent_access_provider::StableSigningKey::hmac_base64url(&self, &[u8], &[u
 pub fn agent_access_provider::attachment_upload_plan(&[&str], core::option::Option<usize>) -> agent_access_provider::MultipartUploadSpec
 pub fn agent_access_provider::attribution_audit_applied(core::option::Option<&serde_json::value::Value>) -> bool
 pub fn agent_access_provider::attribution_skip_target_absent_audit() -> serde_json::value::Value
+pub fn agent_access_provider::base_covered_by_patterns(&url::Url, &[alloc::string::String]) -> bool
 pub fn agent_access_provider::complete_upstream_trace(&mut reqwest::async_impl::response::Response, core::option::Option<agent_access_provider::ProviderReason>)
 pub fn agent_access_provider::current_correlation_context() -> core::option::Option<agent_access_provider::CorrelationContext>
 pub fn agent_access_provider::current_provider_action() -> core::option::Option<(alloc::string::String, alloc::string::String)>
@@ -4268,6 +4306,7 @@ enum agent_access_provider::ContinuationLifetime: non-exhaustive
 enum agent_access_provider::ContinuationOwner: non-exhaustive
 enum agent_access_provider::CredentialMode: exhaustive
 enum agent_access_provider::CredentialPlacementError: non-exhaustive
+enum agent_access_provider::CredentialSource: non-exhaustive
 enum agent_access_provider::Decision: exhaustive
 enum agent_access_provider::DelegatedAccessError: non-exhaustive
 enum agent_access_provider::EgressDeclaration: non-exhaustive
@@ -4479,6 +4518,7 @@ trait agent_access_provider::presentation::EmbeddedBodyCodec: dyn-compatible
 trait agent_access_provider::presentation::EmbeddedBodyCodec::render: required fn
 trait agent_access_provider::presentation::WholeResultRenderer: dyn-compatible
 trait agent_access_provider::presentation::WholeResultRenderer::render: required fn
+variant agent_access_provider::CredentialSource::Static: named fields, non-exhaustive
 
 // Public dependency packages (semver-compatible lines)
 

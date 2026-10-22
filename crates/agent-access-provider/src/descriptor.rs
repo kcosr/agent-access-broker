@@ -195,8 +195,16 @@ impl CredentialDescriptor {
         self
     }
 
+    /// Declares the managed-store token profile `name` storing `kind`.
     pub fn profile(mut self, name: impl Into<String>, kind: &'static str) -> Self {
         self.profiles.push(CredentialProfile::new(name, kind));
+        self
+    }
+
+    /// Declares `profile`, built with its optional label and route-bound
+    /// flag.
+    pub fn with_profile(mut self, profile: CredentialProfile) -> Self {
+        self.profiles.push(profile);
         self
     }
 }
@@ -224,11 +232,24 @@ impl Default for CredentialDescriptor {
 }
 
 /// A managed-store credential profile and the credential kind it stores.
+///
+/// A credential connection lists the profiles it accepts, and a stored token
+/// keeps the profile it was saved as. The host lends a credential with its
+/// profile ([`crate::ExecutionCredential::profile`]).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialProfile {
     pub name: String,
     pub kind: &'static str,
+    /// The name people see where they choose a token type; management falls
+    /// back to [`Self::name`] when it is unset.
+    pub label: Option<String>,
+    /// Only the declaring provider may present a credential of this profile,
+    /// because the provider decides where it goes. The host never lets a
+    /// Git gateway present one: configuration rejects a connection listing
+    /// it beside a Git gateway consumer, and the gateway refuses it before
+    /// sending.
+    pub route_bound: bool,
 }
 
 impl CredentialProfile {
@@ -236,7 +257,21 @@ impl CredentialProfile {
         Self {
             name: name.into(),
             kind,
+            label: None,
+            route_bound: false,
         }
+    }
+
+    /// Sets the label people see for the profile.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Marks the profile route-bound: only this provider may present it.
+    pub fn route_bound(mut self) -> Self {
+        self.route_bound = true;
+        self
     }
 }
 
@@ -546,11 +581,16 @@ impl ServiceDescriptor {
             .map(|(scope, binding)| (scope.as_str(), binding))
     }
 
-    pub fn credential_profile_kind(&self, profile: &str) -> Option<&'static str> {
+    /// The token profile `profile` this service declares.
+    pub fn credential_profile(&self, profile: &str) -> Option<&CredentialProfile> {
         self.credentials
             .profiles
             .iter()
             .find(|candidate| candidate.name == profile)
+    }
+
+    pub fn credential_profile_kind(&self, profile: &str) -> Option<&'static str> {
+        self.credential_profile(profile)
             .map(|candidate| candidate.kind)
     }
 
@@ -613,6 +653,28 @@ impl ServiceDescriptor {
             errors.push(format!(
                 "service {service} needs a delegated connection description of at most 512 bytes"
             ));
+        }
+        let mut profiles = BTreeSet::new();
+        for profile in &self.credentials.profiles {
+            // One declaration per name: lookups by name return the first,
+            // so a duplicate could not carry a different kind, label or
+            // route binding.
+            if !profiles.insert(profile.name.as_str()) {
+                errors.push(format!(
+                    "service {service} declares token profile {} more than once",
+                    profile.name
+                ));
+            }
+            if profile
+                .label
+                .as_deref()
+                .is_some_and(|label| label.trim().is_empty() || label.len() > 128)
+            {
+                errors.push(format!(
+                    "service {service} token profile {} needs a label of at most 128 bytes",
+                    profile.name
+                ));
+            }
         }
         let mut actions = BTreeSet::new();
         for action in &self.actions {
@@ -1013,6 +1075,52 @@ mod tests {
             assert_eq!(
                 with(description),
                 ["service example needs a delegated connection description of at most 512 bytes"]
+            );
+        }
+    }
+
+    #[test]
+    fn token_profiles_are_declared_once_with_bounded_labels() {
+        let with = |credentials: CredentialDescriptor| {
+            let mut service = service(vec![action("item.view")]);
+            service.credentials = credentials;
+            service.validate().err().unwrap_or_default()
+        };
+        assert_eq!(
+            with(
+                CredentialDescriptor::default()
+                    .profile("site-token", "basic_api_token")
+                    .with_profile(
+                        CredentialProfile::new("routed-token", "bearer_token")
+                            .with_label("Routed token")
+                            .route_bound()
+                    )
+            ),
+            Vec::<String>::new()
+        );
+        // A route-bound duplicate after an unrestricted declaration, or any
+        // other repeat, is rejected rather than shadowed.
+        for duplicate in [
+            CredentialProfile::new("routed-token", "bearer_token").route_bound(),
+            CredentialProfile::new("routed-token", "basic_api_token"),
+            CredentialProfile::new("routed-token", "bearer_token").with_label("Other"),
+        ] {
+            assert_eq!(
+                with(
+                    CredentialDescriptor::default()
+                        .profile("routed-token", "bearer_token")
+                        .with_profile(duplicate)
+                ),
+                ["service example declares token profile routed-token more than once"]
+            );
+        }
+        let too_long: &'static str = Box::leak("x".repeat(129).into_boxed_str());
+        for label in ["", " ", too_long] {
+            assert_eq!(
+                with(CredentialDescriptor::default().with_profile(
+                    CredentialProfile::new("site-token", "basic_api_token").with_label(label)
+                )),
+                ["service example token profile site-token needs a label of at most 128 bytes"]
             );
         }
     }

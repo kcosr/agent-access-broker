@@ -94,10 +94,9 @@ impl BackendConfig for ConfluenceProviderConfig {
             true,
             errors,
         );
-        validate_atlassian_gateway_credential(
-            "confluence",
-            &self.allowed_upstream_hosts,
-            self.cloud_id.as_deref(),
+        validate_atlassian_routes(
+            crate::backend::CONFLUENCE_PRODUCT,
+            &self.site(),
             context.credentials,
             errors,
         );
