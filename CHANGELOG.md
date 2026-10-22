@@ -6,13 +6,37 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- **Atlassian gateway lookup credentials must be bearer tokens.** With the
-  Atlassian gateway enabled (`cloud_id` set and `api.atlassian.com`
-  allowlisted), `credentials.lookup.jira` and `credentials.lookup.confluence`
-  must be `bearer_token`, like the service and personal credentials. A basic
-  lookup credential beside the gateway now fails `config validate`, and a
-  bearer lookup credential requires the gateway. See
-  [credential kinds](docs/configuration.md#credential-connections).
+- **Connections list accepted token types per kind of account.**
+  `token_profile` is replaced by `user_token_profiles` (people) and
+  `service_account_token_profiles` (service accounts and system principals).
+  `user_token_profiles` cannot be set beside `oauth`, because people then use
+  OAuth. The credential targets and list responses report `tokenProfiles[]`
+  instead of a single `profile`, `credentialKind` and `inputSchema`. A put or
+  input schema must name its `profile` when several are accepted. See
+  [connection token types](docs/operator-guide.md#connection-token-types) for
+  the configuration translation.
+- **Jira and Confluence route each credential by its token type.** There is no
+  longer a gateway mode switched on by the allowlist:
+  - Classic API tokens go to the site.
+  - Service-account bearer tokens, the new scoped API tokens and OAuth go
+    through `api.atlassian.com`.
+  - `cloud_id` must be a UUID whenever it is set.
+  - `allowed_upstream_hosts` must cover every API base the configured
+    credentials use.
+  - A token connection shared by Jira and Confluence needs one cloud ID.
+  - A Git gateway cannot share a connection that lists an Atlassian token
+    type.
+  - Outstanding Jira and Confluence list and search continuations are refused
+    once after the upgrade.
+
+  See [Atlassian registration](docs/oauth.md#atlassian-registration).
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+- **SDK: `ServiceCredentialKinds` reports credential sources.** It lists the
+  per-user token profiles (name, kind, route-bound), the delegated flag and a
+  secret-store marker, and the service and lookup sources with their optional
+  profile. The single-kind `per_user` value and `new` are removed, and
+  `UpstreamAuthority::same_instance` also compares the tenant and tenant
+  gateway.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Added
@@ -24,10 +48,28 @@ All notable changes to this project are documented in this file.
   queries and fragments are never logged. See
   [Atlassian connection failures](docs/oauth.md#atlassian-connection-failures).
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
-- **SDK: lookup credential kind.** `ServiceCredentialKinds` reports the kind of
-  `credentials.lookup.<service>` (`lookup`, `with_lookup`), so provider
-  validation can check it.
-  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+- **Several token types per connection.** When a connection accepts more than
+  one type, the person saving a token, or an administrator for a service
+  account, chooses it in the portal or with `--profile` in the CLI. Stored
+  tokens show their type's label. A stored token whose type is no longer
+  accepted is kept as **Not used**, and is used again once the type is
+  accepted again.
+- **Atlassian scoped API tokens and mixed credentials.**
+  - `atlassian-scoped-api-token` stores an account email and a scoped API
+    token, sent through the Atlassian gateway.
+  - People on OAuth can work beside service accounts on classic tokens, and
+    classic and service-account tokens can coexist on one connection.
+  - The Atlassian token types carry labels.
+- **`profile` on `credentials.service` and `credentials.lookup` entries**,
+  naming a token profile the service declares with the entry's kind.
+- **SDK: token profile labels, route-bound profiles and a credential's
+  profile.**
+  - `CredentialDescriptor` profiles take a label and a route-bound flag.
+  - `ExecutionCredential::profile()` reports the stored or configured
+    profile.
+  - `base_covered_by_patterns` checks allowlist coverage of an API base.
+  - The Git gateway refuses a route-bound or undeclared profile before
+    sending.
 
 ### Changed
 
