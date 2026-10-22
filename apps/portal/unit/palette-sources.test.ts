@@ -16,7 +16,7 @@ const imported = (id: string, status: ImportedServiceRecord["status"]): Imported
   status, version: 1, actions: [], slotVersions: {}, createdAt: "", createdBy: "", updatedAt: "", updatedBy: ""
 });
 const credential: ConnectionCredential = {
-  credentialId: "cred-123", ownerPrincipal: "alice", ownerKind: "user", connection: "tracker", profile: "standard", credentialKind: "token",
+  credentialId: "cred-123", ownerPrincipal: "alice", ownerKind: "user", connection: "tracker", profile: "standard", label: null, credentialKind: "token",
   metadata: { confidential: "DO_NOT_INDEX_THIS" }, status: "active", createdAt: "", createdBy: "", updatedAt: "", updatedBy: "", verificationStatus: "upstream_verified", lastVerificationErrorCode: "DO_NOT_INDEX_ERROR"
 };
 const connection: CredentialConnection = {

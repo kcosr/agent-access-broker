@@ -218,7 +218,7 @@ export type CredentialInputSchema = {
   fields: CredentialInputField[];
 };
 
-/** A token profile a connection accepts from the principal, with its input form. */
+/** A token profile (token type) a connection accepts from the principal, with its input form. */
 export type CredentialTokenProfile = {
   profile: string;
   /** The name a consuming service declares; show the profile when null. */
@@ -243,8 +243,6 @@ export type CredentialState = {
   ownerPrincipal: string;
   ownerKind: string;
   profile: string;
-  /** The stored profile's label, when a consumer of its connection declares one. */
-  label?: string | null;
   credentialKind: string;
   metadata: Record<string, unknown>;
   status: string;
@@ -259,15 +257,22 @@ export type CredentialState = {
   lastVerificationErrorCode?: string | null;
 };
 
-/** A stored row with its stored service column and name (administrator lists, retained rows). */
+/** A stored row with its stored service column and name (retained-row deletes). */
 export type CredentialMetadata = CredentialState & { service: string; name: string };
 
+/** The label a consumer of the row's connection declares for its stored profile; show the profile when null. */
+type StoredProfileLabel = { label: string | null };
+
+/** A stored row the configuration no longer selects, as the credential list reports it. */
+export type RetainedCredential = CredentialMetadata & StoredProfileLabel;
+
 /** A connection's active token, keyed by its connection. */
-export type ConnectionCredential = CredentialState & {
-  connection: string;
-  /** The consumer whose probe answered the latest verification; `null` for a local check. */
-  probeService?: string | null;
-};
+export type ConnectionCredential = CredentialState &
+  StoredProfileLabel & {
+    connection: string;
+    /** The consumer whose probe answered the latest verification; `null` for a local check. */
+    probeService?: string | null;
+  };
 
 export type CredentialMethod = "token" | "oauth" | "unavailable";
 
@@ -289,7 +294,7 @@ export type CredentialConnection = {
 /** `GET /v1/credentials`: the caller's connections and the stored rows the configuration no longer selects. */
 export type CredentialList = {
   connections: CredentialConnection[];
-  retained: CredentialMetadata[];
+  retained: RetainedCredential[];
 };
 
 export type CredentialVerificationInput = {

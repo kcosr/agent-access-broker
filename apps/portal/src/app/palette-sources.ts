@@ -5,6 +5,7 @@ import type { ImportedServiceRecord } from "../import-types";
 import { canUseSelfService, canViewAdmin, hasPolicyScope } from "../lib/capabilities";
 import { canViewAudit, credentialStatus, identityDisplayName, policySubjectShortLabel, tokenStatus } from "../lib/helpers";
 import { auditListPath } from "../lib/audit";
+import { tokenTypeName } from "../lib/credentials";
 import { resourceLabel } from "../lib/resource-labels";
 import { resourceTypeLabel, resourceTypePluralLabel, type ResourceTypes } from "../lib/resource-types";
 import { ADMIN_TABS, SELF_TABS, hasAdminSpace } from "./spaces";
@@ -127,9 +128,9 @@ export function entityPaletteSources(data: PaletteEntities, go: Go): PaletteSour
       const credential = connection.credential!;
       return {
         id: `credential-${credential.credentialId}`, label: connection.displayName, icon: "lock",
-        hint: `${credential.profile} · ${credentialStatus(credential)}`,
+        hint: `${tokenTypeName(credential)} · ${credentialStatus(credential)}`,
         // Never index opaque metadata, credential values, or verification error details.
-        keywords: [credential.credentialId, connection.connection, ...connection.consumers.flatMap((consumer) => [consumer.service, consumer.displayName]), credential.profile, credential.credentialKind, credential.status, credentialStatus(credential), "credential"],
+        keywords: [credential.credentialId, connection.connection, ...connection.consumers.flatMap((consumer) => [consumer.service, consumer.displayName]), credential.profile, ...(credential.label ? [credential.label] : []), credential.credentialKind, credential.status, credentialStatus(credential), "credential"],
         onSelect: go(paths.credentials(connection.connection))
       };
     }));

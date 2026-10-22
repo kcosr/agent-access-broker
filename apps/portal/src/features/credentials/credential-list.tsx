@@ -7,9 +7,22 @@
 import { canWriteSubject } from "../../lib/capabilities";
 import { useSession } from "../../app/session";
 import { useEffect, useMemo, useState } from "react";
-import type { CredentialConnection, CredentialList, CredentialMetadata, CredentialTarget, OAuthConnectionTarget } from "../../types";
+import type { ConnectionCredential, CredentialConnection, CredentialList, CredentialMetadata, CredentialTarget, CredentialTokenProfile, OAuthConnectionTarget, RetainedCredential } from "../../types";
 import { MASKED_TEXT_SECURITY_SUPPORTED, credentialStatus, credentialTone, errorMessage } from "../../lib/helpers";
-import { administeredOAuthRegistrations, consumerSummary, oauthRowKey, repositoryConsumers, retainedRowKey, type AdministeredOAuth } from "../../lib/credentials";
+import {
+  administeredOAuthRegistrations,
+  chosenTokenType,
+  connectionTokenType,
+  consumerSummary,
+  initialTokenType,
+  oauthRowKey,
+  repositoryConsumers,
+  retainedRowKey,
+  tokenFormReady,
+  tokenTypeName,
+  tokenTypeValues,
+  type AdministeredOAuth
+} from "../../lib/credentials";
 import { urlParam } from "../../lib/url-state";
 import {
   Badge,
@@ -81,7 +94,7 @@ export type CredentialRow =
   | { kind: "unavailable"; key: string; connection: CredentialConnection }
   | { kind: "oauth"; key: string; oauth: OAuthConnectionTarget }
   | { kind: "administered-oauth"; key: string; oauth: AdministeredOAuth }
-  | { kind: "retained"; key: string; credential: CredentialMetadata };
+  | { kind: "retained"; key: string; credential: RetainedCredential };
 
 function rowName(row: CredentialRow) {
   switch (row.kind) {
@@ -165,21 +178,29 @@ function isSettable(row: CredentialRow) {
   return row.kind === "token" || row.kind === "oauth";
 }
 
-/** A token connection's profile: its stored token's, else the first it accepts. */
-function tokenProfile(connection: CredentialConnection) {
-  return connection.credential?.profile ?? connection.tokenProfiles[0]?.profile ?? "";
-}
-
 function isMissing(row: CredentialRow) {
   if (row.kind === "token") return !row.connection.credential;
   if (row.kind === "oauth") return !oauthConnected(row.oauth);
   return false;
 }
 
-/** The text the filter matches: the row key, name, consumers, and its profile or OAuth registration and connections. */
+/** A token type's profile ID and label, as the filter matches them. */
+function tokenTypeSearchText(entry: { profile: string; label: string | null }) {
+  return `${entry.profile} ${entry.label ?? ""}`;
+}
+
+/**
+ * The text the filter matches: the row key, name, consumers, and its token
+ * types (stored and accepted, by profile and label) or OAuth registration and
+ * connections.
+ */
 function rowSearchText(row: CredentialRow) {
-  const detail =
-    row.kind === "token" ? tokenProfile(row.connection) : row.kind === "retained" ? row.credential.profile : row.kind === "administered-oauth" ? row.oauth.connections.join(" ") : "";
+  let detail = "";
+  if (row.kind === "token") {
+    const { credential, tokenProfiles } = row.connection;
+    detail = [...(credential ? [credential] : []), ...tokenProfiles].map(tokenTypeSearchText).join(" ");
+  } else if (row.kind === "retained") detail = tokenTypeSearchText(row.credential);
+  else if (row.kind === "administered-oauth") detail = row.oauth.connections.join(" ");
   return `${row.key} ${rowName(row)} ${rowConsumers(row)} ${detail}`.toLowerCase();
 }
 
@@ -329,8 +350,8 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         minWidth: "10ch",
         className: "wb-cell-muted",
         cell: (row) => {
-          if (row.kind === "token") return tokenProfile(row.connection);
-          if (row.kind === "retained") return row.credential.profile;
+          if (row.kind === "token") return connectionTokenType(row.connection);
+          if (row.kind === "retained") return tokenTypeName(row.credential);
           if (row.kind === "oauth") {
             return (
               <span>
@@ -487,8 +508,8 @@ export function CredentialDrawer({ model }: { model: CredentialListModel }) {
       meta={
         <>
           <StatePill tone={state.tone}>{state.label}</StatePill>
-          {open.kind === "token" && tokenProfile(open.connection) ? <span>{tokenProfile(open.connection)}</span> : null}
-          {open.kind === "retained" ? <span>{open.credential.profile}</span> : null}
+          {open.kind === "token" && connectionTokenType(open.connection) ? <span>{connectionTokenType(open.connection)}</span> : null}
+          {open.kind === "retained" ? <span>{tokenTypeName(open.credential)}</span> : null}
         </>
       }
       actions={<DrawerActions model={model} row={open} />}
@@ -606,8 +627,9 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
       <>
         <DrawerSection title="Not used">
           <p className="wb-small wb-fg-2">
-            The configuration no longer selects this stored credential: its service now uses another connection, its name or profile is retired, or its connection
-            uses OAuth for this account. No service reads it. Delete it when it is no longer needed.
+            The configuration no longer selects this stored credential: its connection no longer accepts its token type from this account, its service now uses
+            another connection, its name is retired, or its connection uses OAuth for this account. No service reads it. A token kept for its type is used again,
+            without re-entry, once its connection accepts that type again. Delete it when it is no longer needed.
           </p>
         </DrawerSection>
         <DrawerSection title="Stored credential">
@@ -615,7 +637,7 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
             items={[
               { label: "Stored service", value: <span className="wb-mono">{credential.service}</span> },
               { label: "Name", value: <span className="wb-mono">{credential.name}</span> },
-              { label: "Profile", value: <span className="wb-mono">{credential.profile}</span> },
+              { label: "Token type", value: <TokenTypeName entry={credential} /> },
               { label: "Kind", value: <span className="wb-mono">{credential.credentialKind}</span> },
               { label: "Updated", value: <><Time value={credential.updatedAt} format="datetime" /> <span className="wb-muted">by {credential.updatedBy}</span></> }
             ]}
@@ -648,6 +670,7 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
               { label: "Last verified", value: <Time value={credential.lastVerifiedAt} format="datetime" fallback="Never" /> },
               credential.lastVerificationErrorCode ? { label: "Last error", value: <span className="wb-mono">{credential.lastVerificationErrorCode}</span> } : null,
               { label: "Updated", value: <><Time value={credential.updatedAt} format="datetime" /> <span className="wb-muted">by {credential.updatedBy}</span></> },
+              { label: "Token type", value: <TokenTypeName entry={credential} /> },
               { label: "Kind", value: <span className="wb-mono">{credential.credentialKind}</span> }
             ]}
           />
@@ -657,7 +680,8 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
       {writable && credential ? <RepositoryVerification connection={connection} onVerify={(service, repository) => actions.verify(connection.connection, { service, repository })} /> : null}
       {writable && row.target ? (
         <DrawerSection title={credential ? "Replace secret" : "Save a credential"}>
-          <CredentialForm key={row.key} target={row.target} replacing={Boolean(credential)} onSave={(values) => actions.save(row.target!, values)} />
+          {/* A stored token of another type restarts the form on that type. */}
+          <CredentialForm key={`${row.key}:${credential?.profile ?? ""}`} target={row.target} stored={credential} onSave={(type, values) => actions.save(connection.connection, type, values)} />
         </DrawerSection>
       ) : null}
     </>
@@ -708,28 +732,59 @@ function RepositoryVerification({ connection, onVerify }: { connection: Credenti
   );
 }
 
-/** Secret entry for one connection's token; values never leave this form except in the save request. */
-function CredentialForm({ target, replacing, onSave }: { target: CredentialTarget; replacing: boolean; onSave: (values: Record<string, string>) => Promise<void> }) {
-  // The form offers the connection's first accepted token profile.
-  const { inputSchema } = target.tokenProfiles[0];
-  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(inputSchema.fields.map((field) => [field.name, ""])));
+/** A token type's label beside its profile ID, or the profile ID alone when it has no label. */
+function TokenTypeName({ entry }: { entry: { profile: string; label: string | null } }) {
+  if (!entry.label) return <span className="wb-mono">{entry.profile}</span>;
+  return (
+    <>
+      {entry.label} <span className="wb-mono wb-muted">{entry.profile}</span>
+    </>
+  );
+}
+
+/**
+ * Secret entry for one connection's token; values never leave this form except
+ * in the save request. A connection accepting several token types asks for one
+ * first, with none chosen for a first save and the stored token's when
+ * replacing; the fields follow the chosen type's input schema.
+ */
+function CredentialForm({
+  target,
+  stored,
+  onSave
+}: {
+  target: CredentialTarget;
+  stored: ConnectionCredential | null;
+  onSave: (type: CredentialTokenProfile, values: Record<string, string>) => Promise<void>;
+}) {
+  const accepted = target.tokenProfiles;
+  const choosing = accepted.length > 1;
+  const [chosen, setChosen] = useState(() => initialTokenType(accepted, stored?.profile));
+  const type = chosenTokenType(accepted, chosen);
+  const [values, setValues] = useState<Record<string, string>>(() => (type ? tokenTypeValues(type, {}) : {}));
   const [visible, setVisible] = useState<Record<string, boolean>>({});
+  const [typeTouched, setTypeTouched] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dirty = Object.values(values).some(Boolean);
-  const missing = inputSchema.fields.some((field) => field.required && !values[field.name]);
+  const ready = tokenFormReady(type, values);
+  const typeError = choosing && !type && typeTouched ? "Choose a token type." : undefined;
+  const typeHint =
+    stored && type && type.profile !== stored.profile
+      ? `Saving replaces the stored token, of type ${tokenTypeName(stored)}, with a token of this type.`
+      : "The fields to fill in follow the token type.";
   return (
     <form
       className="wb-form-stack"
       autoComplete="off"
       onSubmit={async (event) => {
         event.preventDefault();
-        if (missing || !dirty) return;
+        if (!type) setTypeTouched(true);
+        if (!tokenFormReady(type, values)) return;
         setPending(true);
         setError(null);
         try {
-          await onSave(values);
-          setValues(Object.fromEntries(inputSchema.fields.map((field) => [field.name, ""])));
+          await onSave(type, values);
+          setValues(tokenTypeValues(type, {}));
         } catch (failure) {
           setError(errorMessage(failure));
         } finally {
@@ -737,7 +792,33 @@ function CredentialForm({ target, replacing, onSave }: { target: CredentialTarge
         }
       }}
     >
-      {inputSchema.fields.map((field) => {
+      {choosing ? (
+        <Field label="Token type" hint={typeHint} error={typeError}>
+          <Select
+            value={type?.profile ?? ""}
+            required
+            onChange={(event) => {
+              const next = chosenTokenType(accepted, event.target.value);
+              setChosen(event.target.value);
+              // The fields both types share, such as the token, keep their values.
+              if (next) setValues(tokenTypeValues(next, values));
+            }}
+            onBlur={() => setTypeTouched(true)}
+          >
+            {type ? null : (
+              <option value="" disabled>
+                Choose a token type
+              </option>
+            )}
+            {accepted.map((entry) => (
+              <option key={entry.profile} value={entry.profile}>
+                {tokenTypeName(entry)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      ) : null}
+      {(type?.inputSchema.fields ?? []).map((field) => {
         const hidden = field.secret && !visible[field.name];
         return (
           <Field key={field.name} label={field.prompt} hint={field.description} optional={!field.required}>
@@ -769,8 +850,8 @@ function CredentialForm({ target, replacing, onSave }: { target: CredentialTarge
       })}
       <FormError error={error} />
       <div className="flex justify-end">
-        <Button type="submit" variant="primary" disabled={missing || !dirty} pending={pending}>
-          {replacing ? "Replace credential" : "Save credential"}
+        <Button type="submit" variant="primary" disabled={!ready} pending={pending}>
+          {stored ? "Replace credential" : "Save credential"}
         </Button>
       </div>
     </form>
