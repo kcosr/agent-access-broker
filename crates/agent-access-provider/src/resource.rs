@@ -267,6 +267,7 @@ pub struct ResourceTypeDescriptor {
     namespace: Option<NamespaceSelectorDescriptor>,
     attributes: Cow<'static, [ResourceAttributeDescriptor]>,
     action_inputs: Option<ResourceActionInputs>,
+    supports_exclusions: bool,
 }
 
 /// Projects a selector onto the action inputs that address it.
@@ -487,6 +488,7 @@ impl ResourceTypeDescriptor {
             namespace: None,
             attributes: Cow::Borrowed(attributes),
             action_inputs: None,
+            supports_exclusions: true,
         }
     }
 
@@ -545,7 +547,21 @@ impl ResourceTypeDescriptor {
             namespace: None,
             attributes: Cow::Owned(attributes),
             action_inputs: None,
+            supports_exclusions: true,
         }
+    }
+
+    /// Sets whether resources of this type may be excluded from resource groups.
+    /// Defaults to true. Disabling exclusions does not restrict inclusions or
+    /// change selector matching.
+    pub const fn with_supports_exclusions(mut self, supports_exclusions: bool) -> Self {
+        self.supports_exclusions = supports_exclusions;
+        self
+    }
+
+    /// Whether resources of this type may be excluded from resource groups.
+    pub const fn supports_exclusions(&self) -> bool {
+        self.supports_exclusions
     }
 
     /// Adds namespace selectors: a prefix that covers every canonical target
@@ -667,6 +683,7 @@ impl ResourceTypeDescriptor {
     pub fn metadata(&self) -> ResourceTypeMetadata {
         ResourceTypeMetadata {
             id: self.id.clone(),
+            supports_exclusions: self.supports_exclusions,
             attributes: self
                 .attributes()
                 .iter()
@@ -706,6 +723,8 @@ impl ResourceTypeDescriptor {
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTypeMetadata {
     pub id: ResourceType,
+    /// Whether resources of this type may be excluded from resource groups.
+    pub supports_exclusions: bool,
     pub label: String,
     pub plural_label: String,
     pub example: String,
@@ -1108,6 +1127,48 @@ mod tests {
             format!("{:?}", ResourcePattern::new("[a-z]+", 3).unwrap()),
             r#"ResourcePattern { source: "[a-z]+", max_length: 3 }"#
         );
+    }
+
+    #[test]
+    fn exclusion_capability_defaults_true_and_is_const_configurable() {
+        static INCLUSION_ONLY: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
+            ResourceType::from_static("inclusion_only"),
+            "Item",
+            "Items",
+            "org/item",
+            is_canonical_repository_path,
+            &[],
+        )
+        .with_supports_exclusions(false);
+        static SUPPORTS_EXCLUSIONS: bool = INCLUSION_ONLY.supports_exclusions();
+        assert!(!SUPPORTS_EXCLUSIONS);
+        assert!(GIT_REPOSITORY_RESOURCE.supports_exclusions());
+        assert!(declared_project().supports_exclusions());
+        for descriptor in [
+            GIT_REPOSITORY_RESOURCE.clone(),
+            INCLUSION_ONLY.clone(),
+            declared_project().with_supports_exclusions(false),
+            declared_project()
+                .with_supports_exclusions(false)
+                .with_supports_exclusions(true),
+        ] {
+            let metadata = descriptor.metadata();
+            assert_eq!(
+                metadata.supports_exclusions,
+                descriptor.supports_exclusions()
+            );
+            let encoded = serde_json::to_value(&metadata).unwrap();
+            assert_eq!(
+                encoded["supportsExclusions"],
+                descriptor.supports_exclusions()
+            );
+            assert_eq!(
+                serde_json::from_value::<ResourceTypeMetadata>(encoded).unwrap(),
+                metadata
+            );
+            assert!(descriptor.accepts(&ResourceSelector::All));
+            assert!(descriptor.accepts(&exact(descriptor.example())));
+        }
     }
 
     #[test]

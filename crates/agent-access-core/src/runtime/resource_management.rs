@@ -274,6 +274,223 @@ mod tests {
         config
     }
 
+    static INCLUSION_ONLY_RESOURCE: agent_access_provider::ResourceTypeDescriptor =
+        agent_access_provider::ResourceTypeDescriptor::new(
+            ResourceType::from_static("inclusion_only"),
+            "Inclusion only",
+            "Inclusion only resources",
+            "TEST",
+            |value| !value.is_empty(),
+            &[],
+        )
+        .with_supports_exclusions(false);
+
+    static EXCLUSION_TEST_BACKEND: agent_access_provider::BackendRegistration =
+        agent_access_provider::BackendRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "fake",
+            agent_access_provider::parse_backend_config::<agent_access_fake::FakeProviderConfig>,
+        )
+        .with_resource_types(&[
+            &agent_access_fake::FAKE_PROJECT_RESOURCE,
+            &INCLUSION_ONLY_RESOURCE,
+        ])
+        .development_only();
+
+    fn exclusion_test_config(path: &Path) -> BrokerConfig {
+        let mut config = managed_config(path);
+        config.providers = crate::ProvidersConfig::new(Arc::new(
+            crate::BackendRegistry::new([&EXCLUSION_TEST_BACKEND]).unwrap(),
+        ))
+        .with(agent_access_fake::FakeProviderConfig::default());
+        config.execution_context = Some(crate::ExecutionContextConfig {
+            allowed_values: vec!["default".into(), "external".into()],
+            default_context: None,
+        });
+        config
+    }
+
+    fn exclusion_test_directory() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        directory
+    }
+
+    #[test]
+    fn unsupported_exclusions_reject_catalog_edits_atomically_without_grant_references() {
+        let directory = exclusion_test_directory();
+        let config = exclusion_test_config(&directory.path().join("policy.sqlite3"));
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let store = runtime.managed_store.as_ref().unwrap();
+        runtime
+            .create_managed_resource(CreateResourceRequest {
+                id: Some("restricted".into()),
+                display_name: None,
+                resource_type: INCLUSION_ONLY_RESOURCE.id().clone(),
+                selector: ResourceSelector::Exact {
+                    value: "RESTRICTED".into(),
+                },
+                allowed_execution_contexts: vec!["external".into()],
+                enabled: false,
+                attributes: Default::default(),
+                created_by: "test-admin".into(),
+            })
+            .unwrap();
+        create_project(&runtime, "supported", "SUPPORTED");
+        let create_group = |id: &str, excludes: Vec<String>| CreateResourceGroupRequest {
+            id: Some(id.into()),
+            name: "Mixed types".into(),
+            included_resource_ids: vec!["restricted".into(), "supported".into()],
+            excluded_resource_ids: excludes,
+            created_by: "test-admin".into(),
+        };
+        // Includes remain legal and supported exclusions work in mixed groups.
+        runtime
+            .create_managed_resource_group(create_group("mixed", vec!["supported".into()]))
+            .unwrap();
+        let before = store.load_policy_export().unwrap();
+        let generation = runtime.policy_generation();
+        assert!(before.grants.is_empty());
+        let assert_rejected = |error: ManagedStoreError, group: &str, resource: &str| {
+            let message = error.to_string();
+            assert!(message.contains(group), "{message}");
+            assert!(message.contains(resource), "{message}");
+            assert!(message.contains("inclusion_only"), "{message}");
+            assert_eq!(store.load_policy_export().unwrap(), before);
+            assert_eq!(runtime.policy_generation(), generation);
+        };
+        // Same resource included and excluded, disabled, context-ineligible,
+        // and in an unused group: none of these allow the exclusion.
+        assert_rejected(
+            runtime
+                .create_managed_resource_group(create_group("invalid", vec!["restricted".into()]))
+                .unwrap_err(),
+            "invalid",
+            "restricted",
+        );
+        assert_rejected(
+            runtime
+                .patch_managed_resource_group(PatchResourceGroupRequest {
+                    id: "mixed".into(),
+                    expected_version: 1,
+                    name: Some("Must roll back".into()),
+                    included_resource_ids: None,
+                    excluded_resource_ids: Some(vec!["restricted".into()]),
+                    updated_by: "test-admin".into(),
+                })
+                .unwrap_err(),
+            "mixed",
+            "restricted",
+        );
+        let before_resource = store.resource("supported").unwrap();
+        assert_rejected(
+            runtime
+                .patch_managed_resource(PatchResourceRequest {
+                    id: "supported".into(),
+                    expected_version: 1,
+                    display_name: Some(Some("Must roll back".into())),
+                    resource_type: Some(INCLUSION_ONLY_RESOURCE.id().clone()),
+                    selector: None,
+                    allowed_execution_contexts: None,
+                    enabled: None,
+                    attributes: Default::default(),
+                    updated_by: "test-admin".into(),
+                })
+                .unwrap_err(),
+            "mixed",
+            "supported",
+        );
+        assert_eq!(store.resource("supported").unwrap(), before_resource);
+        assert_eq!(store.resource_group("mixed").unwrap().version, 1);
+        assert_eq!(
+            runtime.policy_snapshot().resources.resource_groups["mixed"].excluded_resource_ids,
+            ["supported"]
+        );
+    }
+
+    #[test]
+    fn unsupported_exclusions_fail_toml_validation_and_managed_restart_without_grants() {
+        let directory = exclusion_test_directory();
+        let config = exclusion_test_config(&directory.path().join("policy.sqlite3"));
+        let resource = ResourceDefinition {
+            id: "restricted".into(),
+            display_name: None,
+            resource_type: INCLUSION_ONLY_RESOURCE.id().clone(),
+            selector: ResourceSelector::All,
+            allowed_execution_contexts: vec!["external".into()],
+            enabled: false,
+        };
+        let group = ResourceGroupDefinition {
+            id: "unused".into(),
+            name: "Unused group".into(),
+            included_resource_ids: vec![],
+            excluded_resource_ids: vec![resource.id.clone()],
+        };
+        let mut toml_config = config.clone();
+        toml_config.policy.authority = "toml".into();
+        toml_config.policy.resources = vec![resource.clone()];
+        toml_config.policy.resource_groups = vec![group.clone()];
+        let ConfigError::Invalid { errors } = validate_broker_config(&toml_config).unwrap_err()
+        else {
+            panic!("expected resource catalog validation errors");
+        };
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("unused")
+                    && error.contains("restricted")
+                    && error.contains("inclusion_only")
+            }),
+            "{errors:?}"
+        );
+        let runtime = BrokerRuntime::new(config.clone()).unwrap();
+        let store = runtime.managed_store.as_ref().unwrap();
+        runtime
+            .create_managed_resource(CreateResourceRequest {
+                id: Some(resource.id),
+                display_name: None,
+                resource_type: resource.resource_type,
+                selector: resource.selector,
+                allowed_execution_contexts: resource.allowed_execution_contexts,
+                enabled: resource.enabled,
+                attributes: Default::default(),
+                created_by: "test-admin".into(),
+            })
+            .unwrap();
+        // Seed an invalid historical catalog through the store's structural
+        // layer to exercise startup's registry-aware checks independently.
+        store
+            .create_resource_group(
+                CreateResourceGroupRequest {
+                    id: Some(group.id),
+                    name: group.name,
+                    included_resource_ids: group.included_resource_ids,
+                    excluded_resource_ids: group.excluded_resource_ids,
+                    created_by: "test-admin".into(),
+                },
+                |_, _, _, _| Ok(()),
+            )
+            .unwrap();
+        let before = store.load_policy_export().unwrap();
+        let errors = match BrokerRuntime::new(config) {
+            Err(RuntimeError::Config(ConfigError::Invalid { errors })) => errors,
+            Err(error) => panic!("expected resource catalog validation errors, got {error:?}"),
+            Ok(_) => panic!("invalid managed catalog must not start"),
+        };
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("unused")
+                    && error.contains("restricted")
+                    && error.contains("inclusion_only")
+            }),
+            "{errors:?}"
+        );
+        assert_eq!(store.load_policy_export().unwrap(), before);
+    }
+
     fn create_project(runtime: &BrokerRuntime, id: &str, key: &str) {
         runtime
             .create_managed_resource(CreateResourceRequest {

@@ -83,8 +83,26 @@ pub(super) fn type_usage<'a>(
              WHERE r.resource_type=?1 ORDER BY m.resource_id,m.attribute_name",
         )
         .map_err(sql_unavailable)?;
+    let mut exclusions = conn
+        .prepare(
+            "SELECT m.resource_id,m.resource_group_id FROM resource_group_members m
+         JOIN resources r ON r.resource_id=m.resource_id
+         WHERE r.resource_type=?1 AND m.effect='exclude'
+         ORDER BY m.resource_id,m.resource_group_id",
+        )
+        .map_err(sql_unavailable)?;
     let mut usage = ImportedTypeUsage::new();
     for resource_type in types {
+        let mut excluded_by = BTreeMap::<String, BTreeSet<String>>::new();
+        let rows = exclusions
+            .query_map([resource_type], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sql_unavailable)?;
+        for row in rows {
+            let (resource, group) = row.map_err(sql_unavailable)?;
+            excluded_by.entry(resource).or_default().insert(group);
+        }
         let mut configured = BTreeMap::<String, BTreeSet<String>>::new();
         let rows = attributes
             .query_map([resource_type], |row| {
@@ -119,6 +137,7 @@ pub(super) fn type_usage<'a>(
             };
             stored.push(ImportedTypeResource {
                 attributes: configured.remove(&id).unwrap_or_default(),
+                excluded_by: excluded_by.remove(&id).unwrap_or_default(),
                 id,
                 selector,
             });
@@ -126,6 +145,43 @@ pub(super) fn type_usage<'a>(
         usage.insert(resource_type.to_owned(), stored);
     }
     Ok(usage)
+}
+
+/// Keep human-readable errors concise; the structured target carries the
+/// separately bounded resource memberships needed to resolve each blocker.
+fn describe_acceptance_violations(
+    resources: &BTreeMap<String, Vec<String>>,
+    groups: &BTreeMap<String, Vec<crate::imports::ImportedTypeBlockingGroup>>,
+) -> String {
+    const NAMED_GROUPS: usize = 20;
+    let mut messages = Vec::new();
+    if !resources.is_empty() {
+        messages.push(describe_type_violations(resources));
+    }
+    if !groups.is_empty() {
+        let count: usize = groups.values().map(Vec::len).sum();
+        let mut references = groups
+            .iter()
+            .flat_map(|(kind, entries)| {
+                entries.iter().map(move |group| {
+                    format!(
+                        "{kind}: group {} excludes {} resource(s)",
+                        group.id,
+                        group.resource_ids.len()
+                    )
+                })
+            })
+            .take(NAMED_GROUPS)
+            .collect::<Vec<_>>()
+            .join("; ");
+        if count > NAMED_GROUPS {
+            references.push_str(&format!("; and {} more group(s)", count - NAMED_GROUPS));
+        }
+        messages.push(format!(
+            "resource types cannot disable exclusions while groups exclude their resources; edit the groups first ({references})"
+        ));
+    }
+    messages.join("; ")
 }
 
 /// Rechecks and applies an acceptance's resource type changes. A change that
@@ -141,10 +197,29 @@ pub(super) fn apply_type_acceptance(
 ) -> Result<(ImportedTypeEffects, Option<ManagedPolicyState>), ManagedStoreError> {
     let usage = type_usage(conn, plan.resource_types())?;
     let violations = plan.violations(&usage);
-    if !violations.is_empty() {
+    let group_violations = plan.group_violations(&usage);
+    if !violations.is_empty() || !group_violations.is_empty() {
         return Err(ManagedStoreError::ImportChangeBlocked(Box::new(
             crate::ImportChangeBlocked {
-                message: describe_type_violations(&violations),
+                message: describe_acceptance_violations(&violations, &group_violations),
+                resource_groups: group_violations
+                    .iter()
+                    .flat_map(|(kind, groups)| {
+                        groups
+                            .iter()
+                            .map(move |group| crate::ImportBlockingResourceGroup {
+                                resource_type: kind.clone(),
+                                id: group.id.clone(),
+                                resource_ids: group
+                                    .resource_ids
+                                    .iter()
+                                    .take(IMPORT_TYPE_RESOURCE_SAMPLE)
+                                    .cloned()
+                                    .collect(),
+                            })
+                    })
+                    .take(IMPORT_TYPE_RESOURCE_SAMPLE)
+                    .collect(),
                 affected_grants: Vec::new(),
                 resources: violations
                     .iter()
@@ -219,4 +294,79 @@ pub(super) fn apply_type_acceptance(
             catalog,
         }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::imports::ImportedTypeBlockingGroup;
+
+    #[test]
+    fn acceptance_error_reports_resource_and_group_remedies_together() {
+        let resources = BTreeMap::from([("tickets_project".into(), vec!["legacy".into()])]);
+        let groups = BTreeMap::from([(
+            "tickets_project".into(),
+            vec![ImportedTypeBlockingGroup {
+                id: "unused".into(),
+                resource_ids: vec!["ops".into()],
+            }],
+        )]);
+        let message = describe_acceptance_violations(&resources, &groups);
+        assert!(message.contains("edit or delete them"), "{message}");
+        assert!(message.contains("tickets_project: legacy"), "{message}");
+        assert!(message.contains("edit the groups first"), "{message}");
+        assert!(
+            message.contains("tickets_project: group unused excludes 1 resource(s)"),
+            "{message}"
+        );
+        assert_eq!(
+            describe_acceptance_violations(&resources, &BTreeMap::new()),
+            describe_type_violations(&resources)
+        );
+        let groups_only = describe_acceptance_violations(&BTreeMap::new(), &groups);
+        assert!(!groups_only.contains("edit or delete"), "{groups_only}");
+    }
+
+    #[test]
+    fn acceptance_error_bounds_group_names_across_types_and_counts_memberships() {
+        let members = (0..150)
+            .map(|n| format!("private-member-{n:03}"))
+            .collect::<Vec<_>>();
+        let groups = ["tickets_project", "tickets_queue"]
+            .into_iter()
+            .map(|kind| {
+                (
+                    kind.to_owned(),
+                    (0..15)
+                        .map(|n| ImportedTypeBlockingGroup {
+                            id: format!("group-{n:02}"),
+                            resource_ids: members.clone(),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let message = describe_acceptance_violations(&BTreeMap::new(), &groups);
+        assert_eq!(
+            message.matches("excludes 150 resource(s)").count(),
+            20,
+            "{message}"
+        );
+        assert!(
+            message.contains("tickets_project: group group-14"),
+            "{message}"
+        );
+        assert!(
+            message.contains("tickets_queue: group group-04"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("tickets_queue: group group-05"),
+            "{message}"
+        );
+        assert!(message.contains("and 10 more group(s)"), "{message}");
+        assert!(!message.contains("private-member-"), "{message}");
+        // Membership cardinality changes only the count, not the volume of names.
+        assert!(message.len() < 1600, "{} bytes: {message}", message.len());
+    }
 }

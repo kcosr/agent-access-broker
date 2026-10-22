@@ -112,6 +112,13 @@ pub struct ImportedResourceTypeDeclaration {
     /// later acceptance drops it once they are deleted. Always `false` in a
     /// source's own declaration.
     pub removed: bool,
+    /// Whether this type permits excluded resource-group memberships. Earlier
+    /// persisted declarations omit this field and permit exclusions.
+    #[serde(
+        default = "supports_exclusions_default",
+        skip_serializing_if = "is_true"
+    )]
+    pub supports_exclusions: bool,
     pub label: String,
     pub plural_label: String,
     /// Matched against the whole exact selector value.
@@ -132,6 +139,14 @@ pub struct ImportedResourceAttributeDeclaration {
     pub description: String,
     pub required: bool,
     pub pattern: Option<String>,
+}
+
+const fn supports_exclusions_default() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 fn bounded_text(value: &str, max: usize) -> bool {
@@ -309,6 +324,7 @@ mod tests {
                 id: "project".into(),
                 broker_type: "ticketing_project".into(),
                 removed: false,
+                supports_exclusions: true,
                 label: "Project".into(),
                 plural_label: "Projects".into(),
                 pattern: "[A-Z][A-Z0-9]{1,9}".into(),
@@ -322,6 +338,49 @@ mod tests {
                     pattern: Some("[a-z0-9-]{1,32}".into()),
                 }],
             }],
+        }
+    }
+
+    #[test]
+    fn exclusion_capability_preserves_durable_defaults_and_round_trips_false() {
+        let mut metadata = sample();
+        let original = serde_json::to_value(&metadata).unwrap();
+        assert!(
+            original["resourceTypes"][0]
+                .get("supportsExclusions")
+                .is_none()
+        );
+        let restored: ImportedServiceMetadata = serde_json::from_value(original.clone()).unwrap();
+        assert!(restored.resource_types[0].supports_exclusions);
+        for supported in [true, false] {
+            metadata.resource_types[0].supports_exclusions = supported;
+            let encoded = serde_json::to_value(&metadata).unwrap();
+            if supported {
+                assert_eq!(encoded, original);
+            } else {
+                assert_eq!(encoded["resourceTypes"][0]["supportsExclusions"], false);
+            }
+            assert_eq!(
+                serde_json::from_value::<ImportedServiceMetadata>(encoded).unwrap(),
+                metadata
+            );
+            let mut explicit = original.clone();
+            explicit["resourceTypes"][0]["supportsExclusions"] = json!(supported);
+            assert_eq!(
+                serde_json::from_value::<ImportedServiceMetadata>(explicit).unwrap(),
+                metadata
+            );
+        }
+        for invalid in [
+            serde_json::Value::Null,
+            json!("false"),
+            json!(0),
+            json!([]),
+            json!({}),
+        ] {
+            let mut encoded = original.clone();
+            encoded["resourceTypes"][0]["supportsExclusions"] = invalid;
+            assert!(serde_json::from_value::<ImportedServiceMetadata>(encoded).is_err());
         }
     }
 

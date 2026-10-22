@@ -142,6 +142,8 @@ struct TypeChangeStatus<'a> {
     /// form, or that currently prevent an applied change or drop. At most
     /// [`IMPORT_TYPE_RESOURCE_SAMPLE`].
     blocking_resources: Vec<String>,
+    /// Groups whose excluded memberships prevent a capability downgrade.
+    blocking_groups: Vec<agent_access_core::imports::ImportedTypeBlockingGroup>,
     /// Resources whose removed attributes' values the acceptance deletes. At
     /// most [`IMPORT_TYPE_RESOURCE_SAMPLE`].
     affected_resources: Vec<String>,
@@ -181,6 +183,7 @@ pub(super) fn type_changes(
             .map(|change| change.broker_type.as_str()),
     )?;
     let violations = plan.violations(&usage);
+    let group_violations = plan.group_violations(&usage);
     let deletions = plan
         .deletions()
         .iter()
@@ -228,9 +231,22 @@ pub(super) fn type_changes(
                 change,
                 resource_count: resources.len(),
                 blocked: violations.contains_key(&change.broker_type)
+                    || group_violations.contains_key(&change.broker_type)
                     || (editable
                         && runtime.imported_resource_type_taken(service, &change.broker_type)),
                 blocking_resources: sample(blocking),
+                blocking_groups: group_violations
+                    .get(&change.broker_type)
+                    .into_iter()
+                    .flatten()
+                    .take(IMPORT_TYPE_RESOURCE_SAMPLE)
+                    .map(
+                        |group| agent_access_core::imports::ImportedTypeBlockingGroup {
+                            id: group.id.clone(),
+                            resource_ids: sample(group.resource_ids.clone()),
+                        },
+                    )
+                    .collect(),
                 affected_resources: sample(affected),
                 editable,
             }

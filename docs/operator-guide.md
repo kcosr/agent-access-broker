@@ -1340,6 +1340,20 @@ deleting the Broker's copy of a refresh token does not revoke it there, so
 follow [revoking stored refresh tokens](#revoking-stored-refresh-tokens) when
 that matters.
 
+Command imports can opt resource types out of exclusions with
+`supportsExclusions: false`. Before deploying a command version that cannot
+enforce exclusions, remove every excluded group membership of its types, then
+deploy, refresh and accept the new declaration. The Broker rejects acceptance
+while such memberships remain. The command must reject unexpected `except`
+boundaries during this interval; see [command authorization](command-imports.md#command-enforced-actions).
+
+Once an import stores `supportsExclusions: false`, Broker versions predating
+that field reject its persisted metadata. Rolling back to one of those versions
+requires restoring the backup taken before the upgrade, with matching binaries,
+configuration and keys. This metadata change needs no database migration; the
+durable JSON contract still affects rollback. Existing imports whose capability
+remains at the default `true` keep their previous serialized form.
+
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a
 fresh store at a new path, then reconstruct principals, credentials, resources,

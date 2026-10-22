@@ -388,6 +388,14 @@ satisfy the canonical grammar, which keeps namespace prefix matching sound.
 Policy validation, resource management, discovery and the portal read the
 published metadata.
 
+Both `new` and `declared` default to supporting group exclusions.
+`with_supports_exclusions(false)` opts a type out, and `supports_exclusions()`
+reads the capability; both methods are `const`. The published metadata always
+includes the resolved `supportsExclusions` boolean. Opting out prevents any
+resource of the type from becoming an excluded group member; direct and group
+inclusions still work. This applies to every action using the type. Use separate
+types when actions need different exclusion capabilities.
+
 Private attributes (`ResourceAttributeDescriptor::required` or `optional`)
 are secret values on exact managed resource entries, such as a Teams Workflow
 URL. The host encrypts them, reveals them only through an audited administrator
@@ -406,7 +414,8 @@ pub static DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor
     "release-alerts",
     is_destination_name,
     &DESTINATION_ATTRIBUTES,
-);
+)
+.with_supports_exclusions(false);
 
 static DESTINATION_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
     [ResourceAttributeDescriptor::required(
@@ -1960,6 +1969,12 @@ downstream provider crate keeps its own version and release ownership.
   supposedly compatible upgrade cannot newly claim a code another module uses.
 - Security fixes that must reject previously accepted behavior say so
   explicitly.
+
+Changing a released native resource type to `with_supports_exclusions(false)`
+is an incompatible policy change. Existing exclusions of that type make startup
+fail; operators must remove those memberships using the previous binary before
+upgrading. Document that requirement in the provider's changelog. Adding the
+capability with its default `true` preserves existing policy behavior.
 
 `0.2.0` is the first released baseline of the
 [public API inventory](../api/README.md). Release review compares the

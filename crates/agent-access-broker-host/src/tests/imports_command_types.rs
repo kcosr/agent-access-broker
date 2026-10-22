@@ -79,6 +79,21 @@ async fn current(app: &Router, token: &str) -> Value {
     current["result"].clone()
 }
 
+/// Reads the stored preview with freshly evaluated resource-type blockers.
+async fn current_preview(app: &Router, token: &str) -> Value {
+    let (status, preview) = request(
+        app,
+        token,
+        Method::GET,
+        &format!("/v1/admin/imports/{SERVICE}/preview"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(preview["result"]["preview"].is_object(), "{preview}");
+    preview["result"].clone()
+}
+
 /// Runs discovery and returns the preview result.
 async fn discover(app: &Router, token: &str) -> Value {
     let current = current(app, token).await;
@@ -1411,4 +1426,301 @@ async fn acceptance_checks_stored_resources_against_the_new_registry() {
     );
     drop(app);
     broker.stop().await;
+}
+
+async fn exclusion_group(
+    app: &Router,
+    token: &str,
+    id: &str,
+    included: &[&str],
+    excluded: &[&str],
+) -> (StatusCode, Value) {
+    request(
+        app,
+        token,
+        Method::POST,
+        "/v1/admin/policy/resource-groups",
+        Some(json!({
+            "id": id, "name": id, "includedResourceIds": included, "excludedResourceIds": excluded,
+        })),
+    )
+    .await
+}
+
+async fn replace_group_exclusions(app: &Router, token: &str, id: &str, excluded: &[&str]) {
+    let path = format!("/v1/admin/policy/resource-groups/{id}");
+    let (status, group) = request(app, token, Method::GET, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    let (status, updated) = request(
+        app,
+        token,
+        Method::PATCH,
+        &path,
+        Some(json!({
+            "expectedVersion": group["result"]["version"], "excludedResourceIds": excluded,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exclusion_downgrade_rechecks_late_unused_groups_and_preserves_preaccept_state() {
+    let fixture = CommandFixture::new(SERVICE, &initial_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    accepted_import(&app, &token).await;
+    assert_eq!(
+        listed_type(&app, &token, "tickets_project").await["supportsExclusions"],
+        true
+    );
+    for (id, kind, value) in [
+        ("ops", "tickets_project", "OPS"),
+        ("triage", "tickets_queue", "triage"),
+    ] {
+        let (status, created) = create_resource(&app, &token, id, kind, value, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+    }
+    // Disabled entries and groups with no grant/token references still count.
+    let (status, updated) = patch_resource(&app, &token, "ops", json!({"enabled": false})).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    fixture.write_manifest(&manifest(
+        vec![
+            project_with(|t| t["supportsExclusions"] = json!(false)),
+            queue_type(),
+        ],
+        vec![view_action(), queue_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    assert_eq!(
+        type_change(&discovered, "project")["details"],
+        json!(["exclusions_unsupported"])
+    );
+    assert_eq!(type_change(&discovered, "project")["blocked"], false);
+    // Race: introduce the blocker after discovery. Acceptance must query it again.
+    let (status, group) = exclusion_group(&app, &token, "unused", &[], &["ops"]).await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    let reviewed = current_preview(&app, &token).await;
+    assert_eq!(type_change(&reviewed, "project")["blocked"], true);
+    assert_eq!(
+        type_change(&reviewed, "project")["blockingGroups"],
+        json!([{"id":"unused","resourceIds":["ops"]}])
+    );
+    let before = current_preview(&app, &token).await;
+    let generation = broker.runtime().policy_generation();
+    let (status, rejected) = accept_with(
+        &app,
+        &token,
+        &discovered,
+        all_selections(&discovered),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(
+        rejected["target"]["resourceGroups"],
+        json!([{"type":"tickets_project","id":"unused","resourceIds":["ops"]}])
+    );
+    assert!(
+        rejected.to_string().contains("edit the groups"),
+        "{rejected}"
+    );
+    let after = current_preview(&app, &token).await;
+    assert_eq!(after["service"], before["service"]);
+    assert_eq!(after["preview"], before["preview"]);
+    assert_eq!(after["catalogRevision"], before["catalogRevision"]);
+    assert_eq!(broker.runtime().policy_generation(), generation);
+    assert_eq!(
+        listed_type(&app, &token, "tickets_project").await["supportsExclusions"],
+        true
+    );
+    replace_group_exclusions(&app, &token, "unused", &[]).await;
+    // The same reviewed preview is now acceptable; no policy rewrite is needed.
+    accept(&app, &token, &discovered).await;
+    assert_eq!(
+        listed_type(&app, &token, "tickets_project").await["supportsExclusions"],
+        false
+    );
+    let (status, mixed) = exclusion_group(&app, &token, "mixed", &["ops"], &["triage"]).await;
+    assert_eq!(status, StatusCode::OK, "{mixed}");
+    let (status, rejected) = exclusion_group(&app, &token, "invalid", &[], &["ops"]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    drop(app);
+    broker.stop().await;
+    let restarted = BrokerRuntime::new(fixture.config.clone()).unwrap();
+    assert!(
+        !restarted
+            .resource_type_metadata()
+            .into_iter()
+            .find(|t| t.id.as_str() == "tickets_project")
+            .unwrap()
+            .supports_exclusions
+    );
+    // Persistence also keeps the explicit false in accepted import metadata.
+    assert!(
+        !restarted
+            .managed_store()
+            .unwrap()
+            .imported_catalog()
+            .unwrap()
+            .services
+            .iter()
+            .find(|s| s.definition.service == SERVICE)
+            .unwrap()
+            .accepted_metadata
+            .as_ref()
+            .unwrap()
+            .resource_types
+            .iter()
+            .find(|t| t.id == "project")
+            .unwrap()
+            .supports_exclusions
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn combined_incompatible_change_retains_capability_and_quarantines_affected_actions() {
+    let fixture = CommandFixture::new(SERVICE, &initial_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let accepted = accepted_import(&app, &token).await;
+    let old_type = accepted["service"]["acceptedMetadata"]["resourceTypes"][0].clone();
+    let (status, created) =
+        create_resource(&app, &token, "ops", "tickets_project", "OPS", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let (status, created) = exclusion_group(&app, &token, "unused", &[], &["ops"]).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    fixture.write_manifest(&manifest(
+        vec![
+            project_with(|t| {
+                t["supportsExclusions"] = json!(false);
+                t["attributes"][0]["required"] = json!(true);
+            }),
+            queue_type(),
+        ],
+        vec![view_action(), queue_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    let change = type_change(&discovered, "project");
+    assert_eq!(change["outcome"], "needs_new_id");
+    assert_eq!(
+        change["details"],
+        json!(["attribute_made_required", "exclusions_unsupported"])
+    );
+    assert_eq!(change["blockingGroups"], json!([]));
+    assert_eq!(action_statuses(&discovered)["issue.view"], "quarantined");
+    assert_eq!(
+        discovered["preview"]["manifest"]["serviceMetadata"]["resourceTypes"][0],
+        old_type
+    );
+    // Even an explicit attempt to select the unsupported tool is rejected.
+    let tools = discovered["preview"]["manifest"]["tools"]
+        .as_array()
+        .unwrap();
+    let selections = json!(tools.iter().map(|tool| json!({"source":tool["definition"]["source"],"action":tool["definition"]["action"],"readOnly":true})).collect::<Vec<_>>());
+    let (status, rejected) = accept_with(&app, &token, &discovered, selections, json!({})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    let accepted = accept(&app, &token, &discovered).await;
+    assert_eq!(
+        accepted["service"]["acceptedMetadata"]["resourceTypes"][0],
+        old_type
+    );
+    assert_eq!(action_statuses(&accepted)["issue.view"], "quarantined");
+    assert_eq!(
+        listed_type(&app, &token, "tickets_project").await["supportsExclusions"],
+        true
+    );
+    // A later actual downgrade (without the incompatible attribute edit) checks exclusions.
+    fixture.write_manifest(&manifest(
+        vec![
+            project_with(|t| t["supportsExclusions"] = json!(false)),
+            queue_type(),
+        ],
+        vec![view_action(), queue_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    assert_eq!(type_change(&discovered, "project")["blocked"], true);
+    let (status, rejected) = accept_with(
+        &app,
+        &token,
+        &discovered,
+        all_selections(&discovered),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    replace_group_exclusions(&app, &token, "unused", &[]).await;
+    accept(&app, &token, &discovered).await;
+    fixture.write_manifest(&initial_manifest());
+    let discovered = discover(&app, &token).await;
+    assert_eq!(
+        type_change(&discovered, "project")["details"],
+        json!(["exclusions_supported"])
+    );
+    accept(&app, &token, &discovered).await;
+    let (status, created) = exclusion_group(&app, &token, "supported-again", &[], &["ops"]).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    drop(app);
+    broker.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn concurrent_excluded_membership_and_capability_acceptance_cannot_publish_invalid_catalog() {
+    let fixture = CommandFixture::new(SERVICE, &initial_manifest());
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    accepted_import(&app, &token).await;
+    let (status, created) =
+        create_resource(&app, &token, "ops", "tickets_project", "OPS", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    fixture.write_manifest(&manifest(
+        vec![
+            project_with(|t| t["supportsExclusions"] = json!(false)),
+            queue_type(),
+        ],
+        vec![view_action(), queue_action(), ping_action()],
+    ));
+    let discovered = discover(&app, &token).await;
+    let ((accept_status, accepted), (group_status, created)) = tokio::join!(
+        accept_with(
+            &app,
+            &token,
+            &discovered,
+            all_selections(&discovered),
+            json!({})
+        ),
+        exclusion_group(&app, &token, "racing", &[], &["ops"]),
+    );
+    match (accept_status, group_status) {
+        (StatusCode::OK, status) => {
+            assert!(
+                matches!(status, StatusCode::BAD_REQUEST | StatusCode::CONFLICT),
+                "{created}"
+            );
+            assert_eq!(
+                listed_type(&app, &token, "tickets_project").await["supportsExclusions"],
+                false
+            );
+        }
+        (StatusCode::BAD_REQUEST, StatusCode::OK) => {
+            assert_eq!(
+                accepted["target"]["resourceGroups"],
+                json!([{"type":"tickets_project","id":"racing","resourceIds":["ops"]}])
+            );
+            assert_eq!(
+                listed_type(&app, &token, "tickets_project").await["supportsExclusions"],
+                true
+            );
+        }
+        statuses => panic!("unexpected outcome {statuses:?}: {accepted} {created}"),
+    }
+    drop(app);
+    broker.stop().await;
+    BrokerRuntime::new(fixture.config.clone()).unwrap();
 }

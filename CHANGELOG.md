@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Resource type metadata API additions require consumer updates.**
+  `ImportedResourceTypeDeclaration`, exposed through the host's `test-support`
+  API, gains the public `supports_exclusions` field. Downstream struct literals
+  must supply it (`true` preserves existing behavior), and exhaustive
+  destructuring must include it or use `..`. Deserializing SDK
+  `ResourceTypeMetadata` now requires the `supportsExclusions` boolean, which
+  the Broker always includes in resource-type listings and catalogs.
+  ([#54](https://github.com/kcosr/agent-access-broker/pull/54))
 - **Token types per connection.** `token_profile` is replaced by an optional
   `token_profiles` list. Without `oauth`, a connection whose services accept
   only one type needs none. `service_account_token_profiles` gives service
@@ -25,6 +33,15 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Resource types can opt out of group exclusions.** Command manifests can
+  set `supportsExclusions: false`, and SDK descriptors offer
+  `with_supports_exclusions(false)`. The portal hides unsupported exclusion
+  choices; catalog validation and import acceptance reject invalid memberships,
+  with blocking group references in import review. The default remains `true`,
+  and command authorization payloads are unchanged. After storing an opt-out,
+  rollback to a Broker predating the field requires the pre-upgrade backup; see
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+  ([#54](https://github.com/kcosr/agent-access-broker/pull/54))
 - **Why an OAuth connection is not eligible.** When a connection does not
   qualify for its permission profile at consent or after a refresh, the Broker
   logs a `permission_ineligible` warning naming the requested scopes the token

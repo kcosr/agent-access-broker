@@ -2178,6 +2178,20 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 
 Run it whenever the reference command or the contract it documents changes.
 
+The command manifest and core metadata tests cover the default-true
+`supportsExclusions` capability, strict boolean parsing and persisted opt-outs.
+Core resource-management tests reject unsupported exclusions without grant
+references, including disabled resources and unused mixed-type groups, and
+check transaction rollback and restart validation. Core type-change tests cover
+retained and restored declarations and their acceptance plans. The host's
+`tests/imports_command_types.rs` covers opt-out preview blockers, exclusions
+added after preview, concurrent acceptance and group edits, and incompatible
+attribute changes that keep the entire
+accepted type. Portal unit tests and the mocked browser specs
+`resource-exclusions.spec.ts` and `imports-command-review.spec.ts` cover
+capability-aware choices, removable stale selections, version conflicts and
+blocking-group links.
+
 `crates/agent-access/tests/command_import_smoke.rs`, part of `cargo test`,
 approves the reference command in a real broker and drives the shipped CLI
 and HTTP API: `describe` discovery and acceptance, the `username_token`

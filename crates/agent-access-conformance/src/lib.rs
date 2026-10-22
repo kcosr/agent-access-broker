@@ -77,7 +77,8 @@ pub static CONFORMANCE_ENDPOINT_RESOURCE: ResourceTypeDescriptor = ResourceTypeD
     "alerts",
     is_endpoint_name,
     &CONFORMANCE_ENDPOINT_ATTRIBUTES,
-);
+)
+.with_supports_exclusions(false);
 
 static CONFORMANCE_ENDPOINT_ATTRIBUTES: [ResourceAttributeDescriptor; 1] =
     [ResourceAttributeDescriptor::required(

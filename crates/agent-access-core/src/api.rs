@@ -936,10 +936,11 @@ fn route_response_schema(route: &HttpRouteSpec, resource_type_ids: &[String]) ->
             "description":"Every resource type this broker registers, in registration order.",
             "properties":{"resourceTypes":{"type":"array","items":{
                 "type":"object","additionalProperties":false,
-                "required":["id","label","pluralLabel","example","selectors"],
+                "required":["id","label","pluralLabel","example","selectors","supportsExclusions"],
                 "properties":{
                     "id":{"enum":resource_type_ids},
                     "label":{"type":"string"},"pluralLabel":{"type":"string"},"example":{"type":"string"},
+                    "supportsExclusions":{"type":"boolean","description":"Whether resources of this type may be excluded from resource groups."},
                     "selectors":{"type":"array","items":{"enum":["exact","namespace","all"]}},
                     "namespace":{"type":"object","additionalProperties":false,
                         "required":["label","membersLabel","example"],

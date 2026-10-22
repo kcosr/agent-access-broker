@@ -1,6 +1,7 @@
 import { vi } from "vitest";
-vi.mock("../src/app/session", () => ({ useSession: () => ({ session: { authenticated: true, role: "admin", selfServiceEnabled: true, principal: "admin" } }) }));
-import { describe, expect, test } from "vitest";
+const sessionFixture = vi.hoisted(() => ({ authenticated: true, role: "admin" as "admin" | "service_policy_manager", selfServiceEnabled: true, principal: "admin" }));
+vi.mock("../src/app/session", () => ({ useSession: () => ({ session: sessionFixture }) }));
+import { afterEach, describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ImportPreviewResult, ImportResourceTypeChange } from "../src/import-types";
@@ -311,6 +312,7 @@ describe("acceptance errors", () => {
         { id: "toml:0", reasonCode: "credential_mode_invalid", reason: "policy.grants[0] subjects[0] ...; policy.grants[0] subjects[1] ..." },
         { id: "", reasonCode: "credential_mode_invalid", reason: "policy grant subjects[0] unattributed" }
       ],
+      resourceGroups: [],
       resources: [
         { type: "ticketing_project", id: "legacy" },
         { type: "ticketing_project", id: "web" },
@@ -385,5 +387,54 @@ describe("removed resource types", () => {
     expect(ids()).not.toContain("ticketing_queue");
     expect(ids("ticketing_queue")).toContain("ticketing_queue");
     expect(ids()[0]).toBe(RESOURCE_TYPES[0]!.id);
+  });
+});
+
+
+afterEach(() => { sessionFixture.role = "admin"; });
+
+describe("resource type exclusion capability review", () => {
+  test("omitted capability stays supported while opt-out and its group blockers are explicit", () => {
+    expect(renderReview(commandDiscovered())).toContain("exclusions supported");
+    const data = commandRefreshed();
+    data.preview!.manifest.serviceMetadata!.resourceTypes[0]!.supportsExclusions = false;
+    data.resourceTypeChanges = [{ ...data.resourceTypeChanges![0]!, details: ["exclusions_unsupported"], blocked: true, blockingGroups: [{ id: "engineering", resourceIds: ["ops"] }] }];
+    const html = renderReview(data);
+    expect(html).toContain("exclusions not supported (inclusions only)");
+    expect(html).toContain("Changed: exclusions no longer supported.");
+    expect(html).toContain("remove the listed exclusions from these groups");
+    expect(html).toContain('href="/ui/admin/catalog/resource-groups?item=engineering"');
+    expect(html).toContain('href="/ui/admin/catalog/resources?item=ops"');
+    expect(html).not.toContain("until you edit or delete");
+    expect(acceptButton(html)).toContain('disabled=""');
+  });
+
+  test("combined needs-new-ID changes retain the accepted capability, and enabling exclusions is reviewable", () => {
+    const data = commandRefreshed();
+    // NeedsNewId previews already carry the retained accepted declaration;
+    // details still enumerate the proposed changes that will not apply.
+    data.resourceTypeChanges = [{ ...data.resourceTypeChanges![0]!, details: ["attribute_pattern", "exclusions_unsupported"], outcome: "needs_new_id", blocked: false }];
+    expect(renderReview(data)).toContain("The previously accepted type, including its exclusion support, is retained.");
+    data.preview!.manifest.serviceMetadata!.resourceTypes[0]!.supportsExclusions = true;
+    data.resourceTypeChanges[0] = { ...data.resourceTypeChanges[0]!, details: ["exclusions_supported"], outcome: "applied" };
+    const html = renderReview(data);
+    expect(html).toContain("Changed: exclusions supported.");
+    expect(acceptButton(html)).not.toContain('disabled=""');
+  });
+
+  test("transactional group-only refusals explain membership removal and gate catalog links", () => {
+    const error = new ApiError("refused", 400, "input_invalid", undefined, undefined, undefined, {
+      affectedGrants: [], resources: [], resourceGroups: [{ type: "ticketing_project", id: "engineering", resourceIds: ["ops"] }]
+    });
+    const render = () => renderToStaticMarkup(createElement(ImportErrorAlert, { error }));
+    const html = render();
+    expect(html).toContain("Remove the listed exclusions from these groups, then refresh the preview");
+    expect(html).toContain('href="/ui/admin/catalog/resource-groups?item=engineering"');
+    expect(html).not.toContain("Edit or delete them");
+    sessionFixture.role = "service_policy_manager";
+    const restricted = render();
+    expect(restricted).toContain("engineering");
+    expect(restricted).toContain("ops");
+    expect(restricted).not.toContain('href="/ui/admin/catalog');
   });
 });

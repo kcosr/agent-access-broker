@@ -365,16 +365,30 @@ removed type, with `details` naming what changed; preview results add
 resource IDs), `editable` for an added type's ID and `blocked` when accepting
 now would be rejected because of the type.
 
+Types default to `supportsExclusions: true`; `false` allows inclusions but forbids
+excluded group memberships. Listings and the runtime catalog always expose the
+resolved boolean. Accepted import metadata may omit the default `true` value.
+The preview's `blockingGroups` lists `{id, resourceIds}` for groups whose excluded
+members prevent an opt-out, at most 100 groups and 100 resource IDs per group.
+Remove those exclusions in the resource-group editor before accepting the change.
+
 | Change | Outcome |
 | --- | --- |
 | Any change to a type with no stored resources, or a new type | `applied` |
 | Label, plural label, example, attribute label or description, attribute order | `applied` |
 | New optional attribute, or a required attribute made optional | `applied` |
+| Exclusions enabled (`exclusions_supported`) | `applied` |
+| Exclusions disabled (`exclusions_unsupported`) | `applied` only when no group excludes a resource of the type; otherwise `blocked`, with memberships in `blockingGroups` |
 | Removed attribute | `applied`; acceptance deletes its stored values and advances each affected resource's version (`affectedResources`) |
 | Pattern or `maxLength` change | `applied` when every stored exact value still matches; otherwise `blocked`, listing the values to edit or delete in `blockingResources` |
 | New required attribute, optional attribute made required, or changed attribute pattern, on a type with exact resources | `needs_new_id`: the accepted declaration stays and the actions using the type are unsupported, so a refresh quarantines them; declare the type under a new id. Resources with an `all` selector hold no attribute values and do not count |
 | Type no longer declared, with resources of any selector | `retained`: the type stays registered (`removed: true` in the accepted metadata and in resource type listings) and accepts no new resources until its resources are deleted |
 | Type no longer declared, without resources | `dropped` |
+
+A `needs_new_id` outcome retains the entire accepted declaration, including its
+exclusion capability; none of that type's proposed changes apply. Retained removed
+types also keep their capability. A restored type is checked against its retained
+declaration before new changes apply.
 
 Acceptance rechecks every decision that depends on stored resources inside its
 transaction, under the managed policy mutation lock that resource writes also
@@ -383,7 +397,7 @@ for example a resource of a type gaining a required attribute or of a type being
 dropped, acceptance is rejected and names the resources; edit or delete them,
 or refresh. The error's `target.resources` lists them as `{type, id}`, at most
 100 per type. Any acceptance that changes the import's types also checks every
-stored resource and its attribute bindings against the new registry before it
+stored resource, group exclusion and attribute binding against the new registry before it
 commits. An acceptance that deletes attribute values or drops a type advances
 the managed policy revision and publishes the resulting policy with the new
 registry and catalog; its result includes `resourceTypeEffects` with the
@@ -393,6 +407,14 @@ success completion audit record with the Broker type IDs it added, the affected
 resources with the deleted attribute names (never values; at most 100
 resources, with their total), the dropped types and the policy revisions. Type
 changes never quarantine actions on their own.
+
+An exclusion added after preview can also block acceptance, even when its group
+is unused or its resource is disabled or context-ineligible. That rejection's
+`target.resourceGroups` names `{type, id, resourceIds}`: the Broker type ID, group
+ID and excluded resource IDs. Lists and memberships are bounded at 100. Correct
+the group's exclusions before retrying. A rejected acceptance changes neither
+accepted metadata nor the published runtime; any quarantine already caused by
+discovery remains in effect.
 
 An import that already has accepted actions may accept a preview with no
 selections. That acceptance stores the preview's service metadata and applies

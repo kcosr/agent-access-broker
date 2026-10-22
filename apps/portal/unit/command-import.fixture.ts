@@ -76,7 +76,7 @@ export function commandMetadata(version = "1.4.0", resourceTypes: ImportResource
 }
 
 function change(entry: Partial<ImportResourceTypeChange> & Pick<ImportResourceTypeChange, "id" | "brokerType" | "change" | "outcome">): ImportResourceTypeChange {
-  return { details: [], resourceCount: 0, blockingResources: [], affectedResources: [], editable: false, blocked: false, ...entry };
+  return { details: [], resourceCount: 0, blockingResources: [], blockingGroups: [], affectedResources: [], editable: false, blocked: false, ...entry };
 }
 
 function record(id: string, status: ImportActionRecord["status"], definition: ImportActionDefinition, readOnly: boolean): ImportActionRecord {
@@ -182,8 +182,8 @@ export function commandImportList(services: ImportPreviewResult[], names = ["tic
 
 /** `GET /v1/resource-types` entries of the types `commandAccepted` registers. */
 export const COMMAND_RESOURCE_TYPES: ResourceTypeMetadata[] = [
-  { id: "ticketing_project", label: "Project", pluralLabel: "Projects", example: "OPS", selectors: ["exact", "all"], attributes: PROJECT.attributes.map(({ name, label, description, required }) => ({ name, label, description, required, secret: true })), importedService: "ticketing" },
-  { id: "ticketing_queue", label: "Queue", pluralLabel: "Queues", example: "triage", selectors: ["exact", "all"], importedService: "ticketing" }
+  { id: "ticketing_project", label: "Project", pluralLabel: "Projects", example: "OPS", supportsExclusions: true, selectors: ["exact", "all"], attributes: PROJECT.attributes.map(({ name, label, description, required }) => ({ name, label, description, required, secret: true })), importedService: "ticketing" },
+  { id: "ticketing_queue", label: "Queue", pluralLabel: "Queues", example: "triage", supportsExclusions: true, selectors: ["exact", "all"], importedService: "ticketing" }
 ];
 
 /**
@@ -256,7 +256,7 @@ export const PROTOTYPE_RESOURCE_TYPES: ResourceTypeMetadata[] = prototypeNamedTy
   label: type.label,
   pluralLabel: type.pluralLabel,
   example: type.example,
-  selectors: ["exact", "all"],
+  supportsExclusions: true, selectors: ["exact", "all"],
   attributes: type.attributes.map(({ name, label, description, required }) => ({ name, label, description, required, secret: true })),
   importedService: "ticketing"
 }));

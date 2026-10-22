@@ -36,6 +36,40 @@ pub fn validate_resource_definition_types(
         .collect()
 }
 
+/// Validates type contracts for the entire catalog, including unused groups.
+/// Exclusion support is a property of the type, independent of a resource's
+/// selector, enabled state, execution contexts, or current grant/token use.
+pub(crate) fn validate_resource_catalog_types(
+    registry: &ResourceTypeRegistry,
+    resources: &[ResourceDefinition],
+    groups: &[ResourceGroupDefinition],
+) -> Vec<String> {
+    let mut errors = validate_resource_definition_types(registry, resources);
+    let resources: BTreeMap<_, _> = resources
+        .iter()
+        .map(|resource| (resource.id.as_str(), resource))
+        .collect();
+    for group in groups {
+        for id in &group.excluded_resource_ids {
+            // Structural catalog validation reports unknown references; type
+            // validation above reports unregistered resource types.
+            let Some(resource) = resources.get(id.as_str()) else {
+                continue;
+            };
+            if registry
+                .get(&resource.resource_type)
+                .is_some_and(|descriptor| !descriptor.supports_exclusions())
+            {
+                errors.push(format!(
+                    "resource group {} cannot exclude resource {}: resource type {} does not support exclusions",
+                    group.id, resource.id, resource.resource_type
+                ));
+            }
+        }
+    }
+    errors
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceGroupDefinition {
@@ -415,6 +449,56 @@ mod tests {
             resource_group_ids: groups.iter().map(|s| (*s).into()).collect(),
         }
     }
+    #[test]
+    fn exclusion_capability_validates_every_member_without_changing_resolution() {
+        use agent_access_provider::GIT_REPOSITORY_RESOURCE;
+        use std::sync::Arc;
+        let registry = ResourceTypeRegistry::from_shared([Arc::new(
+            GIT_REPOSITORY_RESOURCE
+                .clone()
+                .with_supports_exclusions(false),
+        )])
+        .unwrap();
+        // Selector kind, enabled state and execution context do not exempt an
+        // excluded member. The same member may also be included.
+        for selector in [
+            exact("org/repository"),
+            namespace("org"),
+            ResourceSelector::All,
+        ] {
+            for enabled in [false, true] {
+                let resources = [resource(
+                    "selected",
+                    selector.clone(),
+                    &["external"],
+                    enabled,
+                )];
+                let mut groups = [ResourceGroupDefinition {
+                    id: "unused".into(),
+                    name: "Unused group".into(),
+                    included_resource_ids: vec!["selected".into()],
+                    excluded_resource_ids: vec![],
+                }];
+                assert!(validate_resource_catalog_types(&registry, &resources, &groups).is_empty());
+                groups[0].excluded_resource_ids.push("selected".into());
+                assert_eq!(
+                    validate_resource_catalog_types(&registry, &resources, &groups),
+                    [
+                        "resource group unused cannot exclude resource selected: resource type git_repository does not support exclusions"
+                    ]
+                );
+                assert!(
+                    validate_resource_catalog_types(
+                        &crate::tests::test_resource_types(),
+                        &resources,
+                        &groups
+                    )
+                    .is_empty()
+                );
+            }
+        }
+    }
+
     #[test]
     fn resource_ids_reject_url_dot_segments() {
         for id in [".", ".."] {

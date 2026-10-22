@@ -335,10 +335,10 @@ pub struct PolicyValidationIssue {
     pub message: String,
 }
 
-/// An import change refused because stored resources or retained grants
+/// An import change refused because stored resources, group exclusions or retained grants
 /// would not stay valid under it. The message names them for people; the
 /// lists name them for clients, which management reports as
-/// `target.affectedGrants` and `target.resources`.
+/// `target.affectedGrants`, `target.resources` and `target.resourceGroups`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -348,6 +348,8 @@ pub struct ImportChangeBlocked {
     pub affected_grants: Vec<ImportBlockingGrant>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<ImportBlockingResource>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resource_groups: Vec<ImportBlockingResourceGroup>,
 }
 
 /// A retained grant the change would leave invalid, with the policy
@@ -359,6 +361,17 @@ pub struct ImportBlockingGrant {
     pub id: String,
     pub reason_code: String,
     pub reason: String,
+}
+
+/// An excluded group membership preventing a resource type capability change.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBlockingResourceGroup {
+    #[serde(rename = "type")]
+    pub resource_type: String,
+    pub id: String,
+    pub resource_ids: Vec<String>,
 }
 
 /// A stored resource that prevents the change, by Broker type and ID.

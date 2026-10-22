@@ -4,7 +4,7 @@
 // acceptance moves the import to the next queued state; requests are recorded.
 import type { Page } from "@playwright/test";
 import type { ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportPreviewResult, ImportResourceTypeEffects } from "../../src/import-types";
-import type { ResourceRecord, ResourceTypeMetadata, Session } from "../../src/types";
+import type { ResourceGroupRecord, ResourceGroupWriteBody, ResourceRecord, ResourceTypeMetadata, Session } from "../../src/types";
 import { RESOURCE_TYPES } from "../../unit/resource-types.fixture";
 import { COMMAND_RESOURCE_TYPES, commandDraft, commandImportList, commandPolicyService } from "../../unit/command-import.fixture";
 
@@ -29,6 +29,9 @@ export type CommandImportApi = {
   /** The command import's entries of `GET /v1/resource-types`. */
   resourceTypes: ResourceTypeMetadata[];
   resources: ResourceRecord[];
+  resourceGroups: ResourceGroupRecord[];
+  savedGroups: ResourceGroupWriteBody[];
+  groupSaveError: string | null;
   /** Bodies of resource creations, which add to `resources`. */
   createdResources: Array<Record<string, unknown>>;
   created: ImportDefinition[];
@@ -59,7 +62,7 @@ function recordResult(data: ImportPreviewResult) {
 }
 
 export async function mockCommandImportApi(page: Page, current: ImportPreviewResult | null = null): Promise<CommandImportApi> {
-  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, acceptConfirmation: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], createdResources: [], created: [], accepted: [], credentials: [], errors: [] };
+  const api: CommandImportApi = { current, discoveries: [], acceptances: [], acceptBlocked: null, acceptConfirmation: null, commandImports: ["ticketing", "deploy-tools"], resourceTypes: COMMAND_RESOURCE_TYPES, resources: [], resourceGroups: [], savedGroups: [], groupSaveError: null, createdResources: [], created: [], accepted: [], credentials: [], errors: [] };
   page.on("pageerror", (error) => api.errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
@@ -109,11 +112,24 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
       result = {
         services: api.current && api.current.service.actions.length ? [commandPolicyService(api.current)] : [],
         resources: api.resources,
-        resourceGroups: [],
+        resourceGroups: api.resourceGroups,
         executionContexts: { allowedValues: ["internal", "external"], defaultContext: "internal", contextRequired: false },
         subjects: { users: [], groups: [], anonymous: false }
       };
-    } else if (pathname === "/v1/admin/policy/resources" && method === "POST") {
+    } else if (/^\/v1\/admin\/policy\/resource-groups(?:\/[^/]+)?$/.test(pathname) && (method === "POST" || method === "PATCH")) {
+      const body = request.postDataJSON() as ResourceGroupWriteBody;
+      api.savedGroups.push(body);
+      if (api.groupSaveError) {
+        await route.fulfill({ status: 400, json: { ok: false, reasonCode: "input_invalid", error: { message: api.groupSaveError } } });
+        return;
+      }
+      const id = method === "PATCH" ? decodeURIComponent(pathname.split("/").at(-1)!) : `group-${api.savedGroups.length}`;
+      const { expectedVersion: _expectedVersion, ...definition } = body;
+      const record = { ...definition, id, version: (api.resourceGroups.find((group) => group.id === id)?.version ?? 0) + 1, ...stamp };
+      api.resourceGroups = [...api.resourceGroups.filter((group) => group.id !== id), record];
+      result = { record, previousRevision: { generation: 1 }, revision: { generation: 2 } };
+    } else if (pathname === "/v1/admin/policy/resource-groups") result = api.resourceGroups;
+    else if (pathname === "/v1/admin/policy/resources" && method === "POST") {
       const body = request.postDataJSON() as Record<string, unknown> & Pick<ResourceRecord, "resourceType" | "selector" | "displayName" | "allowedExecutionContexts" | "enabled">;
       api.createdResources.push(body);
       const { attributes, ...definition } = body;

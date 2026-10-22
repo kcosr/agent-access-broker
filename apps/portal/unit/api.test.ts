@@ -52,3 +52,12 @@ test("management errors preserve structured conflict identity independently of m
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "Already exists" }, target: { conflict } }), { status: 400 })));
   await expect(brokerApi.saveResource({ authenticated: true, role: "admin" }, { resourceType: "git_repository", selector: { kind: "exact", value: "engineering/payments" }, enabled: true, allowedExecutionContexts: ["default"] })).rejects.toMatchObject({ status: 400, reasonCode: "input_invalid", message: "Already exists", conflict });
 });
+
+
+test("a refusal with only group exclusions preserves its structured memberships", async () => {
+  const resourceGroups = [{ type: "ticketing_project", id: "engineering", resourceIds: ["ops"] }];
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "input_invalid", error: { message: "refused" }, target: { resourceGroups } }), { status: 400 })));
+  await expect(brokerApi.acceptImport({ authenticated: true, role: "admin" }, "ticketing", { expectedVersion: 1, expectedCatalogRevision: 1, manifestHash: "hash", selections: [], confirmAffectedGrants: false })).rejects.toMatchObject({
+    status: 400, blocked: { affectedGrants: [], resources: [], resourceGroups }
+  });
+});

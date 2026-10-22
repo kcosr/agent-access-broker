@@ -219,6 +219,8 @@ every change, and accepting the preview applies it:
 | New type | Applied |
 | Label, plural label, example, attribute label or description | Applied |
 | New optional attribute; required attribute made optional | Applied |
+| `supportsExclusions` changes from `false` to `true` | Applied |
+| `supportsExclusions` changes from `true` to `false` | Applied only when no group excludes any resource of the type; the preview names blocking groups and memberships |
 | Removed attribute | Applied. Its stored values are deleted on acceptance, which advances each affected resource's version as an attribute edit does; the preview names the affected resources |
 | Pattern or `maxLength` change | Applied if every stored resource value of the type still matches. Otherwise the preview lists the resources that do not; edit or delete them before accepting |
 | New required attribute, optional attribute made required, or changed attribute pattern, on a type with exact resources | Not applied: the actions using the type become unsupported and must declare it under a new type ID. Stored attribute values are encrypted, so checking them would mean decrypting them |
@@ -229,10 +231,18 @@ Only resources with an exact selector hold attribute values. Resources that
 select all values of a type therefore never prevent an attribute change, but
 they do keep a removed type registered.
 
+When an incompatible attribute change needs a new type ID, the entire accepted
+declaration stays, including its exclusion capability. The preview lists all
+changes, but none of that type's changes apply; its actions remain unsupported
+and quarantined until a usable declaration is reviewed and accepted.
+
 Acceptance rechecks every decision that depends on stored resources inside its
 transaction. If a resource created or changed since the preview makes a change
 no longer allowed, acceptance is rejected and names the resources; fix them or
-refresh. Type changes never quarantine actions by themselves. The preview and
+refresh. It also rechecks excluded group memberships, including unused groups;
+remove blocking exclusions before accepting an opt-out. Rejection preserves the
+accepted metadata and runtime state from before acceptance. Type changes never
+quarantine actions by themselves. The preview and
 acceptance fields are described under
 [imported resource types](imported-services.md#imported-resource-types).
 
@@ -245,6 +255,15 @@ Resource type listings, `GET /v1/resource-types` and the runtime catalog's
 `resourceTypes`, name each imported type's `importedService` and mark a
 removed type with `removed: true`. The portal offers removed types for no new
 resources.
+
+Each listing includes the resolved `supportsExclusions` boolean. It defaults to
+`true`; a manifest can set it to `false` when its command cannot honor exclusions.
+The Broker then rejects all excluded group memberships of that type and the
+portal hides those exclusion choices. Inclusions remain available. The capability
+applies to every action using the type, including Broker-enforced actions, and
+to every selector kind. Declare separate types when actions need different
+exclusion capabilities. It does not change resource matching or the invocation
+payload.
 
 Dropping an unused removed type needs an acceptance even when no action is
 left to select. For an import that already has accepted actions, an
@@ -364,6 +383,13 @@ The command must use each grant's credential only for that grant's resources,
 filter its query or results accordingly, and answer a request it will not serve
 with `resource_forbidden`. The Broker cannot check this: an unfiltered search
 reaches whatever its credential can, as with other imports.
+
+A command that declares `supportsExclusions: false` must still fail with
+`resource_forbidden` if it receives an `except` boundary for that type. Never
+ignore the exceptions: a newly deployed command can run while its previous
+declaration is still accepted. Remove the type's existing group exclusions
+before deploying a command version that cannot enforce them, then refresh and
+accept the declaration. See [upgrade and rollback](operator-guide.md#upgrade-and-rollback).
 
 ## Credentials
 
@@ -494,6 +520,7 @@ must:
 | `resourceTypes[]` | At most 16 |
 | `.id` | `^[a-z][a-z0-9_]{0,31}$`, unique |
 | `.label`, `.pluralLabel` | 1–64 bytes |
+| `.supportsExclusions` | Optional boolean, default `true`. `false` disallows excluded group memberships of this type. `null` and non-booleans are rejected |
 | `.pattern` | Required. A [pattern](#patterns) matched against the whole value |
 | `.maxLength` | Default 256, at most 1,024 bytes |
 | `.example` | Required, nonempty, and must match `pattern` and `maxLength` |

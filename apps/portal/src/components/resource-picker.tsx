@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import type { PolicyServiceCatalog, ResourceCatalog, ResourceDefinition, ResourceSelection, ResourceType } from "../types";
 import { grantResourceChoices, type GrantResourceCatalog } from "../lib/grant-resources";
 import { resourceLabel } from "../lib/resource-labels";
-import { resourceTypeLabel, useResourceTypes } from "../lib/resource-types";
+import { resourceExclusionIssue, resourceTypeLabel, supportsResourceExclusions, useResourceTypes } from "../lib/resource-types";
 import { Banner, Checkbox, FilterInput } from "../workbench";
 
 /** A filterable checkbox list of resource entries; unknown selected IDs stay removable. */
@@ -13,27 +13,42 @@ export function ResourceChoices({
   selected,
   onChange,
   disabled = false,
-  label = "Filter resources"
+  label = "Filter resources",
+  purpose = "include",
+  savedSelection = []
 }: {
   resources: ResourceDefinition[];
   selected: string[];
   onChange: (ids: string[]) => void;
   disabled?: boolean;
   label?: string;
+  /** Group exclusions only offer types that support them; selected invalid entries remain removable. */
+  purpose?: "include" | "exclude";
+  /** Existing group exclusions are server-validated; cached metadata cannot invalidate them. */
+  savedSelection?: readonly string[];
 }) {
   const types = useResourceTypes();
   const [search, setSearch] = useState("");
   const query = search.trim().toLowerCase();
-  const matches = resources.filter((resource) => `${resourceLabel(types, resource)} ${resourceTypeLabel(types, resource.resourceType)}`.toLowerCase().includes(query));
+  const matches = resources.filter((resource) => {
+    const eligible = purpose === "include" || supportsResourceExclusions(types, resource.resourceType);
+    // Selected exclusions remain visible even when current metadata omits them,
+    // so an unavailable/stale type never silently changes the draft.
+    return (!eligible && selected.includes(resource.id)) || (eligible && `${resourceLabel(types, resource)} ${resourceTypeLabel(types, resource.resourceType)}`.toLowerCase().includes(query));
+  });
+  const hidden = purpose === "exclude" && resources.some((resource) => !supportsResourceExclusions(types, resource.resourceType));
   return (
     <div className="flex flex-col gap-2">
+      {hidden ? <p className="pt-prose wb-small">Only resources whose types support exclusions are offered here. Other resources can still be included.</p> : null}
       <FilterInput value={search} onChange={setSearch} placeholder="Filter resources…" label={label} hotkey={null} />
       <div className="pt-checks pt-checks--scroll">
         {matches.map((resource) => (
           <Checkbox
             key={resource.id}
             label={resourceLabel(types, resource)}
-            description={`${resourceTypeLabel(types, resource.resourceType)} · ${resource.allowedExecutionContexts.join(", ")}${resource.enabled ? "" : " · Disabled"}`}
+            description={purpose === "exclude"
+              ? `${resourceTypeLabel(types, resource.resourceType)} · ${resourceExclusionIssue(types, resource.resourceType, savedSelection.includes(resource.id)) ?? "Exclusion applies regardless of enabled state or execution context"}`
+              : `${resourceTypeLabel(types, resource.resourceType)} · ${resource.allowedExecutionContexts.join(", ")}${resource.enabled ? "" : " · Disabled"}`}
             checked={selected.includes(resource.id)}
             disabled={disabled}
             onChange={(event) => onChange(event.target.checked ? [...selected, resource.id] : selected.filter((id) => id !== resource.id))}
@@ -43,7 +58,7 @@ export function ResourceChoices({
         {selected
           .filter((id) => !resources.some((resource) => resource.id === id))
           .map((id) => (
-            <Checkbox key={id} label={id} description="Not in the current catalog" checked disabled={disabled} onChange={() => onChange(selected.filter((value) => value !== id))} />
+            <Checkbox key={id} label={id} description={purpose === "exclude" && savedSelection.includes(id) ? "Saved exclusion. Resource details are unavailable; the broker validates this membership when saving." : "Not in the current catalog"} checked disabled={disabled} onChange={() => onChange(selected.filter((value) => value !== id))} />
           ))}
       </div>
     </div>

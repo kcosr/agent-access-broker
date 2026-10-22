@@ -28,6 +28,7 @@ fn project() -> ImportedResourceTypeDeclaration {
         id: "project".into(),
         broker_type: "ticketing_project".into(),
         removed: false,
+        supports_exclusions: true,
         label: "Project".into(),
         plural_label: "Projects".into(),
         pattern: "[A-Z][A-Z0-9]{1,9}".into(),
@@ -45,6 +46,7 @@ fn queue() -> ImportedResourceTypeDeclaration {
         id: "queue".into(),
         broker_type: "ticketing_queue".into(),
         removed: false,
+        supports_exclusions: true,
         label: "Queue".into(),
         plural_label: "Queues".into(),
         pattern: "[a-z]+".into(),
@@ -73,6 +75,7 @@ fn exact(id: &str, value: &str, attributes: &[&str]) -> ImportedTypeResource {
         selector: ResourceSelector::Exact {
             value: value.into(),
         },
+        excluded_by: BTreeSet::new(),
         attributes: attributes.iter().map(|name| (*name).to_owned()).collect(),
     }
 }
@@ -306,6 +309,7 @@ fn resource_type_acceptances_recheck_the_resources_each_change_depends_on() {
                     id: "all-projects".into(),
                     selector: ResourceSelector::All,
                     attributes: BTreeSet::new(),
+                    excluded_by: BTreeSet::new(),
                 },
             ],
         ),
@@ -426,6 +430,7 @@ fn all_selector(id: &str) -> ImportedTypeResource {
         id: id.into(),
         selector: ResourceSelector::All,
         attributes: BTreeSet::new(),
+        excluded_by: BTreeSet::new(),
     }
 }
 
@@ -485,4 +490,109 @@ fn resource_type_previews_of_full_commands_keep_retained_types_within_bounds() {
     let preview = ImportedTypePreview::plan(Some(&accepted), &proposed, &stored).unwrap();
     assert_eq!(preview.target.resource_types.len(), 17);
     preview.target.validate().unwrap();
+}
+
+#[test]
+fn exclusion_capability_changes_check_group_memberships_without_changing_retention() {
+    let accepted = metadata(vec![project(), queue()]);
+    let mut next = project();
+    next.supports_exclusions = false;
+    assert_eq!(
+        details(&project(), &next),
+        vec![Detail::ExclusionsUnsupported]
+    );
+    assert_eq!(
+        details(&next, &project()),
+        vec![Detail::ExclusionsSupported]
+    );
+    assert!(
+        !imported_type_descriptor(&next)
+            .unwrap()
+            .supports_exclusions()
+    );
+    let mut exact = exact("ops", "OPS", &[]);
+    exact.excluded_by = BTreeSet::from(["unused".into(), "mixed".into()]);
+    let mut all = all_selector("all");
+    all.excluded_by = BTreeSet::from(["mixed".into()]);
+    let stored = usage(&[("ticketing_project", vec![exact, all])]);
+    let proposed = metadata(vec![next.clone(), queue()]);
+    let preview = ImportedTypePreview::plan(Some(&accepted), &proposed, &stored).unwrap();
+    assert_eq!(preview.changes[0].outcome, Outcome::Applied);
+    let plan = ImportedTypeAcceptance::plan(Some(&accepted), &preview.target).unwrap();
+    assert!(plan.violations(&stored).is_empty());
+    assert_eq!(
+        plan.group_violations(&stored)["ticketing_project"],
+        vec![
+            ImportedTypeBlockingGroup {
+                id: "mixed".into(),
+                resource_ids: vec!["all".into(), "ops".into()]
+            },
+            ImportedTypeBlockingGroup {
+                id: "unused".into(),
+                resource_ids: vec!["ops".into()]
+            },
+        ]
+    );
+    // The same preview can be accepted once the memberships are removed.
+    assert!(plan.group_violations(&usage(&[])).is_empty());
+    // Upgrades do not block on memberships.
+    assert!(
+        ImportedTypeAcceptance::plan(Some(&proposed), &accepted)
+            .unwrap()
+            .group_violations(&stored)
+            .is_empty()
+    );
+    // A simultaneous incompatible attribute change keeps the whole old type.
+    next.attributes[0].required = true;
+    let combined =
+        ImportedTypePreview::plan(Some(&accepted), &metadata(vec![next, queue()]), &stored)
+            .unwrap();
+    assert_eq!(combined.changes[0].outcome, Outcome::NeedsNewId);
+    assert!(
+        combined.changes[0]
+            .details
+            .contains(&Detail::ExclusionsUnsupported)
+    );
+    assert_eq!(combined.target, accepted);
+    assert!(
+        ImportedTypeAcceptance::plan(Some(&accepted), &combined.target)
+            .unwrap()
+            .group_violations(&stored)
+            .is_empty()
+    );
+    // Removing a type retains its capability while resources remain.
+    let removed =
+        ImportedTypePreview::plan(Some(&proposed), &metadata(vec![queue()]), &stored).unwrap();
+    let retained = removed
+        .target
+        .resource_types
+        .iter()
+        .find(|t| t.id == "project")
+        .unwrap();
+    assert!(retained.removed);
+    assert!(!retained.supports_exclusions);
+    let dropped =
+        ImportedTypePreview::plan(Some(&removed.target), &metadata(vec![queue()]), &usage(&[]))
+            .unwrap();
+    assert!(
+        dropped
+            .target
+            .resource_types
+            .iter()
+            .all(|t| t.id != "project")
+    );
+    // Restoring a formerly removed, exclusion-capable type still checks downgrades.
+    let mut retired = project();
+    retired.removed = true;
+    let retired_metadata = metadata(vec![retired, queue()]);
+    assert!(retired_metadata.resource_types[0].removed);
+    assert!(retired_metadata.resource_types[0].supports_exclusions);
+    let restored = ImportedTypePreview::plan(Some(&retired_metadata), &proposed, &stored).unwrap();
+    assert_eq!(restored.changes[0].change, Kind::Restored);
+    assert!(
+        !ImportedTypeAcceptance::plan(Some(&retired_metadata), &restored.target)
+            .unwrap()
+            .group_violations(&stored)
+            .is_empty()
+    );
 }

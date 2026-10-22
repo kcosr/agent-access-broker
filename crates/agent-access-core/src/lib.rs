@@ -3842,8 +3842,11 @@ pub(crate) fn normalized_policy_grant_validation_issues(
     let resource_catalog =
         match ResourceCatalog::new(&config.policy.resources, &config.policy.resource_groups)
             .and_then(|catalog| {
-                let errors =
-                    validate_resource_definition_types(resource_types, &config.policy.resources);
+                let errors = validate_resource_catalog_types(
+                    resource_types,
+                    &config.policy.resources,
+                    &config.policy.resource_groups,
+                );
                 if errors.is_empty() {
                     Ok(catalog)
                 } else {

@@ -28,6 +28,10 @@ export function useResourceActions() {
       ]);
     }
 
+    async function refreshResourceTypes() {
+      await queryClient.invalidateQueries({ queryKey: portalQueryKeys.resourceTypes(viewer) }, { throwOnError: true });
+    }
+
     async function saveResource(body: ResourceWriteBody, id?: string) {
       const result = await attempt((current) => brokerApi.saveResource(current, body, id));
       await refresh();
@@ -55,7 +59,15 @@ export function useResourceActions() {
     }
 
     async function saveGroup(body: ResourceGroupWriteBody, id?: string) {
-      const result = await attempt((current) => brokerApi.saveResourceGroup(current, body, id));
+      const result = await attempt((current) => brokerApi.saveResourceGroup(current, body, id)).catch(async (failure: unknown) => {
+        // Another operator may have changed a resource type while this editor
+        // was open. Keep its selections and original error, but update eligibility.
+        await Promise.allSettled([
+          refreshResourceTypes(),
+          queryClient.invalidateQueries({ queryKey: portalQueryKeys.resourceCatalog(viewer) })
+        ]);
+        throw failure;
+      });
       await refresh();
       toast(id ? "Resource group saved" : "Resource group added", { tone: "success" });
       return result.record;
@@ -76,6 +88,6 @@ export function useResourceActions() {
       });
     }
 
-    return { refresh, saveResource, setResourceEnabled, saveGroup, confirmDelete };
+    return { refresh, refreshResourceTypes, saveResource, setResourceEnabled, saveGroup, confirmDelete };
   }, [queryClient, viewer, attempt, confirm, toast]);
 }

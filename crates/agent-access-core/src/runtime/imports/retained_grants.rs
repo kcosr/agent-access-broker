@@ -110,6 +110,7 @@ impl BrokerRuntime {
                 ),
                 affected_grants,
                 resources: Vec::new(),
+                resource_groups: Vec::new(),
             },
         )))
     }
