@@ -224,9 +224,14 @@ other list of URL patterns, such as destinations a provider lets the upstream
 deliver to, `validate_url_patterns` applies the allowlist grammar (a fixed
 host, no embedded credentials, path segments that are literal, `*` or `**`)
 under a `UrlPatternPolicy` that chooses the schemes, whether the list may be
-empty, and whether queries, fragments and normalized repeats are rejected. None
-of them reads files, the process environment or secret references; the host
-resolves secret references such as a proxy's `password_ref`.
+empty, and whether queries, fragments and normalized repeats are rejected.
+`base_covered_by_patterns` checks offline that an allowlist reaches an API base
+the provider uses: some pattern on the base's scheme, host and port must be able
+to match a path at or under it (its path glob intersects `base/**`, with `*` and
+`**` anywhere), and query constraints are ignored. Coverage is not permission:
+each request is still checked against the allowlist. None of them reads files,
+the process environment or secret references; the host resolves secret
+references such as a proxy's `password_ref`.
 
 ### Building a provider
 
@@ -322,10 +327,13 @@ service's credentials act on, derived from its configuration alone: an
 `UpstreamAuthority` built with `UpstreamAuthority::from_base_url` (a normalized
 origin and instance path), optionally `.with_tenant(id)` and
 `.with_tenant_gateway(url)`. Services that consume one credential connection
-with token profiles must declare authorities naming the same instance, and an
-OAuth connection's dialect checks each consumer's authority (see
-[delegated access](#delegated-access)). A service that declares none cannot
-share a token connection with another service.
+with token profiles must declare authorities naming the same instance
+(`UpstreamAuthority::same_instance`): the same origin and instance path, and
+the same tenant and tenant gateway, or neither. Declare a tenant in one
+canonical spelling, since it is compared exactly. An OAuth connection's dialect
+checks each consumer's authority (see [delegated access](#delegated-access)). A
+service that declares none cannot share a token connection with another
+service.
 
 ### Token-only actions
 

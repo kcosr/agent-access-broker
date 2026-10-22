@@ -4383,6 +4383,7 @@ pub fn agent_access_provider::StableSigningKey::hmac_base64url(&self, &[u8], &[u
 pub fn agent_access_provider::attachment_upload_plan(&[&str], core::option::Option<usize>) -> agent_access_provider::MultipartUploadSpec
 pub fn agent_access_provider::attribution_audit_applied(core::option::Option<&serde_json::value::Value>) -> bool
 pub fn agent_access_provider::attribution_skip_target_absent_audit() -> serde_json::value::Value
+pub fn agent_access_provider::base_covered_by_patterns(&url::Url, &[alloc::string::String]) -> bool
 pub fn agent_access_provider::complete_upstream_trace(&mut reqwest::async_impl::response::Response, core::option::Option<agent_access_provider::ProviderReason>)
 pub fn agent_access_provider::current_correlation_context() -> core::option::Option<agent_access_provider::CorrelationContext>
 pub fn agent_access_provider::current_provider_action() -> core::option::Option<(alloc::string::String, alloc::string::String)>
