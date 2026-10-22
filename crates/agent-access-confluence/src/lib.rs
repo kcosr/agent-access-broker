@@ -4970,10 +4970,14 @@ impl ConfluenceProvider {
                         "contentType": attachment.content_type,
                     }));
                 }
-                // Delegated access that could not be presented, or that
-                // Confluence rejected, uploaded nothing: before any upload
-                // applied, the batch fails with the connection's own failure.
-                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                // A credential without a route, or delegated access that
+                // could not be presented or that Confluence rejected, uploaded
+                // nothing: before any upload applied, the batch fails with
+                // that failure.
+                Err(
+                    ConfluenceBackendError::Credential(error)
+                    | ConfluenceBackendError::Unroutable(error),
+                ) if successes.is_empty() => {
                     return Err(error);
                 }
                 Err(error) => {
@@ -5341,10 +5345,14 @@ impl ConfluenceProvider {
                         "attachment": upload_audit,
                     }));
                 }
-                // Delegated access that could not be presented, or that
-                // Confluence rejected, uploaded nothing: before any upload
-                // applied, the batch fails with the connection's own failure.
-                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                // A credential without a route, or delegated access that
+                // could not be presented or that Confluence rejected, uploaded
+                // nothing: before any upload applied, the batch fails with
+                // that failure.
+                Err(
+                    ConfluenceBackendError::Credential(error)
+                    | ConfluenceBackendError::Unroutable(error),
+                ) if successes.is_empty() => {
                     return Err(error);
                 }
                 Err(error) => {
@@ -6981,10 +6989,14 @@ impl ConfluenceProvider {
                         "contentType": attachment.content_type,
                     }));
                 }
-                // Delegated access that could not be presented, or that
-                // Confluence rejected, uploaded nothing: before any upload
-                // applied, the batch fails with the connection's own failure.
-                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                // A credential without a route, or delegated access that
+                // could not be presented or that Confluence rejected, uploaded
+                // nothing: before any upload applied, the batch fails with
+                // that failure.
+                Err(
+                    ConfluenceBackendError::Credential(error)
+                    | ConfluenceBackendError::Unroutable(error),
+                ) if successes.is_empty() => {
                     return Err(error);
                 }
                 Err(error) => {
@@ -7359,10 +7371,14 @@ impl ConfluenceProvider {
                         "attachment": upload_audit,
                     }));
                 }
-                // Delegated access that could not be presented, or that
-                // Confluence rejected, uploaded nothing: before any upload
-                // applied, the batch fails with the connection's own failure.
-                Err(ConfluenceBackendError::Credential(error)) if successes.is_empty() => {
+                // A credential without a route, or delegated access that
+                // could not be presented or that Confluence rejected, uploaded
+                // nothing: before any upload applied, the batch fails with
+                // that failure.
+                Err(
+                    ConfluenceBackendError::Credential(error)
+                    | ConfluenceBackendError::Unroutable(error),
+                ) if successes.is_empty() => {
                     return Err(error);
                 }
                 Err(error) => {
@@ -12646,8 +12662,9 @@ impl ConfluenceWrite {
             ConfluenceBackendError::AcceptedUnreadable(_) => Some(
                 MutationReceipt::applied_unverified("mutation_response", self.locators()),
             ),
-            // Delegated access that could not be presented, or that
-            // Confluence rejected, applied nothing and keeps its own reason.
+            // A credential without a route, and delegated access that could
+            // not be presented or that Confluence rejected, applied nothing
+            // and keep their own reasons.
             ConfluenceBackendError::Unauthorized
             | ConfluenceBackendError::Forbidden
             | ConfluenceBackendError::NotFound
@@ -12659,7 +12676,8 @@ impl ConfluenceWrite {
             | ConfluenceBackendError::Timeout
             | ConfluenceBackendError::ResponseTooLarge
             | ConfluenceBackendError::Protocol(_)
-            | ConfluenceBackendError::Credential(_) => None,
+            | ConfluenceBackendError::Credential(_)
+            | ConfluenceBackendError::Unroutable(_) => None,
         };
         let failure = map(error);
         match receipt {
@@ -12714,6 +12732,7 @@ fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
         | ConfluenceBackendError::Redirected
         | ConfluenceBackendError::Protocol(_) => "upstream_protocol_failed",
         ConfluenceBackendError::Credential(_) => "delegated_access_failed",
+        ConfluenceBackendError::Unroutable(_) => "credential_not_provisioned",
     }
 }
 

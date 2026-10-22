@@ -819,7 +819,8 @@ downloads and continuation binding alike: a classic API token
 (`api.atlassian.com`) on the configured cloud ID; a credential without a
 profile takes its kind's route. An unknown profile, a profile/kind mismatch and
 a gateway credential without a valid `cloud_id` are refused before anything is
-sent. The gateway route exists exactly when `cloud_id` is set, which must then
+sent, as `credential_not_provisioned`, the reason continuation binding reports
+for the same credential. The gateway route exists exactly when `cloud_id` is set, which must then
 be a UUID. Validation checks, per configured credential source, that the
 allowlist covers every API base the product uses on that source's route, with
 `base_covered_by_patterns` over the runtime allowlist grammar; coverage proves

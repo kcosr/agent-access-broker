@@ -657,9 +657,22 @@ pub struct AtlassianRouteUnavailable {
 }
 
 impl AtlassianRouteUnavailable {
+    /// `product`'s refusal of a credential without a route, such as one
+    /// [`AtlassianCredential::present`] reports.
+    pub fn new(product: AtlassianProduct, reason: AtlassianRouteError) -> Self {
+        Self { product, reason }
+    }
+
     /// Why the credential has no route.
     pub fn reason(&self) -> AtlassianRouteError {
         self.reason
+    }
+
+    /// The refusal as the provider reports it: a `credential_not_provisioned`
+    /// denial, as continuation binding reports the same credential, naming
+    /// why. Nothing was sent.
+    pub fn provider_error(&self) -> ProviderError {
+        ProviderError::deny(ReasonCode::CredentialNotProvisioned, self.to_string())
     }
 }
 
@@ -1005,14 +1018,18 @@ mod tests {
                 "the selected credential's kind does not match its Confluence token profile",
             ),
         ];
+        // Each refusal is reported as the credential denial continuation
+        // binding reports for the same credential.
         for (credential, routes, message) in messages {
+            let refusal = routes.for_credential(&credential).err().unwrap();
+            assert_eq!(refusal.to_string(), message);
             assert_eq!(
-                routes
-                    .for_credential(&credential)
-                    .err()
-                    .unwrap()
-                    .to_string(),
-                message
+                refusal.provider_error(),
+                ProviderError::deny(ReasonCode::CredentialNotProvisioned, message)
+            );
+            assert_eq!(
+                AtlassianRouteUnavailable::new(PRODUCT, refusal.reason()).provider_error(),
+                refusal.provider_error()
             );
         }
     }

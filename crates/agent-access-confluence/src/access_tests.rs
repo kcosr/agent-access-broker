@@ -460,6 +460,67 @@ async fn static_tokens_route_by_token_type() {
             "{credential:?}"
         );
     }
+
+    // A credential without a route is denied as not provisioned, in
+    // execution and verification alike, before anything is sent: an unknown
+    // profile, a profile of another kind, and a gateway credential (such as
+    // a secret store's bearer record) on a site without a cloud ID.
+    let mut site_only = site_config(&server);
+    site_only.cloud_id = None;
+    let without_gateway = ConfluenceProvider::with_backend(
+        site_only.clone(),
+        ProviderLimits::default(),
+        Arc::new(HttpConfluenceBackend::for_tests(
+            site_only,
+            ProviderLimits::default(),
+        )),
+    );
+    let sent = requests(&server).await.len();
+    for (provider, credential, message) in [
+        (
+            &provider,
+            credential_with_profile(basic_token(), "gitlab-access-token"),
+            "Confluence does not present the selected credential's token profile",
+        ),
+        (
+            &provider,
+            credential_with_profile(bearer_token(), "atlassian-api-token"),
+            "the selected credential's kind does not match its Confluence token profile",
+        ),
+        (
+            &without_gateway,
+            bearer_token(),
+            "Confluence OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.confluence.cloud_id",
+        ),
+        (
+            &without_gateway,
+            credential_with_profile(basic_token(), "atlassian-scoped-api-token"),
+            "Confluence OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.confluence.cloud_id",
+        ),
+    ] {
+        let denial = ProviderError::deny(ReasonCode::CredentialNotProvisioned, message);
+        let error = invoke(
+            provider,
+            InvocationBuilder::new("confluence", "page.view")
+                .inputs(json!({ "pageId": "123456" }))
+                .resources(space_scopes("ENG"))
+                .credential(credential.clone())
+                .lookup_credential(credential.clone())
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, denial, "{credential:?}");
+        assert_eq!(
+            provider
+                .verify_execution_credential(&credential, &crate::CorrelationContext::for_tests())
+                .await
+                .unwrap_err(),
+            denial,
+            "{credential:?}"
+        );
+    }
+    assert_eq!(requests(&server).await.len(), sent);
 }
 
 /// Static tokens keep their routes: a Basic API token reaches the site and a

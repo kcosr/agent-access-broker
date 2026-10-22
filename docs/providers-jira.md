@@ -349,7 +349,8 @@ tokens and OAuth use the Atlassian gateway
 (`https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/`), which requires
 `providers.jira.cloud_id`. A credential whose token profile Jira does not
 declare, or whose kind differs from its profile's, and a gateway credential
-without a `cloud_id` are refused before anything is sent. Every Jira request,
+without a `cloud_id` are refused before anything is sent, as
+`credential_not_provisioned`. Every Jira request,
 including each attachment redirect hop, must match `allowed_upstream_hosts`,
 so the allowlist must cover the REST paths in use (for example
 `https://<tenant_host>/rest/api/3/**`, and

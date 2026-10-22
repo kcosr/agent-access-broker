@@ -1292,8 +1292,9 @@ dependency_inward = "is blocked by"
   route, which requires providers.jira.cloud_id`.
 - A per-user `secret_store`, whose records carry their own kinds, is checked
   offline on the site route only. A `bearer_token` record whose gateway route
-  is unavailable (no `cloud_id`) or uncovered is refused at run time before
-  anything is sent.
+  is unavailable (no `cloud_id`) is refused at run time before anything is
+  sent, as `credential_not_provisioned`; one whose route the allowlist does
+  not cover is refused by the allowlist check.
 - Attachment downloads redirect to Atlassian's media host,
   `https://api.media.atlassian.com/`; allow it to download attachments. It is
   not required, and downloads fail at run time without it. A deployment

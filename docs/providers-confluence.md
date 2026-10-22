@@ -560,7 +560,8 @@ and other v2 calls, `https://<tenant_host>/wiki/api/v2/`). Scoped API tokens
 (`https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/...`), which
 requires `providers.confluence.cloud_id`. A credential whose token profile
 Confluence does not declare, or whose kind differs from its profile's, and a
-gateway credential without a `cloud_id` are refused before anything is sent.
+gateway credential without a `cloud_id` are refused before anything is sent,
+as `credential_not_provisioned`.
 Validation checks that the allowlist covers both bases of each configured
 credential's route.
 

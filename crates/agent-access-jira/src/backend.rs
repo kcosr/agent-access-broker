@@ -2,7 +2,7 @@
 use super::*;
 use agent_access_atlassian::{
     AtlassianAccessError, AtlassianClients, AtlassianCredential, AtlassianDownloadError,
-    AtlassianProduct, AtlassianRoutes,
+    AtlassianProduct, AtlassianRouteUnavailable, AtlassianRoutes,
 };
 use agent_access_provider::host::UpstreamClientFactory;
 
@@ -672,13 +672,21 @@ pub enum JiraBackendError {
     /// Jira's 401 applied nothing. Reported unchanged.
     #[error("Jira credential could not be presented")]
     Credential(ProviderError),
+    /// The selected static credential or delegated access has no route on
+    /// this site: a token profile Jira does not declare, a profile of
+    /// another kind, or a gateway route without a configured cloud ID.
+    /// Nothing was sent. Reported unchanged, as `credential_not_provisioned`.
+    #[error("Jira has no route for the selected credential")]
+    Unroutable(ProviderError),
 }
 
 impl From<AtlassianAccessError> for JiraBackendError {
     fn from(error: AtlassianAccessError) -> Self {
         match error {
             AtlassianAccessError::Credential(error) => Self::Credential(error),
-            _ => Self::Protocol("Jira cannot route the selected credential".to_string()),
+            AtlassianAccessError::Unroutable(reason) => Self::Unroutable(
+                AtlassianRouteUnavailable::new(JIRA_PRODUCT, reason).provider_error(),
+            ),
         }
     }
 }
@@ -749,7 +757,7 @@ pub(crate) fn jira_backend_error(error: JiraBackendError) -> ProviderError {
             ReasonCode::UpstreamProtocolFailed,
             "Jira response protocol error",
         ),
-        JiraBackendError::Credential(error) => error,
+        JiraBackendError::Credential(error) | JiraBackendError::Unroutable(error) => error,
     }
 }
 
@@ -779,8 +787,9 @@ pub(crate) fn jira_backend_reason_code(error: &JiraBackendError) -> ReasonCode {
         | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => ReasonCode::UpstreamProtocolFailed,
         // Never the outcome of reading a response; only presenting a
-        // credential reports it.
+        // credential reports them.
         JiraBackendError::Credential(_) => ReasonCode::CredentialInvalid,
+        JiraBackendError::Unroutable(_) => ReasonCode::CredentialNotProvisioned,
     }
 }
 
@@ -850,7 +859,7 @@ impl HttpJiraBackend {
     ) -> Result<&AtlassianClients, JiraBackendError> {
         self.routes
             .for_credential(credential)
-            .map_err(|error| JiraBackendError::Protocol(error.to_string()))
+            .map_err(|refusal| JiraBackendError::Unroutable(refusal.provider_error()))
     }
 
     /// Clients for one API base from the test host, routed through the

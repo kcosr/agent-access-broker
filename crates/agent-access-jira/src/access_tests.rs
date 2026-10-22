@@ -489,18 +489,30 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
             ProviderLimits::default(),
         )),
     );
+    const GATEWAY_UNAVAILABLE: &str = "Jira OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.jira.cloud_id";
+    const UNKNOWN_PROFILE: &str = "Jira does not present the selected credential's token profile";
+    const KIND_MISMATCH: &str =
+        "the selected credential's kind does not match its Jira token profile";
     let refused = [
-        (&without_gateway, scoped.clone()),
+        (&without_gateway, scoped.clone(), GATEWAY_UNAVAILABLE),
+        // Such as a secret store's bearer record on a site without one.
+        (
+            &without_gateway,
+            bearer_credential("record"),
+            GATEWAY_UNAVAILABLE,
+        ),
         (
             &provider,
             credential_with_profile(
                 basic_credential("alice@example.com", "token"),
                 "gitlab-access-token",
             ),
+            UNKNOWN_PROFILE,
         ),
         (
             &provider,
             credential_with_profile(bearer_credential("token"), "atlassian-scoped-api-token"),
+            KIND_MISMATCH,
         ),
         (
             &provider,
@@ -508,12 +520,22 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
                 basic_credential("alice@example.com", "token"),
                 "atlassian-bearer-token",
             ),
+            KIND_MISMATCH,
         ),
     ];
-    for (provider, credential) in refused {
+    // Each phase reports the same credential denial, as continuation
+    // binding does for the same credential.
+    for (provider, credential, message) in refused {
+        let denial = ProviderError::deny(ReasonCode::CredentialNotProvisioned, message);
         let fixture = ScopeRequestFixture::new("jira", "issue.view", inputs.clone())
             .lookup_credential(credential.clone());
-        assert!(provider.resolve_scopes(fixture.request()).await.is_err());
+        assert_eq!(
+            provider
+                .resolve_scopes(fixture.request())
+                .await
+                .unwrap_err(),
+            denial
+        );
         let error = provider
             .invoke(
                 InvocationBuilder::new("jira", "issue.view")
@@ -525,22 +547,34 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
             )
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
-        assert!(
+        assert_eq!(error, denial);
+        assert_eq!(
             provider
                 .verify_execution_credential(&credential, &crate::CorrelationContext::for_tests())
                 .await
-                .is_err()
+                .unwrap_err(),
+            denial
         );
-        assert!(
+        assert_eq!(
             provider
                 .backend
                 .attachment_content("10055", &AtlassianCredential::from_static(credential))
                 .await
-                .is_err()
+                .unwrap_err(),
+            JiraBackendError::Unroutable(denial)
         );
     }
     assert_eq!(requests(&server).await.len(), sent);
+    // A presentation refusal reports the same denial.
+    assert_eq!(
+        JiraBackendError::from(agent_access_atlassian::AtlassianAccessError::Unroutable(
+            agent_access_atlassian::AtlassianRouteError::UnknownProfile
+        )),
+        JiraBackendError::Unroutable(ProviderError::deny(
+            ReasonCode::CredentialNotProvisioned,
+            UNKNOWN_PROFILE
+        ))
+    );
 }
 
 /// A lookup's 401 spends the operation's one recovery: the rejected version

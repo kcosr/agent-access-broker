@@ -3024,10 +3024,13 @@ impl JiraProvider {
                         "attachment": upload_audit,
                     }));
                 }
-                // Delegated access that could not be presented, or that Jira
-                // rejected, uploaded nothing: before any upload applied, the
-                // batch fails with the connection's own failure.
-                Err(JiraBackendError::Credential(error)) if successes.is_empty() => {
+                // A credential without a route, or delegated access that
+                // could not be presented or that Jira rejected, uploaded
+                // nothing: before any upload applied, the batch fails with
+                // that failure.
+                Err(JiraBackendError::Credential(error) | JiraBackendError::Unroutable(error))
+                    if successes.is_empty() =>
+                {
                     return Err(error);
                 }
                 Err(error) => {
@@ -5957,8 +5960,9 @@ impl JiraWrite {
             | JiraBackendError::IssueCreateResponseInvalid { .. } => {
                 jira_backend_error(error).with_mutation_receipt(self.receipt())
             }
-            // Delegated access that could not be presented, or that Jira
-            // rejected, applied nothing and keeps its own reason.
+            // A credential without a route, and delegated access that could
+            // not be presented or that Jira rejected, applied nothing and keep
+            // their own reasons.
             JiraBackendError::Unauthorized
             | JiraBackendError::Forbidden
             | JiraBackendError::NotFound
@@ -5969,7 +5973,8 @@ impl JiraWrite {
             | JiraBackendError::Timeout
             | JiraBackendError::ResponseTooLarge
             | JiraBackendError::Protocol(_)
-            | JiraBackendError::Credential(_) => jira_backend_error(error),
+            | JiraBackendError::Credential(_)
+            | JiraBackendError::Unroutable(_) => jira_backend_error(error),
         }
     }
 }
@@ -6024,6 +6029,7 @@ fn sanitized_backend_reason(error: &JiraBackendError) -> &'static str {
         | JiraBackendError::Redirected
         | JiraBackendError::Protocol(_) => "upstream_protocol_failed",
         JiraBackendError::Credential(_) => "delegated_access_failed",
+        JiraBackendError::Unroutable(_) => "credential_not_provisioned",
     }
 }
 
