@@ -3005,7 +3005,7 @@ fn credential_input_schema_schema() -> Value {
 fn token_profiles_schema() -> Value {
     json!({
         "type": "array",
-        "description": "The token profiles the principal may store, in configuration order: the connection's user_token_profiles for a user, its service_account_token_profiles for a service account or system principal. A put names one as profile when there are several.",
+        "description": "The token profiles the principal may store, in configuration order: the connection's token_profiles, or its only possible type when it sets neither a list nor oauth; for a service account or system principal, service_account_token_profiles when set. A put names one as profile when there are several.",
         "items": {
             "type": "object", "additionalProperties": false,
             "required": ["profile", "label", "credentialKind", "inputSchema"],

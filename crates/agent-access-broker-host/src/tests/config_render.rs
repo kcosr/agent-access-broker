@@ -369,13 +369,13 @@ fn credential_value(credential: &CredentialConfig) -> Value {
 fn connection_value(connection: &ConnectionConfig) -> Value {
     let ConnectionConfig {
         display_name,
-        user_token_profiles,
+        token_profiles,
         service_account_token_profiles,
         oauth,
     } = connection;
     Fields::default()
         .opt("display_name", display_name.clone())
-        .opt("user_token_profiles", user_token_profiles.clone())
+        .opt("token_profiles", token_profiles.clone())
         .opt(
             "service_account_token_profiles",
             service_account_token_profiles.clone(),

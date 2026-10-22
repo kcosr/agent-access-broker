@@ -217,7 +217,8 @@ impl<'a> ValidationContext<'a> {
 /// - `service` is the shared execution credential: a static kind with the
 ///   token profile it names, if any.
 /// - `per_user_profiles` are the token profiles the service's per-user
-///   credential connection accepts, from its `user_token_profiles` and
+///   credential connection accepts, from its `token_profiles` (or the
+///   implicit type, when it sets neither a list nor `oauth`) and
 ///   `service_account_token_profiles` together, in configuration order and
 ///   each once, as this service declares them (name, kind, label and
 ///   route-bound flag). A listed profile the service does not declare is

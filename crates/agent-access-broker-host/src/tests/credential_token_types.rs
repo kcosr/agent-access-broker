@@ -54,11 +54,12 @@ impl Provider for LabeledJira {
     }
 }
 
-/// The configuration: the Git gateway consumes `git`, which accepts bearer
-/// tokens from people and bearer or basic tokens from service accounts and
-/// system principals (`people` overrides the people's list); Jira consumes
-/// `jira` with its labeled site token. Alice (a user) and robot (a service
-/// account) hold per_user grants on both.
+/// The configuration: the Git gateway consumes `git`, whose
+/// `token_profiles` accept bearer tokens from people, and whose
+/// service-account override accepts bearer or basic tokens from service
+/// accounts and system principals; Jira consumes `jira` with its labeled
+/// site token. Alice (a user) and robot (a service account) hold per_user
+/// grants on both.
 struct Setup {
     config: BrokerConfig,
     alice: String,
@@ -551,7 +552,7 @@ async fn kind_changes_keep_tokens_and_unaccepted_rows_stay_retained_until_accept
         assert_eq!(list["retained"], json!([]), "{kind}");
     }
 
-    // A person's row of a profile the people's list does not accept is
+    // A person's row of a profile `token_profiles` does not accept is
     // retained, with its label, and never the connection's token.
     let retained_id = fixture
         .store()
@@ -606,7 +607,7 @@ async fn kind_changes_keep_tokens_and_unaccepted_rows_stay_retained_until_accept
         .connections
         .get_mut("git")
         .unwrap()
-        .user_token_profiles = Some(vec![GIT_BEARER.into(), GIT_BASIC.into()]);
+        .token_profiles = Some(vec![GIT_BEARER.into(), GIT_BASIC.into()]);
     fixture.broker.reload_config(&accepting).await;
     let list = fixture
         .ok(alice, Method::GET, "/v1/credentials", None)

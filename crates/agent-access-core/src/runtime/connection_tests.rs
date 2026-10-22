@@ -29,8 +29,8 @@ fn connection_config(connection: &str) -> (BrokerConfig, PathBuf) {
         connection.into(),
         crate::ConnectionConfig {
             display_name: None,
-            user_token_profiles: Some(vec![PROFILE.into()]),
-            service_account_token_profiles: Some(vec![PROFILE.into()]),
+            token_profiles: Some(vec![PROFILE.into()]),
+            service_account_token_profiles: None,
             oauth: None,
         },
     );
@@ -213,6 +213,100 @@ fn discovery_distinguishes_an_unselected_method_from_a_missing_token() {
         assert_eq!(service.actions.len(), 1);
     }
     assert!(discover(None).actions.is_empty());
+}
+
+/// A connection with neither OAuth nor a list: each publication gives the
+/// effective connection the one type its consumers could accept, while the
+/// configuration keeps no list. Everyone then uses that type, so one stored
+/// token serves every managed kind, and a kind change between service
+/// account and system keeps it usable. A reload recomputes the type: one
+/// under which Jira offers several types (with a cloud ID) fails until the
+/// connection lists them, and a reload back resolves the type again.
+#[test]
+fn publication_resolves_the_implicit_type_and_reload_recomputes_it() {
+    use crate::PrincipalKind::{ServiceAccount, System, User};
+    const CLOUD_ID: &str = "00000000-0000-0000-0000-000000000000";
+    let (mut config, _store) = connection_config("tracker");
+    config.credentials.connections.insert(
+        "tracker".into(),
+        crate::ConnectionConfig {
+            display_name: None,
+            token_profiles: None,
+            service_account_token_profiles: None,
+            oauth: None,
+        },
+    );
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let token_profiles = |runtime: &BrokerRuntime| {
+        runtime.effective_credentials().connections["tracker"]
+            .token_profiles
+            .clone()
+    };
+    assert_eq!(token_profiles(&runtime), Some(vec![PROFILE.to_string()]));
+    assert_eq!(
+        runtime.config.credentials.connections["tracker"].token_profiles,
+        None
+    );
+    let available = |runtime: &BrokerRuntime, kind| {
+        runtime
+            .service_capabilities(&identity(Some(kind)), &default_execution_context(), "jira")
+            .unwrap()
+            .availability
+            .state
+    };
+    store_token(&runtime, "tracker", "implied-token");
+    for kind in [User, ServiceAccount, System] {
+        assert_eq!(
+            available(&runtime, kind),
+            AvailabilityState::Available,
+            "{kind:?}"
+        );
+    }
+
+    let mut gateway = config.clone();
+    let jira = gateway
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap();
+    jira.cloud_id = Some(CLOUD_ID.into());
+    jira.allowed_upstream_hosts.push(format!(
+        "https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/**"
+    ));
+    match BrokerRuntime::new_for_reload(gateway.clone(), &runtime) {
+        Err(RuntimeError::Config(ConfigError::Invalid { errors })) => assert_eq!(
+            errors,
+            [
+                "credentials.connections.tracker must set token_profiles: its consumers accept several token profiles (atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token)"
+            ]
+        ),
+        other => panic!("several types need a list: {:?}", other.err()),
+    }
+    gateway
+        .credentials
+        .connections
+        .get_mut("tracker")
+        .unwrap()
+        .token_profiles = Some(vec!["atlassian-bearer-token".into()]);
+    let listed = BrokerRuntime::new_for_reload(gateway, &runtime).unwrap();
+    assert_eq!(
+        token_profiles(&listed),
+        Some(vec!["atlassian-bearer-token".to_string()])
+    );
+    // The stored classic token is not accepted under that list.
+    assert_eq!(
+        available(&listed, ServiceAccount),
+        AvailabilityState::Unavailable
+    );
+
+    let back = BrokerRuntime::new_for_reload(config, &listed).unwrap();
+    assert_eq!(token_profiles(&back), Some(vec![PROFILE.to_string()]));
+    for kind in [User, ServiceAccount, System] {
+        assert_eq!(
+            available(&back, kind),
+            AvailabilityState::Available,
+            "{kind:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -837,11 +931,11 @@ fn store_git_token(runtime: &BrokerRuntime, profile: &str) {
         .unwrap();
 }
 
-/// A per_user Git gateway on the connection `gitlab`, which accepts
-/// `people` from users and `machines` from service accounts and system
-/// principals, with a fetch grant for `agent-one`. Nothing listens at the
-/// upstream it is then pointed at: a request that got through would fail to
-/// connect instead of being refused.
+/// A per_user Git gateway on the connection `gitlab`, whose
+/// `token_profiles` are `people` and whose service-account override is
+/// `machines` unless empty, with a fetch grant for `agent-one`. Nothing
+/// listens at the upstream it is then pointed at: a request that got
+/// through would fail to connect instead of being refused.
 fn git_connection_runtime(people: &[&str], machines: &[&str]) -> BrokerRuntime {
     let identity_token_path = write_temp_secret("agent-one-token");
     let mut config = base_fake_config();
@@ -860,7 +954,7 @@ fn git_connection_runtime(people: &[&str], machines: &[&str]) -> BrokerRuntime {
         "gitlab".into(),
         crate::ConnectionConfig {
             display_name: None,
-            user_token_profiles: list(people),
+            token_profiles: list(people),
             service_account_token_profiles: list(machines),
             oauth: None,
         },
@@ -973,7 +1067,8 @@ async fn each_kind_reads_the_stored_row_only_under_a_profile_its_list_accepts() 
             "{kind:?}"
         );
     }
-    // People's list does not accept the basic profile: the row is retained.
+    // `token_profiles` does not accept the basic profile for people: the row
+    // is retained.
     assert_eq!(
         refused(git_fetch_credential(&runtime, agent_one(&runtime, Some(User))).await),
         Some(ReasonCode::CredentialInvalid.into())
@@ -995,7 +1090,7 @@ async fn each_kind_reads_the_stored_row_only_under_a_profile_its_list_accepts() 
         );
     }
 
-    // Removing the profile from the service accounts' list keeps the row
+    // Removing the profile from the service-account override keeps the row
     // stored but unused; adding it back uses it again as stored.
     let with_machines = |machines: &[&str]| {
         let mut reconfigured = runtime.clone();
@@ -1108,7 +1203,7 @@ async fn the_git_gateway_refuses_route_bound_and_undeclared_token_profiles() {
         .connections
         .get_mut("gitlab")
         .unwrap()
-        .user_token_profiles = Some(vec!["git-retired-token".into()]);
+        .token_profiles = Some(vec!["git-retired-token".into()]);
     retired.effective_credentials = Arc::new(credentials);
     store_git_token(&retired, "git-retired-token");
     let refused = *prepare(retired.clone()).await.err().unwrap();
@@ -1173,7 +1268,7 @@ async fn the_git_gateway_refuses_atlassian_token_profiles() {
             .connections
             .get_mut("gitlab")
             .unwrap()
-            .user_token_profiles = Some(vec![profile.into()]);
+            .token_profiles = Some(vec![profile.into()]);
         routed.effective_credentials = Arc::new(credentials);
         store_git_token(&routed, profile);
         let identity = agent_one(&routed, Some(User));

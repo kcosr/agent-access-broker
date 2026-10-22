@@ -442,7 +442,7 @@ target = "{target}"
 
 [credentials.connections.gitlab]
 display_name = "GitLab"
-service_account_token_profiles = ["gitlab-access-token"]
+token_profiles = ["gitlab-access-token"]
 oauth = {{ registration = "gitlab", profile = "default" }}
 
 [credentials.per_user.gitlab]

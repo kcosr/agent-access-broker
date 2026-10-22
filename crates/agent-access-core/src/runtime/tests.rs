@@ -5075,7 +5075,7 @@ async fn readiness_accepts_oauth_without_upstream_or_connected_users() {
         "oauth_stub".into(),
         crate::ConnectionConfig {
             display_name: None,
-            user_token_profiles: None,
+            token_profiles: None,
             service_account_token_profiles: None,
             oauth: Some(crate::ConnectionOAuthConfig {
                 registration: "stub".into(),

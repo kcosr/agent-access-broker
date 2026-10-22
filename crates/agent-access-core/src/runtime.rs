@@ -2217,10 +2217,12 @@ impl BrokerRuntime {
         }
         let source_config = config.clone();
         imports::effective_credentials(&mut config, &imported_catalog);
-        // Imports add connections offline validation cannot see.
-        let connection_errors = crate::connections::effective_connection_errors(
-            &config.credentials,
+        // Imports add connections offline validation cannot see. The
+        // published connections hold their implicit types.
+        let connection_errors = crate::connections::resolve_effective_connections(
+            &mut config.credentials,
             &services,
+            &config.gateways,
             &config.oauth,
             config.providers.registry(),
         );

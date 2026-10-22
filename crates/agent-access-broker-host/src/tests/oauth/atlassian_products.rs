@@ -151,9 +151,8 @@ async fn products_fixture(atlassian: &MockServer, token_profile: bool) -> OAuthF
                 "atlassian".into(),
                 ConnectionConfig {
                     display_name: Some("Atlassian".into()),
-                    user_token_profiles: None,
-                    service_account_token_profiles: token_profile
-                        .then(|| vec!["atlassian-bearer-token".into()]),
+                    token_profiles: token_profile.then(|| vec!["atlassian-bearer-token".into()]),
+                    service_account_token_profiles: None,
                     oauth: Some(ConnectionOAuthConfig {
                         registration: "atlassian".into(),
                         profile: "default".into(),

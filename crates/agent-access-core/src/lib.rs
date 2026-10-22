@@ -1784,8 +1784,10 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_service_descriptors(&services, resource_types, &mut errors);
     validate_private_resource_consumers(config, &services, &effective_types, &mut errors);
     validate_credentials(config, &services, &mut errors);
-    connections::validate_connections(config, &services, &mut errors);
-    validate_backends(config, &mut errors);
+    // Backends see each connection's accepted token profiles, implicit
+    // types included.
+    let effective_credentials = connections::validate_connections(config, &services, &mut errors);
+    validate_backends(config, &effective_credentials, &mut errors);
     validate_gateways(config, &mut errors);
     validate_policy(config, &services, resource_types, &mut errors);
     validate_attribution_config(&config.attribution, &services, &mut errors);
@@ -4407,8 +4409,14 @@ fn configured_provider_descriptors(config: &BrokerConfig) -> Vec<ServiceDescript
 }
 
 /// Checks each `[providers.<kind>]` table: its backend is registered, its
-/// development-only status fits the deployment, and the backend accepts it.
-fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
+/// development-only status fits the deployment, and the backend accepts it
+/// beside `credentials`, the configured credentials with each connection's
+/// implicit type resolved.
+fn validate_backends(
+    config: &BrokerConfig,
+    credentials: &CredentialsConfig,
+    errors: &mut Vec<String>,
+) {
     let limits = ProviderLimits::from(&config.limits);
     for backend in config.providers.iter() {
         let kind = backend.kind();
@@ -4424,7 +4432,7 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
             ));
         }
         let descriptor = backend.descriptor();
-        let credentials = BackendCredentials::new(&config.credentials, kind, &descriptor);
+        let credentials = BackendCredentials::new(credentials, kind, &descriptor);
         let context = ValidationContext::new(
             &config.deployment.environment,
             &config.policy.authority,
@@ -4437,8 +4445,8 @@ fn validate_backends(config: &BrokerConfig, errors: &mut Vec<String>) {
 
 /// What backend validation sees of one service's configured credentials
 /// ([`ServiceCredentialKinds`]): its shared execution and lookup
-/// credentials, and the token profiles, delegated access or secret store of
-/// its per-user entry.
+/// credentials, and the token profiles (with a connection's implicit type
+/// resolved), delegated access or secret store of its per-user entry.
 struct BackendCredentials<'a> {
     service: Option<CredentialSource<'a>>,
     per_user_profiles: Vec<agent_access_provider::CredentialProfile>,
@@ -4467,7 +4475,7 @@ impl<'a> BackendCredentials<'a> {
                 .map(|connection| {
                     connection
                         .config
-                        .token_profiles()
+                        .accepted_token_profiles()
                         .into_iter()
                         .filter_map(|profile| descriptor.credential_profile(profile).cloned())
                         .collect()

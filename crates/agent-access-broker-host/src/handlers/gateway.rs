@@ -6108,8 +6108,8 @@ mod tests {
             "gitlab".to_string(),
             agent_access_core::ConnectionConfig {
                 display_name: None,
-                user_token_profiles: Some(vec!["git-bearer-token".to_string()]),
-                service_account_token_profiles: Some(vec!["git-bearer-token".to_string()]),
+                token_profiles: Some(vec!["git-bearer-token".to_string()]),
+                service_account_token_profiles: None,
                 oauth: None,
             },
         );
@@ -6306,8 +6306,8 @@ mod tests {
             "gitlab".to_string(),
             agent_access_core::ConnectionConfig {
                 display_name: Some("GitLab".to_string()),
-                user_token_profiles: Some(vec!["gitlab-access-token".to_string()]),
-                service_account_token_profiles: Some(vec!["gitlab-access-token".to_string()]),
+                token_profiles: Some(vec!["gitlab-access-token".to_string()]),
+                service_account_token_profiles: None,
                 oauth: None,
             },
         );

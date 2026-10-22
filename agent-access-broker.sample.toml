@@ -261,9 +261,11 @@ token_ref = "env:JIRA_SERVICE_API_TOKEN"
 # Alternative managed-store per-user credential: a credential connection.
 # Each managed principal's token for it is stored in the managed store; users
 # and system principals provide their own, and administrators provision
-# service accounts'. user_token_profiles lists the token profiles people may
-# store, and service_account_token_profiles those of service accounts and
-# system principals; with several in a list, the saver picks one.
+# service accounts'. token_profiles lists the token profiles (types) they may
+# store; with several, the saver picks one. service_account_token_profiles
+# optionally overrides it for service accounts and system principals. A
+# connection whose consumers accept only one type, without OAuth, needs no
+# list (see [credentials.connections.gitlab] below).
 # Connections need managed_store and credential_encryption.
 # One Atlassian connection serves Jira and Confluence on this site: each
 # principal stores one token for both (see [credentials.per_user.confluence]
@@ -272,12 +274,13 @@ token_ref = "env:JIRA_SERVICE_API_TOKEN"
 # API token (atlassian-scoped-api-token, email and token) and a service
 # account's bearer token (atlassian-bearer-token) reach the Atlassian
 # gateway, which needs the providers' cloud_id and api.atlassian.com in
-# their allowlists.
+# their allowlists. With a cloud_id the connection lists the types it accepts;
+# without one, only the classic API token is possible and the list may be
+# omitted.
 #
 # [credentials.connections.atlassian]
 # display_name = "Atlassian"
-# user_token_profiles = ["atlassian-api-token"]
-# service_account_token_profiles = ["atlassian-api-token"]
+# token_profiles = ["atlassian-api-token"]
 #
 # [credentials.per_user.jira]
 # type = "connection"
@@ -325,13 +328,12 @@ token_ref = "env:GITLAB_LOOKUP_TOKEN"
 read_only = true
 
 # One GitLab credential connection serves GitLab REST and the GitLab Git
-# gateway below: each principal stores one GitLab access token for both, and
-# grants stay per service.
+# gateway below: each principal stores one GitLab access token
+# (gitlab-access-token, the only type both accept) for both, and grants stay
+# per service.
 #
 # [credentials.connections.gitlab]
 # display_name = "GitLab"
-# user_token_profiles = ["gitlab-access-token"]
-# service_account_token_profiles = ["gitlab-access-token"]
 #
 # [credentials.per_user.gitlab]
 # type = "connection"
@@ -353,9 +355,11 @@ read_only = true
 
 # GitLab OAuth: people connect their GitLab account once for GitLab REST and
 # the Git gateway, while service accounts keep administrator-provisioned
-# tokens. Add oauth = { registration = "gitlab", profile = "default" } to
-# [credentials.connections.gitlab] above and remove its user_token_profiles:
-# people then use OAuth. A GitLab administrator creates an
+# tokens. Add oauth = { registration = "gitlab", profile = "default" } and
+# token_profiles = ["gitlab-access-token"] to [credentials.connections.gitlab]
+# above: people then use OAuth, and service accounts and system principals
+# store tokens of the listed type. Beside oauth no type is implied: without
+# token_profiles they have no GitLab method. A GitLab administrator creates an
 # instance-wide confidential application (Admin area > Applications) with the
 # redirect URI and scopes below, and may mark it trusted to skip consent.
 # Requires managed identity/store/encryption, browser auth and management; the
@@ -429,12 +433,12 @@ read_only = true
 # the first by connection ID, so give them the same name:
 # [credentials.connections.jira]
 # display_name = "Atlassian"
-# service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+# token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 # oauth = { registration = "atlassian", profile = "default" }
 #
 # [credentials.connections.confluence]
 # display_name = "Atlassian"
-# service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+# token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 # oauth = { registration = "atlassian", profile = "default" }
 #
 # [credentials.per_user.jira]

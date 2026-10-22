@@ -54,8 +54,8 @@ async fn gitlab_rest_fixture(gitlab: &MockServer) -> OAuthFixture {
                 "gitlab".into(),
                 ConnectionConfig {
                     display_name: Some("GitLab".into()),
-                    user_token_profiles: None,
-                    service_account_token_profiles: Some(vec!["gitlab-access-token".into()]),
+                    token_profiles: Some(vec!["gitlab-access-token".into()]),
+                    service_account_token_profiles: None,
                     oauth: Some(ConnectionOAuthConfig {
                         registration: "gitlab".into(),
                         profile: "default".into(),
@@ -598,7 +598,7 @@ async fn token_only_gitlab_actions_are_refused_for_an_oauth_connection() {
 /// its instance, with or without a token profile for service accounts.
 fn gitlab_rest_oauth_config(token_profile: bool) -> String {
     let token_profile = if token_profile {
-        "service_account_token_profiles = [\"gitlab-access-token\"]\n"
+        "token_profiles = [\"gitlab-access-token\"]\n"
     } else {
         ""
     };

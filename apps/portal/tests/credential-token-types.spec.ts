@@ -29,8 +29,12 @@ const USER_PASSWORD = "casey-password";
 const BOT = "build-bot";
 const BOTH = ["git-bearer-token", "git-basic-api-token"];
 
-/** Writes the Broker configuration, with the token types the Git connection accepts from people. */
-async function writeConfig(userTokenProfiles: string[]) {
+/**
+ * Writes the Broker configuration, with the token types the Git connection
+ * accepts from people (`token_profiles`); its service-account override
+ * accepts both.
+ */
+async function writeConfig(tokenProfiles: string[]) {
   const quoted = (relative: string) => JSON.stringify(path.join(root, relative));
   const configPath = path.join(root, "broker.toml");
   await fs.writeFile(
@@ -77,7 +81,7 @@ principal_id = "admin"
 initial_password = "${ADMIN_PASSWORD}"
 [credentials.connections.gitlab_git]
 display_name = "GitLab Git"
-user_token_profiles = ${JSON.stringify(userTokenProfiles)}
+token_profiles = ${JSON.stringify(tokenProfiles)}
 service_account_token_profiles = ${JSON.stringify(BOTH)}
 [credentials.per_user.gitlab_git]
 type = "connection"

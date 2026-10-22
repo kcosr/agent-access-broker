@@ -168,7 +168,7 @@ async fn oauth_fixture_with(
         "oauth_stub".into(),
         agent_access_core::ConnectionConfig {
             display_name: None,
-            user_token_profiles: None,
+            token_profiles: None,
             service_account_token_profiles: None,
             oauth: Some(agent_access_core::ConnectionOAuthConfig {
                 registration: "stub".into(),
@@ -1017,7 +1017,7 @@ async fn a_shared_registration_row_is_labeled_by_its_first_connection_by_id() {
                 "archive".into(),
                 agent_access_core::ConnectionConfig {
                     display_name: Some("Records archive".into()),
-                    user_token_profiles: None,
+                    token_profiles: None,
                     service_account_token_profiles: None,
                     oauth: Some(agent_access_core::ConnectionOAuthConfig {
                         registration: "stub".into(),

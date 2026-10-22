@@ -18760,8 +18760,8 @@ pub(crate) fn use_token_connection(
         connection.to_string(),
         agent_access_core::ConnectionConfig {
             display_name: None,
-            user_token_profiles: Some(vec![profile.to_string()]),
-            service_account_token_profiles: Some(vec![profile.to_string()]),
+            token_profiles: Some(vec![profile.to_string()]),
+            service_account_token_profiles: None,
             oauth: None,
         },
     );

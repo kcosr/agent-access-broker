@@ -725,7 +725,7 @@ fn product_connections(token_profiles: &[&str], registration: impl Fn(&str) -> S
                 String::new()
             } else {
                 format!(
-                    "service_account_token_profiles = {}\n",
+                    "token_profiles = {}\n",
                     serde_json::to_string(token_profiles).unwrap()
                 )
             };
@@ -748,13 +748,10 @@ fn shared_connection_with(token_profiles: &[&str], oauth: bool) -> String {
     let token = if token_profiles.is_empty() {
         String::new()
     } else {
-        let list = serde_json::to_string(token_profiles).unwrap();
-        let people = if oauth {
-            String::new()
-        } else {
-            format!("user_token_profiles = {list}\n")
-        };
-        format!("{people}service_account_token_profiles = {list}\n")
+        format!(
+            "token_profiles = {}\n",
+            serde_json::to_string(token_profiles).unwrap()
+        )
     };
     let oauth = if oauth {
         "oauth = { registration = \"atlassian\", profile = \"default\" }\n"
@@ -801,7 +798,7 @@ fn atlassian_oauth_connections_follow_the_validation_table() {
     let bearer_tokens = ["jira", "confluence"]
         .map(|product| {
             format!(
-                "[credentials.connections.{product}]\nuser_token_profiles = [\"atlassian-bearer-token\"]\nservice_account_token_profiles = [\"atlassian-bearer-token\"]\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n"
+                "[credentials.connections.{product}]\ntoken_profiles = [\"atlassian-bearer-token\"]\n\n[credentials.per_user.{product}]\ntype = \"connection\"\nconnection = \"{product}\"\n"
             )
         })
         .join("\n");

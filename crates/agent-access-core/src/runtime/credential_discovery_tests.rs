@@ -270,8 +270,8 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
         "jira".into(),
         crate::ConnectionConfig {
             display_name: None,
-            user_token_profiles: Some(vec!["atlassian-api-token".into()]),
-            service_account_token_profiles: Some(vec!["atlassian-api-token".into()]),
+            token_profiles: Some(vec!["atlassian-api-token".into()]),
+            service_account_token_profiles: None,
             oauth: None,
         },
     );

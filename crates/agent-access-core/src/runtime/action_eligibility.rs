@@ -67,9 +67,9 @@ mod tests {
     const ACTION: &str = "echo";
 
     /// The development fake service, consuming a connection with the given
-    /// methods (a token profile for people without OAuth and for service
-    /// accounts, and OAuth), with `echo` marked token-only when `token_only`
-    /// is set.
+    /// methods (a token profile, which people use without OAuth and service
+    /// accounts always, and OAuth), with `echo` marked token-only when
+    /// `token_only` is set.
     fn runtime(token: bool, oauth: bool, token_only: bool) -> BrokerRuntime {
         let mut runtime = BrokerRuntime::new(super::super::tests::base_fake_config()).unwrap();
         let mut services = (*runtime.services).clone();
@@ -84,8 +84,8 @@ mod tests {
             SERVICE.into(),
             crate::ConnectionConfig {
                 display_name: None,
-                user_token_profiles: (token && !oauth).then(|| vec!["fake-token".into()]),
-                service_account_token_profiles: token.then(|| vec!["fake-token".into()]),
+                token_profiles: token.then(|| vec!["fake-token".into()]),
+                service_account_token_profiles: None,
                 oauth: oauth.then(|| crate::ConnectionOAuthConfig {
                     registration: "stub".into(),
                     profile: "read".into(),

@@ -939,7 +939,7 @@ fn connections_sharing_a_registration_need_one_profile_at_publication_and_startu
             "configured".into(),
             agent_access_core::ConnectionConfig {
                 display_name: None,
-                user_token_profiles: None,
+                token_profiles: None,
                 service_account_token_profiles: None,
                 oauth: Some(agent_access_core::ConnectionOAuthConfig {
                     registration: "tools".into(),
@@ -983,8 +983,8 @@ fn connections_sharing_a_registration_need_one_profile_at_publication_and_startu
 fn configured_connection_ids_collide_with_imports_on_startup_reload_and_write() {
     let connection = || agent_access_core::ConnectionConfig {
         display_name: None,
-        user_token_profiles: Some(vec!["token".into()]),
-        service_account_token_profiles: Some(vec!["token".into()]),
+        token_profiles: Some(vec!["token".into()]),
+        service_account_token_profiles: None,
         oauth: None,
     };
     let fixture = fixture();

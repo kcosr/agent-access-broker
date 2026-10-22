@@ -221,8 +221,8 @@ fn credentialed_command_imports_need_their_slot_and_declare_their_profile() {
             effective.credentials.connections["ticketing"],
             crate::ConnectionConfig {
                 display_name: Some("Ticketing".into()),
-                user_token_profiles: Some(vec![profile.into()]),
-                service_account_token_profiles: Some(vec![profile.into()]),
+                token_profiles: Some(vec![profile.into()]),
+                service_account_token_profiles: None,
                 oauth: None,
             }
         );
