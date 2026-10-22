@@ -2088,32 +2088,49 @@ fn rejects_unknown_jira_action_grant() {
     assert_contains(&errors, "action transition.run is unknown for service jira");
 }
 
+/// A cloud ID gives Jira its gateway route and with it the scoped API token
+/// and bearer profiles, whatever the allowlist says. A look-alike gateway
+/// host does not cover that route, so gateway credentials then fail
+/// validation naming the uncovered base.
 #[test]
-fn atlassian_bearer_profiles_require_the_exact_gateway_host() {
+fn atlassian_gateway_profiles_follow_the_cloud_id_and_need_the_exact_gateway_host() {
     let mut config = sample_broker();
     let jira = config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
         .unwrap();
-    jira.cloud_id = Some("11111111-2222-4333-8444-555555555555".to_string());
-    jira.allowed_upstream_hosts =
-        vec!["https://api.atlassian.com.example.net/ex/jira/**".to_string()];
-    assert_eq!(
-        profile_kind(&config, "jira", "atlassian-bearer-token"),
-        None
-    );
+    jira.cloud_id = None;
+    for profile in ["atlassian-scoped-api-token", "atlassian-bearer-token"] {
+        assert_eq!(profile_kind(&config, "jira", profile), None, "{profile}");
+    }
 
-    config
+    let jira = config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts = vec![
-        "https://api.atlassian.com/ex/jira/11111111-2222-4333-8444-555555555555/**".to_string(),
+        .unwrap();
+    jira.cloud_id = Some("11111111-2222-4333-8444-555555555555".to_string());
+    jira.allowed_upstream_hosts = vec![
+        "https://example.atlassian.net/rest/api/3/**".to_string(),
+        "https://api.atlassian.com.example.net/ex/jira/**".to_string(),
     ];
+    assert_eq!(
+        profile_kind(&config, "jira", "atlassian-scoped-api-token"),
+        Some("basic_api_token")
+    );
     assert_eq!(
         profile_kind(&config, "jira", "atlassian-bearer-token"),
         Some("bearer_token")
     );
+    use_bearer_service_and_lookup_credentials(&mut config, "jira");
+    let errors = validation_errors(validate_broker_config(&config));
+    for source in ["credentials.service.jira", "credentials.lookup.jira"] {
+        assert_contains(
+            &errors,
+            &format!(
+                "{source} (type bearer_token) takes the Atlassian gateway route, but providers.jira.allowed_upstream_hosts does not cover https://api.atlassian.com/ex/jira/11111111-2222-4333-8444-555555555555/rest/api/3/"
+            ),
+        );
+    }
 }
 
 #[test]
@@ -2326,20 +2343,26 @@ fn rejects_non_https_credentialed_upstream() {
     assert_contains(&errors, "must use https");
 }
 
+/// Classic service and lookup credentials take the site route beside the
+/// gateway: the sample allowlists both routes and its classic credentials
+/// validate.
 #[test]
-fn rejects_atlassian_gateway_with_basic_service_credentials() {
-    let mut config = sample_broker();
-    config
+fn accepts_classic_service_and_lookup_credentials_beside_the_gateway() {
+    let config = sample_broker();
+    let jira = config
         .providers
-        .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.service.jira does not resolve to a bearer_token credential",
+        .get::<agent_access_jira::JiraProviderConfig>()
+        .unwrap();
+    assert!(
+        jira.allowed_upstream_hosts
+            .iter()
+            .any(|pattern| pattern.starts_with("https://api.atlassian.com/"))
     );
+    for credentials in [&config.credentials.service, &config.credentials.lookup] {
+        assert_eq!(credentials["jira"].kind, "basic_api_token");
+        assert_eq!(credentials["confluence"].kind, "basic_api_token");
+    }
+    validate_broker_config(&config).unwrap();
 }
 
 #[test]
@@ -2895,76 +2918,96 @@ fn rejects_ambiguous_wildcard_and_finite_credential_mode_overlap() {
     assert_contains(&errors, "overlapping project scope values");
 }
 
+/// An allowlist that also covers the gateway needs no gateway credential:
+/// coverage is checked per configured credential source.
 #[test]
-fn rejects_atlassian_gateway_without_bearer_execution_credentials() {
+fn accepts_the_gateway_allowlisted_without_gateway_credentials() {
+    let mut config = sample_broker();
+    config.credentials.service.remove("jira");
+    config.credentials.per_user.remove("jira");
+    let errors = match validate_broker_config(&config) {
+        Ok(()) => Vec::new(),
+        Err(ConfigError::Invalid { errors }) => errors,
+        Err(error) => panic!("unexpected error: {error}"),
+    };
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.starts_with("providers.jira") || error.contains("gateway")),
+        "{errors:?}"
+    );
+}
+
+/// Each credential source must reach the route its token type takes: a
+/// bearer service credential with an allowlist covering only the tenant
+/// names the uncovered gateway base, and classic credentials with an
+/// allowlist covering only the gateway name the uncovered tenant base.
+#[test]
+fn rejects_atlassian_credentials_whose_route_is_not_covered() {
     let mut config = sample_broker();
     config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
         .unwrap()
-        .allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    config.credentials.service.remove("jira");
-    config.credentials.per_user.remove("jira");
+        .allowed_upstream_hosts = vec!["https://example.atlassian.net/rest/api/3/**".to_string()];
+    let credential = config.credentials.service.get_mut("jira").unwrap();
+    credential.kind = "bearer_token".to_string();
+    credential.username_ref = None;
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.service.jira (type bearer_token) takes the Atlassian gateway route, but providers.jira.allowed_upstream_hosts does not cover https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/"
+        ]
+    );
 
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "no bearer_token or OAuth execution credential is configured",
+    let mut config = sample_broker();
+    config
+        .providers
+        .get_mut::<agent_access_jira::JiraProviderConfig>()
+        .unwrap()
+        .allowed_upstream_hosts = vec!["https://api.atlassian.com/ex/jira/**".to_string()];
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.service.jira (type basic_api_token) takes the site route, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/",
+            "credentials.lookup.jira (type basic_api_token) takes the site route, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/",
+        ]
     );
 }
 
+/// Gateway credentials need a cloud ID, and a cloud ID must be a UUID
+/// whenever it is set, even where only classic tokens take the site route.
 #[test]
-fn rejects_atlassian_bearer_credentials_without_gateway_allowlist() {
+fn rejects_atlassian_cloud_ids_that_are_missing_or_not_uuids() {
     let mut config = sample_broker();
-    let credential = config.credentials.service.get_mut("jira").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.service.jira.type bearer_token requires providers.jira.allowed_upstream_hosts to include api.atlassian.com",
-    );
-}
-
-#[test]
-fn rejects_atlassian_gateway_without_valid_cloud_id() {
-    let mut config = sample_broker();
-    let jira = config
+    config
         .providers
         .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap();
-    jira.allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    jira.cloud_id = None;
+        .unwrap()
+        .cloud_id = None;
     let credential = config.credentials.service.get_mut("jira").unwrap();
     credential.kind = "bearer_token".to_string();
     credential.username_ref = None;
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "providers.jira.cloud_id is required when api.atlassian.com is allowed",
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.service.jira (type bearer_token) takes the Atlassian gateway route, which requires providers.jira.cloud_id"
+        ]
     );
 
     let mut config = sample_broker();
-    let jira = config
-        .providers
-        .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap();
-    jira.allowed_upstream_hosts
-        .push("https://api.atlassian.com/ex/jira/cloud/rest/api/3/**".to_string());
-    jira.cloud_id = Some("not-a-uuid".to_string());
-    let credential = config.credentials.service.get_mut("jira").unwrap();
-    credential.kind = "bearer_token".to_string();
-    credential.username_ref = None;
-
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "providers.jira.cloud_id must be a valid Atlassian cloud UUID",
-    );
+    for cloud_id in ["not-a-uuid", "00000000-0000-0000-0000-00000000000"] {
+        config
+            .providers
+            .get_mut::<agent_access_jira::JiraProviderConfig>()
+            .unwrap()
+            .cloud_id = Some(cloud_id.to_string());
+        assert_eq!(
+            validation_errors(validate_broker_config(&config)),
+            ["providers.jira.cloud_id must be a valid Atlassian cloud UUID"],
+            "{cloud_id}"
+        );
+    }
 }
 
 /// `credentials.service` and `credentials.lookup` entries of a static type
@@ -3235,13 +3278,13 @@ fn rejects_retired_atlassian_product_profiles() {
             assert_contains(
                 &errors,
                 &format!(
-                    "credentials.connections.atlassian.user_token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token"
+                    "credentials.connections.atlassian.user_token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token"
                 ),
             );
         }
     }
 
-    // On the gateway, the bearer profiles are retired alike.
+    // The bearer profiles are retired alike.
     for (service, retired) in [
         ("jira", "jira-bearer-token"),
         ("confluence", "confluence-bearer-token"),
@@ -3254,19 +3297,24 @@ fn rejects_retired_atlassian_product_profiles() {
         assert_contains(
             &errors,
             &format!(
-                "credentials.connections.{service}.user_token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-bearer-token"
+                "credentials.connections.{service}.user_token_profiles profile {retired} is unsupported for service {service}, which accepts atlassian-api-token, atlassian-scoped-api-token, atlassian-bearer-token"
             ),
         );
     }
 }
 
-/// A connection must still be declared by every consumer: the bearer
-/// profile exists only where the site uses the gateway.
+/// A connection must still be declared by every consumer: the gateway
+/// profiles exist only where a cloud ID gives the site its gateway route.
+/// A consumer without the cloud ID also acts on another instance.
 #[test]
-fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
+fn rejects_a_shared_gateway_connection_when_a_consumer_has_no_cloud_id() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
-    use_atlassian_gateway_for_jira(&mut config);
+    config
+        .providers
+        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+        .unwrap()
+        .cloud_id = None;
     use_connection(
         &mut config,
         "atlassian",
@@ -3285,6 +3333,82 @@ fn rejects_a_shared_bearer_connection_when_a_consumer_has_no_gateway() {
             .any(|error| error.contains("unsupported for service jira")),
         "{errors:?}"
     );
+    assert_contains(
+        &errors,
+        "credentials.connections.atlassian: confluence acts on https://example.atlassian.net but jira acts on https://example.atlassian.net (tenant 00000000-0000-0000-0000-000000000000, gateway https://api.atlassian.com); a token connection's consumers must act on one upstream",
+    );
+}
+
+/// Jira and Confluence on one tenant host share a token connection only
+/// when they name the same cloud ID, whichever token types it accepts: with
+/// different cloud IDs one stored credential would reach two gateway
+/// tenants. Equivalent UUID spellings name the same cloud ID.
+#[test]
+fn shared_atlassian_token_connections_need_one_cloud_id() {
+    for profile in [
+        "atlassian-api-token",
+        "atlassian-scoped-api-token",
+        "atlassian-bearer-token",
+    ] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        use_connection(
+            &mut config,
+            "atlassian",
+            token_connection(profile),
+            &["jira", "confluence"],
+        );
+        config.policy.grants[0].credential_mode = "per_user".to_string();
+        let confluence = |config: &mut BrokerConfig, cloud_id: &str| {
+            config
+                .providers
+                .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+                .unwrap()
+                .cloud_id = Some(cloud_id.to_string());
+        };
+        validate_broker_config(&config).unwrap();
+        confluence(&mut config, "{00000000-0000-0000-0000-000000000000}");
+        validate_broker_config(&config).unwrap();
+        confluence(&mut config, "11111111-2222-4333-8444-555555555555");
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            "credentials.connections.atlassian: confluence acts on https://example.atlassian.net (tenant 11111111-2222-4333-8444-555555555555, gateway https://api.atlassian.com) but jira acts on https://example.atlassian.net (tenant 00000000-0000-0000-0000-000000000000, gateway https://api.atlassian.com); a token connection's consumers must act on one upstream",
+        );
+    }
+}
+
+/// Every Atlassian profile is route-bound: the Atlassian provider decides
+/// where it goes, so a Git gateway can never consume a connection listing
+/// one, even on the tenant's own origin.
+#[test]
+fn rejects_a_git_gateway_on_a_connection_listing_an_atlassian_profile() {
+    for profile in [
+        "atlassian-api-token",
+        "atlassian-scoped-api-token",
+        "atlassian-bearer-token",
+    ] {
+        let mut config = sample_broker();
+        enable_test_managed_store(&mut config);
+        let mut gateway = git_http_gateway_config();
+        gateway.credential_modes = vec!["per_user".to_string()];
+        gateway.upstream_base_url = "https://example.atlassian.net".to_string();
+        gateway.allowed_upstream_hosts = vec!["https://example.atlassian.net/**".to_string()];
+        config.gateways.insert("atlassian_git".to_string(), gateway);
+        use_connection(
+            &mut config,
+            "atlassian",
+            token_connection(profile),
+            &["jira", "atlassian_git"],
+        );
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            &format!(
+                "credentials.connections.atlassian.user_token_profiles profile {profile} is route-bound: only the provider declaring it may present it, so the gateway atlassian_git cannot consume this connection"
+            ),
+        );
+    }
 }
 
 /// Service accounts' scoped tokens use per-product bearer connections
@@ -3762,22 +3886,23 @@ fn backend_validation_reports_delegated_access_beside_a_token_profile() {
         "{errors:?}"
     );
 
-    // A basic site token beside OAuth is rejected.
+    // People on OAuth through the gateway beside service accounts' classic
+    // tokens on the site and service-account tokens on the gateway.
     config
         .credentials
         .connections
         .get_mut("jira")
         .unwrap()
-        .service_account_token_profiles = Some(vec!["atlassian-api-token".to_string()]);
+        .service_account_token_profiles = Some(vec![
+        "atlassian-api-token".to_string(),
+        "atlassian-bearer-token".to_string(),
+    ]);
     let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira combines OAuth with a basic_api_token profile",
-    );
     assert!(
         !errors
             .iter()
-            .any(|error| error.contains("does not resolve to a bearer_token credential")),
+            .any(|error| error.starts_with("providers.jira")
+                || error.starts_with("credentials.per_user.jira")),
         "{errors:?}"
     );
 }
@@ -3798,8 +3923,10 @@ fn accepts_atlassian_gateway_with_bearer_connection_per_user_credentials() {
     validate_broker_config(&config).unwrap();
 }
 
+/// Classic connection tokens take the site route beside gateway service
+/// and lookup credentials.
 #[test]
-fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
+fn accepts_classic_connection_tokens_beside_gateway_credentials() {
     let mut config = sample_broker();
     enable_test_managed_store(&mut config);
     use_atlassian_gateway_for_jira(&mut config);
@@ -3809,12 +3936,9 @@ fn rejects_atlassian_gateway_with_basic_connection_per_user_credentials() {
         token_connection("atlassian-api-token"),
         &["jira"],
     );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
 
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira does not resolve to a bearer_token credential",
-    );
+    validate_broker_config(&config).unwrap();
 }
 
 #[test]
@@ -3832,96 +3956,105 @@ fn accepts_confluence_gateway_with_bearer_connection_per_user_credentials() {
     validate_broker_config(&config).unwrap();
 }
 
-/// The shared lookup credential reaches the site by its kind like any
-/// static token, so the gateway requires a bearer lookup credential too, and
-/// a bearer one requires the gateway; it is never execution material.
+/// Sets `service`'s allowlist to `patterns`.
+fn set_atlassian_allowlist(config: &mut BrokerConfig, service: &str, patterns: &[&str]) {
+    let patterns = patterns.iter().map(|pattern| pattern.to_string()).collect();
+    match service {
+        "jira" => {
+            config
+                .providers
+                .get_mut::<agent_access_jira::JiraProviderConfig>()
+                .unwrap()
+                .allowed_upstream_hosts = patterns;
+        }
+        _ => {
+            config
+                .providers
+                .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
+                .unwrap()
+                .allowed_upstream_hosts = patterns;
+        }
+    }
+}
+
+/// The shared lookup credential takes the route its own token type
+/// selects, independently of the execution credentials: a classic lookup
+/// credential beside gateway credentials, a bearer one beside classic
+/// credentials and a scoped one naming its profile all validate when the
+/// allowlist covers both routes. An uncovered route is reported for the
+/// lookup credential.
 #[test]
-fn atlassian_gateway_holds_the_lookup_credential_to_its_route() {
-    for service in ["jira", "confluence"] {
-        let gateway_basic_lookup = format!(
-            "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but credentials.lookup.{service} does not resolve to a bearer_token credential"
-        );
+fn atlassian_lookup_credentials_take_their_own_route() {
+    for (service, tenant, gateway_bases) in [
+        (
+            "jira",
+            "https://example.atlassian.net/rest/api/3/**",
+            "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/",
+        ),
+        (
+            "confluence",
+            "https://example.atlassian.net/wiki/**",
+            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/rest/api/ and https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/api/v2/",
+        ),
+    ] {
+        // Classic lookup credentials beside gateway service credentials.
         let mut config = sample_broker();
         route_both_atlassian_products_through_the_gateway(&mut config);
         validate_broker_config(&config).unwrap();
-
-        // A basic lookup credential beside the gateway.
         let lookup = config.credentials.lookup.get_mut(service).unwrap();
         lookup.kind = "basic_api_token".to_string();
         lookup.username_ref = Some(format!("env:{}_LOOKUP_USERNAME", service.to_uppercase()));
-        let errors = validation_errors(validate_broker_config(&config));
-        assert_eq!(
-            errors,
-            std::slice::from_ref(&gateway_basic_lookup),
-            "{service}"
-        );
+        validate_broker_config(&config).unwrap();
 
-        // The same beside OAuth-only per-user access.
-        config.credentials.service.remove(service);
-        use_connection(
-            &mut config,
-            service,
-            ConnectionConfig {
-                display_name: None,
-                user_token_profiles: None,
-                service_account_token_profiles: None,
-                oauth: Some(ConnectionOAuthConfig {
-                    registration: "atlassian".to_string(),
-                    profile: "default".to_string(),
-                }),
-            },
-            &[service],
-        );
-        let errors = validation_errors(validate_broker_config(&config));
-        assert_contains(&errors, &gateway_basic_lookup);
-
-        // A bearer lookup credential is not an execution credential.
-        let mut config = sample_broker();
-        route_both_atlassian_products_through_the_gateway(&mut config);
-        config.credentials.service.remove(service);
-        let errors = validation_errors(validate_broker_config(&config));
-        assert_contains(
-            &errors,
-            &format!(
-                "providers.{service}.allowed_upstream_hosts includes api.atlassian.com but no bearer_token or OAuth execution credential is configured"
-            ),
-        );
-        assert!(
-            !errors
-                .iter()
-                .any(|error| error.contains("credentials.lookup")),
-            "{errors:?}"
-        );
-
-        // A bearer lookup credential without the gateway.
+        // A bearer lookup credential beside classic execution credentials,
+        // and a scoped one naming its profile.
         let mut config = sample_broker();
         let lookup = config.credentials.lookup.get_mut(service).unwrap();
         lookup.kind = "bearer_token".to_string();
         lookup.username_ref = None;
-        let errors = validation_errors(validate_broker_config(&config));
+        validate_broker_config(&config).unwrap();
+        let lookup = config.credentials.lookup.get_mut(service).unwrap();
+        lookup.kind = "basic_api_token".to_string();
+        lookup.username_ref = Some(format!("env:{}_LOOKUP_USERNAME", service.to_uppercase()));
+        lookup.profile = Some("atlassian-scoped-api-token".to_string());
+        validate_broker_config(&config).unwrap();
+
+        // The tenant alone does not cover the scoped lookup credential.
+        set_atlassian_allowlist(&mut config, service, &[tenant]);
         assert_eq!(
-            errors,
+            validation_errors(validate_broker_config(&config)),
             [format!(
-                "credentials.lookup.{service}.type bearer_token requires providers.{service}.allowed_upstream_hosts to include api.atlassian.com"
+                "credentials.lookup.{service} (profile atlassian-scoped-api-token) takes the Atlassian gateway route, but providers.{service}.allowed_upstream_hosts does not cover {gateway_bases}"
             )],
             "{service}"
         );
     }
 }
 
+/// A secret store's records route by their own kind at run time; offline,
+/// only the site route is checked, so a secret store validates beside the
+/// gateway and fails only when the tenant is not covered.
 #[test]
-fn rejects_atlassian_gateway_with_secret_store_per_user_credentials() {
+fn secret_store_per_user_credentials_are_checked_on_the_site_route() {
     let mut config = sample_broker();
     use_atlassian_gateway_for_jira(&mut config);
     config.credentials.per_user.insert(
         "jira".to_string(),
         jira_per_user_credential("/etc/agent-access/jira-user-credentials.json"),
     );
+    config.policy.grants[0].credential_mode = "per_user".to_string();
+    validate_broker_config(&config).unwrap();
 
-    let errors = validation_errors(validate_broker_config(&config));
-    assert_contains(
-        &errors,
-        "credentials.per_user.jira does not resolve to a bearer_token credential",
+    set_atlassian_allowlist(
+        &mut config,
+        "jira",
+        &["https://api.atlassian.com/ex/jira/**"],
+    );
+    assert_eq!(
+        validation_errors(validate_broker_config(&config)),
+        [
+            "credentials.per_user.jira (secret_store) takes the site route its basic_api_token records take, but providers.jira.allowed_upstream_hosts does not cover https://example.atlassian.net/rest/api/3/"
+        ]
     );
 }
 
@@ -6010,7 +6143,7 @@ fn enable_test_managed_store(config: &mut BrokerConfig) {
 }
 
 /// Makes the sample's static `service` credential and shared lookup
-/// credential bearer tokens, as the Atlassian gateway requires of both.
+/// credential bearer tokens, which take the Atlassian gateway route.
 fn use_bearer_service_and_lookup_credentials(config: &mut BrokerConfig, service: &str) {
     for credentials in [
         &mut config.credentials.service,
@@ -6022,38 +6155,22 @@ fn use_bearer_service_and_lookup_credentials(config: &mut BrokerConfig, service:
     }
 }
 
-/// Routes the sample Jira service through the Atlassian gateway with static
-/// bearer service and lookup credentials.
+/// Gives the sample Jira service static bearer service and lookup
+/// credentials, which take the Atlassian gateway route the sample's
+/// allowlist covers.
 fn use_atlassian_gateway_for_jira(config: &mut BrokerConfig) {
-    config
-        .providers
-        .get_mut::<agent_access_jira::JiraProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push(
-            "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**"
-                .to_string(),
-        );
     use_bearer_service_and_lookup_credentials(config, "jira");
 }
 
-/// Routes the sample Confluence service through the Atlassian gateway with
-/// static bearer service and lookup credentials.
+/// Gives the sample Confluence service static bearer service and lookup
+/// credentials, which take the Atlassian gateway route the sample's
+/// allowlist covers.
 fn use_atlassian_gateway_for_confluence(config: &mut BrokerConfig) {
-    config
-        .providers
-        .get_mut::<agent_access_confluence::ConfluenceProviderConfig>()
-        .unwrap()
-        .allowed_upstream_hosts
-        .push(
-            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/**"
-                .to_string(),
-        );
     use_bearer_service_and_lookup_credentials(config, "confluence");
 }
 
-/// Routes the sample Jira and Confluence services through the Atlassian
-/// gateway with static bearer service and lookup credentials.
+/// Gives the sample Jira and Confluence services static bearer service and
+/// lookup credentials on the Atlassian gateway route.
 fn route_both_atlassian_products_through_the_gateway(config: &mut BrokerConfig) {
     use_atlassian_gateway_for_jira(config);
     use_atlassian_gateway_for_confluence(config);

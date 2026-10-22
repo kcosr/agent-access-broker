@@ -220,7 +220,8 @@ async fn readiness_checks_connection_configuration_without_principals() {
     let (config, _store) = connection_config("tracker");
     let runtime = BrokerRuntime::new(config).unwrap();
     runtime.readiness().await.unwrap();
-    // Management resolves a connection's token form by its ID.
+    // Management resolves a connection's token form by its ID, with the
+    // label Jira declares for the profile.
     for kind in [
         crate::PrincipalKind::User,
         crate::PrincipalKind::ServiceAccount,
@@ -230,7 +231,7 @@ async fn readiness_checks_connection_configuration_without_principals() {
             runtime.connection_token_profiles("tracker", Some(kind)),
             Some(vec![crate::ConnectionTokenProfile {
                 profile: PROFILE.into(),
-                label: None,
+                label: Some("Classic API token (site)".into()),
                 credential_kind: "basic_api_token",
             }])
         );
@@ -806,7 +807,11 @@ fn store_git_token(runtime: &BrokerRuntime, profile: &str) {
             created_by: "admin".into(),
         })
         .unwrap();
-    let (credential_kind, secret) = if profile == "git-basic-api-token" {
+    let basic = matches!(
+        profile,
+        "git-basic-api-token" | "atlassian-api-token" | "atlassian-scoped-api-token"
+    );
+    let (credential_kind, secret) = if basic {
         (
             "basic_api_token",
             json!({"username": "deploy-user", "token": "personal-git-token"}),
@@ -1124,6 +1129,85 @@ async fn the_git_gateway_refuses_route_bound_and_undeclared_token_profiles() {
         .await
         .unwrap_err();
     assert_ne!(unprofiled.reason_code(), ReasonCode::CredentialInvalid);
+}
+
+/// Jira's real descriptor marks every Atlassian profile route-bound, so with
+/// Jira published the Git gateway refuses a stored classic, scoped or
+/// service-account Atlassian token in forwarding and in verification,
+/// before anything is sent, even when the connection's list accepts it
+/// (which configuration validation rejects; the guard stays fail-closed).
+#[tokio::test]
+async fn the_git_gateway_refuses_atlassian_token_profiles() {
+    use crate::PrincipalKind::User;
+    let runtime = git_connection_runtime(&["git-bearer-token"], &[]);
+    let jira: agent_access_jira::JiraProviderConfig = serde_json::from_value(json!({
+        "tenant_host": "example.atlassian.net",
+        "cloud_id": "00000000-0000-0000-0000-000000000000",
+        "allowed_upstream_hosts": ["https://example.atlassian.net/rest/api/3/**"],
+    }))
+    .unwrap();
+    let mut services = (*runtime.services).clone();
+    services.insert(
+        "jira".into(),
+        Arc::new(agent_access_jira::jira_descriptor(&jira)),
+    );
+    const ROUTE_BOUND: &str = "the credential's token profile is route-bound: only the service declaring it may present it, so the Git gateway refuses it";
+    for (profile, credential) in [
+        (
+            "atlassian-api-token",
+            basic_credential("agent@example.com", "personal-git-token"),
+        ),
+        (
+            "atlassian-scoped-api-token",
+            basic_credential("agent@example.com", "personal-git-token"),
+        ),
+        (
+            "atlassian-bearer-token",
+            bearer_credential("personal-git-token"),
+        ),
+    ] {
+        let mut routed = runtime.clone();
+        routed.services = Arc::new(services.clone());
+        let mut credentials = (*routed.effective_credentials).clone();
+        credentials
+            .connections
+            .get_mut("gitlab")
+            .unwrap()
+            .user_token_profiles = Some(vec![profile.into()]);
+        routed.effective_credentials = Arc::new(credentials);
+        store_git_token(&routed, profile);
+        let identity = agent_one(&routed, Some(User));
+
+        let refused = *git_fetch_credential(&routed, identity.clone())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.status, 403, "{profile}: {:?}", refused.envelope);
+        assert_eq!(
+            refused.envelope.reason_code,
+            Some(ReasonCode::CredentialInvalid.into()),
+            "{profile}"
+        );
+        assert_eq!(refused.envelope.reason.as_deref(), Some(ROUTE_BOUND));
+        let refused = routed
+            .verify_execution_credential(
+                "gitlab_git",
+                &agent_access_provider::test_support::credential_with_profile(credential, profile),
+                &identity,
+                CredentialVerificationInput {
+                    repository: Some("sip/service".into()),
+                },
+                CorrelationContext::for_tests(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.reason_code(),
+            ReasonCode::CredentialInvalid,
+            "{profile}"
+        );
+        assert_eq!(refused.message, ROUTE_BOUND);
+    }
 }
 
 /// Runtime admission validates every published descriptor, so one that

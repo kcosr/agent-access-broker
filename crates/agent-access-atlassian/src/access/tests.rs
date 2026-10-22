@@ -1,13 +1,17 @@
-//! The credential an Atlassian request presents: static tokens as before,
-//! delegated access pinned to the gateway route's cloud ID and the gateway
-//! audience before every request, one recovery per operation, attachment
-//! downloads whose redirects present it only within the route's site, and
-//! the receipts of writes whose verification the connection stopped.
+//! The credential an Atlassian request presents: static tokens on the
+//! route their token type selects, refused when it has none, delegated
+//! access pinned to the gateway route's cloud ID and the gateway audience
+//! before every request, one recovery per operation, attachment downloads
+//! whose redirects present it only within the route's site, and the
+//! receipts of writes whose verification the connection stopped.
 use super::*;
-use crate::{AtlassianProduct, AtlassianRoutes, AtlassianSite};
+use crate::{
+    ATLASSIAN_API_TOKEN_PROFILE, ATLASSIAN_BEARER_TOKEN_PROFILE,
+    ATLASSIAN_SCOPED_API_TOKEN_PROFILE, AtlassianProduct, AtlassianRoutes, AtlassianSite,
+};
 use agent_access_provider::host::{delegated_credential, port_failure};
 use agent_access_provider::test_support::{
-    TestHost, basic_credential, bearer_credential, delegated_binding_id,
+    TestHost, basic_credential, bearer_credential, credential_with_profile, delegated_binding_id,
 };
 use agent_access_provider::{DelegatedAccess, DelegatedBindingId, DelegatedLease};
 use serde_json::json;
@@ -114,24 +118,87 @@ fn credential_error(error: AtlassianAccessError) -> ProviderError {
     }
 }
 
+/// A static token lent as `profile`.
+fn profiled(credential: ExecutionCredential, profile: &str) -> AtlassianCredential {
+    AtlassianCredential::from_static(credential_with_profile(credential, profile))
+}
+
 #[tokio::test]
 async fn static_tokens_present_their_own_authorization_without_revealing_it() {
     for credential in [
-        basic_credential("agent@example.com", "api-token"),
-        bearer_credential("gateway-token"),
+        AtlassianCredential::from_static(basic_credential("agent@example.com", "site-secret")),
+        AtlassianCredential::from_static(bearer_credential("gateway-secret")),
+        profiled(
+            basic_credential("agent@example.com", "site-secret"),
+            ATLASSIAN_API_TOKEN_PROFILE,
+        ),
+        profiled(
+            basic_credential("agent@example.com", "scoped-secret"),
+            ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+        ),
+        profiled(
+            bearer_credential("gateway-secret"),
+            ATLASSIAN_BEARER_TOKEN_PROFILE,
+        ),
     ] {
-        let credential = AtlassianCredential::from_static(credential);
         assert!(!credential.is_delegated());
         let presented = credential.present().await.unwrap();
         assert!(!presented.is_delegated());
         let rendered = format!("{:?} {credential:?}", presented.authorization());
         assert!(
-            !rendered.contains("api-token")
-                && !rendered.contains("gateway-token")
-                && !rendered.contains("agent@"),
+            !rendered.contains("secret") && !rendered.contains("agent@"),
             "{rendered}"
         );
     }
+}
+
+/// A static token Atlassian providers cannot route is never presented:
+/// neither for a request nor for a download, whose first hop is not sent.
+#[tokio::test]
+async fn unroutable_static_tokens_are_never_presented() {
+    let server = MockServer::start().await;
+    let media = MockServer::start().await;
+    let clients = gateway_clients(&server, &media);
+    for (credential, reason) in [
+        (
+            profiled(
+                basic_credential("agent@example.com", "token"),
+                "gitlab-access-token",
+            ),
+            AtlassianRouteError::UnknownProfile,
+        ),
+        (
+            profiled(
+                bearer_credential("token"),
+                ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+            ),
+            AtlassianRouteError::ProfileKindMismatch,
+        ),
+        (
+            profiled(
+                basic_credential("agent@example.com", "token"),
+                ATLASSIAN_BEARER_TOKEN_PROFILE,
+            ),
+            AtlassianRouteError::ProfileKindMismatch,
+        ),
+    ] {
+        assert_eq!(credential.route(), Err(reason));
+        assert_eq!(
+            credential.present().await.err(),
+            Some(AtlassianAccessError::Unroutable(reason))
+        );
+        assert_eq!(
+            download(
+                &credential,
+                &clients,
+                &on_site(CLOUD_ID, "rest/api/3/attachment/content/1")
+            )
+            .await
+            .unwrap_err(),
+            AtlassianDownloadError::Access(AtlassianAccessError::Unroutable(reason))
+        );
+    }
+    assert!(hops(&server).await.is_empty());
 }
 
 /// Delegated access is revalidated and pinned to the gateway route's cloud
@@ -142,7 +209,8 @@ async fn static_tokens_present_their_own_authorization_without_revealing_it() {
 async fn delegated_access_is_pinned_to_the_gateway_site_and_audience() {
     let lease = Lease::new(CLOUD_ID);
     let credential = delegated(&lease, Some(CLOUD_ID));
-    assert!(credential.is_delegated() && credential.routes_through_gateway());
+    assert!(credential.is_delegated());
+    assert_eq!(credential.route(), Ok(AtlassianRoute::Gateway));
     assert!(credential.static_credential().is_none());
     let presented = credential.present().await.unwrap();
     assert!(presented.is_delegated());
@@ -242,21 +310,16 @@ fn execution_and_lookup_access_fail_closed_without_atlassian_material() {
         let credential = AtlassianCredential::from_lookup(Some(&access), Some(&cloud_id))
             .unwrap()
             .unwrap();
-        assert!(credential.routes_through_gateway());
+        assert_eq!(credential.route(), Ok(AtlassianRoute::Gateway));
     }
 }
 
 /// Delegated access routes through the gateway whatever else the site
-/// allows, as bearer tokens do, and is pinned to the cloud ID the gateway
-/// route names.
+/// allows, as bearer and scoped API tokens do, and is pinned to the cloud
+/// ID the gateway route names.
 #[test]
 fn delegated_access_routes_through_the_gateway_on_its_cloud_id() {
-    const PRODUCT: AtlassianProduct = AtlassianProduct {
-        provider: "jira",
-        name: "Jira",
-        api_path: "rest/api/3/",
-        status_reasons: &[],
-    };
+    const PRODUCT: AtlassianProduct = JIRA;
     let hosts = [
         "https://example.atlassian.net/rest/api/3/**".to_owned(),
         "https://api.atlassian.com/ex/jira/**".to_owned(),
@@ -290,10 +353,9 @@ fn delegated_access_routes_through_the_gateway_on_its_cloud_id() {
             .as_str(),
         "https://example.atlassian.net/rest/api/3/"
     );
-    // Without the gateway, delegated access has no route and no pin.
-    let site_only = &hosts[..1];
+    // Without a cloud ID, delegated access has no route and no pin.
     let site = AtlassianSite {
-        allowed_upstream_hosts: site_only,
+        cloud_id: None,
         ..site
     };
     assert_eq!(site.gateway_cloud_id(), None);
@@ -304,7 +366,7 @@ fn delegated_access_routes_through_the_gateway_on_its_cloud_id() {
             .err()
             .unwrap()
             .to_string(),
-        "Jira bearer tokens and OAuth connections require providers.jira.cloud_id and api.atlassian.com in allowed_upstream_hosts"
+        "Jira OAuth connections, scoped API tokens and bearer tokens take the Atlassian gateway route, which requires providers.jira.cloud_id"
     );
 }
 
@@ -375,6 +437,7 @@ const JIRA: AtlassianProduct = AtlassianProduct {
     provider: "jira",
     name: "Jira",
     api_path: "rest/api/3/",
+    other_api_paths: &[],
     status_reasons: &[],
 };
 
@@ -462,11 +525,12 @@ async fn download(
 }
 
 /// On the gateway, which serves every Atlassian site from one origin, a
-/// download presents the credential (OAuth or a service account's bearer
-/// token) only within the configured site's path, including its paths
-/// outside the API. A redirect to another cloud ID or another product,
-/// directly or back from a media host, fails before it is sent; plain media
-/// redirects keep working without the credential.
+/// download presents the credential (OAuth, a service account's bearer
+/// token or a scoped API token's Basic authorization) only within the
+/// configured site's path, including its paths outside the API. A redirect
+/// to another cloud ID or another product, directly or back from a media
+/// host, fails before it is sent; plain media redirects keep working
+/// without the credential.
 #[tokio::test]
 async fn downloads_present_credentials_only_within_the_configured_site() {
     let lease = Lease::new(CLOUD_ID);
@@ -475,6 +539,20 @@ async fn downloads_present_credentials_only_within_the_configured_site() {
         (
             AtlassianCredential::from_static(bearer_credential("service-token")),
             "Bearer service-token",
+        ),
+        (
+            profiled(
+                bearer_credential("service-token"),
+                ATLASSIAN_BEARER_TOKEN_PROFILE,
+            ),
+            "Bearer service-token",
+        ),
+        (
+            profiled(
+                basic_credential("agent@example.com", "scoped-token"),
+                ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+            ),
+            "Basic YWdlbnRAZXhhbXBsZS5jb206c2NvcGVkLXRva2Vu",
         ),
     ];
     for (credential, presented) in credentials {
@@ -689,4 +767,176 @@ async fn each_authorized_hop_presents_freshly_revalidated_access() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(lease.rejected().is_empty());
     assert_eq!(lease.recoveries.load(Ordering::SeqCst), 0);
+}
+
+/// A scoped API token is Basic on the gateway site and a classic one Basic
+/// on the tenant: neither is presented across the tenant, media, product
+/// or cloud boundary. Hops off the route's origin, to the tenant from the
+/// gateway or to the gateway from the tenant, and to media hosts, carry no
+/// credential; hops on the gateway outside the configured site fail before
+/// they are sent.
+#[tokio::test]
+async fn basic_tokens_never_leave_their_route_site() {
+    let gateway = MockServer::start().await;
+    let tenant = MockServer::start().await;
+    let media = MockServer::start().await;
+    let hosts = [
+        format!("{}/**", gateway.uri()),
+        format!("{}/**", tenant.uri()),
+        format!("{}/**", media.uri()),
+    ];
+    let site = AtlassianSite {
+        tenant_host: "example.atlassian.net",
+        cloud_id: Some(CLOUD_ID),
+        egress_proxy: None,
+        allowed_upstream_hosts: &hosts,
+    };
+    let clients = |origin: &MockServer, base: String| {
+        AtlassianClients::new(
+            JIRA,
+            &site,
+            Url::parse(&format!("{}{base}", origin.uri())).unwrap(),
+            &TestHost::default(),
+        )
+        .unwrap()
+    };
+    let gateway_clients = clients(&gateway, format!("/ex/jira/{CLOUD_ID}/rest/api/3/"));
+    let tenant_clients = clients(&tenant, "/rest/api/3/".to_string());
+    let content = |id: &str| on_site(CLOUD_ID, &format!("rest/api/3/attachment/content/{id}"));
+    let tenant_content = |id: &str| format!("/rest/api/3/attachment/content/{id}");
+    let scoped = profiled(
+        basic_credential("agent@example.com", "scoped-token"),
+        ATLASSIAN_SCOPED_API_TOKEN_PROFILE,
+    );
+    let scoped_basic = "Basic YWdlbnRAZXhhbXBsZS5jb206c2NvcGVkLXRva2Vu";
+    let classic = profiled(
+        basic_credential("agent@example.com", "classic-token"),
+        ATLASSIAN_API_TOKEN_PROFILE,
+    );
+    let classic_basic = "Basic YWdlbnRAZXhhbXBsZS5jb206Y2xhc3NpYy10b2tlbg==";
+
+    // From the gateway site: to the tenant, to a media host, back to the
+    // configured site, to another cloud ID and to another product.
+    redirect(
+        &gateway,
+        &content("1"),
+        format!("{}{}", tenant.uri(), tenant_content("1")),
+    )
+    .await;
+    serve(&tenant, &tenant_content("1")).await;
+    redirect(&gateway, &content("2"), format!("{}/file/2", media.uri())).await;
+    redirect(
+        &media,
+        "/file/2",
+        format!("{}{}", gateway.uri(), content("2b")),
+    )
+    .await;
+    serve(&gateway, &content("2b")).await;
+    redirect(
+        &gateway,
+        &content("3"),
+        format!(
+            "{}{}",
+            gateway.uri(),
+            on_site(OTHER_CLOUD_ID, "rest/api/3/attachment/content/3")
+        ),
+    )
+    .await;
+    redirect(
+        &gateway,
+        &content("4"),
+        format!(
+            "{}/ex/confluence/{CLOUD_ID}/wiki/download/attachments/4/a.txt",
+            gateway.uri()
+        ),
+    )
+    .await;
+    redirect(&gateway, &content("5"), format!("{}/file/5", media.uri())).await;
+    redirect(
+        &media,
+        "/file/5",
+        format!(
+            "{}{}",
+            gateway.uri(),
+            on_site(OTHER_CLOUD_ID, "secure/attachment/5/a.txt")
+        ),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("another site"))
+        .with_priority(10)
+        .mount(&gateway)
+        .await;
+
+    let response = download(&scoped, &gateway_clients, &content("1"))
+        .await
+        .unwrap();
+    assert_eq!(response.text().await.unwrap(), "evidence");
+    let response = download(&scoped, &gateway_clients, &content("2"))
+        .await
+        .unwrap();
+    assert_eq!(response.text().await.unwrap(), "evidence");
+    for id in ["3", "4", "5"] {
+        assert_eq!(
+            download(&scoped, &gateway_clients, &content(id))
+                .await
+                .unwrap_err(),
+            AtlassianDownloadError::Upstream(UpstreamError::Redirect),
+            "{id}"
+        );
+    }
+    assert_eq!(
+        hops(&gateway).await,
+        [
+            format!("{} {scoped_basic}", content("1")),
+            format!("{} {scoped_basic}", content("2")),
+            format!("{} {scoped_basic}", content("2b")),
+            format!("{} {scoped_basic}", content("3")),
+            format!("{} {scoped_basic}", content("4")),
+            format!("{} {scoped_basic}", content("5")),
+        ]
+    );
+    assert_eq!(hops(&tenant).await, [format!("{} -", tenant_content("1"))]);
+    assert_eq!(hops(&media).await, ["/file/2 -", "/file/5 -"]);
+
+    // From the tenant: a classic token is presented on the tenant only,
+    // never on the gateway or a media host.
+    redirect(
+        &tenant,
+        &tenant_content("6"),
+        format!("{}{}", gateway.uri(), content("6")),
+    )
+    .await;
+    serve(&gateway, &content("6")).await;
+    redirect(
+        &tenant,
+        &tenant_content("7"),
+        format!("{}/file/7", media.uri()),
+    )
+    .await;
+    serve(&media, "/file/7").await;
+    redirect(
+        &tenant,
+        &tenant_content("8"),
+        format!("{}/secure/attachment/8/a.txt", tenant.uri()),
+    )
+    .await;
+    serve(&tenant, "/secure/attachment/8/a.txt").await;
+    for id in ["6", "7", "8"] {
+        let response = download(&classic, &tenant_clients, &tenant_content(id))
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "evidence", "{id}");
+    }
+    assert_eq!(
+        hops(&tenant).await[1..],
+        [
+            format!("{} {classic_basic}", tenant_content("6")),
+            format!("{} {classic_basic}", tenant_content("7")),
+            format!("{} {classic_basic}", tenant_content("8")),
+            format!("/secure/attachment/8/a.txt {classic_basic}"),
+        ]
+    );
+    assert_eq!(hops(&gateway).await[6..], [format!("{} -", content("6"))]);
+    assert_eq!(hops(&media).await[2..], ["/file/7 -"]);
 }

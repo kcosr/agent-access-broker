@@ -266,11 +266,13 @@ token_ref = "env:JIRA_SERVICE_API_TOKEN"
 # system principals; with several in a list, the saver picks one.
 # Connections need managed_store and credential_encryption.
 # One Atlassian connection serves Jira and Confluence on this site: each
-# principal stores one account email and classic API token for both (see
-# [credentials.per_user.confluence] below), and grants stay per service.
-# Through the Atlassian gateway (cloud_id and api.atlassian.com allowed),
-# connections list "atlassian-bearer-token" instead, usually one per product
-# for service accounts' scoped tokens.
+# principal stores one token for both (see [credentials.per_user.confluence]
+# below), and grants stay per service. The token type decides the route: a
+# classic API token (atlassian-api-token) reaches the tenant host; a scoped
+# API token (atlassian-scoped-api-token, email and token) and a service
+# account's bearer token (atlassian-bearer-token) reach the Atlassian
+# gateway, which needs the providers' cloud_id and api.atlassian.com in
+# their allowlists.
 #
 # [credentials.connections.atlassian]
 # display_name = "Atlassian"
@@ -385,14 +387,13 @@ read_only = true
 # upstream_tenant_id = "00000000-0000-0000-0000-000000000000"
 
 # Atlassian OAuth: people connect their Atlassian account once for Jira and
-# Confluence, which act through the Atlassian gateway; service accounts keep
-# administrator-provisioned scoped tokens (atlassian-bearer-token). OAuth
-# requires the gateway on both providers (cloud_id set and api.atlassian.com
-# in allowed_upstream_hosts), and a connection with oauth lists only
-# atlassian-bearer-token for service accounts, or no token profile:
-# atlassian-api-token beside oauth is rejected. Through the gateway,
-# [credentials.service.*] and
-# [credentials.lookup.*] for Jira and Confluence are bearer_token too.
+# Confluence, which act through the Atlassian gateway on the providers'
+# cloud_id. Service accounts never use OAuth; they keep
+# administrator-provisioned tokens of the types the connection accepts, each
+# on its own route: here classic API tokens of regular accounts (tenant
+# host) and Atlassian service-account tokens (gateway) side by side, while
+# accounts move from one to the other. The providers' allowlists below
+# cover the tenant, the gateway and the media host.
 # Create an OAuth 2.0 integration in the Atlassian developer console with
 # this callback URL and the Jira, Confluence and User Identity APIs, and
 # enable sharing. The target is the site's cloud ID, the providers' cloud_id.
@@ -420,17 +421,20 @@ read_only = true
 # audience = "api.atlassian.com"
 # target = "00000000-0000-0000-0000-000000000000"
 #
-# People on OAuth, with each product's service-account tokens. Both
-# connections share one registration, which the portal lists once under the
-# display name of the first by connection ID, so give them the same name:
+# People on OAuth; service accounts on classic API tokens or service-account
+# tokens, the administrator choosing the type when saving one. Atlassian
+# service-account tokens are scoped to the products chosen when they are
+# created, so each product has its own connection. Both connections share
+# one registration, which the portal lists once under the display name of
+# the first by connection ID, so give them the same name:
 # [credentials.connections.jira]
 # display_name = "Atlassian"
-# service_account_token_profiles = ["atlassian-bearer-token"]
+# service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 # oauth = { registration = "atlassian", profile = "default" }
 #
 # [credentials.connections.confluence]
 # display_name = "Atlassian"
-# service_account_token_profiles = ["atlassian-bearer-token"]
+# service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 # oauth = { registration = "atlassian", profile = "default" }
 #
 # [credentials.per_user.jira]
@@ -733,9 +737,15 @@ credential_mode = "service"
 #
 [providers.jira]
 tenant_host = "example.atlassian.net"
+# The site's cloud ID (a UUID) gives Jira its Atlassian gateway route, which
+# OAuth, scoped API tokens and service-account tokens take.
 cloud_id = "00000000-0000-0000-0000-000000000000"
+# Each configured token type's route must be covered: the tenant for classic
+# API tokens, the gateway for the others, and Atlassian's media host for
+# attachment downloads.
 allowed_upstream_hosts = [
   "https://example.atlassian.net/rest/api/3/**",
+  "https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000000/rest/api/3/**",
   "https://api.media.atlassian.com/**",
 ]
 
@@ -783,6 +793,9 @@ allowed_upstream_hosts = [
   "https://example.atlassian.net/wiki/rest/api/**",
   "https://example.atlassian.net/wiki/api/v2/**",
   "https://example.atlassian.net/wiki/download/attachments/**",
+  "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/rest/api/**",
+  "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/api/v2/**",
+  "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/download/attachments/**",
   "https://api.media.atlassian.com/**",
 ]
 

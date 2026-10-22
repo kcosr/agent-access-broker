@@ -21,7 +21,7 @@ use validation::*;
 pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
     AtlassianWriteVerification, bind_atlassian_access, is_delegated_access_failure,
-    validate_atlassian_gateway_credential,
+    validate_atlassian_routes,
 };
 use agent_access_content::{
     ContentWriteError, markdown_to_confluence_storage_bounded,
@@ -76,7 +76,8 @@ pub struct ConfluenceProvider {
     continuations: ConfluenceContinuations,
     attribution: ProviderAttributionConfig,
     /// The cloud ID of the site's gateway route, which delegated access is
-    /// pinned to; `None` when the site does not use the gateway.
+    /// pinned to; `None` when the site has no gateway route (no valid
+    /// cloud ID).
     gateway_cloud_id: Option<Arc<str>>,
 }
 
@@ -406,7 +407,7 @@ pub mod test_support {
     /// origin such as a stub server's, instead of
     /// `https://api.atlassian.com`:
     /// `{gateway}/ex/confluence/{cloud_id}/wiki/rest/api/` and its v2
-    /// sibling. The site must use the gateway, and
+    /// sibling. The site must set a cloud ID, and
     /// `config.allowed_upstream_hosts` must also admit that route.
     /// Everything else, including the descriptor, is the production
     /// provider's.

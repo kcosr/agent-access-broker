@@ -1,7 +1,7 @@
 //! Vendor-level Atlassian token profiles (design section 6.11): one
 //! `atlassian` connection serves Jira and Confluence with one stored
-//! classic API token on the site route, service accounts' scoped bearer
-//! tokens reach each product through the gateway, and rows stored under the
+//! classic API token on the site route, service accounts' bearer tokens
+//! reach each product through the gateway, and rows stored under the
 //! retired product profiles are listed as retained, still decrypt, and are
 //! never selected.
 use super::*;
@@ -388,7 +388,7 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
         target["tokenProfiles"],
         json!([{
             "profile": "atlassian-api-token",
-            "label": null,
+            "label": "Classic API token (site)",
             "credentialKind": "basic_api_token",
             "inputSchema": target["tokenProfiles"][0]["inputSchema"]
         }])
@@ -434,6 +434,7 @@ async fn one_stored_atlassian_token_serves_jira_and_confluence_on_the_site_route
         .await;
     assert_eq!(stored["connection"], "atlassian");
     assert_eq!(stored["profile"], "atlassian-api-token");
+    assert_eq!(stored["label"], "Classic API token (site)");
     for (status, body) in fixture.read_both(&fixture.alice_invoke).await {
         assert_eq!(status, StatusCode::OK, "{body}");
     }

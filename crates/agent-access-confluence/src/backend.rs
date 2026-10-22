@@ -926,7 +926,7 @@ impl From<AtlassianAccessError> for ConfluenceBackendError {
     fn from(error: AtlassianAccessError) -> Self {
         match error {
             AtlassianAccessError::Credential(error) => Self::Credential(error),
-            _ => Self::Protocol("unsupported Confluence credential kind".to_string()),
+            _ => Self::Protocol("Confluence cannot route the selected credential".to_string()),
         }
     }
 }
@@ -1043,6 +1043,7 @@ pub(crate) const CONFLUENCE_PRODUCT: AtlassianProduct = AtlassianProduct {
     provider: "confluence",
     name: "Confluence",
     api_path: "wiki/rest/api/",
+    other_api_paths: &["wiki/api/v2/"],
     status_reasons: &[(409, ReasonCode::VersionConflict)],
 };
 
@@ -1083,9 +1084,7 @@ impl HttpConfluenceBackend {
     ) -> Result<Self, ProviderBuildError> {
         let site = self.config.site();
         let cloud_id = site.gateway_cloud_id().ok_or_else(|| {
-            ProviderBuildError::invalid(
-                "the test Confluence site does not use the Atlassian gateway",
-            )
+            ProviderBuildError::invalid("the test Confluence site has no Atlassian gateway route")
         })?;
         let base = Url::parse(&format!(
             "{}/ex/confluence/{cloud_id}/{}",

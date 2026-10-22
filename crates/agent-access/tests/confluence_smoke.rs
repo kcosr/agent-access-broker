@@ -4526,7 +4526,7 @@ hash_key_ref = {hash_key}
 
 [providers.confluence]
 tenant_host = "example.atlassian.net"
-allowed_upstream_hosts = ["https://example.atlassian.net/wiki/rest/api/**"]
+allowed_upstream_hosts = ["https://example.atlassian.net/wiki/rest/api/**", "https://example.atlassian.net/wiki/api/v2/**"]
 attachments = {{ media_types = ["text/plain"] }}
 content = {{ page_formats = ["storage", "atlas_doc_format"] }}
 search = {{ max_results = 2 }}
@@ -4584,7 +4584,10 @@ fn confluence_provider_config(max_results: u32) -> ConfluenceProviderConfig {
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,
         egress_proxy: None,
-        allowed_upstream_hosts: vec!["https://example.atlassian.net/wiki/rest/api/**".to_string()],
+        allowed_upstream_hosts: vec![
+            "https://example.atlassian.net/wiki/rest/api/**".to_string(),
+            "https://example.atlassian.net/wiki/api/v2/**".to_string(),
+        ],
         attachments: agent_access_provider::AttachmentLimitsConfig {
             media_types: vec!["text/plain".to_string()],
             ..agent_access_provider::AttachmentLimitsConfig::default()

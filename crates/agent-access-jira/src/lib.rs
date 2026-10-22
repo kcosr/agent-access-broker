@@ -21,7 +21,7 @@ use validation::*;
 
 pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
-    AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_gateway_credential,
+    AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_routes,
 };
 use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
@@ -72,7 +72,8 @@ pub struct JiraProvider {
     search_pages: SearchPages,
     search_configuration: [u8; 32],
     /// The cloud ID of the site's gateway route, which delegated access is
-    /// pinned to; `None` when the site does not use the gateway.
+    /// pinned to; `None` when the site has no gateway route (no valid
+    /// cloud ID).
     gateway_cloud_id: Option<Arc<str>>,
 }
 
@@ -167,8 +168,8 @@ pub mod test_support {
     /// The production Jira provider for `config`'s site, built with `host`,
     /// whose Atlassian gateway route is served below `gateway`, an origin
     /// such as a stub server's, instead of `https://api.atlassian.com`:
-    /// `{gateway}/ex/jira/{cloud_id}/rest/api/3/`. The site must use the
-    /// gateway, and `config.allowed_upstream_hosts` must also admit that
+    /// `{gateway}/ex/jira/{cloud_id}/rest/api/3/`. The site must set a
+    /// cloud ID, and `config.allowed_upstream_hosts` must also admit that
     /// route. Everything else, including the descriptor, is the production
     /// provider's.
     pub fn provider_with_gateway(

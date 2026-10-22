@@ -678,7 +678,7 @@ impl From<AtlassianAccessError> for JiraBackendError {
     fn from(error: AtlassianAccessError) -> Self {
         match error {
             AtlassianAccessError::Credential(error) => Self::Credential(error),
-            _ => Self::Protocol("unsupported Jira credential kind".to_string()),
+            _ => Self::Protocol("Jira cannot route the selected credential".to_string()),
         }
     }
 }
@@ -789,6 +789,7 @@ pub(crate) const JIRA_PRODUCT: AtlassianProduct = AtlassianProduct {
     provider: "jira",
     name: "Jira",
     api_path: "rest/api/3/",
+    other_api_paths: &[],
     status_reasons: &[],
 };
 
@@ -828,7 +829,7 @@ impl HttpJiraBackend {
     ) -> Result<Self, ProviderBuildError> {
         let site = self.config.site();
         let cloud_id = site.gateway_cloud_id().ok_or_else(|| {
-            ProviderBuildError::invalid("the test Jira site does not use the Atlassian gateway")
+            ProviderBuildError::invalid("the test Jira site has no Atlassian gateway route")
         })?;
         let base = Url::parse(&format!(
             "{}/ex/jira/{cloud_id}/{}",

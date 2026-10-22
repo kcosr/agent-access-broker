@@ -33,6 +33,17 @@ fn access() -> ExecutionAccess {
     ExecutionAccess::Static(credential())
 }
 
+/// A scoped API token for the same account: Basic, like [`access`], but on
+/// the gateway route.
+fn scoped_access() -> ExecutionAccess {
+    ExecutionAccess::Static(
+        agent_access_provider::test_support::credential_with_profile(
+            credential(),
+            "atlassian-scoped-api-token",
+        ),
+    )
+}
+
 fn identity(principal: &str) -> InvocationIdentity {
     InvocationIdentity::new(principal.to_string(), true)
 }
@@ -302,28 +313,21 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
         for changed in changed_requests {
             assert_list_rejection(list.open(&continuations, &changed, &access, &token), list);
         }
-        // The credential kind selects the tenant or gateway route.
-        assert_list_rejection(
-            list.open(
-                &continuations,
-                &request,
-                &ExecutionAccess::Static(bearer_credential("token")),
-                &token,
-            ),
-            list,
-        );
-        // Another tenant, gateway cloud ID or gateway route.
+        // The token type selects the tenant or gateway route: a bearer or
+        // scoped API token never opens a classic token's continuation.
+        for other in [
+            ExecutionAccess::Static(bearer_credential("token")),
+            scoped_access(),
+        ] {
+            assert_list_rejection(list.open(&continuations, &request, &other, &token), list);
+        }
+        // Another tenant or gateway cloud ID.
         let mut tenants = Vec::new();
         let mut other = config();
         other.tenant_host = "other.atlassian.net".to_string();
         tenants.push(other);
         let mut other = config();
         other.cloud_id = Some("11111111-1111-1111-1111-111111111111".to_string());
-        tenants.push(other);
-        let mut other = config();
-        other
-            .allowed_upstream_hosts
-            .push("https://api.atlassian.com/ex/confluence/**".to_string());
         tenants.push(other);
         for tenant in tenants {
             let other = ConfluenceContinuations {
@@ -332,6 +336,20 @@ fn list_tokens_round_trip_and_reject_changed_context_tenant_caller_and_route() {
             };
             assert_list_rejection(list.open(&other, &request, &access, &token), list);
         }
+        // The allowlist no longer selects a route.
+        let mut gateway_allowed = config();
+        gateway_allowed
+            .allowed_upstream_hosts
+            .push("https://api.atlassian.com/ex/confluence/**".to_string());
+        let reconfigured = ConfluenceContinuations {
+            route: gateway_allowed.site().route_fingerprint(),
+            ..continuations.clone()
+        };
+        assert_eq!(
+            list.open(&reconfigured, &request, &access, &token).unwrap(),
+            list.position(),
+            "{list:?}"
+        );
         // No list family opens another's tokens.
         for other_list in LISTS {
             if !matches!(
@@ -1529,4 +1547,134 @@ fn draft_handles_commit_to_the_execution_material_they_were_minted_with() {
     // Execution material Confluence does not accept fails closed.
     let error = open(&continuations, &service, &ExecutionAccess::None, &token).unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
+}
+
+/// Draft handles for page `123456` ([`draft_handle`]) owned per user by
+/// `agent-one` and sealed with [`test_signing_key`]`(7)`, frozen from the
+/// earlier releases for the cloud ID [`CLOUD_ID`], configured in canonical
+/// form or braced. A classic token's handle binds no cloud ID, so every
+/// release and spelling minted the same one; `a5381e4` bound a gateway
+/// handle's cloud ID canonically, which 0.2.0 matched only for a canonical
+/// configuration.
+mod frozen_draft_handles {
+    /// Classic (Basic, site route), minted by 0.2.0 and `a5381e4` under
+    /// either spelling.
+    pub(super) const CLASSIC: &str = "aab_confluence_draft_v4_BG5rUFXL6LMN0EypUysJ1GuBxvYTM6BuEYmdZVLOF1_d-wcP3Xx1qWUYSArEsnEpn4Vl8ARiAmJppyH99jBlsWp7InNwYWNlIjoiRU5HIiwic3BhY2VJZCI6Ijk4NzY1Iiwib3JpZ2luIjoibmV3IiwicGFyZW50UGFnZUlkIjoiNTU1NTUifcUBql63_oF9DQr6oXQUtoIAqzIgftbE_iKXVg3ZqWkj";
+    /// A bearer token on the gateway, minted by `a5381e4` under either
+    /// spelling and by 0.2.0 under the canonical one.
+    pub(super) const BEARER: &str = "aab_confluence_draft_v4_BG5rUFXL6LMN0EypUysJ1GuBxvYTM6BuEYmdZVLOF1_d98NDKbKNUN3zremS1WHpddQ7D8C7sN3ckEfnoVmuCqR7InNwYWNlIjoiRU5HIiwic3BhY2VJZCI6Ijk4NzY1Iiwib3JpZ2luIjoibmV3IiwicGFyZW50UGFnZUlkIjoiNTU1NTUifUkA6vUkBBB2QrwpNT3TFSj8MiIFFk81TopTgM1EmTac";
+    /// OAuth on the gateway (connection `agent-one-oauth-1`), minted by
+    /// `a5381e4` under either spelling and by 0.2.0 under the canonical
+    /// one.
+    pub(super) const OAUTH: &str = "aab_confluence_draft_v4_BG5rUFXL6LMN0EypUysJ1GuBxvYTM6BuEYmdZVLOF1_d6MWGkwd-Ya8EaUBfqsmsyqySLkX4Z7SPGLSgPez4bat7InNwYWNlIjoiRU5HIiwic3BhY2VJZCI6Ijk4NzY1Iiwib3JpZ2luIjoibmV3IiwicGFyZW50UGFnZUlkIjoiNTU1NTUifXmC8rMjhUeVOTFWBGoUjUY3mWjBF-FG5XBd1QXC6HvL";
+    /// A bearer token on the gateway, minted by 0.2.0 under the braced
+    /// spelling, which it bound as written.
+    pub(super) const BEARER_0_2_0_BRACED: &str = "aab_confluence_draft_v4_BG5rUFXL6LMN0EypUysJ1GuBxvYTM6BuEYmdZVLOF1_dOdvin-f6sVCbvucb-97ir8IBMzmV2DbJTktoB0PLuON7InNwYWNlIjoiRU5HIiwic3BhY2VJZCI6Ijk4NzY1Iiwib3JpZ2luIjoibmV3IiwicGFyZW50UGFnZUlkIjoiNTU1NTUifVH0-PznM714ZzT_3fURB0lWO-ImVcju0nwXOS7RK0BB";
+    /// OAuth on the gateway, minted by 0.2.0 under the braced spelling.
+    pub(super) const OAUTH_0_2_0_BRACED: &str = "aab_confluence_draft_v4_BG5rUFXL6LMN0EypUysJ1GuBxvYTM6BuEYmdZVLOF1_dc8uuqevQby56ym_RR73wdLSniX8uQX6TlFwUxRHZo897InNwYWNlIjoiRU5HIiwic3BhY2VJZCI6Ijk4NzY1Iiwib3JpZ2luIjoibmV3IiwicGFyZW50UGFnZUlkIjoiNTU1NTUifVnbv4tJUL5KpzOk-OIN8cpl-hIBV6UHonaX02DuGSZp";
+}
+
+/// Durable draft handles minted before route-by-token-type follow the
+/// compatibility matrix against both baselines and both cloud-ID
+/// spellings: classic handles survive everywhere; gateway handles survive
+/// except those 0.2.0 minted under a non-canonical spelling, which it bound
+/// as written. Classic and bearer bindings are byte-identical to
+/// `a5381e4`'s, whether the token is lent with its profile or without, and
+/// a handle opens only under the material it was minted with.
+#[test]
+fn earlier_draft_handles_follow_the_upgrade_matrix() {
+    use frozen_draft_handles::*;
+    let key = test_signing_key(7);
+    let handle = draft_handle(ConfluenceDraftContentType::Page);
+    let continuations = |cloud_id: &str| {
+        let mut config = config();
+        config.cloud_id = Some(cloud_id.to_string());
+        ConfluenceContinuations::new(&config, &ProviderLimits::default(), Some(key.clone()))
+    };
+    let canonical = continuations(CLOUD_ID);
+    let braced = continuations(&format!("{{{CLOUD_ID}}}"));
+    let profiled = |credential: ExecutionCredential, profile: &str| {
+        ExecutionAccess::Static(
+            agent_access_provider::test_support::credential_with_profile(credential, profile),
+        )
+    };
+    let classic = [access(), profiled(credential(), "atlassian-api-token")];
+    let bearers = [
+        bearer(),
+        profiled(bearer_credential("token"), "atlassian-bearer-token"),
+    ];
+    let oauth = delegated("agent-one-oauth-1", "v2");
+    let open = |signer: &ConfluenceContinuations, access: &ExecutionAccess, token: &str| {
+        let request = per_user("page.draft.view", "agent-one", access.clone());
+        signer.open_draft_handle(
+            request.context(),
+            access,
+            ConfluenceDraftContentType::Page,
+            "123456",
+            token,
+        )
+    };
+
+    // | Minted by | Binding | Canonical | Non-canonical |
+    // | 0.2.0, a5381e4 | Classic | Survives | Survives |
+    // | 0.2.0 | Gateway | Survives | Refused |
+    // | a5381e4 | Gateway | Survives | Survives |
+    for signer in [&canonical, &braced] {
+        for access in &classic {
+            assert_eq!(open(signer, access, CLASSIC).unwrap(), handle);
+        }
+        for access in &bearers {
+            assert_eq!(open(signer, access, BEARER).unwrap(), handle);
+        }
+        assert_eq!(open(signer, &oauth, OAUTH).unwrap(), handle);
+    }
+    // 0.2.0's gateway handles from a canonical configuration are `BEARER`
+    // and `OAUTH` above; those it minted under the braced spelling bound
+    // it as written, which no configuration binds any longer.
+    for signer in [&canonical, &braced] {
+        for access in &bearers {
+            assert_invalid_handle(open(signer, access, BEARER_0_2_0_BRACED));
+        }
+        assert_invalid_handle(open(signer, &oauth, OAUTH_0_2_0_BRACED));
+    }
+
+    // The current release mints byte-identical classic, bearer and OAuth
+    // handles.
+    for (access, frozen) in [
+        (&classic[0], CLASSIC),
+        (&classic[1], CLASSIC),
+        (&bearers[0], BEARER),
+        (&bearers[1], BEARER),
+        (&delegated("agent-one-oauth-1", "v1"), OAUTH),
+    ] {
+        let minted = per_user("page.draft.create", "agent-one", access.clone());
+        for signer in [&canonical, &braced] {
+            assert_eq!(
+                signer
+                    .seal_draft_handle(minted.context(), access, &handle)
+                    .unwrap(),
+                frozen
+            );
+        }
+    }
+
+    // A scoped API token is Basic on the gateway: its handles and classic
+    // handles never open each other.
+    let scoped = scoped_access();
+    for frozen in [CLASSIC, BEARER] {
+        assert_invalid_handle(open(&canonical, &scoped, frozen));
+    }
+    let minted = per_user("page.draft.create", "agent-one", scoped.clone());
+    let token = canonical
+        .seal_draft_handle(minted.context(), &scoped, &handle)
+        .unwrap();
+    assert_eq!(open(&braced, &scoped, &token).unwrap(), handle);
+    for other in classic.iter().chain(&bearers).chain([&oauth]) {
+        assert_invalid_handle(open(&canonical, other, &token));
+    }
+    let mut other_site = config();
+    other_site.cloud_id = Some("11111111-1111-1111-1111-111111111111".to_string());
+    let other_site =
+        ConfluenceContinuations::new(&other_site, &ProviderLimits::default(), Some(key.clone()));
+    assert_invalid_handle(open(&other_site, &scoped, &token));
 }

@@ -8853,6 +8853,7 @@ fn configure_lookup_trace_confluence(config: &mut BrokerConfig) {
             egress_proxy: None,
             allowed_upstream_hosts: vec![
                 "https://example.atlassian.net/wiki/rest/api/**".to_string(),
+                "https://example.atlassian.net/wiki/api/v2/**".to_string(),
             ],
             attachments: agent_access_provider::AttachmentLimitsConfig::default(),
             content: agent_access_confluence::ConfluenceContentConfig {

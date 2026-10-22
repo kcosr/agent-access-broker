@@ -131,35 +131,49 @@ fn descriptor_lookup_requirements_follow_scope_resolution_needs() {
     }
 }
 
+/// A cloud ID gives the site its gateway route, whatever the allowlist
+/// says, and with it the scoped API token and bearer profiles; without one
+/// only the classic profile is declared. Delegated (OAuth) access is
+/// accepted on every site; validation requires the cloud ID for it.
 #[test]
-fn descriptor_offers_gateway_bearer_profile_only_for_gateway_configs() {
+fn descriptor_offers_gateway_profiles_whenever_a_cloud_id_is_set() {
     let mut config = confluence_config();
-    let direct = confluence_descriptor(&config);
-    // Delegated (OAuth) access is accepted on every site; validation
-    // requires the gateway for it.
+    let routed = confluence_descriptor(&config);
+    fn profiles(descriptor: &ServiceDescriptor) -> Vec<(&str, &str, bool)> {
+        descriptor
+            .credentials
+            .profiles
+            .iter()
+            .map(|profile| (profile.name.as_str(), profile.kind, profile.route_bound))
+            .collect()
+    }
     assert_eq!(
-        direct.credentials,
-        CredentialDescriptor::default()
-            .profile("atlassian-api-token", "basic_api_token")
-            .delegated(CONFLUENCE_OAUTH_CONNECTION)
+        profiles(&routed),
+        [
+            ("atlassian-api-token", "basic_api_token", true),
+            ("atlassian-scoped-api-token", "basic_api_token", true),
+            ("atlassian-bearer-token", "bearer_token", true),
+        ]
     );
-    assert_eq!(direct.presentation_body_limit, Some(1024));
+    assert!(routed.credentials.delegated.is_some());
+    assert_eq!(routed.presentation_body_limit, Some(1024));
     config.allowed_upstream_hosts = vec!["https://api.atlassian.com/ex/confluence/**".to_string()];
-    let gateway = confluence_descriptor(&config);
     assert_eq!(
-        gateway.credential_profile_kind("atlassian-bearer-token"),
-        Some("bearer_token")
+        confluence_descriptor(&config).credentials,
+        routed.credentials
     );
     config.cloud_id = None;
+    let direct = confluence_descriptor(&config);
     assert_eq!(
-        confluence_descriptor(&config).credential_profile_kind("atlassian-bearer-token"),
-        None
+        profiles(&direct),
+        [("atlassian-api-token", "basic_api_token", true)]
     );
+    assert!(direct.credentials.delegated.is_some());
 }
 
 /// Confluence declares the vendor-level Atlassian profiles Jira declares:
-/// the classic API token reaches the site and the service-account bearer
-/// token the gateway.
+/// the classic API token reaches the site, and the scoped API token and the
+/// service-account bearer token the gateway, each by its stored profile.
 #[test]
 fn vendor_profiles_select_the_site_route_or_the_gateway() {
     let mut config = confluence_config();
@@ -169,16 +183,23 @@ fn vendor_profiles_select_the_site_route_or_the_gateway() {
     );
     let descriptor = confluence_descriptor(&config);
     let backend = HttpConfluenceBackend::for_tests(config, ProviderLimits::default());
+    let gateway =
+        "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/";
     for (profile, credential, base) in [
         (
             "atlassian-api-token",
             basic_credential("agent@example.com", "token"),
-            "https://example.atlassian.net/wiki/rest/api/",
+            "https://example.atlassian.net/wiki/".to_string(),
+        ),
+        (
+            "atlassian-scoped-api-token",
+            basic_credential("agent@example.com", "token"),
+            gateway.to_string(),
         ),
         (
             "atlassian-bearer-token",
             agent_access_provider::test_support::bearer_credential("token"),
-            "https://api.atlassian.com/ex/confluence/00000000-0000-0000-0000-000000000000/wiki/rest/api/",
+            gateway.to_string(),
         ),
     ] {
         assert_eq!(
@@ -186,12 +207,17 @@ fn vendor_profiles_select_the_site_route_or_the_gateway() {
             Some(credential.kind().as_str()),
             "{profile}"
         );
+        let credential = AtlassianCredential::from_static(
+            agent_access_provider::test_support::credential_with_profile(credential, profile),
+        );
         assert_eq!(
-            backend
-                .api_base(&AtlassianCredential::from_static(credential.clone()))
-                .unwrap()
-                .as_str(),
-            base,
+            backend.api_base(&credential).unwrap().as_str(),
+            format!("{base}rest/api/"),
+            "{profile}"
+        );
+        assert_eq!(
+            backend.api_v2_base(&credential).unwrap().as_str(),
+            format!("{base}api/v2/"),
             "{profile}"
         );
     }
