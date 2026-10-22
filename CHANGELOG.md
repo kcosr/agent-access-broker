@@ -12,15 +12,16 @@ All notable changes to this project are documented in this file.
   targets and rows report `tokenProfiles[]`, and a put names its `profile`
   when several are accepted. See
   [connection token types](docs/operator-guide.md#connection-token-types).
+  ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 - **Atlassian routes follow the token type.** Classic tokens go to the site.
   Service-account, scoped and OAuth credentials go through `api.atlassian.com`.
   `cloud_id` must be a UUID, the allowlist must cover each credential's API
   bases, and list and search continuations are refused once. See
   [Atlassian registration](docs/oauth.md#atlassian-registration).
-  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 - **SDK:** `ServiceCredentialKinds` reports credential sources, and `per_user`
   and `new` are removed.
-  ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
+  ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
 
@@ -34,10 +35,13 @@ All notable changes to this project are documented in this file.
 - **Choose a token type** in the portal, or with `--profile` in the CLI, when
   a connection accepts several. A stored token whose type is no longer accepted
   is kept as **Not used**.
+  ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 - **`atlassian-scoped-api-token`**, labels for Atlassian token types, and
   `profile` on `credentials.service` and `credentials.lookup` entries.
+  ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 - **SDK:** profile labels, a route-bound flag, `ExecutionCredential::profile()`
   and `base_covered_by_patterns`.
+  ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Changed
 
