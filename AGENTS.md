@@ -341,9 +341,11 @@ binary and needs `python3`, whose absence fails it.
   the refusal, before sending, of a token profile a published service marks
   route-bound or none declares)
   and credential connections (`connections.rs`: the
-  `[credentials.connections]` model with its people's and service accounts'
-  token profile lists, its validation and authority checks, `PrincipalKind`
-  and `select`, which every personal-credential consumer uses;
+  `[credentials.connections]` model with its `token_profiles` list and
+  service-account override, its validation and authority checks, the
+  implicit type every publication resolves into the effective connection,
+  `PrincipalKind` and `select`, which every personal-credential consumer
+  uses;
   `runtime/personal_credentials.rs` reads the selected token rows whose
   stored profile the selected list accepts, lent as that profile;
   `runtime/lookup_access.rs` plans and selects lookup access: the shared

@@ -40,7 +40,8 @@ its `NO_PROXY` decision also governs those hops.
 The usual broker egress proxy rules apply. A CloudBees service account or user
 API token authenticates with HTTP Basic. Upstream role permissions still apply.
 A per-user [credential connection](configuration.md#credential-connections)
-uses the `cloudbees-ci-api-token` profile.
+uses the `cloudbees-ci-api-token` profile, the only type CloudBees CI accepts,
+so the connection needs no `token_profiles` list.
 
 CloudBees actions do not perform pre-authorization metadata lookup and do not
 require a `credentials.lookup.cloudbees_ci` credential. The Broker resolves the

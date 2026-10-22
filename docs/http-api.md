@@ -787,10 +787,11 @@ the owner can delete it. `tokenProfiles` lists the token profiles (token types)
 the caller may store for a `token`-method connection, in configuration order,
 each with its `label` (the name a consuming service declares, or `null`; show
 the profile then), its `credentialKind` and the `inputSchema` storing it takes;
-it is empty for the other methods. A user's profiles come from the connection's
-`user_token_profiles`, and a service account's or `system` principal's from its
-`service_account_token_profiles`. `credential` is the active token's metadata,
-keyed by `connection` instead of a stored service and name, with its stored
+it is empty for the other methods. They come from the connection's
+`token_profiles`, or its implicit type when it sets neither a list nor `oauth`;
+a service account's or `system` principal's come from its
+`service_account_token_profiles` instead when set. `credential` is the active
+token's metadata, keyed by `connection` instead of a stored service and name, with its stored
 `profile` and that profile's `label`, or `null` until a token is stored. An OAuth-method row's `remoteRevocation` is its registration's
 [remote revocation](oauth.md#remote-revocation) state, as
 `GET /v1/oauth/connections` reports it; it is `null` for other methods and while

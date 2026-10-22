@@ -49,13 +49,12 @@ principal's selected credential for lookup and execution.
 For per-user credentials, replace the service execution stanza with a
 [credential connection](configuration.md#credential-connections). Confluence and
 Jira declare the same Atlassian token profiles, so one connection serves both
-on one site:
+on one site. Without a `cloud_id`, as above, the classic API token is the only
+type they accept, so the connection needs no `token_profiles` list:
 
 ```toml
 [credentials.connections.atlassian]
 display_name = "Atlassian"
-user_token_profiles = ["atlassian-api-token"]
-service_account_token_profiles = ["atlassian-api-token"]
 
 [credentials.per_user.confluence]
 type = "connection"
@@ -69,15 +68,15 @@ connection = "atlassian"
 Each principal stores their own account email and classic API token for the
 connection, or an administrator provisions a service account's, and grants use
 `credential_mode = "per_user"`. Without Jira, omit its entry. To keep the
-products' tokens separate, give each product its own connection with the same
-profile. The
+products' tokens separate, give each product its own connection. The
 [configuration reference](configuration.md#connection-token-profiles) describes
 secret sources, token profiles, attachment limits and optional egress/TLS
 settings.
 
-A connection may accept several token types, and the person saving a token, or
-an administrator for a service account, picks one. Each type takes its own
-route:
+With a `cloud_id`, Confluence accepts several token types, so a connection
+without OAuth lists those it accepts in `token_profiles`; a connection may
+accept several, and the person saving a token, or an administrator for a
+service account, picks one. Each type takes its own route:
 
 | Token type (profile) | Stored as | Route |
 | --- | --- | --- |
@@ -130,12 +129,12 @@ allowed_upstream_hosts = [
 
 [credentials.connections.jira]
 display_name = "Atlassian"
-service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]

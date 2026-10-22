@@ -1527,11 +1527,17 @@ configuration-only function, `select(connection, principal_kind)`, returns the
 method: a stored token of one of the token profiles a list accepts, the
 principal's OAuth connection for the connection's `oauth` registration and
 profile, or nothing. `user` principals use OAuth when the connection sets it,
-and otherwise a stored token of a `user_token_profiles` profile when that list
-is set; `service_account` and `system` principals share
-`service_account_token_profiles`, so a kind change between them keeps their
-token, and never use OAuth. A connection whose list has several profiles lets
-the saver choose one; the stored row keeps the profile it was saved as. A configured static principal takes the kind of the active managed
+and otherwise a stored token of a `token_profiles` profile; `service_account`
+and `system` principals share one list, `service_account_token_profiles` when
+set and otherwise `token_profiles`, so a kind change between them keeps their
+token, and never use OAuth (beside `oauth`, `token_profiles` is theirs alone,
+and without it they have no method). A connection without `oauth` or a list
+accepts its implicit type: the one profile its consumers could accept, which
+startup, reload and every imported-catalog publication resolve into the
+effective connection beside the other connection checks, so `select` reads
+configuration only; none, or several, fails validation. A connection whose list
+has several profiles lets the saver choose one; the stored row keeps the
+profile it was saved as. A configured static principal takes the kind of the active managed
 principal with its ID, read once per authentication; other static principals
 and anonymous callers have none. The principal kind travels on the identity
 from `principals.kind` (never defaulted; unknown kinds select nothing). Selection never reads stored material, and there

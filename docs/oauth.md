@@ -37,10 +37,11 @@ it names the connection from its `credentials.per_user` entry. Only `user`
 principals use OAuth: a person connects their upstream account, and the Broker
 never reads a stored token for them through that connection. Service accounts
 and `system` principals cannot complete browser consent. They use a token of
-the connection's `service_account_token_profiles` when it sets that list, and
-otherwise have no personal credential for its services. A connection with
-`oauth` does not set `user_token_profiles`. Nobody chooses between a token and OAuth, and the
-Broker never falls back from one to the other.
+the connection's `token_profiles` when it sets that list, and otherwise have no
+personal credential for its services: no token type is implied beside `oauth`.
+A connection with `oauth` does not set `service_account_token_profiles`, since
+its `token_profiles` already applies only to them. Nobody chooses between a
+token and OAuth, and the Broker never falls back from one to the other.
 
 Some upstream operations accept only a token, and their providers mark those
 actions token-only. Where a person's winning grant is `per_user` and their
@@ -212,7 +213,7 @@ target = "https://gitlab.example.com"
 
 [credentials.connections.gitlab]
 display_name = "GitLab"
-service_account_token_profiles = ["gitlab-access-token"]
+token_profiles = ["gitlab-access-token"]
 oauth = { registration = "gitlab", profile = "default" }
 
 [credentials.per_user.gitlab]
@@ -244,10 +245,10 @@ connection = "gitlab"
   GitLab instance <target>`.
 
 People always use their OAuth connection and never store a GitLab token
-through it. With `service_account_token_profiles` set, service accounts keep
-tokens an administrator provisions, because GitLab service accounts
-authenticate only with personal access tokens, and `system` principals store
-their own. Without it, only people have a GitLab credential.
+through it. With `token_profiles` set, service accounts keep tokens an
+administrator provisions, because GitLab service accounts authenticate only
+with personal access tokens, and `system` principals store their own. Without
+it, only people have a GitLab credential.
 
 ### GitLab scopes
 
@@ -471,12 +472,12 @@ target = "00000000-0000-0000-0000-000000000000" # the site's cloud ID
 # administrator choosing the type for each.
 [credentials.connections.jira]
 display_name = "Atlassian"
-service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.connections.confluence]
 display_name = "Atlassian"
-service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian", profile = "default" }
 
 [credentials.per_user.jira]
@@ -535,17 +536,21 @@ deployment:
 | Connection | People | Service accounts and `system` principals |
 | --- | --- | --- |
 | `oauth` only | OAuth (gateway) | No Atlassian credential |
-| `oauth` and `service_account_token_profiles = ["atlassian-api-token"]` | OAuth (gateway) | Classic API tokens (site) |
-| `oauth` and `service_account_token_profiles = ["atlassian-bearer-token"]` | OAuth (gateway) | Service-account tokens (gateway) |
-| `oauth` and `service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]` | OAuth (gateway) | Either, chosen per account when the token is saved |
-| Token lists only | The `user_token_profiles` types | The `service_account_token_profiles` types |
+| `oauth` and `token_profiles = ["atlassian-api-token"]` | OAuth (gateway) | Classic API tokens (site) |
+| `oauth` and `token_profiles = ["atlassian-bearer-token"]` | OAuth (gateway) | Service-account tokens (gateway) |
+| `oauth` and `token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]` | OAuth (gateway) | Either, chosen per account when the token is saved |
+| `token_profiles` only | The `token_profiles` types | The same types |
+| `token_profiles` and `service_account_token_profiles` | The `token_profiles` types | The `service_account_token_profiles` types |
 
 `credentials.service` and `credentials.lookup` entries route by their own
 type, independently of the connection. People always use their OAuth
 connection when the connection sets `oauth`, and never store an Atlassian
-token through it; `user_token_profiles` cannot be set beside it. Service
-accounts keep the tokens an administrator provisions, and `system` principals
-store their own.
+token through it; `service_account_token_profiles` cannot be set beside it.
+Service accounts keep the tokens an administrator provisions, and `system`
+principals store their own. With a `cloud_id`, Jira and Confluence accept
+several token types, so a connection without `oauth` must set
+`token_profiles`; without one, only the classic API token is possible and the
+list may be omitted.
 
 ### Atlassian scopes
 
@@ -618,11 +623,11 @@ product connection its own registration:
 
 ```toml
 [credentials.connections.jira]
-service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian_jira", profile = "default" }
 
 [credentials.connections.confluence]
-service_account_token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
+token_profiles = ["atlassian-api-token", "atlassian-bearer-token"]
 oauth = { registration = "atlassian_confluence", profile = "default" }
 ```
 
