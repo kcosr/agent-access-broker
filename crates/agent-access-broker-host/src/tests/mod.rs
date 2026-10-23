@@ -16774,6 +16774,7 @@ async fn spec_token_fixture_with_restrictions(
             execution_contexts: None,
             service: "jira".to_string(),
             actions: vec![
+                "project.list".to_string(),
                 "issue_type.list".to_string(),
                 "issue.create".to_string(),
                 "issue.child.create".to_string(),
