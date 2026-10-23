@@ -1272,6 +1272,10 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jira_moved_issue_denial_does_not_leak_content() {
     let backend = Arc::new(StubJiraBackend {
+        custom_fields: vec![serde_json::json!({
+            "id":"customfield_10001", "name":"secret moved custom name",
+            "type":"text", "status":"supported", "value":"secret moved custom value"
+        })],
         issues: BTreeMap::from([(
             "PROJ-2".to_string(),
             JiraIssue {
@@ -1329,10 +1333,12 @@ async fn jira_moved_issue_denial_does_not_leak_content() {
     assert_eq!(issue_json["decision"], "deny");
     assert_eq!(issue_json["reasonCode"], "scope_unresolved");
     assert!(!String::from_utf8_lossy(&issue.stdout).contains("secret moved issue summary"));
+    assert!(!String::from_utf8_lossy(&issue.stdout).contains("secret moved custom"));
 
     let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"reasonCode\":\"scope_unresolved\""));
     assert!(!audit.contains("secret moved issue summary"));
+    assert!(!audit.contains("secret moved custom"));
 
     stop(broker).await;
 }
@@ -1358,6 +1364,10 @@ fn renamed_issue_backend(alias: &str, key: &str, project: &str, secret: &str) ->
     };
     StubJiraBackend {
         issues: BTreeMap::from([(alias.to_string(), issue.clone()), (key.to_string(), issue)]),
+        custom_fields: vec![serde_json::json!({
+            "id":"customfield_10001", "name":format!("{secret} custom name"),
+            "type":"text", "status":"supported", "value":format!("{secret} custom value")
+        })],
         // The comment belongs to the current key, so listing it proves the
         // Broker sends the key Jira confirmed rather than the alias.
         comments: Mutex::new(BTreeMap::from([(
@@ -3376,6 +3386,7 @@ struct StubJiraBackend {
     issues: BTreeMap<String, JiraIssue>,
     issue_view_requests: Mutex<Vec<bool>>,
     issue_view_links: Mutex<Option<Vec<JiraIssueViewLink>>>,
+    custom_fields: Vec<serde_json::Value>,
     created_issue: Mutex<Option<JiraCreatedIssue>>,
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
@@ -3527,6 +3538,7 @@ impl JiraBackend for StubJiraBackend {
         Ok(JiraBackendResponse {
             value: JiraIssueView {
                 issue: response.value,
+                custom_fields: self.custom_fields.clone(),
                 issue_links: if include_issue_links {
                     self.issue_view_links.lock().unwrap().clone()
                 } else {
@@ -4320,3 +4332,6 @@ fn assert_new_backend_operations(backend: &StubJiraBackend, cursor: &mut usize, 
 #[path = "support/temp_dirs.rs"]
 mod temp_dirs;
 use temp_dirs::temp_path;
+
+#[path = "jira_custom_fields/mod.rs"]
+mod custom_fields;

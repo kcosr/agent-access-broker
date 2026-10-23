@@ -416,7 +416,8 @@ Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
 `readContentFormat` accepts `native`, `markdown`, or `text`; omission is
 `native`. It is advertised on exactly these seven actions:
 
-- `issue.view`, whose `renderedBody` is beside root `description`;
+- `issue.view`, whose `renderedBody` is beside root `description`, with a
+  companion inside each supported non-null ADF custom-field entry;
 - `issue.create` and `issue.update`, whose companion is inside `result.issue`;
 - `comment.view`, `comment.add`, `comment.reply`, and `comment.update`, whose
   companion is inside `result.comment` beside `body`.
@@ -463,11 +464,14 @@ advertise support. Confluence and GitLab normalized reads are also available on
 their declared actions.
 
 Every returned declared ADF field is structurally validated and bounded by
-`providers.jira.content.max_body_bytes` even in native mode. Malformed,
-oversized, over-complex, or over-budget native/rendered content fails without
-truncation or fallback as sanitized `upstream_protocol_failed`/502. Native ADF,
-rendered content, whole-result Markdown, property values, and pagination tokens
-are excluded from audit, tracing, logs, errors, and object identifiers.
+`providers.jira.content.max_body_bytes` even in native mode. Malformed custom
+ADF is explicitly withheld as described under [custom fields](#custom-fields);
+malformed descriptions or comment bodies fail the request. Oversized,
+over-complex, or over-budget native/rendered content fails the complete request
+without truncation as sanitized `upstream_protocol_failed`/502. Native ADF,
+custom-field names and values, rendered content, whole-result Markdown, property
+values, and pagination tokens are excluded from audit, tracing, logs, errors,
+and object identifiers.
 
 ## Keys, locators, and project confirmation
 
@@ -601,14 +605,20 @@ may be recorded.
 `issue.view` is a project-scoped issue read. Authorization and containment
 lookup use only `fields=project`; after authorization, the execution credential
 performs the full read with
-`fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description`.
-It adds `issuelinks` to that same execution request only when the
-[issue-link coverage condition](#issue-links) holds.
+`fields=*all,-comment,-attachment,-worklog,-subtasks,-parent` and
+`expand=names,schema`. It also excludes `issuelinks` unless the
+[issue-link coverage condition](#issue-links) holds. The same response supplies
+custom-field values, names, and type metadata; no field-discovery request or
+linked-resource fetch is added. An ordinary full Broker invocation makes three
+requests: scope-resolution metadata lookup, invocation-time metadata
+confirmation, and the authorized issue fetch. Existing credential selection
+and OAuth recovery rules still apply.
 
 Successful results include issue id/key/project, generated `webUrl`, summary,
 status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
-`priority`, `labels`, and `description`. The description is Jira ADF JSON when
-Jira returns one and `null` when Jira returns no description or omits the field.
+`priority`, `labels`, `description`, and `customFields`. The description is Jira
+ADF JSON when Jira returns one and `null` when Jira returns no description or
+omits the field.
 When requested through `readContentFormat`, the broker also adds the normalized
 companion described above. User summaries expose only `accountId` and
 `displayName`; priority exposes only `id` and `name`.
@@ -619,6 +629,108 @@ read-path check does not apply the broker's write-time ADF node allowlist, so
 ordinary existing Jira descriptions with nodes the broker would not let agents
 write can still be viewed. Audit records for `issue.view` do not include
 description content.
+
+### Custom fields
+
+Every successful `issue.view` contains a `customFields` array, including when
+empty. Entries come only from canonical `customfield_[1-9][0-9]*` keys present
+in Jira's returned `fields`; metadata alone creates no entry. The array is
+ordered by the numeric field-ID suffix, without an integer-size limit. An empty
+array means no custom fields were returned, not that the project defines none.
+Custom fields are automatic: no label mapping, input flag, configuration, or
+additional credential is needed. Search and mutation readbacks do not include
+this array, and create/update do not accept custom-field writes.
+
+Each entry has `id`, nullable `name`, nullable `type`, and `status`. `name` is
+Jira's display text, so duplicate names are valid; use `id` for identity. A
+missing, null, or malformed individual name becomes null, and readable output
+uses the ID. For example:
+
+```json
+{
+  "customFields": [
+    {
+      "id": "customfield_12345",
+      "name": "Business impact",
+      "type": "text",
+      "status": "supported",
+      "value": "Customer-facing"
+    },
+    {
+      "id": "customfield_12346",
+      "name": "External object",
+      "type": null,
+      "status": "unsupported"
+    }
+  ]
+}
+```
+
+`supported` entries always contain a validated, typed `value`. `unsupported`
+means the custom implementation or schema is not supported, including missing
+or malformed type metadata, and has `type: null`. `withheld` means a recognized implementation with
+a matching schema returned an invalid value shape or malformed ADF; it retains
+its normalized `type`. Unsupported and withheld entries omit nonempty values.
+For every returned field, explicit `null` and empty-array values are retained
+even when unsupported or withheld, preserving empty-versus-absent semantics.
+All supported types accept null; an empty array is supported only for array
+types. Missing `names` or `schema` maps count as absent metadata, but a supplied
+non-object map fails the request with sanitized `upstream_protocol_failed`.
+
+The exact allowlist below uses the
+`com.atlassian.jira.plugin.system.customfieldtypes:` prefix for `schema.custom`.
+Both the implementation and its `schema.type`/`items` must match:
+
+| Implementation suffix | Schema type (`items` for arrays) | Result type | Value |
+| --- | --- | --- | --- |
+| `textfield` | `string` | `text` | String |
+| `url` | `string` | `url` | String, displayed as a code span |
+| `float` | `number` | `number` | JSON number |
+| `datepicker` | `date` | `date` | String |
+| `datetime` | `datetime` | `datetime` | String |
+| `textarea` | `string` | `adf` | Structurally validated Cloud v3 ADF document |
+| `select`, `radiobuttons` | `option` | `option` | `{id, value}` |
+| `multiselect`, `multicheckboxes` | `array` (`option`) | `options` | Array of `{id, value}` |
+| `cascadingselect` | `option-with-child` | `cascadingOption` | `{id, value, child}` with one nullable option child |
+| `userpicker` | `user` | `user` | `{accountId, displayName}` |
+| `multiuserpicker` | `array` (`user`) | `users` | Array of user summaries |
+
+Option IDs and values must be strings. User `accountId` must be a string;
+missing/null `displayName` becomes null, and a supplied non-string is invalid.
+A missing/null cascading option child becomes null. A textarea's schema uses
+`string`, but its value must be an ADF document, not a plain string.
+Every array member must validate or the entire field is withheld. Projection
+strips other option/user properties, including email and self/avatar URLs.
+Project, issue, group, version, sprint, Assets, and app-specific fields are
+unsupported; a scalar schema alone never makes an unknown implementation safe.
+The expanded raw issue, unrelated standard fields, and complete `names`/`schema`
+maps are never returned. Free text and ADF can mention resources, under the same
+policy as issue descriptions.
+
+Whole-result Markdown has a custom-field section with escaped names, IDs, and
+readable values. Null and empty arrays display as not set, retaining an
+unsupported/withheld marker when applicable. `readContentFormat` preserves
+native values and adds `renderedBody` only inside supported non-null `adf`
+entries, at `/result/customFields/*`; the description's companion stays at the
+root. Unsupported, withheld, and null ADF entries have no companion.
+
+`providers.jira.content.max_body_bytes` applies to each ADF document separately
+(default 1 MiB), not to the custom-field collection. Description and custom
+ADF validation/rendering share the existing request budgets: 131,072
+rich-content nodes and 524,288 work units, with per-document protections too.
+Malformed custom ADF can be withheld; any byte or complexity exhaustion fails
+the complete request, without dropping supported fields or retrying with less
+content. Markdown-specific expansion limits apply when Markdown is requested.
+There is no separate custom-field-count or aggregate custom-field byte limit.
+
+The complete upstream response and Broker result remain bounded by
+`limits.max_upstream_response_bytes` (default 512 MiB). HTTP MCP additionally
+uses `mcp.max_response_bytes` (default 16 MiB, configurable), counting structured
+content and its text copy; excess returns `mcp_response_too_large`. The local
+stdio MCP adapter has a 16 MiB Broker-JSON receipt cap. These are ceilings, not
+target response sizes. Custom-field audit metadata contains only
+`customFields: {count, unsupported, withheld}` counts, never names, values, or
+parser excerpts.
 
 ### Issue links
 
@@ -701,8 +813,8 @@ The provider sends `POST /rest/api/3/issue` with only
 key. Before full readback, the broker validates that the created key is a valid
 Jira issue key whose project prefix matches the authorized requested project.
 It then reads the issue back with the execution credential and returns
-`operation: "issue.create"` plus the bounded issue fields of `issue.view`,
-without `issueLinks`.
+`operation: "issue.create"` plus the bounded standard issue fields of `issue.view`,
+without `issueLinks` or `customFields`.
 An invalid created key is `upstream_protocol_failed`. A valid key in another
 project, for example when Jira resolves a
 [previous project key](#renamed-project-keys) and creates the issue under the
@@ -822,8 +934,9 @@ issue id, key, and project. Invalid readback key/project shapes fail with
 `scope_unresolved`.
 
 Successful results include `operation: "issue.update"`, the bounded issue
-fields of `issue.view` without `issueLinks`, stable `changedFields` order (`summary`, then
-`description`), and `notifyUsers` as `true`, `false`, or `null` when omitted.
+fields of `issue.view` without `issueLinks` or `customFields`, stable
+`changedFields` order (`summary`, then `description`), and `notifyUsers` as
+`true`, `false`, or `null` when omitted.
 Readback description content is returned in `result.issue.description` when Jira
 returns it. Audit includes issue id/key, project, changed field names, booleans
 for which fields changed, notification mode, credential mode, and egress proxy
@@ -1227,8 +1340,9 @@ Backend search issues a GET to `search/jql` with `jql`, `maxResults`,
 `fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels`,
 and, on a continuation, Jira's `nextPageToken` recovered from the caller's
 broker continuation. Search results include the same lightweight
-issue metadata as `issue.view`, but omit both `description` and `issueLinks`;
-callers should use `issue.view` on a specific result when they need the body.
+issue metadata as `issue.view`, but omit `description`, `issueLinks`, and
+`customFields`; callers should use `issue.view` on a specific result when they
+need its body or custom fields.
 `maxResults` defaults to `providers.jira.search.max_results` (default `50`),
 rejects `0`, and is clamped to `providers.jira.search.max_results`. The response
 is bounded by `limits.max_upstream_response_bytes`.

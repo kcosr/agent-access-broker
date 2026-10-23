@@ -94,13 +94,14 @@ async fn mount_source_reads(api: &MockServer, value: Value, include_links: bool)
         .mount(api)
         .await;
     let fields = if include_links {
-        format!("{ISSUE_FIELDS},issuelinks")
+        "*all,-comment,-attachment,-worklog,-subtasks,-parent".to_string()
     } else {
-        ISSUE_FIELDS.to_string()
+        "*all,-comment,-attachment,-worklog,-subtasks,-parent,-issuelinks".to_string()
     };
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1"))
         .and(query_param("fields", fields))
+        .and(query_param("expand", "names,schema"))
         .and(header("Authorization", "Bearer execution-token"))
         .and(header("Accept", "application/json"))
         .respond_with(ResponseTemplate::new(200).set_body_json(value))
@@ -303,7 +304,9 @@ async fn issue_view_fetches_links_only_with_universal_reach_using_execution_acce
                 json!({"status": "disclosed", "count": 1})
             );
         } else {
-            let baseline = issue_view_result(&issue_from_value(source).unwrap(), &jira_config());
+            let mut baseline =
+                issue_view_result(&issue_from_value(source).unwrap(), &jira_config());
+            baseline["customFields"] = json!([]);
             assert_eq!(result.result, baseline);
             assert_eq!(
                 markdown(result.result.clone(), 16384).unwrap(),
@@ -432,9 +435,12 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
 }
 
 #[tokio::test]
-async fn mutation_readbacks_and_search_ignore_unsolicited_links() {
+async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_fields() {
     let api = MockServer::start().await;
-    let source = source_issue(Some(json!({"private-malformed-links": true})));
+    let mut source = source_issue(Some(json!({"private-malformed-links": true})));
+    source["fields"]["customfield_10001"] = json!("private-custom-value");
+    source["names"] = json!({"customfield_10001": "private-custom-name"});
+    source["schema"] = json!({"customfield_10001": {"type":"string", "custom":"com.atlassian.jira.plugin.system.customfieldtypes:textfield"}});
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1"))
         .and(query_param("fields", ISSUE_FIELDS))
@@ -506,6 +512,8 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links() {
             .await
             .unwrap();
         assert!(result.result["issue"].get("issueLinks").is_none());
+        assert!(result.result["issue"].get("customFields").is_none());
+        assert!(result.audit.as_ref().unwrap().get("customFields").is_none());
         assert!(!result.result.to_string().contains("private"));
     }
     let result = provider
@@ -520,13 +528,16 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links() {
         .await
         .unwrap();
     assert!(result.result["issues"][0].get("issueLinks").is_none());
+    assert!(result.result["issues"][0].get("customFields").is_none());
+    assert!(result.audit.as_ref().unwrap().get("customFields").is_none());
     assert!(!result.result.to_string().contains("private"));
     assert_eq!(api.received_requests().await.unwrap().len(), 6);
 }
 
 #[test]
 fn issue_links_markdown_has_omission_empty_metadata_escaping_and_bounds() {
-    let base = issue_view_result(&visible_issue(), &jira_config());
+    let mut base = issue_view_result(&visible_issue(), &jira_config());
+    base["customFields"] = json!([]);
     let absent = markdown(base.clone(), 16384).unwrap();
     assert!(!absent["value"].as_str().unwrap().contains("## Issue links"));
     let mut empty = base.clone();
@@ -562,4 +573,226 @@ fn issue_links_markdown_has_omission_empty_metadata_escaping_and_bounds() {
         markdown(result, exact - 1).unwrap_err().reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
+}
+
+#[tokio::test]
+async fn expanded_issue_view_projects_custom_fields_without_releasing_other_fetched_fields() {
+    for universal_reach in [false, true] {
+        let api = MockServer::start().await;
+        let mut source = source_issue(Some(if universal_reach {
+            json!([])
+        } else {
+            json!({"private-links": true})
+        }));
+        source["fields"]["customfield_10"] = json!("Visible custom value");
+        source["fields"]["customfield_2"] = json!(null);
+        source["fields"]["customfield_11"] = json!({"private-app-object": "private-value"});
+        source["fields"]["customfield_12"] = json!(123);
+        source["fields"]["customfield_13"] = json!([]);
+        source["fields"]["customfield_14"] = json!("Unnamed value");
+        source["fields"]["customfield_01"] = json!("private-invalid-id");
+        for field in [
+            "comment",
+            "attachment",
+            "worklog",
+            "subtasks",
+            "parent",
+            "environment",
+        ] {
+            source["fields"][field] = json!({"private-standard-field": "private-content"});
+        }
+        source["names"] = json!({
+            "customfield_2": "Duplicate label", "customfield_10": "Duplicate label",
+            "customfield_11": "App label", "customfield_12": "Invalid known value",
+            "customfield_13": "Empty app value", "customfield_99": "private-metadata-only"
+        });
+        let text_schema = json!({"type":"string", "custom":"com.atlassian.jira.plugin.system.customfieldtypes:textfield"});
+        source["schema"] = json!({
+            "customfield_2": text_schema, "customfield_10": text_schema,
+            "customfield_11": {"type":"string", "custom":"private:app"},
+            "customfield_12": text_schema,
+            "customfield_13": {"type":"array", "items":"string", "custom":"private:app"},
+            "customfield_14": text_schema
+        });
+        mount_source_reads(&api, source, universal_reach).await;
+        let provider = JiraProvider::with_backend(
+            jira_config(),
+            ProviderLimits::default(),
+            Arc::new(http_backend(&api, ProviderLimits::default())),
+        );
+        let response = provider
+            .invoke(view_invocation(universal_reach))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.result["customFields"],
+            json!([
+                {"id":"customfield_2", "name":"Duplicate label", "type":"text", "status":"supported", "value":null},
+                {"id":"customfield_10", "name":"Duplicate label", "type":"text", "status":"supported", "value":"Visible custom value"},
+                {"id":"customfield_11", "name":"App label", "type":null, "status":"unsupported"},
+                {"id":"customfield_12", "name":"Invalid known value", "type":"text", "status":"withheld"},
+                {"id":"customfield_13", "name":"Empty app value", "type":null, "status":"unsupported", "value":[]},
+                {"id":"customfield_14", "name":null, "type":"text", "status":"supported", "value":"Unnamed value"}
+            ])
+        );
+        assert_eq!(
+            response.audit.as_ref().unwrap()["customFields"],
+            json!({"count":6, "unsupported":2, "withheld":1})
+        );
+        assert!(!response.result.to_string().contains("private"));
+        let audit = response.audit.unwrap().to_string();
+        for secret in [
+            "Duplicate label",
+            "Visible custom value",
+            "App label",
+            "Unnamed value",
+            "customfield_",
+            "private",
+        ] {
+            assert!(!audit.contains(secret), "custom data escaped into audit");
+        }
+        let requests = api.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].url.query_pairs().collect::<Vec<_>>(),
+            [("fields".into(), "project".into())]
+        );
+        assert_eq!(requests[1].url.query_pairs().count(), 2);
+    }
+}
+
+#[tokio::test]
+async fn custom_field_view_limits_fail_the_whole_response_without_partial_values() {
+    // Empty paragraphs keep the byte size modest while reaching the renderer's
+    // actual per-document node guard, independently of the content byte guard.
+    let dense = |paragraphs| {
+        json!({
+            "type":"doc", "version":1,
+            "content": vec![json!({"type":"paragraph", "content":[]}); paragraphs]
+        })
+    };
+    for case in [
+        "body-bytes",
+        "result-bytes",
+        "document-nodes",
+        "shared-nodes",
+    ] {
+        let api = MockServer::start().await;
+        let mut source = source_issue(None);
+        source["fields"]["customfield_1"] = json!("private-before-the-failure");
+        source["names"] =
+            json!({"customfield_1":"private-label-before", "customfield_2":"private-label-after"});
+        source["schema"] = json!({
+            "customfield_1":{"type":"string","custom":"com.atlassian.jira.plugin.system.customfieldtypes:textfield"},
+            "customfield_2":{"type":"string","custom":"com.atlassian.jira.plugin.system.customfieldtypes:textarea"}
+        });
+        let mut config = jira_config();
+        config.content.max_body_bytes = 16 * 1024 * 1024;
+        let mut limits = ProviderLimits::default();
+        match case {
+            "body-bytes" => {
+                config.content.max_body_bytes = 128;
+                source["fields"]["customfield_2"] = adf_text(&"private-custom-body".repeat(128));
+            }
+            "result-bytes" => {
+                limits = limits.with_max_upstream_response_bytes(512);
+                source["schema"]["customfield_2"]["custom"] =
+                    json!("com.atlassian.jira.plugin.system.customfieldtypes:textfield");
+                source["fields"]["customfield_2"] = json!("private-custom-body".repeat(128));
+            }
+            "document-nodes" => {
+                let document = dense(65_536);
+                assert!(matches!(
+                    agent_access_content::render_adf_bounded_with_budget(
+                        &document,
+                        ReadContentFormat::Native,
+                        config.content.max_body_bytes,
+                        config.content.max_body_bytes,
+                        &mut agent_access_provider::presentation::RenderBudget::default(),
+                    ),
+                    Err(agent_access_content::ContentRenderError::NodeLimitExceeded)
+                ));
+                source["fields"]["customfield_2"] = document;
+            }
+            "shared-nodes" => {
+                let document = dense(50_000);
+                agent_access_content::render_adf_bounded_with_budget(
+                    &document,
+                    ReadContentFormat::Native,
+                    config.content.max_body_bytes,
+                    config.content.max_body_bytes,
+                    &mut agent_access_provider::presentation::RenderBudget::default(),
+                )
+                .unwrap();
+                source["fields"]["description"] = document.clone();
+                source["fields"]["customfield_2"] = document.clone();
+                source["fields"]["customfield_3"] = document;
+                source["schema"]["customfield_3"] = source["schema"]["customfield_2"].clone();
+            }
+            _ => unreachable!(),
+        }
+        mount_source_reads(&api, source, false).await;
+        // Give the fixture HTTP receiver its ordinary cap so result-bytes
+        // specifically exercises the provider's final projected-result guard.
+        let provider = JiraProvider::with_backend(
+            config,
+            limits,
+            Arc::new(http_backend(&api, ProviderLimits::default())),
+        );
+        let error = provider.invoke(view_invocation(false)).await.unwrap_err();
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::UpstreamProtocolFailed,
+            "{case}"
+        );
+        assert!(
+            error.result.is_none(),
+            "{case} must not return partial fields"
+        );
+        assert!(!format!("{error:?}").contains("private"), "{case}");
+        assert_eq!(
+            api.received_requests().await.unwrap().len(),
+            2,
+            "{case} must not retry"
+        );
+    }
+}
+
+#[tokio::test]
+async fn malformed_custom_adf_is_withheld_after_fetch_while_valid_custom_fields_survive() {
+    let api = MockServer::start().await;
+    let mut source = source_issue(None);
+    source["fields"]["customfield_1"] = json!({
+        "type":"doc", "version":1,
+        "content":[{"type":"paragraph", "content":[{"type":"text", "text":{"private-malformed-content":true}}]}]
+    });
+    source["fields"]["customfield_2"] = adf_text("valid custom notes");
+    source["schema"] = json!({
+        "customfield_1":{"type":"string","custom":"com.atlassian.jira.plugin.system.customfieldtypes:textarea"},
+        "customfield_2":{"type":"string","custom":"com.atlassian.jira.plugin.system.customfieldtypes:textarea"}
+    });
+    mount_source_reads(&api, source, false).await;
+    let provider = JiraProvider::with_backend(
+        jira_config(),
+        ProviderLimits::default(),
+        Arc::new(http_backend(&api, ProviderLimits::default())),
+    );
+    let result = provider.invoke(view_invocation(false)).await.unwrap();
+    assert_eq!(
+        result.result["customFields"][0],
+        json!({
+            "id":"customfield_1", "name":null, "type":"adf", "status":"withheld"
+        })
+    );
+    assert_eq!(result.result["customFields"][1]["status"], "supported");
+    assert_eq!(
+        result.result["customFields"][1]["value"],
+        adf_text("valid custom notes")
+    );
+    assert_eq!(
+        result.audit.unwrap()["customFields"],
+        json!({"count":2,"unsupported":0,"withheld":1})
+    );
+    assert!(!result.result.to_string().contains("private"));
+    assert_eq!(api.received_requests().await.unwrap().len(), 2);
 }

@@ -33,6 +33,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Jira custom fields in issue views.** `issue.view` automatically returns
+  supported custom-field values with Jira display names, typed JSON and readable
+  Markdown. Unsupported or malformed values have explicit status markers; rich
+  text supports normalized companions. The same authorized request now fetches
+  all fields except heavy collections, with names and schemas; larger upstream
+  responses remain bounded by `limits.max_upstream_response_bytes`. See
+  [custom fields](docs/providers-jira.md#custom-fields).
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
   `with_supports_exclusions(false)`. The portal hides unsupported exclusion

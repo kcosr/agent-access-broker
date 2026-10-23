@@ -247,6 +247,26 @@ the same request inputs to continue; keep every original filter and
 
 ## Jira
 
+`jira.issue.view` automatically returns `customFields`, an array of fields Jira
+returned, sorted by numeric field ID. Each entry has `id`, nullable Jira display
+`name`, nullable normalized `type`, and `status`. Use `id` for identity; display
+names can be missing or duplicated. `supported` entries include typed `value`.
+`unsupported` means the implementation/schema is not supported; `withheld`
+means a recognized field returned malformed data. Their nonempty values are
+omitted, but explicit nulls and empty arrays are preserved for all statuses.
+An empty `customFields` array means no custom fields were returned, not that the
+project defines none. Search and mutation readbacks do not include this array;
+create/update do not accept custom-field writes.
+
+Supported values include text, URLs, numbers, dates, ADF rich text, options,
+cascading options, and small user summaries. App-specific and resource-reference
+types are unsupported. Whole-result Markdown uses readable names and IDs with
+explicit unsupported/withheld markers. Embedded Markdown/text adds
+`renderedBody` within each supported non-null ADF entry, preserving `value`;
+null and empty arrays display as not set. No field-selection flag or label
+mapping is needed. Size/complexity exhaustion fails the whole request rather
+than silently omitting supported fields.
+
 `jira.issue.view` can include `issueLinks` only when effective access covers
 all projects in the selected credential mode. Each entry has `key`, `type`
 (relationship type), `direction`, `relationship` (directional label), and nullable
