@@ -40,6 +40,7 @@ All notable changes to this project are documented in this file.
   all fields except heavy collections, with names and schemas; larger upstream
   responses remain bounded by `limits.max_upstream_response_bytes`. See
   [custom fields](docs/providers-jira.md#custom-fields).
+  ([#57](https://github.com/kcosr/agent-access-broker/pull/57))
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
   `with_supports_exclusions(false)`. The portal hides unsupported exclusion
