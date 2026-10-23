@@ -1920,8 +1920,9 @@ comment reads convert the representation selected by native input
 `inputs.bodyFormat`, and `blog.view` handles its current bare
 `body.storage` string shape.
 
-Confluence advertises whole-result Markdown on these 26 retrievals:
+Confluence advertises whole-result Markdown on these 27 retrievals:
 
+- `space.list`;
 - `page.view`, `search`, `verify`, `blog.view`, `blog.search`, and
   `blog.verify`;
 - `{page,blog}.draft.view` and `{page,blog}.draft.verify`;

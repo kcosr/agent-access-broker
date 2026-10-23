@@ -915,7 +915,7 @@ actions, required inputs, typed examples, generic `invoke` payloads, JSON
 Each typed Confluence command lowers to a generic `invoke` of the corresponding
 `confluence.<action>` (`POST /v1/invoke/confluence/<action>`).
 
-The typed Confluence family covers page and blog view/search/create/update,
+The typed Confluence family covers space listing, page and blog view/search/create/update,
 drafts, footer and inline comments, attachments, and verification helpers.
 Page and blog locators accept numeric IDs and, where documented, tenant browser
 URLs. Provider-specific actions, body formats, draft handle rules, typed
@@ -966,7 +966,7 @@ For Confluence, embedded read formats are supported by current page/blog view,
 page/blog draft view, every page/blog footer/inline comment list/view/reply-list
 read, page/blog footer-comment add, every page/blog footer/inline comment
 update, and every page/blog footer/inline reply add. Whole-result output is
-supported by current page/blog view/search/verify, page/blog draft view/verify,
+supported by space list, current page/blog view/search/verify, page/blog draft view/verify,
 current and draft attachment lists, and every page/blog footer/inline comment
 list/view/reply-list read. Search and attachment output remains body-free;
 comment and reply lists format only the bodies already returned.
@@ -1428,6 +1428,11 @@ See [providers-jira.md](providers-jira.md) for provider examples, canonical
 authorization behavior.
 
 ### Confluence (typed)
+
+`agent-access confluence space list [--max-results N] [--page-token TOKEN]`
+returns one live grant-filtered page; `--output-format markdown` is supported.
+Continue `more` and `scan_budget` results even when empty. See
+[space listing](providers-confluence.md#live-space-listing).
 
 ```bash
 agent-access --url http://127.0.0.1:8787 confluence page view 123456

@@ -830,6 +830,12 @@ max_body_bytes = 2097152
 [providers.confluence.search]
 max_results = 50
 
+[providers.confluence.listing]
+max_results = 50
+max_candidate_pages = 4
+max_upstream_requests = 8
+max_scan_bytes = 16777216
+
 [providers.gitlab]
 api_base_url = "https://gitlab.example.com/api/v4"
 web_base_url = "https://gitlab.example.com"

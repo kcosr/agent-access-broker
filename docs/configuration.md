@@ -1416,7 +1416,13 @@ comment_formats = ["storage"]                    # supported comment body format
 max_body_bytes = 2097152                          # 2 MiB; default
 
 [providers.confluence.search]
-max_results = 50            # default
+max_results = 50                    # default
+
+[providers.confluence.listing]
+max_results = 50                    # default
+max_candidate_pages = 4             # default
+max_upstream_requests = 8           # default
+max_scan_bytes = 16777216            # default
 ```
 
 - `tenant_host`, `cloud_id`, `allowed_upstream_hosts`, `[...attachments]`, and
@@ -1471,6 +1477,12 @@ max_results = 50            # default
   `[broker_tokens].hash_key_ref` to resolve to a valid 32-byte base64url key.
   The broker uses that stable key to sign draft handles so they survive process
   restarts and service-mode handoff.
+
+`providers.confluence.listing` bounds live `space.list` scans: `max_results`
+(default 50, 1..100), `max_candidate_pages` (4), `max_upstream_requests` (8),
+and `max_scan_bytes` (16 MiB). All limits are positive. Attempts include the
+invocation's shared OAuth replay; consumed bodies share the byte budget.
+Per-response and result caps still apply. See [space listing](providers-confluence.md#live-space-listing).
 
 ### `[providers.gitlab]`
 

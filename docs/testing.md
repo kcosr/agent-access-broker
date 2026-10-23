@@ -1186,7 +1186,7 @@ Confluence storage golden/adversarial tests cover standard HTML, namespaced
 `ac:`/`ri:` references, macros, active-content suppression, entities, unknown
 nodes, safe/unsafe links, malformed fragments, depth/event/work/output limits,
 determinism, and secrecy of macro parameters and internal identifiers.
-Whole-result snapshots cover exactly 26 retrievals: current page/blog
+Whole-result snapshots cover exactly 27 retrievals: live space listing, current page/blog
 view/search/verify, page/blog draft view/verify, current/draft attachment lists,
 and all page/blog footer/inline comment list/view/reply-list reads. They verify
 that body-free actions stay body-free, collection bodies are converted in

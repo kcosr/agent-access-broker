@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn config() -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
+        listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: Some("00000000-0000-0000-0000-000000000000".to_string()),
         egress_proxy: None,
@@ -1020,6 +1021,17 @@ impl SearchBackend {
 
 #[async_trait]
 impl ConfluenceBackend for SearchBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         _page_id: &str,

@@ -15,6 +15,29 @@ pub struct ConfluenceProviderConfig {
     pub content: ConfluenceContentConfig,
     #[serde(default)]
     pub search: SearchLimitsConfig,
+    #[serde(default)]
+    pub listing: ConfluenceListingConfig,
+}
+
+/// Work limits for live space enumeration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConfluenceListingConfig {
+    pub max_results: u32,
+    pub max_candidate_pages: u32,
+    pub max_upstream_requests: u32,
+    pub max_scan_bytes: u64,
+}
+
+impl Default for ConfluenceListingConfig {
+    fn default() -> Self {
+        Self {
+            max_results: 50,
+            max_candidate_pages: 4,
+            max_upstream_requests: 8,
+            max_scan_bytes: 16 * 1024 * 1024,
+        }
+    }
 }
 
 impl ConfluenceProviderConfig {
@@ -128,6 +151,18 @@ impl BackendConfig for ConfluenceProviderConfig {
         );
         if self.search.max_results == 0 {
             errors.push("providers.confluence.search.max_results must be non-zero".to_string());
+        }
+        if self.listing.max_results == 0 || self.listing.max_results > 100 {
+            errors.push("providers.confluence.listing.max_results must be in 1..=100".into());
+        }
+        if self.listing.max_candidate_pages == 0
+            || self.listing.max_upstream_requests == 0
+            || self.listing.max_scan_bytes == 0
+        {
+            errors.push(
+                "providers.confluence.listing page, request, and byte limits must be non-zero"
+                    .into(),
+            );
         }
         validate_provider_limit_relation("confluence", &self.attachments, context.limits, errors);
     }

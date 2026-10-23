@@ -8,6 +8,12 @@ use agent_access_provider::host::UpstreamClientFactory;
 
 #[async_trait]
 pub trait ConfluenceBackend: Send + Sync {
+    async fn space_list(
+        &self,
+        request: ConfluenceSpaceListRequest,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpaceListPage>, ConfluenceBackendError>;
+
     fn egress_proxy_audit(&self, _credential: &AtlassianCredential) -> Value {
         EgressRoute::direct().audit_value()
     }
@@ -1211,6 +1217,14 @@ impl HttpConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for HttpConfluenceBackend {
+    async fn space_list(
+        &self,
+        request: ConfluenceSpaceListRequest,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpaceListPage>, ConfluenceBackendError> {
+        self.space_list_page(request, credential).await
+    }
+
     fn egress_proxy_audit(&self, credential: &AtlassianCredential) -> Value {
         self.client_for(credential)
             .map(|clients| clients.client.egress_route().audit_value())
@@ -5265,4 +5279,20 @@ pub(crate) fn next_cursor_from_link(link: &str) -> Option<String> {
     parsed
         .query_pairs()
         .find_map(|(key, value)| (key == "cursor").then(|| value.into_owned()))
+}
+
+/// Position and shared budgets of a live space collection request.
+#[derive(Debug, Clone)]
+pub struct ConfluenceSpaceListRequest {
+    pub cursor: Option<String>,
+    pub max_results: u32,
+    pub requests: UpstreamRequestBudget,
+    pub bytes: SharedBodyBudget,
+    pub replay_used: Arc<std::sync::atomic::AtomicBool>,
+}
+/// Bounded wire collection with a validated cursor, never a followed URL.
+#[derive(Debug, Clone)]
+pub struct ConfluenceSpaceListPage {
+    pub value: Value,
+    pub next_cursor: Option<String>,
 }

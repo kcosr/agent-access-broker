@@ -717,6 +717,153 @@ async fn jira_project_listing_honors_token_resource_and_action_ceilings() {
     assert_eq!(atlassian.received_requests().await.unwrap().len(), before);
 }
 
+#[tokio::test]
+async fn confluence_space_listing_uses_oauth_refresh_and_filters_the_live_collection() {
+    let atlassian = MockServer::start().await;
+    let fixture = products_fixture(&atlassian, false).await;
+    fixture.grant_collection("confluence", "space.list", "confluence-alice");
+    fixture.atlassian_connected(&atlassian, 1, "connect").await;
+    let consented = atlassian.received_requests().await.unwrap().len();
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({"grant_type":"refresh_token", "refresh_token":"atlassian-refresh-1"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(token(2, None)))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&atlassian)
+        .await;
+    let collection = format!("{CONFLUENCE_GATEWAY}/api/v2/spaces");
+    mount_gateway(
+        &atlassian,
+        &collection,
+        1,
+        ResponseTemplate::new(401).set_body_string("PRIVATE_REJECTION"),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(collection.as_str()))
+        .and(header_is("authorization", "Bearer atlassian-access-2"))
+                .and(query_param("limit", "2"))
+                .and(query_param("status", "current"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results":[
+                {"id":"10","key":"~alice","name":"Engineering","type":"personal","status":"current"},
+                {"id":"999","key":"HIDDEN","name":"PRIVATE_SPACE","type":"global","status":"current"}
+            ]
+        })))
+        .mount(&atlassian)
+        .await;
+    let (status, body) = fixture
+        .invoke_product(
+            "confluence",
+            "space.list",
+            "confluence-space-oauth",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["result"]["count"], 1);
+    assert_eq!(body["result"]["items"][0]["key"], "~alice");
+    assert_eq!(body["result"]["scanStatus"], "exhausted");
+    assert!(!body.to_string().contains("PRIVATE_"));
+    assert_eq!(refreshes(&atlassian, consented).await, 1);
+    assert_eq!(
+        gateway_requests(&atlassian, consented).await,
+        [
+            format!("GET {collection} Bearer atlassian-access-1"),
+            format!("GET {collection} Bearer atlassian-access-2"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn confluence_space_listing_honors_token_resource_and_action_ceilings() {
+    let atlassian = MockServer::start().await;
+    let fixture = products_fixture(&atlassian, false).await;
+    fixture
+        .runtime
+        .create_managed_resource(CreateResourceRequest {
+            id: Some("confluence-ops".into()),
+            display_name: None,
+            resource_type: agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+                .id()
+                .clone(),
+            selector: ResourceSelector::Exact {
+                value: "OPS".into(),
+            },
+            allowed_execution_contexts: vec!["default".into()],
+            enabled: true,
+            attributes: Default::default(),
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    for resource in ["confluence-alice", "confluence-ops"] {
+        fixture.grant_collection("confluence", "space.list", resource);
+    }
+    fixture.atlassian_connected(&atlassian, 1, "connect").await;
+    let collection = format!("{CONFLUENCE_GATEWAY}/api/v2/spaces");
+    mount_gateway(
+        &atlassian,
+        &collection,
+        1,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "results":[
+                {"id":"10","key":"~alice","name":"Engineering","type":"personal","status":"current"},
+                {"id":"20","key":"OPS","name":"Operations","type":"global","status":"current"}
+            ]
+        })),
+    )
+    .await;
+    let issue = |name: &str, actions: Vec<&str>| {
+        fixture.runtime.managed_store().unwrap().issue_broker_token(
+            fixture.runtime.broker_token_hasher().unwrap(),BrokerTokenIssueRequest {
+                principal_id:"alice".into(),name:name.into(),token_class:BrokerTokenClass::AgentInvoke,
+                scopes:json!({"allowedExecutionContexts":["default"],"allowedServices":["confluence"],"serviceRestrictions":{"confluence":{"actions":actions,"resources":{"resourceIds":["confluence-alice"]}}}}),
+                expires_at:None,created_by:"test".into(),
+            }
+        ).unwrap().token
+    };
+    let narrow = issue("one project", vec!["space.list"]);
+    let search_only = issue("search only", vec!["search"]);
+    let (status, broad) = fixture
+        .invoke_product(
+            "confluence",
+            "space.list",
+            "list-broad",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{broad}");
+    assert_eq!(broad["result"]["count"], 2);
+    let (status, narrow) = fixture
+        .invoke_as(
+            &narrow,
+            "confluence",
+            "space.list",
+            "list-narrow",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{narrow}");
+    assert_eq!(narrow["result"]["count"], 1);
+    assert_eq!(narrow["result"]["items"][0]["key"], "~alice");
+    assert!(!narrow.to_string().contains("Operations"));
+    let before = atlassian.received_requests().await.unwrap().len();
+    let (status, denied) = fixture
+        .invoke_as(
+            &search_only,
+            "confluence",
+            "space.list",
+            "list-token-denied",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert!(!status.is_success(), "{denied}");
+    assert_eq!(atlassian.received_requests().await.unwrap().len(), before);
+}
+
 /// Another request refreshes while one is in flight with the earlier
 /// access, which Atlassian then rejects: the in-flight request marks it
 /// rejected and recovers once with the stored successor, without refreshing

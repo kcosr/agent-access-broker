@@ -378,7 +378,7 @@ binary and needs `python3`, whose absence fails it.
   client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Its
   `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
-- `crates/agent-access-confluence`: the Confluence backend (`backend.rs` wire
+- `crates/agent-access-confluence`: the Confluence backend (`space_list.rs` live space collection, `backend.rs` wire
   seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
   page-token and draft-handle families, `config.rs`, `present.rs`), with the
   same `test-support` provider fixture as Jira.
@@ -632,7 +632,7 @@ binary and needs `python3`, whose absence fails it.
   refresh recovery, and live smoke instructions.
 - `docs/providers-teams.md`: signed Workflow destinations, managed setup, payloads,
   client commands, and acceptance/delivery limits.
-- `docs/providers-confluence.md`: Confluence page, blog, draft, comment,
+- `docs/providers-confluence.md`: Confluence live spaces, page, blog, draft, comment,
   attachment, CQL, URL locator, and attribution behavior, and OAuth
   connections with each action's Atlassian scopes.
 - `docs/providers-cloudbees-ci.md`: CloudBees CI job resources and

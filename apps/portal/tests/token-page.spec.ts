@@ -718,8 +718,17 @@ test("required password changes redirect a dirty token draft without a discard p
   await page.goto(`${baseUrl}/ui/tokens/new`);
   await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("password-lock-draft");
   model.session = { ...model.session, passwordChangeRequired: true };
-  await page.route("**/v1/tokens/effective-access", (route) => route.fulfill({ status: 403, json: { ok: false, reasonCode: "password_change_required", error: { message: "Password change required" } } }));
-  await editor(page).getByRole("group", { name: "Execution contexts", exact: true }).getByLabel("external", { exact: true }).uncheck();
+  let releasePreview!: () => void;
+  const previewWait = new Promise<void>((resolve) => { releasePreview = resolve; });
+  await page.route("**/v1/tokens/effective-access", async (route) => {
+    await previewWait;
+    await route.fulfill({ status: 403, json: { ok: false, reasonCode: "password_change_required", error: { message: "Password change required" } } });
+  });
+  // Finish the checkbox state assertion before the response navigates away
+  // and removes the editor. The redirect assertions below remain unchanged.
+  try {
+    await editor(page).getByRole("group", { name: "Execution contexts", exact: true }).getByLabel("external", { exact: true }).uncheck();
+  } finally { releasePreview(); }
   await expect(page).toHaveURL(`${baseUrl}/ui/account`);
   await expect(page.getByRole("main", { name: "Account", exact: true })).toBeVisible();
   await expect(page.getByRole("main", { name: "Account", exact: true }).getByText("Change your password to continue", { exact: true })).toBeVisible();

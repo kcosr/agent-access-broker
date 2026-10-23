@@ -57,6 +57,7 @@ const WHOLE_ACTIONS: &[&str] = &[
     "page.inline_comment.view",
     "page.view",
     "search",
+    "space.list",
     "verify",
 ];
 
@@ -327,6 +328,7 @@ fn assert_response_option_enums(
 
 fn confluence_provider_config() -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
+        listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,
         egress_proxy: None,

@@ -425,8 +425,10 @@ Namespace selectors match descendants, including nested namespaces, but neither
 the namespace itself nor similarly named siblings. Effective-access previews,
 caller discovery and token pickers use these same clauses and coverage proofs.
 
-Jira and Confluence derive exact-only finite/cofinite query constraints from the
-clauses; namespace authority is a contract error. Native providers declare either
+Jira issue search and Confluence page/blog search derive exact-only finite/cofinite
+query constraints from the clauses; namespace authority is a contract error. Jira
+`project.list` and Confluence `space.list` instead filter live canonical keys inside
+the trusted provider through those clauses. Native providers declare either
 `UpstreamConstrained` enforcement or `ResultFiltered` enforcement. The latter may
 retrieve unauthorized candidates inside the trusted provider, but must discard
 them before results, presentation, audit, object IDs, traces, or continuation

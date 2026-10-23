@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
+    SpaceList,
     Content(ConfluenceContentKind),
     Search(ConfluenceContentKind),
     Verify(ConfluenceContentKind),
@@ -48,6 +49,11 @@ const CONFLUENCE_COMMENT_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
 )];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
+    ResultDescriptor {
+        action: "space.list",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::SpaceList),
+    },
     ResultDescriptor {
         action: "page.view",
         embedded_bodies: CONFLUENCE_ROOT_BODY,
@@ -294,6 +300,7 @@ impl WholeResultRenderer for WholeRenderer {
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
+            WholeRenderer::SpaceList => render_space_list(result, out, budget)?,
             WholeRenderer::Content(kind) => {
                 render_confluence_content(result, kind, out, max_body_bytes, budget)?
             }
@@ -862,6 +869,52 @@ fn confluence_url_fields(
     Ok(())
 }
 
+fn render_space_list(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let object = as_object(value)?;
+    let items = array(required(object, "items")?)?;
+    budget.charge_work(items.len().saturating_add(object.len()))?;
+    out.push("# Confluence spaces\n\n")?;
+    field(out, "Count", &items.len().to_string())?;
+    for item in items {
+        let item = as_object(item)?;
+        budget.charge_work(item.len())?;
+        out.push("\n## ")?;
+        out.push_heading_text(scalar(required(item, "key")?)?)?;
+        out.push("\n\n")?;
+        for (key, label) in [
+            ("id", "ID"),
+            ("name", "Name"),
+            ("type", "Type"),
+            ("status", "Status"),
+            ("webUrl", "Web URL"),
+            ("previewTruncated", "Preview truncated"),
+        ] {
+            if let Some(value) = optional_display(item, key)? {
+                field(out, label, &value)?;
+            }
+        }
+    }
+    out.push("\n## Pagination\n\n")?;
+    for (key, label) in [
+        ("maxResults", "Maximum results"),
+        ("scanStatus", "Scan status"),
+    ] {
+        if let Some(value) = optional_display(object, key)? {
+            field(out, label, &value)?;
+        }
+    }
+    if let Some(token) = optional_scalar(object, "nextPageToken")? {
+        out.push("- Next page token: ")?;
+        out.push_code(token)?;
+        out.push("\n")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -969,6 +1022,7 @@ mod tests {
                 "page.inline_comment.view",
                 "page.view",
                 "search",
+                "space.list",
                 "verify",
             ]
             .into_iter()
@@ -1135,6 +1189,9 @@ mod tests {
 
     fn confluence_whole_fixture(renderer: WholeRenderer) -> Value {
         match renderer {
+            WholeRenderer::SpaceList => {
+                json!({"items":[{"id":"1","key":"ENG","name":"Engineering","type":"global","status":"current","webUrl":"https://example.atlassian.net/wiki/spaces/ENG","previewTruncated":true}],"count":1,"maxResults":2,"scanStatus":"more","nextPageToken":"opaque-token"})
+            }
             WholeRenderer::Content(kind) => {
                 let mut value = json!({
                     "title":"Title", "space":"SPACE", "spaceId":"99",
@@ -1271,6 +1328,21 @@ mod tests {
     fn assert_confluence_whole_semantics(renderer: WholeRenderer, markdown: &str, action: &str) {
         let mut expected = Vec::new();
         match renderer {
+            WholeRenderer::SpaceList => expected.extend(
+                [
+                    "# Confluence spaces",
+                    "## ENG",
+                    "Engineering",
+                    "global",
+                    "current",
+                    "https://example.atlassian.net/wiki/spaces/ENG",
+                    "Preview truncated",
+                    "more",
+                    "opaque-token",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            ),
             WholeRenderer::Content(kind) => {
                 expected.extend([
                     format!("# Confluence {} `10` — Title", confluence_kind_label(kind)),

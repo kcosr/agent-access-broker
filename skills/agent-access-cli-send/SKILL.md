@@ -438,6 +438,20 @@ Raw attachment download:
 
 ## Confluence
 
+Use a send envelope such as:
+
+```json
+{"version":"agent-access.send.v1","kind":"invoke","service":"confluence","action":"space.list","inputs":{"maxResults":50}}
+```
+
+Put the returned token in `inputs.pageToken`; whole-result Markdown is supported.
+
+The separately granted `space.list` enumerates current spaces within effective
+space grants. Inputs accept only `maxResults` and optional `pageToken`. Continue
+`more` and `scan_budget` pages even when empty; `exhausted` ends the observed
+stream. Authorization uses canonical keys, including personal `~` keys, never
+URL aliases. Listing grants no content access and leaves local discovery unchanged.
+
 Personal spaces use their actual keys, such as `~alice`, with the same space
 inputs and grants as team spaces. Preserve the tilde and case; for search use
 `"spaces":["~alice"]`. In raw CQL, quote the key: `space = "~alice"`.
@@ -506,7 +520,7 @@ update, and every footer/inline reply add. A non-native top-level
 owning `body`. Current pages select present ADF before storage; malformed
 selected ADF fails without storage fallback.
 
-Confluence whole-result Markdown is advertised by current page/blog
+Confluence whole-result Markdown is advertised by `space.list`, current page/blog
 view/search/verify, page/blog draft view/verify, current/draft attachment
 lists, and every page/blog footer/inline comment list/view/reply-list read.
 Body-free searches/attachment lists stay body-free, while comment/reply lists

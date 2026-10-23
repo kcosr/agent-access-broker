@@ -179,6 +179,19 @@ or page fields, preserve required query settings, and stop when continuation
 ends or the user's requested scope is met. Never invent cursors or substitute
 raw offsets. A saved response still represents only the requested page or slice.
 
+## Confluence space listing
+
+Discover the Confluence `space.list` tool, then call its returned name with
+`{"inputs":{"maxResults":50}}`. Resume with `inputs.pageToken`; whole-result
+Markdown uses `responseFormat` beside `inputs`, for example
+`{"inputs":{"maxResults":50},"responseFormat":"markdown"}`.
+
+The separately granted `space.list` enumerates current spaces within effective
+space grants. Inputs accept only `maxResults` and optional `pageToken`. Continue
+`more` and `scan_budget` pages even when empty; `exhausted` ends the observed
+stream. Authorization uses canonical keys, including personal `~` keys, never
+URL aliases. Listing grants no content access and leaves local discovery unchanged.
+
 ## Jira project listing
 
 For live authorized projects, use the exposed Jira `project.list` tool with `{"inputs":{"maxResults":50}}`.

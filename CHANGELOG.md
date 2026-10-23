@@ -33,6 +33,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Live Confluence space listing.** The separately grantable, read-only
+  `space.list` action and `confluence space list` command enumerate current
+  spaces within effective space grants, including personal spaces. Bounded
+  scans, confidential continuations, and Markdown preserve filtered results
+  and completion status. New [`providers.confluence.listing` configuration](docs/configuration.md#providersconfluence)
+  bounds pages, HTTP attempts including the shared OAuth replay, and scanned bytes.
+  It is eligible for read-only trusted-identity paths
+  when separately granted. Existing content search and local discovery retain
+  their contracts. See [space listing](docs/providers-confluence.md#live-space-listing).
+
 - **Live Jira project listing.** The independently grantable, read-only
   `project.list` action and `jira project list` command enumerate visible live
   projects, filter current keys through effective grants, and support bounded

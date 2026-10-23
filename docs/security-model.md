@@ -201,13 +201,14 @@ credentials, mixed modes, and empty token intersections deny without trying a
 lower grant band. Each clause keeps its own exclusions, so an independent grant
 can restore a specific exception. Namespace selectors match descendants only.
 
-Jira and Confluence declare `UpstreamConstrained` enforcement: they derive strict
-exact-only boundaries, inject them into canonical JQL/CQL queries before upstream
-pagination, and validate every returned result. GitLab's repository discovery
-and full-text searches declare `ResultFiltered`: policy authorizes bounded
-candidate retrieval with the selected execution credential, then the trusted
-provider confirms current repository ownership and filters against the complete
-boundary before projecting any output. Candidates outside the Broker boundary
+Jira issue search and Confluence page/blog search declare `UpstreamConstrained`
+enforcement: they derive strict exact-only boundaries, inject them into canonical
+JQL/CQL queries before upstream pagination, and validate every returned result.
+Jira `project.list`, Confluence `space.list`, and GitLab repository discovery and
+full-text searches declare `ResultFiltered`: policy authorizes bounded candidate
+retrieval with the selected execution credential, then the trusted provider
+checks current canonical resource identity against the complete boundary before
+projecting any output. Candidates outside the Broker boundary
 can enter that provider and must be discarded before responses, presentation,
 audit, object IDs, traces, or continuations. Ordinary project-scoped GitLab
 `issue.search` and `merge_request.search` retain project lookup and authorization
