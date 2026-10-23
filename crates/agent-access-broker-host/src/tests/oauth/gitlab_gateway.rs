@@ -889,6 +889,13 @@ async fn discovery_recovers_once_from_a_401_with_refreshed_access() {
             git_route(Git::Discovery)
         ]
     );
+    // Gateway terminal audit writes are queued. Finish them before selecting
+    // the request's final record instead of racing its allowed start record.
+    fixture
+        .runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
     let record = read_audit_records(&fixture.audit_path)
         .into_iter()
         .rfind(|record| record["agentRequestId"] == "gitlab-git-rejected")
