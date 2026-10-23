@@ -208,7 +208,7 @@ impl WholeResultRenderer for WholeRenderer {
 
 fn render_issue(
     value: &Value,
-    include_description: bool,
+    include_view_details: bool,
     heading: &str,
     out: &mut MarkdownWriter,
     max_body_bytes: u64,
@@ -274,7 +274,11 @@ fn render_issue(
     if let Some(url) = optional_scalar(object, "webUrl")? {
         field_url(out, "URL", url)?;
     }
-    if include_description && let Some(links) = object.get("issueLinks") {
+    if include_view_details {
+        render_issue_context(object, out, budget)?;
+        render_issue_hierarchy(object, out, budget)?;
+    }
+    if include_view_details && let Some(links) = object.get("issueLinks") {
         let links = array(links)?;
         budget.charge_work(links.len())?;
         out.push("\n## Issue links\n\n")?;
@@ -304,7 +308,7 @@ fn render_issue(
             out.push("\n")?;
         }
     }
-    if include_description
+    if include_view_details
         && let Some(description) = object.get("description").filter(|value| !value.is_null())
     {
         let rendered = render_adf_bounded_with_budget(
@@ -320,13 +324,150 @@ fn render_issue(
         out.push(&rendered.value)?;
         out.push("\n")?;
     }
-    if include_description {
+    if include_view_details {
         render_custom_fields(
             required(object, "customFields")?,
             out,
             max_body_bytes,
             budget,
         )?;
+    }
+    Ok(())
+}
+
+fn render_issue_context(
+    object: &Map<String, Value>,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    if let Some(resolution) = object.get("resolution").filter(|value| !value.is_null()) {
+        out.push("- Resolution: ")?;
+        render_context_named_object(resolution, out, budget)?;
+        out.push("\n")?;
+    }
+    code_fields(
+        out,
+        &[
+            (
+                "Resolution date",
+                optional_scalar(object, "resolutionDate")?,
+            ),
+            ("Due date", optional_scalar(object, "dueDate")?),
+        ],
+    )?;
+    if let Some(category) = object
+        .get("statusCategory")
+        .filter(|value| !value.is_null())
+    {
+        let category = as_object(category)?;
+        budget.charge_work(category.len())?;
+        let id = required(category, "id")?.as_u64().ok_or(RenderError)?;
+        let key = required_scalar(category, "key")?;
+        out.push("- Status category: ")?;
+        if let Some(name) = optional_scalar(category, "name")? {
+            out.push_escaped(name)?;
+            out.push(" (key: ")?;
+            out.push_code(key)?;
+            out.push("; ID: ")?;
+        } else {
+            out.push_code(key)?;
+            out.push(" (ID: ")?;
+        }
+        out.push_code(&id.to_string())?;
+        out.push(")\n")?;
+    }
+    for (key, heading, label) in [
+        ("components", "Components", "Component"),
+        ("fixVersions", "Fix versions", "Version"),
+        ("affectedVersions", "Affected versions", "Version"),
+    ] {
+        let Some(values) = object.get(key).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let values = array(values)?;
+        budget.charge_work(values.len())?;
+        out.push("\n## ")?;
+        out.push(heading)?;
+        out.push("\n\n")?;
+        if values.is_empty() {
+            out.push("None.\n")?;
+        }
+        for value in values {
+            out.push("- ")?;
+            out.push(label)?;
+            out.push(": ")?;
+            render_context_named_object(value, out, budget)?;
+            out.push("\n")?;
+        }
+    }
+    Ok(())
+}
+
+fn render_context_named_object(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let object = as_object(value)?;
+    budget.charge_work(object.len())?;
+    let id = required_scalar(object, "id")?;
+    if let Some(name) = optional_scalar(object, "name")? {
+        out.push_escaped(name)?;
+        out.push(" (ID: ")?;
+        out.push_code(id)?;
+        out.push(")")
+    } else {
+        out.push_code(id)
+    }
+}
+
+fn render_issue_hierarchy(
+    object: &Map<String, Value>,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    if let Some(parent) = object.get("parent") {
+        out.push("\n## Parent\n\n")?;
+        if parent.is_null() {
+            out.push("No parent returned.\n")?;
+        } else {
+            out.push("- Parent: ")?;
+            render_issue_reference(parent, out, budget)?;
+            out.push("\n")?;
+        }
+    }
+    if let Some(subtasks) = object.get("subtasks") {
+        let subtasks = array(subtasks)?;
+        budget.charge_work(subtasks.len())?;
+        out.push("\n## Subtasks\n\n")?;
+        if subtasks.is_empty() {
+            out.push("None.\n")?;
+        }
+        for subtask in subtasks {
+            out.push("- Subtask: ")?;
+            render_issue_reference(subtask, out, budget)?;
+            out.push("\n")?;
+        }
+    }
+    Ok(())
+}
+
+fn render_issue_reference(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let issue = as_object(value)?;
+    budget.charge_work(issue.len())?;
+    out.push_code(required_scalar(issue, "key")?)?;
+    if let Some(issue_type) = optional_scalar(issue, "issueType")? {
+        out.push(" (issue type: ")?;
+        out.push_escaped(issue_type)?;
+        out.push(")")?;
+    }
+    if let Some(summary) = optional_scalar(issue, "summary")? {
+        out.push(" — ")?;
+        out.push_escaped(summary)?;
     }
     Ok(())
 }
@@ -399,6 +540,16 @@ fn render_custom_fields(
             "user" => {
                 budget.charge_work(as_object(value)?.len())?;
                 field_raw(out, "Value", &render_user(value)?)?;
+            }
+            "labels" => {
+                let values = array(value)?;
+                budget.charge_work(values.len())?;
+                out.push("\nValues:\n\n")?;
+                for value in values {
+                    out.push("- Label: ")?;
+                    out.push_code(scalar(value)?)?;
+                    out.push("\n")?;
+                }
             }
             "options" | "users" => {
                 let values = array(value)?;
@@ -1102,6 +1253,202 @@ mod tests {
     }
 
     #[test]
+    fn issue_context_and_hierarchy_markdown_preserve_identity_order_and_literal_text() {
+        let mut result = json!({
+            "key":"PROJ-1","description":null,"customFields":[],
+            "resolution":{"id":"r`1","name":"Fixed *now*\n## forged"},
+            "resolutionDate":"2026-10-23T12:34:56.000+0000",
+            "dueDate":"2026-11-01",
+            "statusCategory":{"id":3,"key":"done`key","name":"# Done"},
+            "components":[{"id":"2","name":"# Main"},{"id":"1","name":null},{"id":"2","name":"# Main"}],
+            "fixVersions":[],
+            "affectedVersions":[{"id":"v`1","name":"1. Release\n## forged"}],
+            "parent":{"key":"PLAN-2","summary":"# Deliver *this*\n## forged","issueType":"Epic"},
+            "subtasks":[
+                {"key":"PROJ-3","summary":"- Work","issueType":"Subtask"},
+                {"key":"PROJ-2","summary":null,"issueType":null},
+                {"key":"PROJ-3","summary":"- Work","issueType":"Subtask"}
+            ]
+        });
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for expected in [
+            "- Resolution: Fixed \\*now\\* ## forged (ID: ``r`1``)",
+            "- Resolution date: `2026-10-23T12:34:56.000+0000`",
+            "- Due date: `2026-11-01`",
+            "- Status category: # Done (key: ``done`key``; ID: `3`)",
+            "## Components\n\n- Component: # Main (ID: `2`)\n- Component: `1`\n- Component: # Main (ID: `2`)",
+            "## Fix versions\n\nNone.",
+            "## Affected versions\n\n- Version: 1. Release ## forged (ID: ``v`1``)",
+            "## Parent\n\n- Parent: `PLAN-2` (issue type: Epic) — # Deliver \\*this\\* ## forged",
+            "## Subtasks\n\n- Subtask: `PROJ-3` (issue type: Subtask) — - Work\n- Subtask: `PROJ-2`\n- Subtask: `PROJ-3` (issue type: Subtask) — - Work",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected:?}: {markdown}"
+            );
+        }
+        assert!(!markdown.contains("\n## forged"));
+        assert!(!markdown.contains("\n- #"));
+        assert!(!markdown.contains("\n- 1."));
+    }
+
+    #[test]
+    fn issue_context_nulls_and_hierarchy_absence_do_not_claim_empty_values() {
+        let source = json!({
+            "key":"PROJ-1","description":null,"customFields":[],
+            "resolution":null,"resolutionDate":null,"dueDate":null,
+            "statusCategory":null,"components":null,"fixVersions":null,"affectedVersions":null
+        });
+        let options = ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown);
+        let mut result = source.clone();
+        present_provider_result("issue.view", &mut result, options, 4096, 16384).unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for absent in [
+            "Resolution",
+            "Due date",
+            "Status category",
+            "Components",
+            "Fix versions",
+            "Affected versions",
+            "Parent",
+            "Subtasks",
+        ] {
+            assert!(!markdown.contains(absent), "{markdown}");
+        }
+        let mut empty = source.clone();
+        empty["parent"] = Value::Null;
+        empty["subtasks"] = json!([]);
+        for collection in ["components", "fixVersions", "affectedVersions"] {
+            empty[collection] = json!([]);
+        }
+        present_provider_result("issue.view", &mut empty, options, 4096, 16384).unwrap();
+        let markdown = empty["value"].as_str().unwrap();
+        assert!(markdown.contains("## Parent\n\nNo parent returned.\n"));
+        for heading in [
+            "Components",
+            "Fix versions",
+            "Affected versions",
+            "Subtasks",
+        ] {
+            assert!(
+                markdown.contains(&format!("## {heading}\n\nNone.\n")),
+                "{markdown}"
+            );
+        }
+        let mut parent_only = source;
+        parent_only["parent"] = Value::Null;
+        present_provider_result("issue.view", &mut parent_only, options, 4096, 16384).unwrap();
+        let markdown = parent_only["value"].as_str().unwrap();
+        assert!(markdown.contains("No parent returned."));
+        assert!(!markdown.contains("## Subtasks"));
+    }
+
+    #[test]
+    fn unnamed_context_objects_keep_their_id_or_category_key() {
+        let mut result = json!({
+            "key":"PROJ-1","description":null,"customFields":[],
+            "resolution":{"id":"resolution-1","name":null},
+            "statusCategory":{"id":0,"key":"new","name":null},
+            "components":[{"id":"component-1","name":null}],
+            "fixVersions":[{"id":"fix-1","name":null}],
+            "affectedVersions":[{"id":"affected-1","name":null}]
+        });
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for expected in [
+            "- Resolution: `resolution-1`",
+            "- Status category: `new` (ID: `0`)",
+            "- Component: `component-1`",
+            "- Version: `fix-1`",
+            "- Version: `affected-1`",
+        ] {
+            assert!(markdown.contains(expected), "{markdown}");
+        }
+    }
+
+    #[test]
+    fn search_markdown_does_not_consume_view_only_context_or_hierarchy() {
+        // Even malformed unsolicited view-only metadata cannot change a search result.
+        let mut result = json!({"issues":[{
+            "key":"PROJ-1","summary":"Search result",
+            "resolution":{"invalid":"HIDDEN"},"resolutionDate":{},"dueDate":{},
+            "statusCategory":true,"components":"HIDDEN","fixVersions":true,"affectedVersions":42,
+            "parent":{"key":"HIDDEN-1"},"subtasks":"HIDDEN",
+            "customFields":[{"type":"labels","value":["HIDDEN"]}]
+        }]});
+        present_provider_result(
+            "search",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        assert!(markdown.contains("## `PROJ-1` — Search result"));
+        for absent in [
+            "HIDDEN",
+            "Resolution",
+            "Due date",
+            "Status category",
+            "Components",
+            "Fix versions",
+            "Affected versions",
+            "Parent",
+            "Subtasks",
+            "Custom fields",
+        ] {
+            assert!(!markdown.contains(absent), "{markdown}");
+        }
+    }
+
+    #[test]
+    fn view_context_and_hierarchy_share_work_and_output_bounds() {
+        let object = json!({
+            "components":[{"id":"1","name":"component"}],
+            "parent":{"key":"PROJ-2","summary":"PRIVATE_SUMMARY","issueType":"Task"}
+        });
+        let mut budget = PresentationBudget::new(16384);
+        budget.charge_work(MAX_PRESENTATION_WORK_UNITS - 5).unwrap();
+        let mut out = MarkdownWriter::new(16384);
+        render_issue_context(object.as_object().unwrap(), &mut out, &mut budget).unwrap();
+        assert!(
+            render_issue_hierarchy(object.as_object().unwrap(), &mut out, &mut budget).is_err()
+        );
+
+        let mut result = json!({
+            "key":"PROJ-1","customFields":[],
+            "components":[{"id":"1","name":"PRIVATE_CONTEXT".repeat(40)}]
+        });
+        let error = present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            128,
+        )
+        .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+        assert!(error.result.is_none());
+    }
+
+    #[test]
     fn property_json_and_tokens_use_collision_safe_delimiters() {
         let mut property = json!({
             "issue":{"id":"1","key":"SBC-1","project":"SBC","webUrl":"https://example.test"},
@@ -1507,6 +1854,66 @@ mod tests {
             assert!(markdown.contains(&format!("\n- Option: {label} (ID: `{id}`)\n")));
             assert!(markdown.contains(&format!("\n- User: {label} (account ID: `{id}`)\n")));
         }
+    }
+
+    #[test]
+    fn custom_labels_preserve_empty_strings_duplicates_and_order_in_every_format() {
+        let source = json!({
+            "key":"PROJ-1","description":null,
+            "resolution":{"id":"1","name":null},
+            "resolutionDate":"2026-10-23T01:02:03.000+0000","dueDate":null,
+            "components":[],"fixVersions":null,"affectedVersions":[],
+            "statusCategory":{"id":3,"key":"done","name":"Done"},
+            "parent":null,"subtasks":[],
+            "customFields":[
+                supported_field(1, "labels", Value::Null),
+                supported_field(2, "labels", json!([])),
+                supported_field(3, "labels", json!(["", "# Blocker", "1. Release", "one`two", "line\n## forged", "# Blocker"]))
+            ]
+        });
+        for content in [
+            ReadContentFormat::Native,
+            ReadContentFormat::Markdown,
+            ReadContentFormat::Text,
+        ] {
+            let mut result = source.clone();
+            present_provider_result(
+                "issue.view",
+                &mut result,
+                ResponseOptions::new(content, ResponseFormat::Json),
+                4096,
+                16384,
+            )
+            .unwrap();
+            // Labels and standard context are typed metadata, never ADF companions.
+            assert_eq!(result, source);
+        }
+        let mut result = source;
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        assert_eq!(markdown.matches("- Value: not set").count(), 2);
+        assert_eq!(
+            markdown
+                .lines()
+                .filter(|line| line.starts_with("- Label:"))
+                .collect::<Vec<_>>(),
+            [
+                "- Label: `  `",
+                "- Label: `# Blocker`",
+                "- Label: `1. Release`",
+                "- Label: ``one`two``",
+                "- Label: `line ## forged`",
+                "- Label: `# Blocker`",
+            ]
+        );
+        assert!(!markdown.contains("\n## forged"));
     }
 
     #[test]

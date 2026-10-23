@@ -41,7 +41,7 @@ pub trait JiraBackend: Send + Sync {
         &self,
         issue_key: &str,
         credential: &AtlassianCredential,
-        include_issue_links: bool,
+        include_issue_references: bool,
     ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError>;
 
     async fn issue_types(
@@ -277,12 +277,13 @@ pub struct JiraIssue {
     pub labels: Option<Vec<String>>,
 }
 
-/// View-only data. Links are absent when not requested or not returned by Jira.
+/// View-only data. Embedded references require universal same-mode authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JiraIssueView {
     pub issue: JiraIssue,
     pub issue_links: Option<Vec<JiraIssueViewLink>>,
     pub custom_fields: Vec<Value>,
+    pub context: JiraIssueViewContext,
 }
 
 /// Allowlisted metadata from a linked issue in the source issue's response.
@@ -1073,14 +1074,14 @@ impl JiraBackend for HttpJiraBackend {
         &self,
         issue_key: &str,
         credential: &AtlassianCredential,
-        include_issue_links: bool,
+        include_issue_references: bool,
     ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
         let mut url = self
             .api_base(credential)?
             .join(&format!("issue/{issue_key}"))
             .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
-        let fields = if include_issue_links {
-            "*all,-comment,-attachment,-worklog,-subtasks,-parent"
+        let fields = if include_issue_references {
+            "*all,-comment,-attachment,-worklog"
         } else {
             "*all,-comment,-attachment,-worklog,-subtasks,-parent,-issuelinks"
         };
@@ -1100,17 +1101,20 @@ impl JiraBackend for HttpJiraBackend {
         .await?;
         let status = response.status().as_u16();
         let value = jira_response_value(response, self.limits.max_upstream_response_bytes).await?;
-        let issue_links = if include_issue_links {
+        let issue_links = if include_issue_references {
             viewed_issue_links_from_value(&value)?
         } else {
             None
         };
         let custom_fields = custom_fields::custom_fields_from_value(&value)?;
+        let context =
+            issue_view_context::issue_view_context_from_value(&value, include_issue_references)?;
         Ok(JiraBackendResponse {
             value: JiraIssueView {
                 issue: issue_from_value(value)?,
                 issue_links,
                 custom_fields,
+                context,
             },
             status,
             duration_ms: elapsed_ms(started),

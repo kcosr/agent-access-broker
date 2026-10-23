@@ -15294,6 +15294,13 @@ impl Provider for TestJiraReadPresentationProvider {
             "key": "PROJ-7",
             "project": "PROJ",
             "summary": "Normalized read fixture",
+            "resolution": null,
+            "resolutionDate": null,
+            "dueDate": null,
+            "components": null,
+            "fixVersions": null,
+            "affectedVersions": null,
+            "statusCategory": null,
             "customFields": [],
             "description": {
                 "type": "doc",

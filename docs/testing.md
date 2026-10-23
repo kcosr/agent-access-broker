@@ -1132,16 +1132,30 @@ links, unknown-container and unknown-leaf fallbacks, malformed roots, Unicode,
 depth/node/work/output boundaries, deterministic LF output, no truncation, no
 panic, and no network access.
 
-Deterministic Jira custom-field fixtures cover the expanded issue fetch with
-`fields=*all,-comment,-attachment,-worklog,-subtasks,-parent` and
-`expand=names,schema`, plus `-issuelinks` without universal same-mode access.
+Deterministic Jira issue-view fixtures cover the expanded issue fetch with
+`fields=*all,-comment,-attachment,-worklog` and `expand=names,schema`, adding
+`-subtasks,-parent,-issuelinks` without universal same-mode access.
 They check the unchanged three-request Broker flow (two metadata checks and
-one authorized issue fetch), both link-access modes, unsolicited standard/link
-data containment, identity mismatches, and renamed-project handling. Projection cases cover
+one authorized issue fetch), both reference-disclosure modes, unsolicited-data
+containment, identity mismatches, and renamed-project handling. Projection cases cover
 canonical numeric-ID ordering, duplicate/missing names, every allowlisted type,
 null/empty sentinels, stripped option/user properties, unsupported app/reference
 data, malformed values marked `withheld`, and sanitized metadata-map failures.
 Search and create/update readbacks must retain their existing shapes.
+
+Standard-context cases cover resolution, dates, components, fix/affected
+versions, status category, nullable names, missing/null/empty values, ordered
+duplicates, stripped properties, and malformed nested containers. Custom Labels
+require the exact implementation and array/string schema; invalid members
+withhold the complete field. Hierarchy cases use the existing universal-access
+proof for links, parent, and subtasks together, including exclusions, restored
+same-mode unions, competing modes and token restrictions. Both HTTP projection
+and provider output must suppress unsolicited references without that proof.
+Eligible missing/null parents normalize to null; missing subtasks stay absent.
+Snapshots distinguish `No parent returned.` from an absent parent section and
+empty **Subtasks**, preserve IDs when names are null, and exercise malicious
+Markdown prefixes in all new dynamic values. Audit assertions permit only
+reference disclosure statuses and counts, not hierarchy or context content.
 
 Presentation fixtures check escaped custom names and values, explicit status
 markers, empty fields versus no returned fields, and per-entry `renderedBody`

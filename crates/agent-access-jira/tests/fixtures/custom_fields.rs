@@ -38,6 +38,8 @@ pub fn realistic_issue_view() -> Value {
         },
         "created":null,"updated":null,"creator":null,"reporter":null,
         "assignee":null,"priority":null,"labels":[],
+        "resolution":null,"resolutionDate":null,"dueDate":null,
+        "components":null,"fixVersions":null,"affectedVersions":null,"statusCategory":null,
         "customFields":custom_fields,
     })
 }
