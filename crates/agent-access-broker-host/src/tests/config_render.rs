@@ -1304,12 +1304,22 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
 
 fn cloudbees_value(cloudbees: &CloudbeesCiProviderConfig) -> Value {
     let CloudbeesCiProviderConfig {
+        listing,
         max_log_scan_bytes,
         controllers,
         egress_proxy,
         allowed_upstream_hosts,
     } = cloudbees;
     Fields::default()
+        .put(
+            "listing",
+            Fields::default()
+                .int("max_results", listing.max_results)
+                .int("max_candidate_pages", listing.max_candidate_pages)
+                .int("max_upstream_requests", listing.max_upstream_requests)
+                .int("max_scan_bytes", listing.max_scan_bytes)
+                .value(),
+        )
         .int("max_log_scan_bytes", *max_log_scan_bytes)
         .put(
             "controllers",

@@ -950,7 +950,25 @@ unaffected.
 
 ## CloudBees CI
 
-Commands take `CONTROLLER JOB` positionals or `--job-url URL`. `CONTROLLER`
+`job.list` input and continuation errors return uncategorized `input_invalid`;
+correct the inputs or restart without the token.
+
+`job.list` is a separately granted read-only live listing action. It takes a
+configured `controller`, optional canonical `folder`, `maxResults`, and
+`pageToken`; it does not need a registered job or a job URL. It recursively
+returns authorized containers and jobs, including unregistered current items,
+without granting inspection or build access. Continue `more` and `scan_budget`
+using `nextPageToken` and identical inputs, even on empty pages. `exhausted` ends
+the observed stream; `upstream_window` is terminal incomplete coverage. Tokens
+expire 15 minutes after first issuance. Results are JSON-only. Use returned
+`controller` and `job` values for later separately authorized actions.
+
+```sh
+agent-access cloudbees-ci job list team-ci --folder payments --max-results 50
+agent-access cloudbees-ci job list team-ci --folder payments --max-results 50 --page-token TOKEN
+```
+
+Other commands take `CONTROLLER JOB` positionals or `--job-url URL`. `CONTROLLER`
 is the configured alias, the first segment of a `cloudbees_ci_job` value; `JOB`
 is the Jenkins full name below it, such as `payments/build-api`, never a
 display name or the alias again. Take both from `resources list` entry `inputs`,
@@ -966,10 +984,10 @@ failure" instead of listing builds. Results report the resolved `buildNumber`;
 continue a log `--cursor` with that number. Pipeline node IDs, artifact paths,
 and queue IDs are `--node-id`, `--artifact-path`, and `--queue-id`.
 
-Every command authorizes the combined `controller/job` resource. Log reads,
+Commands other than `job list` authorize the combined `controller/job` resource. Log reads,
 test details, downloads, and build triggers need their own action grants.
 Pipeline commands require the Pipeline REST API plugin. Node IDs are positive
-integer strings from Pipeline reads. `input_invalid` results name the field in
+integer strings from Pipeline reads. For actions other than `job.list`, `input_invalid` results name the field in
 `result.field` and the mistake in `result.inputCategory`; `job_is_container`
 means a folder or multibranch project, so address a job or branch inside it.
 

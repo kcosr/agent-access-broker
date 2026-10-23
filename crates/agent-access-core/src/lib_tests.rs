@@ -6280,6 +6280,7 @@ fn sample_broker() -> BrokerConfig {
 fn sample_cloudbees_config() -> BrokerConfig {
     let mut config = sample_broker();
     config.providers.insert(CloudbeesCiProviderConfig {
+        listing: Default::default(),
         max_log_scan_bytes: 16 * 1024 * 1024,
         controllers: BTreeMap::from([(
             "team-ci".into(),

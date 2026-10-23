@@ -1675,6 +1675,12 @@ allow_disable_ssl_verification = false
 allowed_upstream_hosts = ["https://ci.example.com/team-ci/**"]
 max_log_scan_bytes = 16777216 # default 16 MiB
 
+[providers.cloudbees_ci.listing]
+max_results = 50 # default; 1..100
+max_candidate_pages = 32 # default; positive
+max_upstream_requests = 64 # default; positive
+max_scan_bytes = 16777216 # default 16 MiB; positive
+
 [providers.cloudbees_ci.controllers.team-ci]
 base_url = "https://ci.example.com/team-ci/"
 # web_base_url = "https://ci-public.example.com/team-ci/" # optional
@@ -1707,6 +1713,16 @@ continuation. Raising the text budget does not raise the scan ceiling.
 Only `basic_api_token` execution credentials are supported, from a service
 secret or a credential connection with the `cloudbees-ci-api-token` profile. See
 [the provider contract](providers-cloudbees-ci.md).
+
+Live `job.list` recursively filters jobs and containers through effective grants.
+Its listing limits bound each call, including error bodies.
+`limits.max_upstream_response_bytes` must be at least 11491 bytes for its
+confidential token and result envelope whenever the CloudBees provider is configured,
+even if `job.list` is not granted. Raise a smaller limit before upgrading.
+Depth beyond 64 below the chosen root,
+8192-byte traversal state, or signed 32-bit child ranges returns terminal
+`upstream_window` (incomplete coverage), never false exhaustion. See
+[live job listing](providers-cloudbees-ci.md#live-job-listing).
 
 ### `[providers.teams]`
 

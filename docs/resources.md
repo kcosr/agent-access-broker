@@ -428,11 +428,15 @@ caller discovery and token pickers use these same clauses and coverage proofs.
 Jira issue search and Confluence page/blog search derive exact-only finite/cofinite
 query constraints from the clauses; namespace authority is a contract error. Jira
 `project.list` and Confluence `space.list` instead filter live canonical keys inside
-the trusted provider through those clauses. Native providers declare either
+the trusted provider through those clauses. CloudBees CI `job.list` similarly
+filters canonical job paths and intersects each container namespace with those
+clauses before descent. Native providers declare either
 `UpstreamConstrained` enforcement or `ResultFiltered` enforcement. The latter may
 retrieve unauthorized candidates inside the trusted provider, but must discard
-them before results, presentation, audit, object IDs, traces, or continuation
-payloads. Imported actions cannot enable either native search mode. Commands keep
+their metadata before results, presentation, audit, object IDs, or traces.
+CloudBees continuation payloads may retain necessary ancestor path components,
+including denied ancestors, only inside a fixed-length encrypted traversal stack.
+Other denied candidate metadata never enters continuations. Imported actions cannot enable either native search mode. Commands keep
 per-grant credential modes and their distinct exact-only protocol boundaries.
 
 ## Configuration contract

@@ -26,6 +26,7 @@ async fn cloudbees_ci_catalog_and_discovery_follow_job_grant_and_context() {
     config
         .providers
         .insert(agent_access_cloudbees_ci::CloudbeesCiProviderConfig {
+            listing: Default::default(),
             max_log_scan_bytes: 16 * 1024 * 1024,
             controllers: BTreeMap::from([(
                 "team-ci".into(),
@@ -166,6 +167,7 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
     config
         .providers
         .insert(agent_access_cloudbees_ci::CloudbeesCiProviderConfig {
+            listing: Default::default(),
             max_log_scan_bytes: 16 * 1024 * 1024,
             controllers: ["team-ci", "other-ci"]
                 .into_iter()

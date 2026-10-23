@@ -1171,6 +1171,7 @@ mod tests {
         });
         // Build with the local raw HTTP endpoint so allowlisting still applies.
         let config = CloudbeesCiProviderConfig {
+            listing: Default::default(),
             max_log_scan_bytes: default_scan_limit(),
             controllers: BTreeMap::from([(
                 "team-ci".into(),
@@ -1204,6 +1205,7 @@ mod tests {
             });
             let ci = CloudbeesCiProvider::for_tests(
                 CloudbeesCiProviderConfig {
+                    listing: Default::default(),
                     max_log_scan_bytes: default_scan_limit(),
                     controllers: BTreeMap::from([(
                         "team-ci".into(),
@@ -1327,6 +1329,7 @@ mod tests {
         });
         let ci = CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
+                listing: Default::default(),
                 max_log_scan_bytes: default_scan_limit(),
                 controllers: BTreeMap::from([(
                     "team-ci".into(),

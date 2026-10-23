@@ -651,7 +651,10 @@ replacement handling. Denied or failed reads and incomplete transfers leave an
 existing destination intact. If parent-directory synchronization fails after
 replacement, the reported local error indicates that the file was replaced.
 
-CloudBees CI actions take `controller` and `job` (from `resources_list`
+CloudBees CI `job.list` takes `controller`, optional `folder`, `maxResults`, and
+`pageToken`, and returns a filtered JSON page of live jobs and containers. Continue
+`more` and `scan_budget` even when empty; `upstream_window` means terminal
+incomplete coverage. Other CloudBees CI actions take `controller` and `job` (from `resources_list`
 `inputs` or `coverage`) or a pasted Jenkins job or build `url`, and build-level
 actions accept `buildSelector` permalinks such as `lastFailedBuild`; see
 [locating jobs and builds](providers-cloudbees-ci.md#locating-jobs-and-builds).

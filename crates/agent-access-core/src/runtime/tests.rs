@@ -8141,6 +8141,7 @@ fn runtime_preflights_every_provider_proxy_even_when_environment_proxy_wins() {
                 config
                     .providers
                     .insert(agent_access_cloudbees_ci::CloudbeesCiProviderConfig {
+                        listing: Default::default(),
                         max_log_scan_bytes: 16 * 1024 * 1024,
                         controllers: BTreeMap::from([(
                             "team-ci".to_string(),

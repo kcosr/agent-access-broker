@@ -418,7 +418,7 @@ on redirect targets.
 The SDK provides a continuation envelope (`ContinuationFamily`,
 `ContinuationBinding`, `ContinuationSigner`) for native actions that return a
 resumable cursor, page token or handle. Every native provider that returns such
-a token uses it: CloudBees CI log cursors, GitLab REST page tokens, Gmail and
+a token uses it: CloudBees CI log cursors and job-list tokens, GitLab REST page tokens, Gmail and
 Jira search page tokens, and Confluence search cursors, list tokens and draft
 handles. A provider declares each token family once: its service and purpose, a
 version, an explicit payload cap (a family relaying an upstream token may
@@ -806,7 +806,13 @@ existence, ownership of a particular object, or an authorization outcome.
   rejected. See
   [imported services](imported-services.md) and [OpenAPI imports](imported-openapi.md).
 
-- **CloudBees CI** (`cloudbees_ci`) — typed actions to view jobs and builds,
+- **CloudBees CI** (`cloudbees_ci`) — separately granted, read-only `job.list`
+  filters live recursive inventory through normalized job authority. It proves
+  descendant reachability before fetching containers, preserves independent
+  allows and exclusions, and encrypts bounded traversal paths/offsets in fixed
+  15-minute continuations. Its JSON-only results report explicit completion or
+  incomplete coverage at depth/state/upstream range limits. Other typed actions
+  view jobs and builds,
   read bounded console-log head/tail/literal-search excerpts with verified
   continuation cursors and test summaries, list and download archived artifacts,
   inspect a queued build, and trigger a non-parameterized build.

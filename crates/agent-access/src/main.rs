@@ -3341,6 +3341,18 @@ impl CloudbeesCiBuildArgs {
 
 #[derive(Debug, Subcommand)]
 enum CloudbeesCiJobCommand {
+    /// Recursively list live jobs and folders within effective grants (one JSON page).
+    List {
+        /// Configured controller alias.
+        controller: String,
+        /// Canonical folder path below the controller; defaults to its root.
+        #[arg(long)]
+        folder: Option<String>,
+        #[arg(long)]
+        max_results: Option<u32>,
+        #[arg(long)]
+        page_token: Option<String>,
+    },
     /// Read a job's metadata, recent builds, and queue state.
     View {
         #[command(flatten)]
@@ -6837,7 +6849,33 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
         serde_json::Value::Object(inputs)
     };
     let download = |action, inputs| CloudbeesCiInvocation::Download { action, inputs };
+    let list_response = WholeOutputArgs {
+        output_format: None,
+    };
     let (action, inputs, response) = match command {
+        CloudbeesCiCommand::Job {
+            command:
+                CloudbeesCiJobCommand::List {
+                    controller,
+                    folder,
+                    max_results,
+                    page_token,
+                },
+        } => (
+            "job.list",
+            with(
+                serde_json::Map::from_iter([("controller".into(), serde_json::json!(controller))]),
+                &[
+                    ("folder", folder.clone().map(serde_json::Value::String)),
+                    ("maxResults", max_results.map(|n| serde_json::json!(n))),
+                    (
+                        "pageToken",
+                        page_token.clone().map(serde_json::Value::String),
+                    ),
+                ],
+            ),
+            &list_response,
+        ),
         CloudbeesCiCommand::Job {
             command: CloudbeesCiJobCommand::View { job, response },
         } => ("job.view", with(job.inputs(), &[]), response),
@@ -17486,8 +17524,49 @@ mod tests {
     }
 
     #[test]
+    fn cloudbees_ci_job_listing_is_json_only_and_requires_a_controller() {
+        for args in [
+            vec!["agent-access", "cloudbees-ci", "job", "list"],
+            vec![
+                "agent-access",
+                "cloudbees-ci",
+                "job",
+                "list",
+                "team-ci",
+                "--output-format",
+                "markdown",
+            ],
+            vec![
+                "agent-access",
+                "cloudbees-ci",
+                "job",
+                "list",
+                "--job-url",
+                "https://ci.example.com/job/x/",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
     fn cloudbees_ci_typed_commands_lower_to_canonical_actions() {
         let cases = [
+            (
+                vec![
+                    "job",
+                    "list",
+                    "team-ci",
+                    "--folder",
+                    "payments",
+                    "--max-results",
+                    "3",
+                    "--page-token",
+                    "opaque",
+                ],
+                "job.list",
+                serde_json::json!({"controller":"team-ci","folder":"payments","maxResults":3,"pageToken":"opaque"}),
+            ),
             (
                 vec!["job", "view", "team-ci", "payments/build-api"],
                 "job.view",

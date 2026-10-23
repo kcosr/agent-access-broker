@@ -824,6 +824,7 @@ mod tests {
         };
         CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
+                listing: Default::default(),
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([
                     (
