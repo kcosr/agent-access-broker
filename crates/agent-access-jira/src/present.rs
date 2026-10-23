@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
+    ProjectList,
     IssueTypeList,
     Issue,
     Search,
@@ -39,6 +40,11 @@ const COMMENT_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(
 )];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
+    ResultDescriptor {
+        action: "project.list",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::ProjectList),
+    },
     ResultDescriptor {
         action: "issue_type.list",
         embedded_bodies: NO_BODIES,
@@ -159,6 +165,7 @@ impl WholeResultRenderer for WholeRenderer {
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
+            WholeRenderer::ProjectList => render_project_list(result, out, budget)?,
             WholeRenderer::IssueTypeList => render_issue_type_list(result, out, budget)?,
             WholeRenderer::Issue => render_issue(result, true, "# ", out, max_body_bytes, budget)?,
             WholeRenderer::Search => render_search(result, out, budget)?,
@@ -327,6 +334,51 @@ fn render_issue_type_list(
         if let Some(value) = optional_display(object, key)? {
             field(out, label, &value)?;
         }
+    }
+    Ok(())
+}
+
+fn render_project_list(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let object = as_object(value)?;
+    let items = array(required(object, "items")?)?;
+    budget.charge_work(items.len().saturating_add(object.len()))?;
+    out.push("# Jira projects\n\n")?;
+    field(out, "Count", &items.len().to_string())?;
+    for item in items {
+        let item = as_object(item)?;
+        budget.charge_work(item.len())?;
+        out.push("\n## ")?;
+        out.push_heading_text(scalar(required(item, "key")?)?)?;
+        out.push("\n\n")?;
+        for (key, label) in [
+            ("id", "ID"),
+            ("name", "Name"),
+            ("projectTypeKey", "Project type"),
+            ("webUrl", "Web URL"),
+            ("previewTruncated", "Preview truncated"),
+        ] {
+            if let Some(value) = optional_display(item, key)? {
+                field(out, label, &value)?;
+            }
+        }
+    }
+    out.push("\n## Pagination\n\n")?;
+    for (key, label) in [
+        ("maxResults", "Maximum results"),
+        ("scanStatus", "Scan status"),
+    ] {
+        if let Some(value) = optional_display(object, key)? {
+            field(out, label, &value)?;
+        }
+    }
+    if let Some(token) = optional_scalar(object, "nextPageToken")? {
+        out.push("- Next page token: ")?;
+        out.push_code(token)?;
+        out.push("\n")?;
     }
     Ok(())
 }
@@ -719,6 +771,7 @@ mod tests {
         assert_eq!(
             whole,
             [
+                "project.list",
                 "issue_type.list",
                 "issue.view",
                 "comment.view",

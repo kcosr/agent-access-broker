@@ -7450,6 +7450,7 @@ async fn attribution_validation_failure_during_reload_preserves_active_runtime()
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -8834,6 +8835,7 @@ fn configure_lookup_trace_jira(config: &mut BrokerConfig) {
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });

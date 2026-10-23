@@ -216,6 +216,15 @@ and provider access.
 
 ## Jira
 
+For live authorized projects, use `POST /v1/invoke/jira/project.list` with `{"inputs":{"maxResults":50}}`.
+This separately grantable action accepts only pagination, lists live projects,
+and does not grant issue access. Continue `nextPageToken` as `pageToken` with
+unchanged `maxResults` through `more` and empty `scan_budget` pages until
+`exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
+by configuration at 100. Results contain `items`, `count`, `maxResults`, and
+`scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
+page and reject changed authority. Local resource discovery is unchanged.
+
 `jira.issue.view` can include `issueLinks` only when effective access covers
 all projects in the selected credential mode. Each entry has `key`, `type`
 (relationship type), `direction`, `relationship` (directional label), and nullable
@@ -283,7 +292,7 @@ curl -fsS \
 
 Jira embedded normalization is advertised by `issue.view`, `issue.create`,
 `issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
-`comment.update`. Whole-result Markdown is advertised by `issue_type.list`, `issue.view`,
+`comment.update`. Whole-result Markdown is advertised by `project.list`, `issue_type.list`, `issue.view`,
 `search`, `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`. Search and comment
 list remain body-free, and format selection never causes an extra upstream

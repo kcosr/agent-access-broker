@@ -12,6 +12,12 @@ mod issue_types_tests;
 
 #[async_trait]
 pub trait JiraBackend: Send + Sync {
+    /// One bounded project collection page, using the selected execution credential.
+    async fn project_list(
+        &self,
+        request: JiraProjectListRequest,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError>;
     fn egress_proxy_audit(&self, _credential: &AtlassianCredential) -> Value {
         EgressRoute::direct().audit_value()
     }
@@ -610,6 +616,17 @@ pub struct JiraBackendResponse<T> {
     pub duration_ms: u64,
 }
 
+/// The position and shared operation budgets of a project collection request.
+#[derive(Debug, Clone)]
+pub struct JiraProjectListRequest {
+    pub start_at: u64,
+    pub max_results: u32,
+    pub requests: UpstreamRequestBudget,
+    pub bytes: SharedBodyBudget,
+    /// Shared by every page of this invocation, never reset per page.
+    pub replay_used: Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum JiraBackendError {
     #[error("Jira returned unauthorized")]
@@ -917,6 +934,13 @@ impl HttpJiraBackend {
 
 #[async_trait]
 impl JiraBackend for HttpJiraBackend {
+    async fn project_list(
+        &self,
+        request: JiraProjectListRequest,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        self.project_list_page(request, credential).await
+    }
     fn egress_proxy_audit(&self, credential: &AtlassianCredential) -> Value {
         self.client_for(credential)
             .map(|clients| clients.client.egress_route().audit_value())

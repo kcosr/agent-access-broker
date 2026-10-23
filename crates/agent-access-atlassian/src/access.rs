@@ -239,6 +239,17 @@ impl AtlassianCredential {
         replay: Option<T>,
         product: &str,
     ) -> Result<T, AtlassianAccessError> {
+        self.mark_rejected(presented, product)?;
+        self.recover_rejected(replay, product).await
+    }
+
+    /// Fences the exact rejected access version before consuming a 401 body.
+    /// A bounded body read may fail; that must not leave rejected access usable.
+    pub fn mark_rejected(
+        &self,
+        presented: &PresentedAccess,
+        product: &str,
+    ) -> Result<(), AtlassianAccessError> {
         let (Material::Delegated { credential, .. }, Some(version)) =
             (&self.0, presented.version.as_deref())
         else {
@@ -249,7 +260,22 @@ impl AtlassianCredential {
         };
         credential
             .mark_rejected(version)
-            .map_err(AtlassianAccessError::Credential)?;
+            .map_err(AtlassianAccessError::Credential)
+    }
+
+    /// Recovers access already fenced by [`Self::mark_rejected`], using the
+    /// invocation's shared lease allowance and an explicitly reserved replay.
+    pub async fn recover_rejected<T>(
+        &self,
+        replay: Option<T>,
+        product: &str,
+    ) -> Result<T, AtlassianAccessError> {
+        let Material::Delegated { credential, .. } = &self.0 else {
+            return Err(AtlassianAccessError::Credential(ProviderError::error(
+                ReasonCode::UpstreamUnauthorized,
+                format!("{product} rejected the selected credential"),
+            )));
+        };
         let Some(replay) = replay else {
             return Err(AtlassianAccessError::Credential(ProviderError::deny(
                 ReasonCode::CredentialInvalid,

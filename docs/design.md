@@ -665,15 +665,18 @@ metadata. When a concealed `scope_unresolved` result repeats that value under
 fixed independently of the requested locator and must never encode resource
 existence, ownership of a particular object, or an authorization outcome.
 
-- **Jira** (`jira`) — twenty-two actions: `issue_type.list`, `issue.view`, `issue.create`,
+- **Jira** (`jira`) — twenty-three actions: `project.list`, `issue_type.list`, `issue.view`, `issue.create`,
   `issue.child.create`, `issue.update`, `issue.parent.set`,
   `issue.dependency.add`, `search`,
   `comment.list`, `comment.view`, `comment.add`, `comment.reply`, `comment.update`,
   `comment.delete`, `comment.property.list`, `comment.property.get`,
   `comment.property.set`, `comment.property.delete`, `attachment.add`,
   `attachment.download`, `attachment.list`, `verify`. Policy scope is the
-  containing `project`. `issue_type.list`, `issue.create`, and `search` do not
-  require pre-authorization metadata lookup. `issue_type.list` returns one page
+  containing `project`. `project.list`, `issue_type.list`, `issue.create`, and `search` do not
+  require pre-authorization metadata lookup. `project.list` scans the live project
+  collection under bounded work limits, filters current project keys against
+  normalized action authority, and seals confidential continuations bound to that
+  authority. `issue_type.list` returns one page
   of creation metadata using the execution credential, with IDs, names,
   descriptions, subtask flags, and explicit continuation offsets.
   `attachment.list` is a single fetch, not paginated. Issue
@@ -687,8 +690,8 @@ existence, ownership of a particular object, or an authorization outcome.
   Jira normalized reads cover seven actions whose
   results declare ADF advertise `readContentFormats = [native, markdown, text]`:
   `issue.view`, `issue.create`, `issue.update`, `comment.view`, `comment.add`,
-  `comment.reply`, and `comment.update`. Nine non-streaming retrieval actions
-  advertise `responseFormats = [json, markdown]`: `issue_type.list`, `issue.view`, `search`,
+  `comment.reply`, and `comment.update`. Ten non-streaming retrieval actions
+  advertise `responseFormats = [json, markdown]`: `project.list`, `issue_type.list`, `issue.view`, `search`,
   `comment.list`, `comment.view`, `comment.property.list`,
   `comment.property.get`, `attachment.list`, and `verify`.
 - **Confluence** (`confluence`) — page, blog, attachment, verification, and

@@ -5130,7 +5130,7 @@ async fn blog_view_rejects_non_current_execution_response() {
 }
 
 #[test]
-fn build_creates_request_and_stream_clients_for_each_api_base() {
+fn build_creates_request_stream_and_single_attempt_clients_for_each_api_base() {
     let cloud_id = "00000000-0000-0000-0000-000000000000";
     let mut config = confluence_config();
     config.allowed_upstream_hosts.push(format!(
@@ -5150,9 +5150,11 @@ fn build_creates_request_and_stream_clients_for_each_api_base() {
         built,
         [
             (label.clone(), tenant.clone(), ClientProfile::Request),
-            (label.clone(), tenant, ClientProfile::Stream),
+            (label.clone(), tenant.clone(), ClientProfile::Stream),
+            (label.clone(), tenant, ClientProfile::SingleAttempt),
             (label.clone(), gateway.clone(), ClientProfile::Request),
-            (label, gateway, ClientProfile::Stream),
+            (label.clone(), gateway.clone(), ClientProfile::Stream),
+            (label, gateway, ClientProfile::SingleAttempt),
         ]
     );
 }

@@ -16,9 +16,32 @@ pub struct JiraProviderConfig {
     #[serde(default)]
     pub search: SearchLimitsConfig,
     #[serde(default)]
+    pub listing: JiraListingConfig,
+    #[serde(default)]
     pub comments: JiraCommentsConfig,
     #[serde(default)]
     pub issue_links: JiraIssueLinksConfig,
+}
+
+/// Work limits for live project enumeration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JiraListingConfig {
+    pub max_results: u32,
+    pub max_candidate_pages: u32,
+    pub max_upstream_requests: u32,
+    pub max_scan_bytes: u64,
+}
+
+impl Default for JiraListingConfig {
+    fn default() -> Self {
+        Self {
+            max_results: 50,
+            max_candidate_pages: 4,
+            max_upstream_requests: 8,
+            max_scan_bytes: 16 * 1024 * 1024,
+        }
+    }
 }
 
 impl JiraProviderConfig {
@@ -304,6 +327,16 @@ impl BackendConfig for JiraProviderConfig {
             errors.push("providers.jira.search.max_results must be non-zero".to_string());
         }
         validate_jira_comments_config("providers.jira.comments", &self.comments, errors);
+        if !(1..=100).contains(&self.listing.max_results)
+            || self.listing.max_candidate_pages == 0
+            || self.listing.max_upstream_requests == 0
+            || self.listing.max_scan_bytes == 0
+        {
+            errors.push(
+                "providers.jira.listing requires max_results in 1..100 and positive work limits"
+                    .to_string(),
+            );
+        }
         validate_jira_issue_links_config("providers.jira.issue_links", &self.issue_links, errors);
         validate_provider_limit_relation("jira", &self.attachments, context.limits, errors);
     }

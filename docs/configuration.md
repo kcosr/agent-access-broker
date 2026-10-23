@@ -1255,6 +1255,12 @@ max_body_bytes = 1048576    # 1 MiB; default
 [providers.jira.search]
 max_results = 50            # default
 
+[providers.jira.listing]
+max_results = 50
+max_candidate_pages = 4
+max_upstream_requests = 8
+max_scan_bytes = 16777216
+
 [providers.jira.comments]
 max_results = 50
 max_property_value_bytes = 32768
@@ -1354,6 +1360,11 @@ dependency_inward = "is blocked by"
   Read response defaults are separate client presentation settings under
   `[defaults]`; they become top-level Broker request fields and never
   `inputs.contentFormat`.
+- `[providers.jira.listing]` bounds `project.list`: `max_results` defaults to
+  `50` and must be 1–100; candidate pages default to `4`, HTTP attempts to `8`,
+  and scanned bytes to `16777216`. Work limits must be positive. HTTP replay and
+  error bodies count toward the shared operation budget. The selected execution
+  credential supplies visibility; listing does not require lookup credentials.
 - `[providers.jira.search].max_results` defaults to `50` and must be non-zero.
 - `[providers.jira.comments].max_results` defaults to `50` and must be
   non-zero. `max_property_value_bytes` defaults to `32768`, must be non-zero,

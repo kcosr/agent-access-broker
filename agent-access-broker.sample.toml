@@ -771,6 +771,12 @@ max_body_bytes = 1048576
 [providers.jira.search]
 max_results = 50
 
+[providers.jira.listing]
+max_results = 50
+max_candidate_pages = 4
+max_upstream_requests = 8
+max_scan_bytes = 16777216
+
 [providers.jira.comments]
 max_results = 50
 max_property_value_bytes = 32768

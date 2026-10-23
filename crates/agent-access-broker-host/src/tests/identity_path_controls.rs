@@ -229,6 +229,7 @@ async fn fixture() -> Fixture {
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });

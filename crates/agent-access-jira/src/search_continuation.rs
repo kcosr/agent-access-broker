@@ -220,6 +220,7 @@ mod tests {
                 attachments: AttachmentLimitsConfig::default(),
                 content: JiraContentConfig::default(),
                 search: SearchLimitsConfig::default(),
+                listing: Default::default(),
                 comments: JiraCommentsConfig::default(),
                 issue_links: JiraIssueLinksConfig::default(),
             };

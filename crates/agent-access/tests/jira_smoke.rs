@@ -1,3 +1,5 @@
+#[path = "jira_smoke/project_list.rs"]
+mod project_listing;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -3431,6 +3433,16 @@ impl StubJiraBackend {
 
 #[async_trait]
 impl JiraBackend for StubJiraBackend {
+    async fn project_list(
+        &self,
+        _request: agent_access_jira::JiraProjectListRequest,
+        _credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "unexpected project listing in this fixture".to_string(),
+        ))
+    }
+
     async fn issue_types(
         &self,
         project: &str,
@@ -4270,6 +4282,7 @@ fn jira_provider_config(max_results: u32) -> JiraProviderConfig {
             ..agent_access_jira::JiraContentConfig::default()
         },
         search: SearchLimitsConfig { max_results },
+        listing: Default::default(),
         comments: agent_access_jira::JiraCommentsConfig::default(),
         issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
     }

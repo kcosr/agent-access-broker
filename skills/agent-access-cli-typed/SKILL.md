@@ -221,6 +221,15 @@ search) means repeating the request without it.
 
 ## Jira
 
+For live authorized projects, use `agent-access jira project list --max-results 50`.
+This separately grantable action accepts only pagination, lists live projects,
+and does not grant issue access. Continue `nextPageToken` as `pageToken` with
+unchanged `maxResults` through `more` and empty `scan_budget` pages until
+`exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
+by configuration at 100. Results contain `items`, `count`, `maxResults`, and
+`scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
+page and reject changed authority. Local resource discovery is unchanged.
+
 `jira.issue.view` can include `issueLinks` only when effective access covers
 all projects in the selected credential mode. Each entry has `key`, `type`
 (relationship type), `direction`, `relationship` (directional label), and nullable
@@ -283,7 +292,7 @@ agent-access jira issue attachment list PROJ-123 --output-format markdown
 agent-access jira issue verify PROJ-123 --expect-comment-id 10042 --output-format markdown
 ```
 
-Whole-result Markdown is supported on issue-type list, issue view, search, comment list/view,
+Whole-result Markdown is supported on project list, issue-type list, issue view, search, comment list/view,
 comment property list/get, attachment list, and verify. On an allowed result,
 the CLI prints only Markdown to stdout. JSON is the default for every Jira
 retrieval command. Copyable identifiers/timestamps are code spans, safe URLs are

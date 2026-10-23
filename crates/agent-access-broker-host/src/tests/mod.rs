@@ -1354,6 +1354,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -1462,6 +1463,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -13724,6 +13726,7 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -14977,6 +14980,7 @@ fn managed_jira_verify_config(
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -16301,6 +16305,7 @@ fn download_config(audit_file: &str) -> BrokerConfig {
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -16484,6 +16489,7 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
                 ..agent_access_jira::JiraContentConfig::default()
             },
             search: agent_access_provider::SearchLimitsConfig::default(),
+            listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
         });
@@ -16759,6 +16765,7 @@ async fn spec_token_fixture_with_restrictions(
                     ..agent_access_jira::JiraContentConfig::default()
                 },
                 search: agent_access_provider::SearchLimitsConfig::default(),
+                listing: Default::default(),
                 comments: agent_access_jira::JiraCommentsConfig::default(),
                 issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
             });
@@ -17870,6 +17877,7 @@ fn jira_capabilities_omit_content_writes_without_a_native_comment_target() {
             ..agent_access_jira::JiraContentConfig::default()
         },
         search: agent_access_provider::SearchLimitsConfig::default(),
+        listing: Default::default(),
         comments: agent_access_jira::JiraCommentsConfig::default(),
         issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
     };
@@ -18241,6 +18249,7 @@ fn assert_jira_read_response_capability_matrix(
         "comment.view",
         "issue.view",
         "issue_type.list",
+        "project.list",
         "search",
         "verify",
     ];

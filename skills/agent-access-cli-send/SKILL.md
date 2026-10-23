@@ -247,6 +247,15 @@ the same request inputs to continue; keep every original filter and
 
 ## Jira
 
+For live authorized projects, use a send envelope with `service: "jira"`, `action: "project.list"`, and `inputs: {"maxResults":50}`.
+This separately grantable action accepts only pagination, lists live projects,
+and does not grant issue access. Continue `nextPageToken` as `pageToken` with
+unchanged `maxResults` through `more` and empty `scan_budget` pages until
+`exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
+by configuration at 100. Results contain `items`, `count`, `maxResults`, and
+`scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
+page and reject changed authority. Local resource discovery is unchanged.
+
 `jira.issue.view` can include `issueLinks` only when effective access covers
 all projects in the selected credential mode. Each entry has `key`, `type`
 (relationship type), `direction`, `relationship` (directional label), and nullable
@@ -297,7 +306,7 @@ Whole-result Markdown request:
 
 Jira embedded normalization is available for `issue.view`, `issue.create`,
 `issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
-`comment.update`. Whole-result Markdown is available for `issue_type.list`, `issue.view`,
+`comment.update`. Whole-result Markdown is available for `project.list`, `issue_type.list`, `issue.view`,
 `search`, `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`. Always generate the
 request from the caller-filtered send schema. Raw attachment download

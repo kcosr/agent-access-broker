@@ -6076,6 +6076,7 @@ fn provider_read_only_metadata_is_conservative_across_action_families() {
         (
             "jira",
             vec![
+                "project.list",
                 "issue.view",
                 "search",
                 "comment.view",
