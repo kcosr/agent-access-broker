@@ -42,7 +42,7 @@ All notable changes to this project are documented in this file.
   request fetches `*all` with names/schema metadata, excluding comments,
   attachments, worklogs and, without universal access, issue references.
   Existing response limits apply. See [issue views](docs/providers-jira.md#issueview).
-  ([#57](https://github.com/kcosr/agent-access-broker/pull/57))
+  ([#57](https://github.com/kcosr/agent-access-broker/pull/57), [#61](https://github.com/kcosr/agent-access-broker/pull/61))
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
   `with_supports_exclusions(false)`. The portal hides unsupported exclusion
