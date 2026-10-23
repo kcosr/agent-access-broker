@@ -40,6 +40,7 @@ All notable changes to this project are documented in this file.
   `providers.jira.listing` limits bound pages, HTTP attempts, and scanned bytes.
   It is eligible for separately granted read-only trusted-identity paths.
   Existing resource discovery and issue search are unchanged.
+  ([#58](https://github.com/kcosr/agent-access-broker/pull/58))
 
 - **Live GitLab project listing.** The separately grantable, read-only
   `project.list` action and `gitlab project list` command list current projects
