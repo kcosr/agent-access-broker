@@ -41,6 +41,7 @@ All notable changes to this project are documented in this file.
   action-specific authority and tokens. It is eligible for
   [read-only trusted-identity paths](docs/managed-identity.md#read-only-paths)
   when separately granted. Local resource discovery is unchanged.
+  ([#56](https://github.com/kcosr/agent-access-broker/pull/56))
 
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
