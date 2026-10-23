@@ -6114,6 +6114,7 @@ fn provider_read_only_metadata_is_conservative_across_action_families() {
             "gitlab",
             vec![
                 "project.view",
+                "project.list",
                 "project.search",
                 "search.issues",
                 "search.merge_requests",
@@ -6176,6 +6177,7 @@ fn provider_read_only_metadata_is_conservative_across_action_families() {
         }
         if service == "gitlab" {
             for name in [
+                "project.list",
                 "project.search",
                 "search.issues",
                 "search.merge_requests",

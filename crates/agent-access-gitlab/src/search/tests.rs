@@ -85,6 +85,25 @@ async fn page(server: &MockServer, page: u64, body: Value, next: Option<&str>) {
 #[test]
 fn input_validation_and_capability_matrix_are_closed() {
     let config = GitlabSearchConfig::default();
+    assert!(parse_inputs("project.list", &json!({}), &config).is_ok());
+    for input in [
+        json!({"search":"needle"}),
+        json!({"includeNamespaces":true}),
+        json!({"archived":false}),
+        json!({"project":"team/repo"}),
+        json!({"engine":"basic"}),
+        json!({"maxResults":0}),
+        json!({"maxResults":51}),
+        json!({"maxResults":null}),
+        json!({"pageToken":null}),
+        json!({"pageToken":""}),
+        json!({"pageToken":"x".repeat(513)}),
+    ] {
+        assert!(
+            parse_inputs("project.list", &input, &config).is_err(),
+            "{input}"
+        );
+    }
     assert!(parse_inputs("project.search", &json!({}), &config).is_ok());
     assert!(parse_inputs("search.issues", &json!({"search":" needle "}), &config).is_ok());
     for input in [
@@ -558,6 +577,15 @@ fn project_keyset_default_links_reject_mutated_contracts_and_duplicate_fields() 
 
 #[tokio::test]
 async fn project_search_default_links_filter_results_and_reconstruct_continuation_requests() {
+    assert_project_collection_pages("project.search").await;
+}
+
+#[tokio::test]
+async fn project_list_default_links_filter_results_and_reconstruct_continuation_requests() {
+    assert_project_collection_pages("project.list").await;
+}
+
+async fn assert_project_collection_pages(action: &str) {
     let server = MockServer::start().await;
     let provider = provider(config(&server));
     let next = project_keyset_default_link().replace("https://gitlab.example", &server.uri());
@@ -591,7 +619,7 @@ async fn project_search_default_links_filter_results_and_reconstruct_continuatio
     let mut input = json!({"maxResults":2});
     for expected in [Some("team/first"), Some("team/second"), None] {
         let result = provider
-            .invoke(invocation("project.search", input.clone(), scope()))
+            .invoke(invocation(action, input.clone(), scope()))
             .await
             .unwrap();
         let released = format!(
@@ -628,6 +656,15 @@ async fn project_search_default_links_filter_results_and_reconstruct_continuatio
 
 #[tokio::test]
 async fn discovery_filters_live_listing_without_project_lookups_and_resumes_keysets() {
+    assert_project_collection_binding("project.search").await;
+}
+
+#[tokio::test]
+async fn project_list_filters_without_lookups_and_binds_its_own_action_and_scope() {
+    assert_project_collection_binding("project.list").await;
+}
+
+async fn assert_project_collection_binding(action: &str) {
     let server = MockServer::start().await;
     let provider = provider(config(&server));
     Mock::given(method("GET")).and(path("/api/v4/projects")).and(query_param("simple","false")).and(query_param("pagination","keyset")).and(query_param("order_by","id")).and(query_param("sort","asc")).and(query_param("search_namespaces","true"))
@@ -636,11 +673,7 @@ async fn discovery_filters_live_listing_without_project_lookups_and_resumes_keys
             ResponseTemplate::new(200).set_body_json(if after.is_some(){json!([])}else{json!([{"id":1,"path_with_namespace":"hidden/secret","name":"DENIED_NAME","description":"DENIED_BODY","archived":false},{"id":2,"path_with_namespace":"team/new-repository","name":"New","description":"visible","archived":false}])})
         }).expect(2).mount(&server).await;
     let first = provider
-        .invoke(invocation(
-            "project.search",
-            json!({"maxResults":2}),
-            scope(),
-        ))
+        .invoke(invocation(action, json!({"maxResults":2}), scope()))
         .await
         .unwrap();
     assert_eq!(first.result["count"], 1);
@@ -651,9 +684,34 @@ async fn discovery_filters_live_listing_without_project_lookups_and_resumes_keys
     assert!(!serialized.contains("hidden/secret"));
     let token = first.result["nextPageToken"].as_str().unwrap();
     assert_eq!(token.len(), 99);
+    let other_action = if action == "project.list" {
+        "project.search"
+    } else {
+        "project.list"
+    };
+    for (action, size, boundary) in [
+        (other_action, 2, scope()),
+        (action, 1, scope()),
+        (
+            action,
+            2,
+            SearchAuthorizationScope::from_selectors(vec![ResourceSelector::All], vec![]),
+        ),
+    ] {
+        let error = provider
+            .invoke(invocation(
+                action,
+                json!({"maxResults":size,"pageToken":token}),
+                boundary,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
     let second = provider
         .invoke(invocation(
-            "project.search",
+            action,
             json!({"maxResults":2,"pageToken":token}),
             scope(),
         ))
@@ -662,6 +720,61 @@ async fn discovery_filters_live_listing_without_project_lookups_and_resumes_keys
     assert_eq!(second.result["scanStatus"], "exhausted");
     assert!(second.result.get("engine").is_none());
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn project_list_empty_budget_pages_preserve_independent_allows_and_current_inventory() {
+    let server = MockServer::start().await;
+    let mut cfg = config(&server);
+    cfg.search.max_candidate_pages = 1;
+    let provider = provider(cfg);
+    let scope = scope().union(&SearchAuthorizationScope::from_selectors(
+        vec![ResourceSelector::Exact {
+            value: "team/private/reallowed".into(),
+        }],
+        vec![],
+    ));
+    Mock::given(method("GET")).and(path("/api/v4/projects"))
+        .respond_with(|request: &wiremock::Request| {
+            assert!(!request.url.query_pairs().any(|(key, _)| matches!(key.as_ref(), "search" | "archived")));
+            let after = request.url.query_pairs().find(|(key, _)| key == "id_after").map(|(_, value)| value.into_owned());
+            let items = match after.as_deref() {
+                None => json!([{"id":1,"path_with_namespace":"team/private/denied","name":"DENIED_NAME"}]),
+                Some("1") => json!([{"id":2,"path_with_namespace":"elsewhere/denied","name":"DENIED_NAME"}]),
+                Some("2") => json!([{"id":3,"path_with_namespace":"team/private/reallowed","name":"Allowed","archived":true}]),
+                Some("3") => json!([]),
+                _ => panic!("unexpected continuation position"),
+            };
+            ResponseTemplate::new(200).set_body_json(items)
+        }).expect(4).mount(&server).await;
+    let mut input = json!({"maxResults":1});
+    for (status, count) in [
+        ("scan_budget", 0),
+        ("scan_budget", 0),
+        ("more", 1),
+        ("exhausted", 0),
+    ] {
+        let result = provider
+            .invoke(invocation("project.list", input.clone(), scope.clone()))
+            .await
+            .unwrap();
+        assert_eq!(result.result["scanStatus"], status);
+        assert_eq!(result.result["count"], count);
+        assert!(!format!("{:?}{:?}", result.result, result.audit).contains("DENIED"));
+        if count == 1 {
+            assert_eq!(
+                result.result["items"][0]["project"],
+                "team/private/reallowed"
+            );
+            assert_eq!(result.result["items"][0]["archived"], true);
+        }
+        if status == "exhausted" {
+            assert!(result.result.get("nextPageToken").is_none());
+        } else {
+            input["pageToken"] = result.result["nextPageToken"].clone();
+            assert!(input["pageToken"].is_string());
+        }
+    }
 }
 
 #[tokio::test]
@@ -1224,7 +1337,7 @@ fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas(
         .iter()
         .filter(|a| is_search_action(&a.action))
         .collect();
-    assert_eq!(actions.len(), 7);
+    assert_eq!(actions.len(), 8);
     for action in &actions {
         assert!(action.read_only);
         assert_eq!(
@@ -1252,7 +1365,7 @@ fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas(
             .iter()
             .filter(|a| is_search_action(&a.action))
             .count(),
-        1
+        2
     );
     assert!(
         descriptor
@@ -1260,6 +1373,16 @@ fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas(
             .iter()
             .any(|a| a.action == "project.search")
     );
+    let list = descriptor
+        .actions
+        .iter()
+        .find(|a| a.action == "project.list")
+        .unwrap();
+    assert_eq!(
+        list.input_schema["properties"].as_object().unwrap().len(),
+        2
+    );
+    assert!(list.input_schema["properties"].get("search").is_none());
 }
 
 #[test]

@@ -3,9 +3,9 @@
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_core::{
     BrokerTokenClass, BrokerTokenHasher, BrokerTokenIssueRequest, BrokerTokensConfig,
-    LocalPasswordHasher, LocalPasswordWriteRequest, ManagedResourceCatalog, ManagedStore,
-    ManagedStoreConfig, ManagedStoreOpenMode, PrincipalAccessPatchRequest, PrincipalRole,
-    PrincipalWriteRequest,
+    GroupWriteRequest, LocalPasswordHasher, LocalPasswordWriteRequest, ManagedResourceCatalog,
+    ManagedStore, ManagedStoreConfig, ManagedStoreOpenMode, PrincipalAccessPatchRequest,
+    PrincipalRole, PrincipalWriteRequest,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{Method, StatusCode};
@@ -18,8 +18,9 @@ use std::{
 };
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-pub const ACTIONS: [&str; 7] = [
+pub const ACTIONS: [&str; 8] = [
     "project.search",
+    "project.list",
     "search.issues",
     "search.merge_requests",
     "search.code",
@@ -464,6 +465,18 @@ impl Fixture {
                 },
             )
             .unwrap();
+        for group in ["list-members", "list-nonmembers"] {
+            store
+                .create_group(GroupWriteRequest {
+                    group_id: group.into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    created_by: "test".into(),
+                })
+                .unwrap();
+        }
+        store.add_group("alice", "list-members", "test").unwrap();
         let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
             hash_key_ref: hash_key,
             ..BrokerTokensConfig::default()

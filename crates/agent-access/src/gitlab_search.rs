@@ -4,6 +4,22 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 #[derive(Debug, Args)]
+pub(super) struct ProjectListArgs {
+    #[command(flatten)]
+    page: SearchPageArgs,
+    #[command(flatten)]
+    response: WholeOutputArgs,
+}
+
+impl ProjectListArgs {
+    fn inputs(&self) -> Value {
+        let mut inputs = json!({});
+        self.page.apply(&mut inputs);
+        inputs
+    }
+}
+
+#[derive(Debug, Args)]
 pub(super) struct ProjectSearchArgs {
     /// Match project names, paths, or descriptions; omit to browse.
     #[arg(long)]
@@ -150,6 +166,17 @@ pub(super) async fn run_project(ctx: &CliContext<'_>, args: &ProjectSearchArgs) 
     .await
 }
 
+pub(super) async fn run_project_list(ctx: &CliContext<'_>, args: &ProjectListArgs) -> Result<()> {
+    run_typed_invoke_value(
+        ctx,
+        "gitlab.project.list",
+        args.inputs(),
+        None,
+        args.response.output_format,
+    )
+    .await
+}
+
 pub(super) async fn run_content(ctx: &CliContext<'_>, command: &SearchCommand) -> Result<()> {
     let (action, inputs, response) = command.invocation();
     run_typed_invoke_value(ctx, action, inputs, None, response.output_format).await
@@ -160,6 +187,46 @@ mod tests {
     use super::*;
     use crate::{Cli, Command, GitlabCommand, GitlabProjectCommand, OutputFormatArg};
     use clap::Parser;
+
+    #[test]
+    fn project_list_accepts_only_pagination_and_response_options() {
+        let cli = Cli::try_parse_from([
+            "agent-access",
+            "gitlab",
+            "project",
+            "list",
+            "--max-results",
+            "20",
+            "--page-token",
+            "opaque",
+            "--output-format",
+            "markdown",
+        ])
+        .unwrap();
+        let Command::Gitlab {
+            command:
+                GitlabCommand::Project {
+                    command: GitlabProjectCommand::List(args),
+                },
+        } = cli.command
+        else {
+            panic!("expected project list command")
+        };
+        assert_eq!(args.inputs(), json!({"maxResults":20,"pageToken":"opaque"}));
+        assert_eq!(args.response.output_format, Some(OutputFormatArg::Markdown));
+        for flag in [
+            "--search",
+            "--archived",
+            "--include-namespaces",
+            "--engine",
+            "--project",
+        ] {
+            assert!(
+                Cli::try_parse_from(["agent-access", "gitlab", "project", "list", flag, "value"])
+                    .is_err()
+            );
+        }
+    }
 
     fn parse_content(args: &[&str]) -> SearchCommand {
         let cli = Cli::try_parse_from(args).unwrap();

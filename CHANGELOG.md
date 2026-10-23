@@ -33,6 +33,15 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Live GitLab project listing.** The separately grantable, read-only
+  `project.list` action and `gitlab project list` command list current projects
+  within effective repository grants, including namespace descendants and
+  archived projects. Only pagination inputs are accepted. Results share the
+  bounded scan and confidential continuation contract of project search, with
+  action-specific authority and tokens. It is eligible for
+  [read-only trusted-identity paths](docs/managed-identity.md#read-only-paths)
+  when separately granted. Local resource discovery is unchanged.
+
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
   `with_supports_exclusions(false)`. The portal hides unsupported exclusion

@@ -30,10 +30,14 @@ const SEARCH_TOKENS: ContinuationFamily = ContinuationFamily::new(
 .clock_skew(Duration::from_secs(60));
 
 pub(crate) fn is_search_action(action: &str) -> bool {
-    action == "project.search"
+    is_project_collection(action)
         || action
             .strip_prefix("search.")
             .is_some_and(|v| CATEGORIES.contains(&v))
+}
+
+fn is_project_collection(action: &str) -> bool {
+    matches!(action, "project.list" | "project.search")
 }
 
 fn invalid() -> ProviderError {
@@ -74,8 +78,10 @@ fn parse_inputs(
     config: &GitlabSearchConfig,
 ) -> Result<SearchInputs, ProviderError> {
     let object = value.as_object().ok_or_else(invalid)?;
-    let discovery = action == "project.search";
-    let allowed: &[&str] = if discovery {
+    let discovery = is_project_collection(action);
+    let allowed: &[&str] = if action == "project.list" {
+        &["maxResults", "pageToken"]
+    } else if discovery {
         &[
             "search",
             "includeNamespaces",
@@ -206,6 +212,23 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
         discovery,
         json!({"query":"Omit search to browse. A supplied query must contain 1–512 UTF-8 bytes after trimming; GitLab matches name, path, description and optionally ancestor namespaces. * has no special Broker meaning. Current upstream projects, including new namespace descendants, supply the inventory.","ordering":"Ascending project ID with keyset pagination; no snapshot isolation.","pagination":pagination,"previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."}),
     )];
+    let mut listing = base();
+    listing["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("search");
+    actions.push(common(
+        "project.list",
+        "List live GitLab projects within effective repository grants",
+        listing,
+        json!({
+            "listing":"Lists visible archived and unarchived projects without a query. Namespace/all grants can include projects absent from the local resource catalog. Every candidate is filtered through this action's effective grants, exclusions and token restrictions; project.search permissions do not grant project.list.",
+            "ordering":"Ascending project ID with keyset pagination; no snapshot isolation.",
+            "pagination":pagination,
+            "limits":"Shares the configured GitLab search result, candidate-page, HTTP-attempt and byte limits.",
+            "previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."
+        }),
+    ));
     for category in CATEGORIES {
         let engines = search.enabled_engines(category);
         if engines.is_empty() {
@@ -469,7 +492,7 @@ impl HttpSearchBackend {
         project: Option<&projection::Project>,
         position: u64,
     ) -> Result<Url, ProviderError> {
-        let mut url = if action == "project.search" {
+        let mut url = if is_project_collection(action) {
             self.endpoint("projects")?
         } else if let Some(project) = project {
             self.endpoint(&format!("projects/{}/search", project.id))?
@@ -478,7 +501,7 @@ impl HttpSearchBackend {
         };
         let mut query = url.query_pairs_mut();
         query.append_pair("per_page", &input.max_results.to_string());
-        if action == "project.search" {
+        if is_project_collection(action) {
             query
                 .append_pair("simple", "false")
                 .append_pair("pagination", "keyset")
@@ -570,7 +593,7 @@ impl GitlabProvider {
         } else {
             None
         };
-        let route: u8 = if action == "project.search" {
+        let route: u8 = if is_project_collection(action) {
             1
         } else if project.is_some() {
             3

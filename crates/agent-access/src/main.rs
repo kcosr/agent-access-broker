@@ -3548,6 +3548,8 @@ enum GitlabCommand {
 
 #[derive(Debug, Subcommand)]
 enum GitlabProjectCommand {
+    /// List live projects within effective repository grants, one page per call.
+    List(gitlab_search::ProjectListArgs),
     /// Discover or browse authorized repositories by name, path, or description.
     Search(gitlab_search::ProjectSearchArgs),
     AccessToken {
@@ -6944,6 +6946,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
             gitlab_provisioning::run_service_account(ctx, command).await
         }
         GitlabCommand::Project { command } => match command {
+            GitlabProjectCommand::List(args) => gitlab_search::run_project_list(ctx, args).await,
             GitlabProjectCommand::Search(args) => gitlab_search::run_project(ctx, args).await,
             GitlabProjectCommand::AccessToken { command } => {
                 gitlab_provisioning::run_project_token(ctx, command).await

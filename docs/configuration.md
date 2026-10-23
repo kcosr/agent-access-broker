@@ -1555,14 +1555,13 @@ allow_disable_ssl_verification = false
   bounds GitLab raw file, current merge-request raw diff, and CI job trace
   downloads. It must not exceed
   `limits.max_download_bytes`.
-- `[providers.gitlab.search].max_results` defaults to `50`; it bounds repository
-  discovery, native content search, issue/MR list searches, note/discussion lists,
-  and every merge-request review-context
-  collection. It must be non-zero and may not exceed GitLab's single-page REST
+- `[providers.gitlab.search].max_results` defaults to `50`; it bounds `project.list`,
+  repository discovery, native content search, issue/MR list searches,
+  note/discussion lists, and every merge-request review-context collection. It must be non-zero and may not exceed GitLab's single-page REST
   cap of `100`. Draft-note list uses the same caller-visible cap for Broker-
   local slices of GitLab's single non-paginated response array.
-- Native discovery/content-search work budgets are `max_candidate_pages`
-  (default 4, range 1–32), `max_upstream_requests` (default 128, range 4–4096),
+- `project.list`, project discovery, and content search share the work budgets
+  `max_candidate_pages` (default 4, range 1–32), `max_upstream_requests` (default 128, range 4–4096),
   and `max_scan_bytes` (default 16 MiB, range 1–64 MiB). Request capacity must
   also be at least `max(max_results + 2, 4)`. Requests include collection,
   ownership-confirmation, safe rename resolution, and one permitted
@@ -1577,7 +1576,7 @@ allow_disable_ssl_verification = false
   configuration and upstream infrastructure. Each exposed category must have a
   route on the default engine; a category available only on another engine is
   invalid. Empty lists on every engine disable content search while leaving
-  `project.search` independently available.
+  `project.list` and `project.search` independently available.
 - Category schemas expose configured engines and require `project` when the
   selected/default engine has no instance route. Discovery does not probe GitLab
   or indexing state. Qualify each tuple against the deployed GitLab version and
@@ -1614,7 +1613,7 @@ allow_disable_ssl_verification = false
   authorization.
   Per-user-only GitLab policy uses the caller's per-user GitLab credential for
   that lookup.
-  `project.search` and the six `search.*` actions authorize their repository
+  `project.list`, `project.search`, and the six `search.*` actions authorize their repository
   boundary first and use only the selected execution credential for collection,
   explicit-project resolution, and ownership confirmation; they neither require
   nor use the separate lookup credential.

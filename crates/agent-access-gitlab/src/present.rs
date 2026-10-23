@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
     NativeSearch,
+    ProjectList,
     Project,
     Issue,
     IssueList,
@@ -125,6 +126,11 @@ const GITLAB_DRAFT_NOTE_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
 )];
 
 const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
+    ResultDescriptor {
+        action: "project.list",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::ProjectList),
+    },
     ResultDescriptor {
         action: "project.search",
         embedded_bodies: NO_BODIES,
@@ -521,7 +527,8 @@ impl WholeResultRenderer for WholeRenderer {
         } = context;
         let max_body_bytes = *max_body_bytes;
         match *self {
-            WholeRenderer::NativeSearch => render_native_search(result, out, budget)?,
+            WholeRenderer::NativeSearch => render_native_collection(result, out, budget, false)?,
+            WholeRenderer::ProjectList => render_native_collection(result, out, budget, true)?,
             WholeRenderer::Project => {
                 render_gitlab_project_view(result, out, max_body_bytes, budget)?
             }
@@ -2457,18 +2464,34 @@ fn required_display(object: &Map<String, Value>, key: &str) -> Result<String, Re
     optional_display(object, key)?.ok_or(RenderError)
 }
 
-fn render_native_search(
+fn render_native_collection(
     value: &Value,
     out: &mut MarkdownWriter,
     budget: &mut PresentationBudget,
+    listing: bool,
 ) -> Result<(), RenderError> {
     let result = as_object(value)?;
     let items = array(required(result, "items")?)?;
     budget.charge_work(result.len().saturating_add(items.len()))?;
-    out.push("# GitLab search\n")?;
+    if listing {
+        out.push("# GitLab projects\n")?;
+        field_code(out, "Count", &required_display(result, "count")?)?;
+        field_code(
+            out,
+            "Maximum results",
+            &required_display(result, "maxResults")?,
+        )?;
+        field_code(out, "Scan status", required_scalar(result, "scanStatus")?)?;
+    } else {
+        out.push("# GitLab search\n")?;
+    }
     if items.is_empty() {
         if result.get("nextPageToken").is_some() {
-            out.push("No matching authorized items in this page; continue the search.\n")?;
+            out.push(if listing {
+                "No authorized projects in this page; continue listing.\n"
+            } else {
+                "No matching authorized items in this page; continue the search.\n"
+            })?;
         } else {
             out.push("No matching authorized items in this page.\n")?;
         }
@@ -2498,6 +2521,17 @@ fn render_native_search(
                 field_code(out, label, &value)?;
             }
         }
+        if listing {
+            for (name, label) in [
+                ("archived", "Archived"),
+                ("visibility", "Visibility"),
+                ("defaultBranch", "Default branch"),
+            ] {
+                if let Some(value) = optional_display(item, name)? {
+                    field_code(out, label, &value)?;
+                }
+            }
+        }
         if let Some(url) = optional_scalar(item, "webUrl")? {
             field_url(out, "URL", url)?;
         }
@@ -2523,7 +2557,11 @@ fn render_native_search(
         }
     }
     if result.get("scanStatus").and_then(Value::as_str) == Some("upstream_window") {
-        out.push("\nSearch coverage is incomplete: the upstream retrieval window was reached.\n")?;
+        out.push(if listing {
+            "\nListing coverage is incomplete: the upstream retrieval window was reached.\n"
+        } else {
+            "\nSearch coverage is incomplete: the upstream retrieval window was reached.\n"
+        })?;
     }
     if let Some(token) = optional_scalar(result, "nextPageToken")? {
         out.push("\nContinuation (another authorized match is not guaranteed):\n\n")?;
@@ -2641,6 +2679,7 @@ mod tests {
                 "pipeline.list",
                 "pipeline.view",
                 "project.view",
+                "project.list",
                 "project.search",
                 "search.issues",
                 "search.merge_requests",
@@ -2947,6 +2986,9 @@ mod tests {
 
     fn gitlab_whole_fixture(renderer: WholeRenderer) -> Value {
         match renderer {
+            WholeRenderer::ProjectList => {
+                json!({"items":[{"project":"group/repo","projectId":12,"id":12,"name":"Repository","description":"Project description","archived":true,"visibility":"private","defaultBranch":"main","webUrl":"https://gitlab.test/group/repo","previewTruncated":false}],"count":1,"maxResults":20,"scanStatus":"more","nextPageToken":"opaque-token"})
+            }
             WholeRenderer::NativeSearch => {
                 json!({"items":[{"project":"group/repo","id":12,"title":"Found","bodyPreview":"Preview","previewTruncated":false}],"count":1,"maxResults":20,"scanStatus":"more","nextPageToken":"opaque-token"})
             }
@@ -3100,6 +3142,20 @@ mod tests {
 
     fn assert_gitlab_whole_semantics(renderer: WholeRenderer, markdown: &str) {
         let expected: &[&str] = match renderer {
+            WholeRenderer::ProjectList => &[
+                "GitLab projects",
+                "Archived",
+                "true",
+                "Visibility",
+                "private",
+                "Default branch",
+                "main",
+                "Project description",
+                "Scan status",
+                "more",
+                "group/repo",
+                "opaque-token",
+            ],
             WholeRenderer::NativeSearch => &[
                 "GitLab search",
                 "group/repo",

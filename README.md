@@ -57,12 +57,14 @@ when effective `issue.view` access covers every project in the selected credenti
 mode. Project restrictions or gaps in that coverage omit the entire links field;
 absence does not mean an issue has no links.
 
-GitLab [repository discovery and content search](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
-can find authorized repositories live, including namespace-granted projects that
-are not individually registered in `resources_list`, then search issues, merge
-requests, code, commits, project wikis, or comments. Each category is separately
-grantable. Omit `engine` to use the service's configured default. Engine and
-instance-wide availability are operator configured; basic code, commit, wiki,
+GitLab's [live project listing](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
+action, `project.list`, returns authorized repositories, including namespace-granted
+projects that are not individually registered in `resources_list`. It accepts only pagination,
+includes archived projects, and is separately grantable from `project.search`
+and object reads. `project.search` adds optional project filters; content actions
+search issues, merge requests, code, commits, project wikis, or comments. Each
+category is separately grantable. Omit `engine` to use the service's configured
+default. Engine and instance-wide availability are operator configured; basic code, commit, wiki,
 and comment search require a project. Search pages report bounded progress and
 incomplete retrieval coverage explicitly, and may return no items with a
 continuation.
