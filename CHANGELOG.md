@@ -42,6 +42,7 @@ All notable changes to this project are documented in this file.
   It is eligible for read-only trusted-identity paths
   when separately granted. Existing content search and local discovery retain
   their contracts. See [space listing](docs/providers-confluence.md#live-space-listing).
+  ([#59](https://github.com/kcosr/agent-access-broker/pull/59))
 
 - **Live Jira project listing.** The independently grantable, read-only
   `project.list` action and `jira project list` command enumerate visible live
