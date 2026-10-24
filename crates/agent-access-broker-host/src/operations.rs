@@ -250,17 +250,19 @@ mod tests {
             if self.raw {
                 let dropped = StreamDrop(Arc::clone(&self.stream_dropped));
                 let polled = Arc::clone(&self.stream_polled);
+                // Command imports reach stream finalization with audit metadata.
+                // Give this fake provider the same lifecycle-record context.
                 return Ok(
-                    agent_access_provider::ProviderResult::new(json!({"size":3})).with_stream(
-                        agent_access_provider::ProviderResultStream::from_stream(
+                    agent_access_provider::ProviderResult::new(json!({"size":3}))
+                        .with_audit(json!({"operation":"raw-download"}))
+                        .with_stream(agent_access_provider::ProviderResultStream::from_stream(
                             "application/octet-stream",
                             futures_util::stream::once(async move {
                                 let _dropped = dropped;
                                 polled.store(true, Ordering::SeqCst);
                                 Ok(bytes::Bytes::from_static(b"raw"))
                             }),
-                        ),
-                    ),
+                        )),
                 );
             }
             agent_access_fake::FakeProvider.invoke(request).await
