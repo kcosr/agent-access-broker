@@ -52,6 +52,9 @@ fn protocol() -> ProviderError {
         "Confluence space listing response protocol error",
     )
 }
+fn response_protocol(diagnostic: &'static str) -> ProviderError {
+    protocol().with_internal_diagnostic_code(diagnostic)
+}
 fn backend_protocol() -> ConfluenceBackendError {
     ConfluenceBackendError::Protocol("Confluence space listing response protocol error".into())
 }
@@ -243,17 +246,21 @@ impl ConfluenceProvider {
                 .value
                 .get("results")
                 .and_then(Value::as_array)
-                .filter(|items| items.len() <= input.max_results as usize)
-                .ok_or_else(protocol)?;
+                .ok_or_else(|| response_protocol("confluence_space_list_results_invalid"))?;
+            if candidates.len() > input.max_results as usize {
+                return Err(response_protocol("confluence_space_list_results_oversized"));
+            }
             let next = response
                 .value
                 .next_cursor
                 .map(|cursor| {
                     if cursor.is_empty()
                         || cursor.len() > family.max_payload_bytes().saturating_sub(POSITION_PREFIX)
-                        || !seen.insert(cursor_digest(&cursor))
                     {
-                        return Err(protocol());
+                        return Err(response_protocol("confluence_space_list_cursor_invalid"));
+                    }
+                    if !seen.insert(cursor_digest(&cursor)) {
+                        return Err(response_protocol("confluence_space_list_cursor_repeated"));
                     }
                     Ok(Position {
                         cursor,
@@ -272,14 +279,17 @@ impl ConfluenceProvider {
                     .get("id")
                     .and_then(Value::as_str)
                     .filter(|id| is_page_id(id))
-                    .ok_or_else(protocol)?;
+                    .ok_or_else(|| response_protocol("confluence_space_list_id_invalid"))?;
                 let key = candidate
                     .get("key")
                     .and_then(Value::as_str)
                     .filter(|key| is_space_key(key))
-                    .ok_or_else(protocol)?;
-                if !ids.insert(id) || !keys.insert(key) {
-                    return Err(protocol());
+                    .ok_or_else(|| response_protocol("confluence_space_list_key_invalid"))?;
+                if !ids.insert(id) {
+                    return Err(response_protocol("confluence_space_list_duplicate_id"));
+                }
+                if !keys.insert(key) {
+                    return Err(response_protocol("confluence_space_list_duplicate_key"));
                 }
                 if !authority.scope.matches(key) {
                     continue;
@@ -326,7 +336,7 @@ fn space_item(
         .get("name")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or_else(protocol)?;
+        .ok_or_else(|| response_protocol("confluence_space_list_name_invalid"))?;
     let kind = value
         .get("type")
         .and_then(Value::as_str)
@@ -335,9 +345,9 @@ fn space_item(
                 && s.len() <= 64
                 && s.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_')
         })
-        .ok_or_else(protocol)?;
+        .ok_or_else(|| response_protocol("confluence_space_list_type_invalid"))?;
     if value.get("status").and_then(Value::as_str) != Some("current") {
-        return Err(protocol());
+        return Err(response_protocol("confluence_space_list_status_invalid"));
     }
     let mut end = name.len().min(4096);
     while !name.is_char_boundary(end) {

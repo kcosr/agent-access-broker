@@ -13000,9 +13000,11 @@ fn attachment_id_re() -> &'static Regex {
 fn space_key_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // Personal keys are literal upstream identifiers, not Broker usernames.
-        // Keep both forms bounded to 255 ASCII bytes and safe as one URL segment.
-        Regex::new(r"^(?:[A-Z][A-Z0-9_-]{1,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$")
+        // Keys are literal, case-sensitive upstream identifiers. Ordinary keys
+        // may begin with a digit or consist of one character; personal keys
+        // are not Broker usernames. Bound both forms to 255 ASCII bytes and
+        // keep them safe as one URL segment.
+        Regex::new(r"^(?:[A-Za-z0-9][A-Za-z0-9_-]{0,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$")
             .expect("space key regex")
     })
 }
