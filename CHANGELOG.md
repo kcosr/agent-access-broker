@@ -33,14 +33,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **Jira custom fields in issue views.** `issue.view` automatically returns
-  supported custom-field values with Jira display names, typed JSON and readable
-  Markdown. Unsupported or malformed values have explicit status markers; rich
-  text supports normalized companions. The same authorized request now fetches
-  all fields except heavy collections, with names and schemas; larger upstream
-  responses remain bounded by `limits.max_upstream_response_bytes`. See
-  [custom fields](docs/providers-jira.md#custom-fields).
-  ([#57](https://github.com/kcosr/agent-access-broker/pull/57))
+- **Richer Jira issue views.** `issue.view` returns resolution, dates, components,
+  versions, status category, and supported named custom fields, including Labels,
+  in typed JSON and readable Markdown. Custom fields have explicit unsupported
+  or withheld markers and rich-text companions. Callers with effective all-project
+  access in the selected credential mode now also receive embedded parent and
+  subtask metadata under the existing issue-link disclosure rule. The authorized
+  request fetches `*all` with names/schema metadata, excluding comments,
+  attachments, worklogs and, without universal access, issue references.
+  Existing response limits apply. See [issue views](docs/providers-jira.md#issueview).
+  ([#57](https://github.com/kcosr/agent-access-broker/pull/57), [#61](https://github.com/kcosr/agent-access-broker/pull/61))
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
   `with_supports_exclusions(false)`. The portal hides unsupported exclusion

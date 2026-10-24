@@ -1334,6 +1334,13 @@ async fn oauth_issue_view_discloses_embedded_links_through_the_gateway() {
     let server = MockServer::start().await;
     let route = format!("{GATEWAY}/issue/ENG-1");
     let mut source = gateway_issue("10001", "ENG-1", "ENG");
+    source["fields"]["parent"] = json!({
+        "key":"EPIC-42", "self":"https://private.invalid/parent",
+        "fields":{"summary":"Parent OAuth title", "issuetype":{"name":"Initiative"}}
+    });
+    source["fields"]["subtasks"] = json!([{
+        "key":"CHILD-42", "fields":{"summary":"Child OAuth title", "issuetype":{"name":"Sub-task"}}
+    }]);
     source["fields"]["issuelinks"] = json!([{
         "id": "20001",
         "self": format!("https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issueLink/20001"),
@@ -1395,11 +1402,31 @@ async fn oauth_issue_view_discloses_embedded_links_through_the_gateway() {
         json!({ "status": "disclosed", "count": 1 })
     );
     assert_eq!(
+        result.result["parent"],
+        json!({"key":"EPIC-42","summary":"Parent OAuth title","issueType":"Initiative"})
+    );
+    assert_eq!(
+        result.result["subtasks"],
+        json!([{"key":"CHILD-42","summary":"Child OAuth title","issueType":"Sub-task"}])
+    );
+    assert_eq!(
+        result.audit.as_ref().unwrap()["parent"],
+        json!({"status":"disclosed","count":1})
+    );
+    assert_eq!(
+        result.audit.as_ref().unwrap()["subtasks"],
+        json!({"status":"disclosed","count":1})
+    );
+    assert!(result.result.get("epic").is_none());
+    for secret in ["EPIC-42", "CHILD-42", "OAuth title", "private.invalid"] {
+        assert!(!result.audit.as_ref().unwrap().to_string().contains(secret));
+    }
+    assert_eq!(
         field_requests(&server).await,
         [
             format!("GET {route} fields=project Bearer oauth-1"),
             format!(
-                "GET {route} fields=*all,-comment,-attachment,-worklog,-subtasks,-parent expand=names,schema Bearer oauth-1"
+                "GET {route} fields=*all,-comment,-attachment,-worklog expand=names,schema Bearer oauth-1"
             ),
         ]
     );

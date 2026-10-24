@@ -417,6 +417,7 @@ struct StubJiraBackend {
     created_issue_links: Mutex<Vec<JiraIssueLinkCreateRequest>>,
     issue_link_readbacks: Mutex<BTreeMap<String, JiraIssueLinks>>,
     issue_view_links: Mutex<Option<Vec<JiraIssueViewLink>>>,
+    issue_view_context: Mutex<JiraIssueViewContext>,
     issue_view_link_requests: Mutex<Vec<bool>>,
     issue_links_error: Mutex<Option<JiraBackendError>>,
     search_page: Mutex<Option<JiraSearchPage>>,
@@ -556,18 +557,19 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         credential: &AtlassianCredential,
-        include_issue_links: bool,
+        include_issue_references: bool,
     ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
         self.issue_view_link_requests
             .lock()
             .unwrap()
-            .push(include_issue_links);
+            .push(include_issue_references);
         let response = self.issue(issue_key, credential).await?;
         Ok(JiraBackendResponse {
             value: JiraIssueView {
                 issue: response.value,
+                context: self.issue_view_context.lock().unwrap().clone(),
                 custom_fields: Vec::new(),
-                issue_links: include_issue_links
+                issue_links: include_issue_references
                     .then(|| self.issue_view_links.lock().unwrap().clone())
                     .flatten(),
             },

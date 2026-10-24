@@ -22,6 +22,7 @@ enum FieldType {
     CascadingOption,
     User,
     Users,
+    Labels,
 }
 
 impl FieldType {
@@ -45,6 +46,7 @@ impl FieldType {
             "cascadingselect" => (Self::CascadingOption, "option-with-child", None),
             "userpicker" => (Self::User, "user", None),
             "multiuserpicker" => (Self::Users, "array", Some("user")),
+            "labels" => (Self::Labels, "array", Some("string")),
             _ => return None,
         };
         if schema.get("type").and_then(Value::as_str) != Some(expected_type) {
@@ -71,6 +73,7 @@ impl FieldType {
             Self::CascadingOption => "cascadingOption",
             Self::User => "user",
             Self::Users => "users",
+            Self::Labels => "labels",
         }
     }
 
@@ -98,6 +101,7 @@ impl FieldType {
             }
             Self::User => project_user(value),
             Self::Users => project_array(value, project_user),
+            Self::Labels => project_array(value, |label| label.is_string().then(|| label.clone())),
         }
     }
 }
@@ -360,6 +364,13 @@ mod tests {
                 "users",
                 json!([user]),
             ),
+            (
+                "labels",
+                "array",
+                Some("string"),
+                "labels",
+                json!(["triaged", "release-ready"]),
+            ),
         ];
         for (implementation, kind, items, normalized, value) in cases {
             let field = project(schema(implementation, kind, items), value.clone());
@@ -376,6 +387,51 @@ mod tests {
                 Value::Null,
                 "{implementation} accepts null"
             );
+        }
+    }
+
+    #[test]
+    fn labels_require_the_exact_implementation_and_schema() {
+        let cases = [
+            json!({"type": "array", "items": "string"}),
+            json!({"custom": "app:labels", "type": "array", "items": "string"}),
+            schema("label", "array", Some("string")),
+            schema("labels", "string", None),
+            schema("labels", "array", None),
+            schema("labels", "array", Some("option")),
+        ];
+        for schema in cases {
+            let field = project(schema, json!(["private"]));
+            assert_eq!(field["status"], "unsupported");
+            assert_eq!(field["type"], Value::Null);
+            assert!(field.get("value").is_none());
+        }
+    }
+
+    #[test]
+    fn labels_preserve_strings_order_duplicates_null_and_empty_values() {
+        for value in [
+            Value::Null,
+            json!([]),
+            json!(["z", "", "snow 雪", "z", "`literal`"]),
+        ] {
+            let field = project(schema("labels", "array", Some("string")), value.clone());
+            assert_eq!(field["type"], "labels");
+            assert_eq!(field["status"], "supported");
+            assert_eq!(field["value"], value);
+        }
+        for invalid in [
+            json!("private"),
+            json!({"private": true}),
+            json!(42),
+            json!(["valid", null]),
+            json!(["valid", 42]),
+            json!(["valid", {"private": true}]),
+        ] {
+            let field = project(schema("labels", "array", Some("string")), invalid);
+            assert_eq!(field["type"], "labels");
+            assert_eq!(field["status"], "withheld");
+            assert!(field.get("value").is_none());
         }
     }
 

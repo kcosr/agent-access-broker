@@ -605,9 +605,11 @@ may be recorded.
 `issue.view` is a project-scoped issue read. Authorization and containment
 lookup use only `fields=project`; after authorization, the execution credential
 performs the full read with
-`fields=*all,-comment,-attachment,-worklog,-subtasks,-parent` and
-`expand=names,schema`. It also excludes `issuelinks` unless the
-[issue-link coverage condition](#issue-links) holds. The same response supplies
+`fields=*all,-comment,-attachment,-worklog` and `expand=names,schema` when the
+[all-project coverage condition](#issue-links) holds. Otherwise it also excludes
+`subtasks`, `parent`, and `issuelinks`, using
+`fields=*all,-comment,-attachment,-worklog,-subtasks,-parent,-issuelinks`.
+The same response supplies standard context, permitted embedded references,
 custom-field values, names, and type metadata; no field-discovery request or
 linked-resource fetch is added. An ordinary full Broker invocation makes three
 requests: scope-resolution metadata lookup, invocation-time metadata
@@ -618,7 +620,9 @@ Successful results include issue id/key/project, generated `webUrl`, summary,
 status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
 `priority`, `labels`, `description`, and `customFields`. The description is Jira
 ADF JSON when Jira returns one and `null` when Jira returns no description or
-omits the field.
+omits the field. The [standard context](#standard-context) fields below are
+also always present; [parent/subtasks](#parent-and-subtasks) and
+[issue links](#issue-links) depend on the shared disclosure rule.
 When requested through `readContentFormat`, the broker also adds the normalized
 companion described above. User summaries expose only `accountId` and
 `displayName`; priority exposes only `id` and `name`.
@@ -629,6 +633,41 @@ read-path check does not apply the broker's write-time ADF node allowlist, so
 ordinary existing Jira descriptions with nodes the broker would not let agents
 write can still be viewed. Audit records for `issue.view` do not include
 description content.
+
+### Standard context
+
+Detailed views always include these additional top-level fields:
+
+| Result field | Jira source | Value |
+| --- | --- | --- |
+| `resolution` | `fields.resolution` | Nullable `{id, name}` |
+| `resolutionDate` | `fields.resolutiondate` | Nullable string |
+| `dueDate` | `fields.duedate` | Nullable string |
+| `components` | `fields.components` | Nullable array of `{id, name}` |
+| `fixVersions` | `fields.fixVersions` | Nullable array of `{id, name}` |
+| `affectedVersions` | `fields.versions` | Nullable array of `{id, name}` |
+| `statusCategory` | `fields.status.statusCategory` | Nullable `{id, key, name}` |
+
+Missing and explicit null source values both become null. Null can mean Jira
+hid or did not return the field; it does not prove the field is unset. Explicit
+empty collections remain `[]`. Arrays preserve order and duplicates. Dates
+retain Jira's strings without time-zone conversion or reformatting.
+
+Resolution, component, and version IDs are nonempty strings; their names are
+nullable strings. Status-category `id` is a nonnegative JSON integer, `key` is
+a nonempty string, and `name` is a nullable string. Category keys are preserved
+without an enum restriction. Missing/null names become null; supplied wrong
+types fail the complete view with sanitized `upstream_protocol_failed`.
+The same failure applies to malformed objects or array members. Missing/null
+`fields.status` or its `statusCategory` produces null category; a supplied
+non-object status is malformed.
+
+Projection strips every other property, including version descriptions,
+component leads, email addresses, API URLs, and nested project objects.
+Markdown presents returned context near the issue metadata, omits null context
+fields, and displays `None.` for empty collections. IDs, dates and category
+keys use code spans; missing names fall back to the corresponding ID or key.
+Search and mutation readbacks do not acquire these detailed-view fields.
 
 ### Custom fields
 
@@ -694,6 +733,7 @@ Both the implementation and its `schema.type`/`items` must match:
 | `cascadingselect` | `option-with-child` | `cascadingOption` | `{id, value, child}` with one nullable option child |
 | `userpicker` | `user` | `user` | `{accountId, displayName}` |
 | `multiuserpicker` | `array` (`user`) | `users` | Array of user summaries |
+| `labels` | `array` (`string`) | `labels` | Array of strings |
 
 Option IDs and values must be strings. User `accountId` must be a string;
 missing/null `displayName` becomes null, and a supplied non-string is invalid.
@@ -701,8 +741,14 @@ A missing/null cascading option child becomes null. A textarea's schema uses
 `string`, but its value must be an ADF document, not a plain string.
 Every array member must validate or the entire field is withheld. Projection
 strips other option/user properties, including email and self/avatar URLs.
+Custom Labels preserve string order and duplicates, with null and empty arrays
+retained under the normal custom-field rules. Markdown displays each label as
+a literal code span. Only the exact `labels` implementation and matching
+array/string schema qualify; an arbitrary string-array schema is unsupported.
 Project, issue, group, version, sprint, Assets, and app-specific fields are
-unsupported; a scalar schema alone never makes an unknown implementation safe.
+unsupported as custom-field implementations; the standard context projections
+above do not enable custom version fields. A scalar schema alone never makes an
+unknown implementation safe.
 The expanded raw issue, unrelated standard fields, and complete `names`/`schema`
 maps are never returned. Free text and ADF can mention resources, under the same
 policy as issue descriptions.
@@ -740,8 +786,9 @@ mode, including projects not registered in Broker. This proof includes the
 execution context, identity ceilings, token restrictions, grant precedence and
 grant-local exclusions. Several same-mode grants can together provide full
 coverage. A project restriction, an unrestored exclusion, or a winning grant
-in another credential mode that leaves a gap disables link output for the
-whole view, including links within otherwise readable projects. A `search`
+in another credential mode that leaves a gap disables all link, parent and
+subtask output for the whole view, including references to otherwise readable
+projects. A `search`
 grant does not satisfy this condition.
 
 When eligible, Broker requests the source issue's embedded `issuelinks` with
@@ -792,6 +839,58 @@ only `issueLinks.status` (`withheld`, `not-returned`, or `disclosed`), plus
 `count` when disclosed, without linked identities or summaries. Search and
 mutation readbacks do not request or return `issueLinks`.
 
+### Parent and subtasks
+
+The same [effective all-project access condition](#issue-links) gates embedded
+`parent` and `subtasks`. A raw allow-all grant is insufficient when effective
+coverage has a gap. When coverage is absent, both properties are omitted even
+if Jira supplies unsolicited values; their payloads are not parsed. Eligible
+views use the existing issue fetch and make no requests for related issues.
+
+An eligible view always includes `parent`: a missing or null Jira parent becomes
+null, meaning no parent was returned to the execution credential. A returned
+parent object has exactly this shape:
+
+```json
+{
+  "key": "PROJ-100",
+  "summary": "Prepare deployment",
+  "issueType": "Epic"
+}
+```
+
+`subtasks` is omitted if Jira did not return the field; otherwise it is an array
+of the same `{key, summary, issueType}` references, preserving order and
+duplicates. An explicit `[]` means Jira returned no subtasks. A supplied null
+or non-array is malformed and fails the view.
+
+Keys must be valid Jira issue keys. Optional summary and issue-type name come
+only from `fields.summary` and `fields.issuetype.name`; missing/null values
+become null. Missing/null `fields` or `issuetype` containers make their optional
+metadata unavailable. Supplied non-object containers, non-string summary/type
+names, or invalid keys fail with sanitized `upstream_protocol_failed`. Other
+embedded properties are stripped, including IDs, status, descriptions, project
+objects, and API URLs.
+
+`parent` is Jira's direct modern parent. It may be an epic, a story, or another
+permitted parent; Broker does not classify it from its type name, infer further
+ancestors, or read legacy Epic Link/Parent Link custom fields. Subtasks are not
+a complete list of epic children or descendants. These are embedded details
+visible to the execution credential, without independent target confirmation;
+a later view of a related key performs its own authorization and lookup.
+
+An absent `parent` means withheld. A null parent is not proof that the issue has
+no parent. An absent `subtasks` means withheld or not returned; an empty array
+says nothing about other child issue types. Markdown renders sections only for
+present properties, with `No parent returned.` for null parent and `None.` for
+empty subtasks under **Subtasks**.
+
+Audit adds only `parent.status` (`withheld` or `disclosed`) and
+`subtasks.status` (`withheld`, `not-returned`, or `disclosed`). Disclosed parent
+has count 0 for null or 1 for an object; disclosed subtasks have their array
+length as count. No related keys, summaries, or new context values enter audit.
+Search and mutation readbacks retain their existing contracts.
+
 ## `issue.create`
 
 `issue.create` creates a normal Jira issue in an authorized Jira project. It is
@@ -813,8 +912,9 @@ The provider sends `POST /rest/api/3/issue` with only
 key. Before full readback, the broker validates that the created key is a valid
 Jira issue key whose project prefix matches the authorized requested project.
 It then reads the issue back with the execution credential and returns
-`operation: "issue.create"` plus the bounded standard issue fields of `issue.view`,
-without `issueLinks` or `customFields`.
+`operation: "issue.create"` plus the bounded standard issue metadata and
+description. This readback omits `customFields`, the detailed-view
+[standard context](#standard-context), `issueLinks`, `parent`, and `subtasks`.
 An invalid created key is `upstream_protocol_failed`. A valid key in another
 project, for example when Jira resolves a
 [previous project key](#renamed-project-keys) and creates the issue under the
@@ -933,10 +1033,12 @@ issue id, key, and project. Invalid readback key/project shapes fail with
 `upstream_protocol_failed`; mismatched issue or project readback fails with
 `scope_unresolved`.
 
-Successful results include `operation: "issue.update"`, the bounded issue
-fields of `issue.view` without `issueLinks` or `customFields`, stable
+Successful results include `operation: "issue.update"`, bounded standard issue
+metadata and description, stable
 `changedFields` order (`summary`, then `description`), and `notifyUsers` as
 `true`, `false`, or `null` when omitted.
+The readback omits `customFields`, the detailed-view
+[standard context](#standard-context), `issueLinks`, `parent`, and `subtasks`.
 Readback description content is returned in `result.issue.description` when Jira
 returns it. Audit includes issue id/key, project, changed field names, booleans
 for which fields changed, notification mode, credential mode, and egress proxy
@@ -1340,9 +1442,10 @@ Backend search issues a GET to `search/jql` with `jql`, `maxResults`,
 `fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels`,
 and, on a continuation, Jira's `nextPageToken` recovered from the caller's
 broker continuation. Search results include the same lightweight
-issue metadata as `issue.view`, but omit `description`, `issueLinks`, and
-`customFields`; callers should use `issue.view` on a specific result when they
-need its body or custom fields.
+issue metadata as `issue.view`, but omit `description`, `customFields`, the
+detailed-view [standard context](#standard-context), `issueLinks`, `parent`, and
+`subtasks`; callers should use `issue.view` on a specific result when they need
+its detailed context or body.
 `maxResults` defaults to `providers.jira.search.max_results` (default `50`),
 rejects `0`, and is clamped to `providers.jira.search.max_results`. The response
 is bounded by `limits.max_upstream_response_bytes`.

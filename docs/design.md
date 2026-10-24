@@ -627,7 +627,9 @@ The resulting immutable `universal_reach()` hint permits the provider to disclos
 metadata about other resources embedded in the same upstream response. It
 does not change the exact admitted source scopes or authorize additional
 requests or credential acquisition. Jira uses this only for `issue.view`
-embedded links. The proof depends on project being that action's sole
+embedded links, parent and subtasks, all under the same disclosure decision.
+These references do not establish complete epic ancestry or descendants.
+The proof depends on project being that action's sole
 target-dependent admission input: adding issue-level, issue-type or
 attribute-bound authority requires revisiting the contract. It does not prove
 current target identity, upstream visibility or successful lookup on a later

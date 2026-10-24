@@ -6,6 +6,25 @@ use wiremock::matchers::{header, query_param};
 
 const ISSUE_FIELDS: &str = "project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description";
 
+const CONTEXT_KEYS: &[&str] = &[
+    "resolution",
+    "resolutionDate",
+    "dueDate",
+    "components",
+    "fixVersions",
+    "affectedVersions",
+    "statusCategory",
+];
+
+fn view_baseline(issue: &JiraIssue) -> Value {
+    let mut result = issue_view_result(issue, &jira_config());
+    result["customFields"] = json!([]);
+    for key in CONTEXT_KEYS {
+        result[*key] = Value::Null;
+    }
+    result
+}
+
 fn source_issue(links: Option<Value>) -> Value {
     let mut value = json!({
         "id": "10001", "key": "PROJ-1",
@@ -94,7 +113,7 @@ async fn mount_source_reads(api: &MockServer, value: Value, include_links: bool)
         .mount(api)
         .await;
     let fields = if include_links {
-        "*all,-comment,-attachment,-worklog,-subtasks,-parent".to_string()
+        "*all,-comment,-attachment,-worklog".to_string()
     } else {
         "*all,-comment,-attachment,-worklog,-subtasks,-parent,-issuelinks".to_string()
     };
@@ -138,12 +157,17 @@ fn issue_view_alone_reports_universal_reach_and_documents_omission() {
         .iter()
         .find(|action| action.action == "issue.view")
         .unwrap();
-    assert!(
-        view.documentation.as_ref().unwrap()["omission"]
-            .as_str()
-            .unwrap()
-            .contains("not that no links exist")
-    );
+    let omission = view.documentation.as_ref().unwrap()["omission"]
+        .as_str()
+        .unwrap();
+    for meaning in [
+        "Missing parent means hierarchy was withheld",
+        "A null parent is not independent proof",
+        "Missing subtasks or issueLinks means withheld or not returned",
+        "universal same-mode authority withholds all links, parent and subtasks",
+    ] {
+        assert!(omission.contains(meaning));
+    }
     assert!(
         view.input_schema["properties"]
             .get("universalReach")
@@ -304,9 +328,7 @@ async fn issue_view_fetches_links_only_with_universal_reach_using_execution_acce
                 json!({"status": "disclosed", "count": 1})
             );
         } else {
-            let mut baseline =
-                issue_view_result(&issue_from_value(source).unwrap(), &jira_config());
-            baseline["customFields"] = json!([]);
+            let baseline = view_baseline(&issue_from_value(source).unwrap());
             assert_eq!(result.result, baseline);
             assert_eq!(
                 markdown(result.result.clone(), 16384).unwrap(),
@@ -387,6 +409,10 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
             ReasonCode::UpstreamProtocolFailed,
         ),
     ] {
+        source["fields"]["parent"] =
+            json!({"key":"PRIVATE-42","fields":{"summary":"private parent summary"}});
+        source["fields"]["subtasks"] =
+            json!([{"key":"PRIVATE-43","fields":{"summary":"private child summary"}}]);
         if expected_reason == ReasonCode::ScopeUnresolved {
             source["id"] = json!("different-source-id");
         }
@@ -401,6 +427,8 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
         assert_eq!(error.reason_code(), expected_reason);
         assert!(error.result.is_none());
         assert!(!error.message.contains("Linked title"));
+        assert!(!format!("{error:?}").contains("PRIVATE-"));
+        assert!(!format!("{error:?}").contains("private parent"));
         assert_eq!(api.received_requests().await.unwrap().len(), 2);
     }
 
@@ -408,7 +436,7 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
     backend.issues.insert("PROJ-1".to_string(), visible_issue());
     *backend.issue_view_links.lock().unwrap() =
         viewed_issue_links_from_value(&source_issue(Some(json!([linked_issue()])))).unwrap();
-    let baseline = issue_view_result(&visible_issue(), &jira_config());
+    let baseline = view_baseline(&visible_issue());
     let cap = serde_json::to_vec(&baseline).unwrap().len() as u64;
     let provider = JiraProvider::with_backend(
         jira_config(),
@@ -437,7 +465,8 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
 #[tokio::test]
 async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_fields() {
     let api = MockServer::start().await;
-    let mut source = source_issue(Some(json!({"private-malformed-links": true})));
+    let mut source = issue_context_source();
+    source["fields"]["issuelinks"] = json!({"private-malformed-links": true});
     source["fields"]["customfield_10001"] = json!("private-custom-value");
     source["names"] = json!({"customfield_10001": "private-custom-name"});
     source["schema"] = json!({"customfield_10001": {"type":"string", "custom":"com.atlassian.jira.plugin.system.customfieldtypes:textfield"}});
@@ -513,6 +542,9 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_field
             .unwrap();
         assert!(result.result["issue"].get("issueLinks").is_none());
         assert!(result.result["issue"].get("customFields").is_none());
+        for key in CONTEXT_KEYS.iter().copied().chain(["parent", "subtasks"]) {
+            assert!(result.result["issue"].get(key).is_none(), "{action}: {key}");
+        }
         assert!(result.audit.as_ref().unwrap().get("customFields").is_none());
         assert!(!result.result.to_string().contains("private"));
     }
@@ -529,6 +561,12 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_field
         .unwrap();
     assert!(result.result["issues"][0].get("issueLinks").is_none());
     assert!(result.result["issues"][0].get("customFields").is_none());
+    for key in CONTEXT_KEYS.iter().copied().chain(["parent", "subtasks"]) {
+        assert!(
+            result.result["issues"][0].get(key).is_none(),
+            "search: {key}"
+        );
+    }
     assert!(result.audit.as_ref().unwrap().get("customFields").is_none());
     assert!(!result.result.to_string().contains("private"));
     assert_eq!(api.received_requests().await.unwrap().len(), 6);
@@ -536,8 +574,7 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_field
 
 #[test]
 fn issue_links_markdown_has_omission_empty_metadata_escaping_and_bounds() {
-    let mut base = issue_view_result(&visible_issue(), &jira_config());
-    base["customFields"] = json!([]);
+    let base = view_baseline(&visible_issue());
     let absent = markdown(base.clone(), 16384).unwrap();
     assert!(!absent["value"].as_str().unwrap().contains("## Issue links"));
     let mut empty = base.clone();
@@ -591,14 +628,7 @@ async fn expanded_issue_view_projects_custom_fields_without_releasing_other_fetc
         source["fields"]["customfield_13"] = json!([]);
         source["fields"]["customfield_14"] = json!("Unnamed value");
         source["fields"]["customfield_01"] = json!("private-invalid-id");
-        for field in [
-            "comment",
-            "attachment",
-            "worklog",
-            "subtasks",
-            "parent",
-            "environment",
-        ] {
+        for field in ["comment", "attachment", "worklog", "environment"] {
             source["fields"][field] = json!({"private-standard-field": "private-content"});
         }
         source["names"] = json!({
@@ -795,4 +825,242 @@ async fn malformed_custom_adf_is_withheld_after_fetch_while_valid_custom_fields_
     );
     assert!(!result.result.to_string().contains("private"));
     assert_eq!(api.received_requests().await.unwrap().len(), 2);
+}
+
+fn issue_context_source() -> Value {
+    let mut source = source_issue(Some(json!([linked_issue()])));
+    source["fields"]["resolution"] =
+        json!({"id":"1", "name":"Resolved", "description":"private-resolution-description"});
+    source["fields"]["resolutiondate"] = json!("2026-10-23T12:30:00.000+0530");
+    source["fields"]["duedate"] = json!("2026-10-30");
+    source["fields"]["components"] = json!([
+        {"id":"20", "name":"API", "lead":{"emailAddress":"private@example.test"}},
+        {"id":"21", "self":"https://private.invalid/component"},
+        {"id":"20", "name":"API"}
+    ]);
+    source["fields"]["fixVersions"] = json!([
+        {"id":"30", "name":"Release one", "description":"private-release-description", "released":true}
+    ]);
+    source["fields"]["versions"] = json!([]);
+    source["fields"]["status"] = json!({
+        "name":"Closed", "statusCategory":{"id":3,"key":"custom-done","name":"Complete","colorName":"private-color"}
+    });
+    source["fields"]["parent"] = json!({
+        "id":"private-parent-id", "key":"EPIC-42", "self":"https://private.invalid/parent",
+        "fields":{
+            "summary":"Parent context summary", "issuetype":{"name":"Portfolio work", "hierarchyLevel":1},
+            "description":"private-parent-body", "project":{"key":"private-project"}
+        }
+    });
+    source["fields"]["subtasks"] = json!([
+        {"key":"CHILD-2","self":"https://private.invalid/child","fields":{"summary":"Child context summary","issuetype":{"name":"Sub-task"},"assignee":{"emailAddress":"private@example.test"}}},
+        {"key":"CHILD-2","fields":{"summary":"Child context summary","issuetype":{"name":"Sub-task"}}},
+        {"key":"PROJ-12"}
+    ]);
+    // Legacy Epic Link must remain unsupported; a modern parent never promotes
+    // a separate custom implementation into a generally disclosed reference.
+    source["fields"]["customfield_10001"] = json!("PRIVATE-9");
+    source["names"] = json!({"customfield_10001":"Epic Link"});
+    source["schema"] = json!({"customfield_10001":{"type":"string","custom":"com.pyxis.greenhopper.jira:gh-epic-link"}});
+    source
+}
+
+fn assert_standard_context(result: &Value) {
+    assert_eq!(result["resolution"], json!({"id":"1","name":"Resolved"}));
+    assert_eq!(result["resolutionDate"], "2026-10-23T12:30:00.000+0530");
+    assert_eq!(result["dueDate"], "2026-10-30");
+    assert_eq!(
+        result["components"],
+        json!([
+            {"id":"20","name":"API"}, {"id":"21","name":null}, {"id":"20","name":"API"}
+        ])
+    );
+    assert_eq!(
+        result["fixVersions"],
+        json!([{"id":"30","name":"Release one"}])
+    );
+    assert_eq!(result["affectedVersions"], json!([]));
+    assert_eq!(
+        result["statusCategory"],
+        json!({"id":3,"key":"custom-done","name":"Complete"})
+    );
+}
+
+#[tokio::test]
+async fn context_is_view_only_and_hierarchy_uses_the_same_fetch_and_gate_as_links() {
+    for universal_reach in [false, true] {
+        let api = MockServer::start().await;
+        let mut source = issue_context_source();
+        if !universal_reach {
+            // Unrequested references must not be parsed, including malformed
+            // unsolicited containers that would fail an eligible view.
+            source["fields"]["parent"] = json!("private-unrequested-parent");
+            source["fields"]["subtasks"] = json!({"private-unrequested-subtasks":true});
+            source["fields"]["issuelinks"] = json!(null);
+        }
+        mount_source_reads(&api, source, universal_reach).await;
+        let provider = JiraProvider::with_backend(
+            jira_config(),
+            ProviderLimits::default(),
+            Arc::new(http_backend(&api, ProviderLimits::default())),
+        );
+        let response = provider
+            .invoke(view_invocation(universal_reach))
+            .await
+            .unwrap();
+        assert_standard_context(&response.result);
+        assert_eq!(
+            response.result["customFields"],
+            json!([
+                {"id":"customfield_10001","name":"Epic Link","type":null,"status":"unsupported"}
+            ])
+        );
+        let audit = response.audit.as_ref().unwrap();
+        if universal_reach {
+            assert_eq!(
+                response.result["parent"],
+                json!({"key":"EPIC-42","summary":"Parent context summary","issueType":"Portfolio work"})
+            );
+            assert_eq!(
+                response.result["subtasks"],
+                json!([
+                    {"key":"CHILD-2","summary":"Child context summary","issueType":"Sub-task"},
+                    {"key":"CHILD-2","summary":"Child context summary","issueType":"Sub-task"},
+                    {"key":"PROJ-12","summary":null,"issueType":null}
+                ])
+            );
+            assert_eq!(response.result["issueLinks"], json!([expected_link()]));
+            assert_eq!(audit["parent"], json!({"status":"disclosed","count":1}));
+            assert_eq!(audit["subtasks"], json!({"status":"disclosed","count":3}));
+        } else {
+            for key in ["parent", "subtasks", "issueLinks"] {
+                assert!(response.result.get(key).is_none());
+                assert_eq!(audit[key], json!({"status":"withheld"}));
+            }
+        }
+        for secret in ["private", "PRIVATE-9", "hierarchyLevel"] {
+            assert!(!response.result.to_string().contains(secret));
+        }
+        assert!(response.result.get("epic").is_none());
+        for secret in [
+            "Resolved",
+            "Release one",
+            "EPIC-42",
+            "CHILD-2",
+            "context summary",
+            "Epic Link",
+            "custom-done",
+            "private",
+        ] {
+            assert!(!audit.to_string().contains(secret));
+        }
+        let requests = api.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.path() == "/rest/api/3/issue/PROJ-1")
+        );
+        assert_eq!(requests[0].url.query_pairs().count(), 1);
+        assert_eq!(requests[1].url.query_pairs().count(), 2);
+    }
+}
+
+#[tokio::test]
+async fn eligible_parent_and_subtask_absence_have_explicit_output_and_audit_semantics() {
+    for (parent, subtasks, expected_subtasks) in [
+        (None, None, None),
+        (Some(Value::Null), Some(json!([])), Some(json!([]))),
+    ] {
+        let api = MockServer::start().await;
+        let mut source = source_issue(None);
+        if let Some(parent) = parent {
+            source["fields"]["parent"] = parent;
+        }
+        if let Some(subtasks) = subtasks {
+            source["fields"]["subtasks"] = subtasks;
+        }
+        mount_source_reads(&api, source, true).await;
+        let provider = JiraProvider::with_backend(
+            jira_config(),
+            ProviderLimits::default(),
+            Arc::new(http_backend(&api, ProviderLimits::default())),
+        );
+        let response = provider.invoke(view_invocation(true)).await.unwrap();
+        assert_eq!(response.result.get("parent"), Some(&Value::Null));
+        assert_eq!(response.result.get("subtasks"), expected_subtasks.as_ref());
+        assert_eq!(
+            response.audit.as_ref().unwrap()["parent"],
+            json!({"status":"disclosed","count":0})
+        );
+        assert_eq!(
+            response.audit.as_ref().unwrap()["subtasks"],
+            if expected_subtasks.is_some() {
+                json!({"status":"disclosed","count":0})
+            } else {
+                json!({"status":"not-returned"})
+            }
+        );
+        for key in CONTEXT_KEYS {
+            assert_eq!(response.result.get(*key), Some(&Value::Null));
+        }
+        let rendered = markdown(response.result, 16384).unwrap();
+        let text = rendered["value"].as_str().unwrap();
+        assert!(text.contains("## Parent\n\nNo parent returned."));
+        assert_eq!(text.contains("## Subtasks"), expected_subtasks.is_some());
+        assert_eq!(api.received_requests().await.unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn provider_suppresses_hierarchy_from_a_backend_that_ignores_the_disclosure_flag() {
+    for (universal, returned_parent) in [(false, true), (true, true), (true, false)] {
+        let mut backend = StubJiraBackend::default();
+        backend.issues.insert("PROJ-1".into(), visible_issue());
+        *backend.issue_view_context.lock().unwrap() = JiraIssueViewContext {
+            parent: returned_parent.then(|| JiraIssueViewReference {
+                key: "PARENT-42".into(),
+                summary: Some("private parent summary".into()),
+                issue_type: None,
+            }),
+            subtasks: Some(vec![JiraIssueViewReference {
+                key: "CHILD-42".into(),
+                summary: Some("private child summary".into()),
+                issue_type: None,
+            }]),
+            ..Default::default()
+        };
+        let backend = Arc::new(backend);
+        let provider =
+            JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+        let response = provider.invoke(view_invocation(universal)).await.unwrap();
+        assert_eq!(
+            *backend.issue_view_link_requests.lock().unwrap(),
+            vec![universal]
+        );
+        if universal {
+            assert_eq!(response.result["parent"].is_null(), !returned_parent);
+            assert!(response.result.get("parent").is_some());
+            assert_eq!(response.result["subtasks"][0]["key"], "CHILD-42");
+            assert_eq!(
+                response.audit.as_ref().unwrap()["parent"],
+                json!({"status":"disclosed","count":usize::from(returned_parent)})
+            );
+        } else {
+            assert!(response.result.get("parent").is_none());
+            assert!(response.result.get("subtasks").is_none());
+            let text = markdown(response.result, 16384).unwrap().to_string();
+            for secret in ["PARENT-42", "CHILD-42", "private"] {
+                assert!(!text.contains(secret));
+            }
+            assert_eq!(
+                response.audit.as_ref().unwrap()["parent"],
+                json!({"status":"withheld"})
+            );
+            assert_eq!(
+                response.audit.as_ref().unwrap()["subtasks"],
+                json!({"status":"withheld"})
+            );
+        }
+    }
 }

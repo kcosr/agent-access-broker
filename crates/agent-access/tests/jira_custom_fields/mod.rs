@@ -29,6 +29,7 @@ fn backend_for(fields: Vec<Value>) -> Arc<StubJiraBackend> {
             },
         )]),
         custom_fields: fields,
+        issue_view_context: Mutex::new(super::issue_context::complete_context()),
         ..StubJiraBackend::default()
     })
 }
@@ -43,12 +44,13 @@ fn small_fields() -> Vec<Value> {
         json!({"id":"customfield_14","name":"Malformed option","type":"option","status":"withheld"}),
         json!({"id":"customfield_15","name":"Empty external object","type":null,"status":"unsupported","value":null}),
         json!({"id":"customfield_16","name":"Empty notes","type":"adf","status":"supported","value":null}),
+        json!({"id":"customfield_17","name":"Custom labels","type":"labels","status":"supported","value":["release-a","- break","release-a"]}),
     ]
 }
 
 fn assert_small_result(result: &Value, format: Option<&str>) {
     let fields = result["customFields"].as_array().unwrap();
-    assert_eq!(fields.len(), 8);
+    assert_eq!(fields.len(), 9);
     let mut expected = small_fields();
     if let Some(format) = format {
         let body = if format == "markdown" {
@@ -85,6 +87,8 @@ fn assert_small_markdown(markdown: &str) {
         "Duplicate name",
         "unsupported",
         "withheld",
+        "- Label: `release-a`",
+        "- Label: `- break`",
     ] {
         assert!(
             markdown.to_lowercase().contains(&text.to_lowercase()),
@@ -115,6 +119,10 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
         let native = run(&["jira", "issue", "view", "PROJ-1"]);
         let native: Value = serde_json::from_slice(&native.stdout).unwrap();
         assert_small_result(&native["result"], None);
+        super::issue_context::assert_context(
+            &native["result"],
+            matches!(access, JiraAccess::AgentPerUser),
+        );
         assert_new_backend_operations(
             &backend,
             &mut cursor,
@@ -131,6 +139,10 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
         ]);
         let normalized: Value = serde_json::from_slice(&normalized.stdout).unwrap();
         assert_small_result(&normalized["result"], Some("text"));
+        super::issue_context::assert_context(
+            &normalized["result"],
+            matches!(access, JiraAccess::AgentPerUser),
+        );
         assert_new_backend_operations(
             &backend,
             &mut cursor,
@@ -169,6 +181,10 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
             let response: Value = response.json().await.unwrap();
             assert_eq!(status, reqwest::StatusCode::OK, "{response}");
             assert_small_result(&response["result"], format);
+            super::issue_context::assert_context(
+                &response["result"],
+                matches!(access, JiraAccess::AgentPerUser),
+            );
             assert_new_backend_operations(
                 &backend,
                 &mut cursor,
@@ -207,6 +223,10 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
             "Duplicate name",
             "customfield_",
             "External object",
+            "Custom labels",
+            "release-a",
+            "PARENT-42",
+            "CHILD-42",
         ] {
             assert!(!audit.contains(secret));
         }
@@ -222,7 +242,7 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
         assert!(
             counters
                 .iter()
-                .all(|counts| **counts == json!({"count":8,"unsupported":2,"withheld":1}))
+                .all(|counts| **counts == json!({"count":9,"unsupported":2,"withheld":1}))
         );
         stop(broker).await;
     }
@@ -238,13 +258,17 @@ fn find_custom_field_counts(value: &Value) -> Option<&Value> {
     }
 }
 
-async fn start_mcp_broker(backend: Arc<StubJiraBackend>, max_response_bytes: u64) -> RunningBroker {
+pub(super) async fn start_mcp_broker(
+    access: JiraAccess,
+    backend: Arc<StubJiraBackend>,
+    max_response_bytes: u64,
+) -> RunningBroker {
     let application = IsolatedBroker::new(
         agent_access_broker::composition().unwrap(),
         agent_access_broker::build_identity(),
     )
     .unwrap();
-    let mut document = jira_document(application.directory(), JiraAccess::AgentService)
+    let mut document = jira_document(application.directory(), access)
         .replace(
             "header = \"X-Agent-Access-Identity-Token\"",
             "header = \"Authorization\"",
@@ -290,6 +314,7 @@ fn mcp_cli(base_url: &str) -> Command {
 }
 
 fn assert_complete_large(result: &Value, normalized: bool) {
+    super::issue_context::assert_context(result, false);
     let expected = large_fixture::realistic_issue_view();
     let fields = result["customFields"].as_array().unwrap();
     assert_eq!(fields.len(), 256);
@@ -321,7 +346,8 @@ async fn large_custom_fields_are_complete_in_cli_and_both_mcp_transports() {
     let fixture = large_fixture::realistic_issue_view();
     assert!(serde_json::to_vec(&fixture).unwrap().len() > 2 * 1024 * 1024);
     let backend = backend_for(fixture["customFields"].as_array().unwrap().clone());
-    let broker = start_mcp_broker(backend.clone(), 16 * 1024 * 1024).await;
+    let broker =
+        start_mcp_broker(JiraAccess::AgentService, backend.clone(), 16 * 1024 * 1024).await;
     let base_url = broker.public_url();
     let mut cursor = 0;
     for (args, normalized) in [
@@ -403,7 +429,7 @@ async fn large_custom_fields_are_complete_in_cli_and_both_mcp_transports() {
     }
     stdio.finish().await;
     let (client, session) = initialize_http_mcp(&base_url).await;
-    let response = http_mcp_call(&client, &base_url, &session).await;
+    let response = http_mcp_call(&client, &base_url, &session, 2).await;
     assert_eq!(response["result"]["isError"], false);
     assert_complete_large(&response["result"]["structuredContent"]["result"], false);
     assert_new_backend_operations(
@@ -427,10 +453,10 @@ async fn large_custom_fields_are_complete_in_cli_and_both_mcp_transports() {
 async fn http_mcp_custom_field_overflow_fails_explicitly_without_replay_or_partial_values() {
     let fixture = large_fixture::realistic_issue_view();
     let backend = backend_for(fixture["customFields"].as_array().unwrap().clone());
-    let broker = start_mcp_broker(backend.clone(), 64 * 1024).await;
+    let broker = start_mcp_broker(JiraAccess::AgentService, backend.clone(), 64 * 1024).await;
     let base_url = broker.public_url();
     let (client, session) = initialize_http_mcp(&base_url).await;
-    let response = http_mcp_call(&client, &base_url, &session).await;
+    let response = http_mcp_call(&client, &base_url, &session, 2).await;
     assert_eq!(response["result"]["isError"], true);
     let receipt = &response["result"]["structuredContent"];
     assert_eq!(receipt["error"]["code"], "mcp_response_too_large");
@@ -480,7 +506,7 @@ fn http_rpc(
     request.json(&value)
 }
 
-async fn initialize_http_mcp(base_url: &str) -> (reqwest::Client, String) {
+pub(super) async fn initialize_http_mcp(base_url: &str) -> (reqwest::Client, String) {
     let client = reqwest::Client::new();
     let response = http_rpc(&client, base_url, None, json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"jira-custom-fields-smoke","version":"1"}}})).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -502,10 +528,17 @@ async fn initialize_http_mcp(base_url: &str) -> (reqwest::Client, String) {
     (client, session)
 }
 
-async fn http_mcp_call(client: &reqwest::Client, base_url: &str, session: &str) -> Value {
-    let response = http_rpc(client, base_url, Some(session), json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":agent_access_core::mcp::tool_name("jira","issue.view"),"arguments":{"inputs":{"issue":"PROJ-1"}}}})).send().await.unwrap();
+pub(super) async fn http_mcp_call(
+    client: &reqwest::Client,
+    base_url: &str,
+    session: &str,
+    request_id: usize,
+) -> Value {
+    let response = http_rpc(client, base_url, Some(session), json!({"jsonrpc":"2.0","id":request_id,"method":"tools/call","params":{"name":agent_access_core::mcp::tool_name("jira","issue.view"),"arguments":{"inputs":{"issue":"PROJ-1"}}}})).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    decode_http_rpc(response).await
+    let response = decode_http_rpc(response).await;
+    assert_eq!(response["id"], request_id);
+    response
 }
 
 async fn decode_http_rpc(response: reqwest::Response) -> Value {
@@ -523,7 +556,7 @@ async fn decode_http_rpc(response: reqwest::Response) -> Value {
     value
 }
 
-struct StdioMcp {
+pub(super) struct StdioMcp {
     child: Child,
     stdin: Option<ChildStdin>,
     responses: tokio::sync::mpsc::UnboundedReceiver<String>,
@@ -531,7 +564,7 @@ struct StdioMcp {
 }
 
 impl StdioMcp {
-    fn start(base_url: &str) -> Self {
+    pub(super) fn start(base_url: &str) -> Self {
         let mut child = mcp_cli(base_url)
             .args(["mcp", "serve"])
             .stdin(Stdio::piped())
@@ -565,11 +598,11 @@ impl StdioMcp {
         stdin.flush().unwrap();
     }
 
-    fn notify(&mut self, method: &str, params: Value) {
+    pub(super) fn notify(&mut self, method: &str, params: Value) {
         self.send(json!({"jsonrpc":"2.0","method":method,"params":params}));
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> Value {
+    pub(super) async fn request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
@@ -587,7 +620,7 @@ impl StdioMcp {
         .expect("stdio MCP response timed out")
     }
 
-    async fn finish(mut self) {
+    pub(super) async fn finish(mut self) {
         self.stdin.take();
         tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
