@@ -99,7 +99,9 @@ actions and exposes typed wrappers for supported services.
   scoped native reads. Prove complete same-mode coverage from the admitted
   snapshot after precedence, ceilings and token restrictions; never widen
   source authority or make linked-resource requests from that hint. Jira uses
-  it only for embedded links in `issue.view`; absence is distinct from `[]`.
+  it only for embedded links, parent and subtasks in `issue.view`. Withheld
+  properties are absent; an eligible missing/null parent becomes null, meaning
+  no parent was returned. Subtasks do not enumerate all epic children.
 - Backend invocation context comes from the host-authorized execution context,
   never a tool input. Seal resumable provider cursors with the SDK continuation
   envelope, bound to that context and current principal/resource/query settings
@@ -387,8 +389,15 @@ binary and needs `python3`, whose absence fails it.
   them from `agent_access_provider` directly, not through core.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
-- `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection, `backend.rs` wire seam and HTTP
-  client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Its
+- `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
+  `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
+  `issue_view_context.rs` standard context and guarded hierarchy projection,
+  `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
+  embedded hierarchy and custom fields belong only to `JiraIssueView`; search
+  and mutation readbacks keep their own shapes. Hierarchy shares the existing
+  universal same-mode issue-link gate and never triggers target fetches.
+  Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
+  or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`space_list.rs` live space collection, `backend.rs` wire
