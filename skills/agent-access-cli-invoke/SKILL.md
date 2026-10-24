@@ -201,6 +201,47 @@ by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
 page and reject changed authority. Local resource discovery is unchanged.
 
+`jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
+`components`, `fixVersions`, `affectedVersions`, and `statusCategory`. These
+keys are always present in detailed JSON; null can mean unset, hidden, or not
+returned by Jira. Named objects retain IDs even when names are null, arrays
+preserve order and duplicates, and dates retain Jira's strings. Markdown omits
+null context and shows `None.` for empty collections. Search and mutation
+readbacks do not include these additional context fields.
+
+`jira.issue.view` automatically returns `customFields`, an array of fields Jira
+returned, sorted by numeric field ID. Each entry has `id`, nullable Jira display
+`name`, nullable normalized `type`, and `status`. Use `id` for identity; display
+names can be missing or duplicated. `supported` entries include typed `value`.
+`unsupported` means the implementation/schema is not supported; `withheld`
+means a recognized field returned malformed data. Their nonempty values are
+omitted, but explicit nulls and empty arrays are preserved for all statuses.
+An empty `customFields` array means no custom fields were returned, not that the
+project defines none. Search and mutation readbacks do not include this array;
+create/update do not accept custom-field writes.
+
+Supported values include text, URLs, numbers, dates, ADF rich text, options,
+cascading options, custom Labels string arrays, and small user summaries.
+Custom Labels preserve order and duplicates; malformed members withhold the
+entire field. App-specific and resource-reference types are unsupported. Whole-result Markdown uses readable names and IDs with
+explicit unsupported/withheld markers. Embedded Markdown/text adds
+`renderedBody` within each supported non-null ADF entry, preserving `value`;
+null and empty arrays display as not set. No field-selection flag or label
+mapping is needed. Size/complexity exhaustion fails the whole request rather
+than silently omitting supported fields.
+
+Effective `issue.view` access to every project in the selected credential
+mode gates `parent` and `subtasks`, including references within the source project. A withheld parent is absent; an eligible
+view always includes `parent`, with null meaning no parent was returned to the
+execution credential and Markdown showing `No parent returned.` A returned
+parent has `{key, summary, issueType}` with nullable summary/type. `subtasks`
+is an ordered array of the same references, or absent if withheld/not returned;
+`[]` means Jira returned no subtasks. The parent is the direct modern Jira
+parent, with no inferred ancestry. Subtasks do not enumerate all epic children
+or descendants. Broker makes no related-issue requests, and a separate view of
+a related key still needs its own authorization and lookup. These references
+are absent from search and mutation readbacks.
+
 `jira.issue.view` can include `issueLinks` only when effective access covers
 all projects in the selected credential mode. Each entry has `key`, `type`
 (relationship type), `direction`, `relationship` (directional label), and nullable
