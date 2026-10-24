@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
   `registeredResources.items` and `registeredResources.nextCursor`; no aliases
   remain. Upgrade the CLI and Broker together and refresh MCP tool discovery.
   See [caller discovery](docs/resources.md#caller-discovery).
+  ([#62](https://github.com/kcosr/agent-access-broker/pull/62))
 
 - **CloudBees CI response-limit minimum.** Configurations with a CloudBees
   provider must set `limits.max_upstream_response_bytes` to at least 11491
@@ -62,7 +63,7 @@ All notable changes to this project are documented in this file.
   command-manifest `listingOf` metadata let generic resource-access discovery
   advertise available enumeration actions. MCP/OpenAPI imports remain unscoped.
   See [caller discovery](docs/resources.md#caller-discovery) and the provider guides.
-  ([#56](https://github.com/kcosr/agent-access-broker/pull/56), [#58](https://github.com/kcosr/agent-access-broker/pull/58), [#59](https://github.com/kcosr/agent-access-broker/pull/59), [#60](https://github.com/kcosr/agent-access-broker/pull/60))
+  ([#56](https://github.com/kcosr/agent-access-broker/pull/56), [#58](https://github.com/kcosr/agent-access-broker/pull/58), [#59](https://github.com/kcosr/agent-access-broker/pull/59), [#60](https://github.com/kcosr/agent-access-broker/pull/60), [#62](https://github.com/kcosr/agent-access-broker/pull/62))
 
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
