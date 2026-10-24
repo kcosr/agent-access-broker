@@ -18,6 +18,38 @@ pub trait JiraBackend: Send + Sync {
         request: JiraProjectListRequest,
         credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<Value>, JiraBackendError>;
+    /// Project details read with the operation's selected execution credential.
+    async fn project_details(
+        &self,
+        _project: &str,
+        _include_issue_types: bool,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "Jira project details are not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Search references restricted to a previously validated numeric project ID.
+    async fn project_search_fields(
+        &self,
+        _project_id: u64,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "Jira project fields are not supported by this backend".to_string(),
+        ))
+    }
+
+    async fn project_statuses(
+        &self,
+        _project_id: u64,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "Jira project statuses are not supported by this backend".to_string(),
+        ))
+    }
     fn egress_proxy_audit(&self, _credential: &AtlassianCredential) -> Value {
         EgressRoute::direct().audit_value()
     }
@@ -936,6 +968,54 @@ impl HttpJiraBackend {
 
 #[async_trait]
 impl JiraBackend for HttpJiraBackend {
+    async fn project_details(
+        &self,
+        project: &str,
+        include_issue_types: bool,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        let project = utf8_percent_encode(project, JIRA_PATH_SEGMENT_ENCODE_SET);
+        self.project_view_value(
+            &format!("project/{project}"),
+            Some(if include_issue_types {
+                "description,issueTypes"
+            } else {
+                "description"
+            }),
+            None,
+            credential,
+        )
+        .await
+    }
+
+    async fn project_search_fields(
+        &self,
+        project_id: u64,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        self.project_view_value(
+            "jql/autocompletedata",
+            None,
+            Some(json!({"projectIds": [project_id], "includeCollapsedFields": false})),
+            credential,
+        )
+        .await
+    }
+
+    async fn project_statuses(
+        &self,
+        project_id: u64,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        self.project_view_value(
+            &format!("project/{project_id}/statuses"),
+            None,
+            None,
+            credential,
+        )
+        .await
+    }
+
     async fn project_list(
         &self,
         request: JiraProjectListRequest,

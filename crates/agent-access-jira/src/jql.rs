@@ -1,12 +1,12 @@
 //! Search inputs, scope-bounded query building, and the bounded JQL parser.
 use super::*;
 
-// Declare the enum and its complete discovery inventory together so adding a
-// grammar variant cannot silently omit it from documentation or diagnostics.
+// Declare static grammar variants and their discovery inventory together.
+// Parameterized fields have a separate documented grammar and no finite inventory.
 macro_rules! jql_inventory {
-    ($name:ident { $($variant:ident),+ $(,)? }) => {
+    ($name:ident { $($variant:ident),+ $(,)? } $(with $dynamic:ident($payload:ty))?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub(crate) enum $name { $($variant),+ }
+        pub(crate) enum $name { $($variant),+ $(, $dynamic($payload))? }
 
         impl $name {
             pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),+];
@@ -30,7 +30,7 @@ pub(crate) const MAX_JIRA_QUERY_TOKENS: usize = 512;
 pub(crate) const MAX_JIRA_IN_LIST_VALUES: usize = 100;
 pub(crate) const MAX_JIRA_STRING_LITERAL_BYTES: usize = 512;
 pub(crate) const MAX_JIRA_ORDER_TERMS: usize = 5;
-pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 2;
+pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +48,11 @@ pub(crate) fn jql_documentation() -> Value {
                 "name": field.canonical(), "operators": field.operator_names(),
             })).collect::<Vec<_>>(),
             "aliases": JqlField::alias_documentation(),
+            "customFields": {
+                "reference": "cf[ID], where ID is a positive u64 decimal integer without leading zeros; field names and customfield_ID aliases are unsupported",
+                "operators": JqlField::Custom(1).operator_names(),
+                "values": "Use scalar values, quoted strings, or bounded IN lists. The ~ operator requires a quoted string. Functions and custom-field ORDER BY are unsupported. Jira validates field type and operator compatibility; project.view returns the intersection of Jira and Broker capabilities."
+            },
             "functions": JqlFunctionName::ALL.iter().map(|function| json!({
                 "name": function.canonical(),
                 "fields": JqlField::ALL.iter().filter(|field| if function.is_date() { field.is_date() } else { field.is_user() }).map(|field| field.canonical()).collect::<Vec<_>>(),
@@ -55,7 +60,7 @@ pub(crate) fn jql_documentation() -> Value {
                 "credentialModes": if matches!(function, JqlFunctionName::CurrentUser) { vec!["per_user"] } else { vec!["service", "per_user"] },
             })).collect::<Vec<_>>(),
             "orderBy": {"fields": JqlSortField::ALL.iter().map(|field| field.canonical()).collect::<Vec<_>>(), "aliases": JqlSortField::alias_documentation(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_JIRA_ORDER_TERMS},
-            "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, text negation, custom fields, and nested functions are unsupported.",
+            "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, text negation, and nested functions are unsupported.",
             "values": "Text operands must be quoted. Bare identifiers use ASCII letters, digits, underscore, hyphen, or dot; quote other values. Single or double quotes delimit ASCII strings, with only the matching quote and backslash escapable; non-ASCII and control characters are rejected. Dates accept YYYY-MM-DD or quoted YYYY/MM/DD, optionally with HH:mm in a quoted string; relative dates use a sign, positive integer, and m/h/d/w, e.g. -7d. Function offsets must be unquoted. Project and issue keys must be canonical uppercase keys; project keys may contain underscores, e.g. OPS_TOOLS and OPS_TOOLS-12345.",
             "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
             "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, supply explicit projects or a filter such as updated >= -7d: Jira enhanced search requires a bounded query, and exclusions alone are not treated as a sufficient bound.",
@@ -69,6 +74,7 @@ pub(crate) fn jql_documentation() -> Value {
             {"query": {"type": "jql", "value": ""}, "projects": ["PROJ"]},
             {"query": {"type": "jql", "value": "status = Done ORDER BY updated DESC"}},
             {"query": {"type": "jql", "value": "updated >= startOfDay(-7d) ORDER BY updated DESC, key"}},
+            {"query": {"type": "jql", "value": "cf[12345] ~ \"EXT-4812\" AND fixVersion = \"2.4\""}, "projects": ["PROJ"]},
             {"query": {"type": "text", "value": "release notes"}, "maxResults": 10}
         ]
     })
@@ -376,6 +382,7 @@ pub(crate) fn capped_max_results(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum JqlToken {
     Word(String),
+    CustomField(u64),
     String(String),
     Eq,
     NotEq,
@@ -594,13 +601,13 @@ impl JqlClause {
                     "{} {} {}",
                     self.field.canonical(),
                     self.operator.emit(),
-                    value.emit_for_field(self.field)
+                    value.emit_for_field(self.field, self.operator)
                 )
             }
             JqlOperand::List(values) => {
                 let values = values
                     .iter()
-                    .map(|value| value.emit_for_field(self.field))
+                    .map(|value| value.emit_for_field(self.field, self.operator))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
@@ -687,11 +694,18 @@ jql_inventory! {
         Summary,
         Description,
         Text,
-    }
+    } with Custom(u64)
 }
 
 impl JqlField {
-    pub(crate) fn from_input(value: &str) -> Option<Self> {
+    pub(crate) fn from_input(value: impl AsRef<str>) -> Option<Self> {
+        let value = value.as_ref();
+        if value
+            .get(..3)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("cf["))
+        {
+            return custom_field_id(value).map(Self::Custom);
+        }
         Self::ALL.iter().copied().find(|field| {
             field.canonical().eq_ignore_ascii_case(value)
                 || field
@@ -724,6 +738,7 @@ impl JqlField {
             Self::Summary => &[],
             Self::Description => &[],
             Self::Text => &[],
+            Self::Custom(_) => &[],
         }
     }
 
@@ -741,8 +756,8 @@ impl JqlField {
         )
     }
 
-    pub(crate) fn canonical(self) -> &'static str {
-        match self {
+    pub(crate) fn canonical(self) -> std::borrow::Cow<'static, str> {
+        let name = match self {
             Self::Project => "project",
             Self::Key => "key",
             Self::Status => "status",
@@ -764,7 +779,9 @@ impl JqlField {
             Self::Summary => "summary",
             Self::Description => "description",
             Self::Text => "text",
-        }
+            Self::Custom(id) => return format!("cf[{id}]").into(),
+        };
+        name.into()
     }
 
     pub(crate) fn allows_operator(self, operator: JqlOperator) -> bool {
@@ -815,6 +832,20 @@ impl JqlField {
                     | JqlOperator::Gte
             ),
             Self::Summary | Self::Description | Self::Text => operator == JqlOperator::Contains,
+            Self::Custom(_) => matches!(
+                operator,
+                JqlOperator::Eq
+                    | JqlOperator::NotEq
+                    | JqlOperator::Lt
+                    | JqlOperator::Lte
+                    | JqlOperator::Gt
+                    | JqlOperator::Gte
+                    | JqlOperator::In
+                    | JqlOperator::NotIn
+                    | JqlOperator::IsEmpty
+                    | JqlOperator::IsNotEmpty
+                    | JqlOperator::Contains
+            ),
         }
     }
 
@@ -841,6 +872,26 @@ impl JqlField {
     pub(crate) fn is_text(self) -> bool {
         matches!(self, Self::Summary | Self::Description | Self::Text)
     }
+}
+
+/// Parser capabilities only. Discovery intersects these operators with Jira's
+/// searchable-field metadata; neither source asserts a field's configured type.
+pub(crate) fn jql_field_capabilities(reference: &str) -> Option<(String, Vec<&'static str>)> {
+    let field = JqlField::from_input(reference)?;
+    Some((field.canonical().into_owned(), field.operator_names()))
+}
+
+fn custom_field_id(reference: &str) -> Option<u64> {
+    if !reference.get(..3)?.eq_ignore_ascii_case("cf[") {
+        return None;
+    }
+    let digits = reference.get(3..)?.strip_suffix(']')?;
+    if !digits.starts_with(|ch: char| matches!(ch, '1'..='9'))
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 jql_inventory! {
@@ -916,12 +967,14 @@ pub(crate) enum JqlValue {
 }
 
 impl JqlValue {
-    pub(crate) fn emit_for_field(&self, field: JqlField) -> String {
+    pub(crate) fn emit_for_field(&self, field: JqlField, operator: JqlOperator) -> String {
         match self {
             Self::Identifier(value) => jql_bare_or_string_literal(value),
             Self::Date(value) if is_safe_jql_bare_date(value) => value.clone(),
             Self::Date(value) => jql_string_literal(value),
-            Self::String(value) if field.is_text() => jql_string_literal(value),
+            Self::String(value) if field.is_text() || operator == JqlOperator::Contains => {
+                jql_string_literal(value)
+            }
             Self::String(value) => jql_bare_or_string_literal(value),
             Self::Function(function) => function.emit(),
         }
@@ -1194,12 +1247,20 @@ impl JqlParser {
     }
 
     pub(crate) fn parse_clause(&mut self) -> Result<JqlExpr, String> {
-        let Some(field) = self.next_word() else {
-            return Err("JQL clause is missing a field".to_string());
+        let field = match self.tokens.get(self.index).cloned() {
+            Some(JqlToken::CustomField(id)) => {
+                self.index += 1;
+                Some(JqlField::Custom(id))
+            }
+            Some(JqlToken::Word(value)) => {
+                self.index += 1;
+                JqlField::from_input(&value)
+            }
+            _ => return Err("JQL clause is missing a field".to_string()),
         };
-        let field = JqlField::from_input(&field).ok_or_else(|| {
+        let field = field.ok_or_else(|| {
             format!(
-                "JQL field is unsupported; supported fields: {}",
+                "JQL field is unsupported; supported fields: {}, cf[ID]",
                 JqlField::ALL
                     .iter()
                     .map(|field| field.canonical())
@@ -1666,7 +1727,27 @@ pub(crate) fn tokenize_jql(jql: &str) -> Result<Vec<JqlToken>, String> {
                 tokens.push(JqlToken::RParen);
             }
             '"' | '\'' => tokens.push(JqlToken::String(read_quoted_jql(&mut chars, ch)?)),
-            _ if is_jql_word_start(ch) => tokens.push(JqlToken::Word(read_jql_word(&mut chars))),
+            _ if is_jql_word_start(ch) => {
+                let word = read_jql_word(&mut chars);
+                if word.eq_ignore_ascii_case("cf")
+                    && chars.peek().is_some_and(|(_, next)| *next == '[')
+                {
+                    let mut reference = word;
+                    // A custom field is one bounded token. Brackets never enter
+                    // bare operands or the ordinary word grammar.
+                    for (_, next) in chars.by_ref() {
+                        reference.push(next);
+                        if next == ']' {
+                            break;
+                        }
+                    }
+                    let id = custom_field_id(&reference)
+                        .ok_or_else(|| "JQL custom field reference is invalid".to_string())?;
+                    tokens.push(JqlToken::CustomField(id));
+                } else {
+                    tokens.push(JqlToken::Word(word));
+                }
+            }
             _ => return Err("JQL contains an unsupported character".to_string()),
         }
     }

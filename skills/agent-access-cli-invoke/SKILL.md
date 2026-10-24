@@ -253,6 +253,25 @@ by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
 page and reject changed authority. Local resource-access discovery describes policy and registered references.
 
+Use `agent-access invoke jira.project.view --input-json '{"project":"PROJ"}'`
+to inspect project details and searchable fields.
+
+This read-only action has its own project grant and uses the selected execution
+credential; it grants no search or issue access. Optional `include` selects
+`fields` (the default), `versions`, `components`, `issueTypes`, or `statuses`;
+`[]` requests project details only. Optional `query` filters collection names,
+IDs, and field JQL references before the 100-item cap. Collections report
+`items`, `count`, and `truncated`; narrow a truncated collection with `query`.
+
+Field entries contain `id`, `name`, `jqlReference`, `types`, and `operators`.
+Use the stable `jqlReference`, such as `cf[12345]`, in a project-scoped `search`
+JQL query: `cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"`. Do not substitute
+a display name or `customfield_12345`. Operators are the intersection of Jira's
+discovery and Broker's parser; Jira still validates the field's type. Text `~`
+means text matching, not strict whole-value equality. Custom-field functions
+and sorting are unsupported. Discovery is a searchable catalog visible to the
+credential, not every issue type's field configuration or option inventory.
+
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
 `components`, `fixVersions`, `affectedVersions`, and `statusCategory`. These
 keys are always present in detailed JSON; null can mean unset, hidden, or not
@@ -337,7 +356,7 @@ Jira embedded normalization is advertised by `issue.view`, `issue.create`,
 `issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
 `comment.update`. Markdown/text companions are added beside the owning issue or
 comment while its ADF remains unchanged. Whole-result Markdown is advertised by
-`project.list`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
+`project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
 `comment.property.list`, `comment.property.get`, `attachment.list`, and
 `verify`. Body-free searches and lists remain body-free; their whole-result
 renderer does not fetch additional bodies. Semantic Markdown emits copyable

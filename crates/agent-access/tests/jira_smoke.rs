@@ -1,5 +1,7 @@
 #[path = "jira_smoke/project_list.rs"]
 mod project_listing;
+#[path = "jira_smoke/project_view.rs"]
+mod project_view;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };

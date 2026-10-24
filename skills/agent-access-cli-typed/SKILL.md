@@ -271,6 +271,26 @@ by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
 page and reject changed authority. Local resource-access discovery describes policy and registered references.
 
+Use `agent-access jira project view PROJ` to inspect project details and searchable fields.
+Select optional metadata with `--include fields,versions,components,issueTypes,statuses`
+and narrow large collections with `--query external`.
+
+This read-only action has its own project grant and uses the selected execution
+credential; it grants no search or issue access. Optional `include` selects
+`fields` (the default), `versions`, `components`, `issueTypes`, or `statuses`;
+`[]` requests project details only. Optional `query` filters collection names,
+IDs, and field JQL references before the 100-item cap. Collections report
+`items`, `count`, and `truncated`; narrow a truncated collection with `query`.
+
+Field entries contain `id`, `name`, `jqlReference`, `types`, and `operators`.
+Use the stable `jqlReference`, such as `cf[12345]`, in a project-scoped `search`
+JQL query: `cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"`. Do not substitute
+a display name or `customfield_12345`. Operators are the intersection of Jira's
+discovery and Broker's parser; Jira still validates the field's type. Text `~`
+means text matching, not strict whole-value equality. Custom-field functions
+and sorting are unsupported. Discovery is a searchable catalog visible to the
+credential, not every issue type's field configuration or option inventory.
+
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
 `components`, `fixVersions`, `affectedVersions`, and `statusCategory`. These
 keys are always present in detailed JSON; null can mean unset, hidden, or not
@@ -375,7 +395,7 @@ agent-access jira issue attachment list PROJ-123 --output-format markdown
 agent-access jira issue verify PROJ-123 --expect-comment-id 10042 --output-format markdown
 ```
 
-Whole-result Markdown is supported on project list, issue-type list, issue view, search, comment list/view,
+Whole-result Markdown is supported on project list/view, issue-type list, issue view, search, comment list/view,
 comment property list/get, attachment list, and verify. On an allowed result,
 the CLI prints only Markdown to stdout. JSON is the default for every Jira
 retrieval command. Copyable identifiers/timestamps are code spans, safe URLs are

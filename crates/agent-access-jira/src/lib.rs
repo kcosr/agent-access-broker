@@ -10,6 +10,7 @@ mod issue_view_context;
 mod jql;
 mod present;
 mod project_list;
+mod project_view;
 mod search_continuation;
 mod search_diagnostics;
 #[cfg(test)]
@@ -822,6 +823,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         .lookup(LookupRequirement::ScopeResolution),
     ];
     actions.push(project_list::descriptor(&config.listing));
+    actions.push(project_view::descriptor());
     if !config
         .content
         .comment_formats
@@ -884,6 +886,13 @@ impl JiraProvider {
             "project.list" => {
                 project_list::parse_inputs(inputs, &self.config.listing)?;
                 Ok(BTreeMap::from([("project".to_string(), vec![])]))
+            }
+            "project.view" => {
+                let inputs = project_view::parse_inputs(inputs)?;
+                Ok(BTreeMap::from([(
+                    "project".to_string(),
+                    vec![inputs.project],
+                )]))
             }
             "issue_type.list" => {
                 let inputs = parse_issue_type_list_inputs(inputs)?;
@@ -977,7 +986,7 @@ impl JiraProvider {
                     issue_scopes_from_metadata(&response.value)
                 }
             }
-            "project.list" | "issue_type.list" | "issue.create" | "search" => {
+            "project.list" | "project.view" | "issue_type.list" | "issue.create" | "search" => {
                 self.local_scopes(action, inputs)
             }
             _ => Err(ProviderError::deny(
@@ -1053,6 +1062,7 @@ impl Provider for JiraProvider {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         match request.action() {
             "project.list" => self.invoke_project_list(request).await,
+            "project.view" => self.invoke_project_view(request).await,
             "issue_type.list" => self.invoke_issue_type_list(request).await,
             "issue.view" => self.invoke_issue_view(request).await,
             "issue.create" => self.invoke_issue_create(request).await,

@@ -38,6 +38,12 @@ Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
 `exhausted`; issue search has its own contract. Local
 `resource_access_describe` reports policy access and registered references.
 
+Jira `project.view` accepts `inputs: {"project":"PROJ"}` to return project
+details and searchable fields under its own project grant. Use a returned
+`jqlReference`, such as `cf[12345]`, with a supported operator in the separately
+authorized `search` tool. Optional `include` and `query` select and narrow
+metadata; see [project discovery](providers-jira.md#project-details-and-searchable-fields).
+
 The separately grantable `confluence.space.list` action accepts `inputs` with
 only `maxResults` and optional `pageToken`. Results use canonical space grants,
 not URL aliases. Continue `more` and `scan_budget` pages even when empty.

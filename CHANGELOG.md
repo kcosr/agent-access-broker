@@ -58,6 +58,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Jira project and search-field discovery.** The read-only `project.view`
+  action and `jira project view` command describe an authorized project,
+  its searchable fields and optional project metadata. Issue search accepts
+  stable custom-field references such as `cf[12345]` with bounded operators,
+  preserving project restrictions. See [project discovery](docs/providers-jira.md#project-details-and-searchable-fields).
+
 - **Command file downloads and generic invocation.** Reviewed commands can
   declare `download: true` when the operator sets an explicit `max_download_bytes`.
   `invoke --output`, JSON `send` and local stdio MCP verify and atomically save
