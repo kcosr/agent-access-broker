@@ -134,6 +134,12 @@ pub enum ImportedDiscoveryAuthentication {
 
 #[async_trait]
 pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
+    /// Resolve static material requirements offline; unavailable requirements fail closed.
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        import: &ImportedAdapterContext<'_>,
+    ) -> Result<super::ImportedCredentialContract, String>;
     fn kind(&self) -> &'static str;
     /// A development fixture: the host accepts its kind only in a non-production
     /// deployment with `deployment.enable_fake_service`.

@@ -3069,7 +3069,8 @@ fn credential_input_schema_schema() -> Value {
             "connection": {"type": "string"},
             "profile": {"type": "string"},
             "credentialKind": {"type": "string"},
-            "fields": {"type": "array", "items": {"type": "object"}}
+            "fields": {"type": "array", "items": {"type": "object"}},
+            "inputPolicy": {"enum": ["token_header", "http_basic", "command_stdin"]}
         }
     })
 }

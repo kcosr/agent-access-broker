@@ -2201,9 +2201,9 @@ connection, including scope omission on consent, code exchange and refresh,
 known/unknown scope display, credential isolation and action-grant enforcement.
 The Gmail regression suite retains its stricter initial refresh-token requirement.
 
-## Imported OpenAPI services
+## Imported OpenAPI and Swagger services
 
-The adapter suite uses synthetic OpenAPI 3.1 documents and HTTP servers to test
+The adapter suite uses synthetic OpenAPI 3.1 and Swagger 2.0 documents and HTTP servers to test
 bounded references, scheme selection, security/server overrides, serialization,
 response validation and single-attempt write outcomes. The shared imported-service
 CLI smoke exercises both adapter kinds through management, direct invoke, JSON
@@ -2211,9 +2211,28 @@ send with file output, downstream HTTP MCP and local stdio MCP. The OpenAPI case
 checks shared/personal credential isolation, missing-personal-token denial and
 operator removal of the document destination on offline restart.
 
+The adapter's `tests/unified.rs` preserves captured pre-change OpenAPI plan and
+manifest bytes, compiles the reduced 15-operation Swagger fixture, and compares
+both readers' schemas and actual JSON/form requests. It tests typed local
+references, draft-4 numeric bounds, duplicate JSON members, strict frozen form
+plans, percent-encoding expansion, and independent Basic definition/API origins.
+Form values include long strings, Unicode and control characters; field names
+and URL parameters retain their separate restrictions.
+
+The shared CLI fixture's `mcp_stdio/imports/openapi.rs` journeys use a real
+isolated Broker and synthetic HTTP API. They check service/personal Basic
+credentials, form POST reads, unaccepted-write refusal, CLI and aggregate/scoped
+HTTP/stdio MCP, revision checks before stdin reads, offline restart, and separate
+write-enabled JSON-array/form DELETE receipts. Core and host tests cover invalid
+encrypted material, contract publication, and both orderings of a first personal
+save racing an empty-draft delivery change.
+
 The portal OpenAPI fixture covers public/private definition discovery, the
 security-scheme picker, reviewed actions, refresh and invocation. The ordinary
-MCP and OAuth fixtures remain regression checks.
+MCP and OAuth fixtures remain regression checks. `imports-swagger.spec.ts` adds a
+real-service Basic/form journey, including shared, personal and administered
+credential entry. Descriptor rendering and unavailable guidance also have
+mocked browser contracts; those do not establish upstream integration.
 
 ## Command imports
 

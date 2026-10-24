@@ -8,6 +8,11 @@ use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, Import
 #[cfg(test)]
 mod authentication_tests;
 mod authority;
+mod credentials;
+pub use credentials::PreparedImportedCredentialContract;
+pub(super) use credentials::{
+    ImportedCredentialContracts, credential_contract, resolve_credential_contracts,
+};
 #[cfg(test)]
 mod command_tests;
 mod mcp_names;
@@ -26,6 +31,7 @@ pub struct PreparedImportedProviders {
     /// record must carry the same.
     accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     transport: PreparedTransport,
+    credential_contracts: ImportedCredentialContracts,
 }
 
 enum PreparedTransport {
@@ -169,14 +175,13 @@ fn preparation_mismatch() -> ManagedStoreError {
     )
 }
 
-/// The stored kind of an import's execution credential: its accepted
-/// declaration, or a bearer token for imports that record none.
-pub(super) fn execution_credential_kind(record: &ImportedServiceRecord) -> ImportedCredentialKind {
-    record
-        .accepted_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.credential.as_ref())
-        .map_or(ImportedCredentialKind::Token, |credential| credential.kind)
+/// The adapter-resolved kind; an unavailable contract never defaults to token.
+pub(super) fn execution_credential_kind(
+    contract: Option<&ImportedCredentialContract>,
+) -> Option<ImportedCredentialKind> {
+    contract?
+        .requirement(ImportedCredentialPurpose::Execution)?
+        .kind()
 }
 
 /// Whether an import declares no execution credential: a command import
@@ -204,10 +209,11 @@ fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
 
 /// The service descriptor of `record`, whose scopes bind the Broker types
 /// the generation's `resource_types` registers.
-pub(super) fn descriptor(
+pub(super) fn descriptor_with_contract(
     record: &ImportedServiceRecord,
     config: &BrokerConfig,
     resource_types: &ResourceTypeRegistry,
+    contract: Option<&ImportedCredentialContract>,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
     // Arbitrary upstream content may contain private data or credentials.
@@ -274,8 +280,11 @@ pub(super) fn descriptor(
                 "Connect your account to authorize this imported service's reviewed actions.",
             )
     } else {
-        let kind = execution_credential_kind(record);
-        CredentialDescriptor::default().profile(kind.personal_profile(), kind.credential_kind())
+        match execution_credential_kind(contract) {
+            Some(kind) => CredentialDescriptor::default()
+                .profile(kind.personal_profile(), kind.credential_kind()),
+            None => CredentialDescriptor::default(),
+        }
     });
     // An HTTP import acts on its endpoint; a command import declares none.
     match UpstreamAuthority::from_base_url(&record.definition.endpoint) {
@@ -414,7 +423,11 @@ fn import_authentication(config: &BrokerConfig) -> serde_json::Value {
     serde_json::Value::Array(groups)
 }
 
-pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &ImportedCatalog) {
+pub(super) fn effective_credentials_with_contracts(
+    config: &mut BrokerConfig,
+    catalog: &ImportedCatalog,
+    contracts: &ImportedCredentialContracts,
+) {
     config.credentials.imported_modes.clear();
     for record in &catalog.services {
         let service = &record.definition.service;
@@ -429,6 +442,8 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .iter()
                 .filter(|binding| {
                     binding.is_supported()
+                        && (binding.mechanism == ImportedAuthMechanism::Oauth
+                            || execution_credential_kind(contracts.get(service)).is_some())
                         && oauth_binding_allowed(config, &record.definition, binding)
                         && (binding.owner_mode != ImportedCredentialMode::Service
                             || record
@@ -447,10 +462,10 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
                 .iter()
                 .find(|binding| binding.owner_mode == ImportedCredentialMode::PerUser)
                 .expect("selected mode");
-            config
-                .credentials
-                .connections
-                .insert(service.clone(), personal_connection(record, binding));
+            config.credentials.connections.insert(
+                service.clone(),
+                personal_connection(record, binding, contracts.get(service)),
+            );
             config.credentials.per_user.insert(
                 service.clone(),
                 CredentialConfig {
@@ -493,6 +508,7 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
 fn personal_connection(
     record: &ImportedServiceRecord,
     binding: &ImportedCredentialBinding,
+    contract: Option<&ImportedCredentialContract>,
 ) -> crate::ConnectionConfig {
     let display_name = Some(record.definition.display_name.clone());
     if binding.mechanism == ImportedAuthMechanism::Oauth {
@@ -510,7 +526,9 @@ fn personal_connection(
                 }),
         }
     } else {
-        let profile = execution_credential_kind(record).personal_profile();
+        let profile = execution_credential_kind(contract)
+            .expect("ready static binding")
+            .personal_profile();
         crate::ConnectionConfig {
             display_name,
             token_profiles: Some(vec![profile.into()]),
@@ -521,9 +539,13 @@ fn personal_connection(
 }
 
 /// Retained modes validate old references, but never determine execution availability.
-pub(super) fn retention_config(config: &BrokerConfig, catalog: &ImportedCatalog) -> BrokerConfig {
+pub(super) fn retention_config_with_contracts(
+    config: &BrokerConfig,
+    catalog: &ImportedCatalog,
+    contracts: &ImportedCredentialContracts,
+) -> BrokerConfig {
     let mut retained = config.clone();
-    effective_credentials(&mut retained, catalog);
+    effective_credentials_with_contracts(&mut retained, catalog, contracts);
     for record in &catalog.services {
         retained.credentials.imported_modes.insert(
             record.definition.service.clone(),
@@ -534,6 +556,33 @@ pub(super) fn retention_config(config: &BrokerConfig, catalog: &ImportedCatalog)
         );
     }
     retained
+}
+
+#[cfg(test)]
+pub(super) fn descriptor(
+    record: &ImportedServiceRecord,
+    config: &BrokerConfig,
+    types: &ResourceTypeRegistry,
+) -> ServiceDescriptor {
+    descriptor_with_contract(
+        record,
+        config,
+        types,
+        credential_contract(config, record).ok().as_ref(),
+    )
+}
+#[cfg(test)]
+pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &ImportedCatalog) {
+    let contracts = resolve_credential_contracts(config, catalog);
+    effective_credentials_with_contracts(config, catalog, &contracts)
+}
+#[cfg(test)]
+pub(super) fn retention_config(config: &BrokerConfig, catalog: &ImportedCatalog) -> BrokerConfig {
+    retention_config_with_contracts(
+        config,
+        catalog,
+        &resolve_credential_contracts(config, catalog),
+    )
 }
 
 impl BrokerRuntime {
@@ -740,6 +789,7 @@ impl BrokerRuntime {
     ) -> Result<Self, ManagedStoreError> {
         self.validate_import_mcp_names(&catalog)?;
         let changed_service = prepared.service.clone();
+        let contracts = prepared.credential_contracts.clone();
         let imported_providers = prepared.validate(self, &catalog)?;
         // The registry publishes with the catalog that declares its types.
         let resource_types = Arc::new(self.imported_resource_types(&catalog)?);
@@ -785,7 +835,12 @@ impl BrokerRuntime {
                     .validate()
                     .map_err(ManagedStoreError::InputInvalid)?;
             }
-            let definition = descriptor(record, &config, resource_types.registry());
+            let definition = descriptor_with_contract(
+                record,
+                &config,
+                resource_types.registry(),
+                contracts.get(name),
+            );
             if imported_providers.contains_key(name) {
                 definition
                     .validate()
@@ -825,7 +880,7 @@ impl BrokerRuntime {
             }
             providers.insert(name, provider.provider());
         }
-        effective_credentials(&mut config, &catalog);
+        effective_credentials_with_contracts(&mut config, &catalog, &contracts);
         // The publication's synthesized connections join the configured
         // ones, whose implicit types are resolved again; a catalog that
         // breaks a check across them is not published.
@@ -848,6 +903,7 @@ impl BrokerRuntime {
         next.providers = Arc::new(providers);
         next.command_providers = Arc::new(command_providers);
         next.imported_catalog = Arc::new(catalog);
+        next.imported_credential_contracts = Arc::new(contracts);
         next.initialize_import_dispatch(Some(self));
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
         next.policy_snapshot = Arc::new(ArcSwap::from(self.policy_snapshot()));
@@ -968,6 +1024,7 @@ impl BrokerRuntime {
 pub(super) fn build_providers(
     config: &BrokerConfig,
     catalog: &ImportedCatalog,
+    contracts: &ImportedCredentialContracts,
     resource_types: &ResourceTypeRegistry,
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
@@ -986,9 +1043,14 @@ pub(super) fn build_providers(
             continue;
         }
         if definition.validate().is_err()
-            || descriptor(record, config, resource_types)
-                .validate()
-                .is_err()
+            || descriptor_with_contract(
+                record,
+                config,
+                resource_types,
+                contracts.get(&definition.service),
+            )
+            .validate()
+            .is_err()
         {
             continue;
         }
@@ -1005,6 +1067,9 @@ pub(super) fn build_providers(
         {
             continue;
         }
+        let Some(contract) = contracts.get(&definition.service) else {
+            continue;
+        };
         let transport = if definition.transport_auth {
             match record
                 .slot_versions
@@ -1022,6 +1087,11 @@ pub(super) fn build_providers(
                             ring.ok_or_else(|| RuntimeError::ManagedStore {
                                 message: "import encryption unavailable".into(),
                             })?,
+                            contract
+                                .requirement(ImportedCredentialPurpose::Transport)
+                                .ok_or_else(|| RuntimeError::ManagedStore {
+                                    message: "import transport contract unavailable".into(),
+                                })?,
                         )
                         .map_err(runtime_managed_store_error)?,
                 ),
@@ -1194,6 +1264,15 @@ impl BrokerRuntime {
                 PreparedTransport::ReplacementPending(Sha256::digest(token.as_bytes()).into())
             }
         };
+        let mut contracts = (*self.imported_credential_contracts).clone();
+        match credential_contract(&self.config, record) {
+            Ok(contract) => {
+                contracts.insert(definition.service.clone(), contract);
+            }
+            Err(_) => {
+                contracts.remove(&definition.service);
+            }
+        }
         let mut prepared = PreparedImportedProviders {
             base_catalog: self.imported_catalog.clone(),
             providers,
@@ -1203,6 +1282,7 @@ impl BrokerRuntime {
             enabled_actions: enabled_definitions(record),
             accepted_metadata: record.accepted_metadata.clone(),
             transport: transport_provenance,
+            credential_contracts: contracts,
         };
         if record.status != ImportedServiceStatus::Enabled
             || !destination_allowed(&self.config, definition)
@@ -1210,9 +1290,23 @@ impl BrokerRuntime {
             return Ok(prepared);
         }
         self.require_import_destination(definition)?;
+        let contract = prepared
+            .credential_contracts
+            .get(&definition.service)
+            .ok_or(ManagedStoreError::CredentialNotFound)?;
         let transport = if definition.transport_auth {
             match transport_override {
-                Some(value) => value.map(agent_access_provider::host::bearer_credential),
+                Some(value) => value
+                    .map(|token| {
+                        contract
+                            .requirement(ImportedCredentialPurpose::Transport)
+                            .ok_or(ManagedStoreError::CredentialNotFound)?
+                            .plaintext(&token, None)?;
+                        Ok::<_, ManagedStoreError>(agent_access_provider::host::bearer_credential(
+                            token,
+                        ))
+                    })
+                    .transpose()?,
                 None => match record
                     .slot_versions
                     .get(&ImportedCredentialPurpose::Transport)
@@ -1232,6 +1326,9 @@ impl BrokerRuntime {
                                         "import storage or encryption unavailable".into(),
                                     ),
                                 )?,
+                                contract
+                                    .requirement(ImportedCredentialPurpose::Transport)
+                                    .ok_or(ManagedStoreError::CredentialNotFound)?,
                             )?,
                     ),
                     None => None,
@@ -1322,6 +1419,13 @@ impl BrokerRuntime {
             .get(&ImportedCredentialPurpose::Execution)
             .cloned()
             .ok_or_else(import_credential_unavailable)?;
+        let requirement = self
+            .imported_credential_contracts
+            .get(service)
+            .ok_or_else(import_credential_unavailable)?
+            .requirement(ImportedCredentialPurpose::Execution)
+            .cloned()
+            .ok_or_else(import_credential_unavailable)?;
         let service = service.to_string();
         managed_store_blocking(move || {
             store.resolve_imported_secret(
@@ -1329,6 +1433,7 @@ impl BrokerRuntime {
                 ImportedCredentialPurpose::Execution,
                 &version,
                 &ring,
+                &requirement,
             )
         })
         .await

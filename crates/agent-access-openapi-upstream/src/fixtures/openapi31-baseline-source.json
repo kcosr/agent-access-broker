@@ -1,0 +1,185 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Baseline",
+    "version": "5"
+  },
+  "servers": [
+    {
+      "url": "https://api.example.test/api"
+    }
+  ],
+  "security": [
+    {
+      "access": []
+    },
+    {
+      "Key": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "access": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "Key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Key"
+      }
+    },
+    "schemas": {
+      "Record": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "annotation": {
+            "type": "string",
+            "default": "literal $ref"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    }
+  },
+  "paths": {
+    "/object": {
+      "post": {
+        "operationId": "create",
+        "summary": "Create record",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Record"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/array": {
+      "delete": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Record"
+                },
+                "minItems": 1
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "empty"
+          }
+        }
+      }
+    },
+    "/none": {
+      "get": {
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{id}/related/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "X-Count",
+          "in": "header",
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "parameters": [
+          {
+            "name": "x-count",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

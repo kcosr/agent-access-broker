@@ -905,3 +905,27 @@ async fn invoke_processes_get_the_request_only_on_stdin_and_the_network_variable
     assert!(!String::from_utf8_lossy(&completed.stdout).contains("secret-example"));
     assert_eq!(registry.in_use("ticketing"), 0);
 }
+
+#[test]
+fn basic_delivery_is_rejected_by_command_validation_contract_and_build() {
+    let mut service = definition(&[ImportedCredentialMode::Service]);
+    service.execution_bindings[0].delivery = ImportedCredentialDelivery::Basic;
+    assert!(CommandAdapter.validate_definition(&service).is_err());
+    assert!(
+        CommandAdapter
+            .credential_contract(&service, &ImportedAdapterContext::default())
+            .is_err()
+    );
+    let host = agent_access_provider::test_support::TestHost::default();
+    assert!(
+        CommandAdapter
+            .build(
+                &service,
+                &[],
+                None,
+                &ImportedAdapterContext::default(),
+                &host.context()
+            )
+            .is_err()
+    );
+}

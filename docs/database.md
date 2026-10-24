@@ -1194,12 +1194,15 @@ mappings, one bounded pending preview per service, a monotonic catalog revision,
 and encrypted service-owned credential slots. Slots are owned
 by service and purpose (execution, discovery, transport), without a synthetic
 principal. Their ciphertext binds service, purpose, credential kind and material
-version. A `bearer_token` slot encrypts the raw token. A `basic_api_token` slot,
-the execution slot of a command import whose accepted credential kind is
-`username_token`, encrypts the managed credential encoding
+version. A `bearer_token` slot encrypts the raw token. A `basic_api_token` slot
+encrypts the managed credential encoding
 `{"token","username"}`; the username is at most 256 bytes and the encoded
-plaintext at most 32,768 bytes. Discovery and transport slots are always
-`bearer_token`.
+plaintext at most 32,768 bytes. This kind serves Basic execution and dedicated
+definition-discovery slots, as well as command execution slots whose accepted
+credential kind is `username_token`. Transport slots remain `bearer_token`.
+Basic reuses the existing row, encrypted payload and AAD contract and needs no
+credential-table migration. Its imported input policy preserves UTF-8 bytes and
+validates username/password grammar before encryption and local resolution.
 
 `accepted_metadata_json` holds the service-level metadata a command import's
 acceptance stored with its actions: manifest format, command version, the
@@ -1214,6 +1217,13 @@ Rewrap preserves material versions. Definitions, policy and execution availabili
 publish together after a successful transaction; offline startup reconstructs
 the committed catalog. Administrator request cancellation does not release the
 publication lock while a database mutation is still running.
+Credential writes use an offline prepared contract bound to purpose, exact
+definition/accepted metadata, service version and catalog revision. The
+transaction rechecks that binding; the host separately holds the admitted
+snapshot fence, including for personal and administered credential saves. A
+first personal save and a draft delivery change cannot silently repurpose each
+other's material. Derived administrative `credentialInputs` descriptions are
+not stored in service records, previews or manifest hashes.
 
 Each service may retain up to 2,048 non-retired actions and 16 MiB of their
 serialized action entries, including disabled and quarantined actions. Retired

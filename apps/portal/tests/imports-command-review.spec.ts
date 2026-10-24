@@ -1,3 +1,4 @@
+import { TOKEN_INPUT } from "../unit/credential-input.fixture";
 import { expect, test, type Page } from "@playwright/test";
 import {
   COMMAND_RESOURCE_TYPES,
@@ -66,7 +67,7 @@ test("new imports pick an approved command by name, with credential modes or non
   await expect(main).toContainText("Each agent call runs the approved command once, with the request on its stdin.");
   await expect(main).toContainText("Accept a discovery preview first");
   await expect(main.getByRole("button", { name: "Set execution credential", exact: true })).toBeDisabled();
-  await expect(main).toContainText("Accept the command's manifest first; it declares the credential kind.");
+  await expect(main).toContainText("Accept the command manifest before setting its credential");
   expect(api.errors).toEqual([]);
 });
 
@@ -301,7 +302,9 @@ test("a username-and-token execution credential is saved with its username", asy
   await expect(dialog.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
   await dialog.getByLabel("Token", { exact: true }).fill("svc-example");
   await expect(dialog.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
-  await dialog.getByLabel("Username", { exact: true }).fill("svc-tickets");
+  await dialog.getByLabel("Username", { exact: true }).fill(" ");
+  await expect(dialog.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Username", { exact: true }).fill(" svc-tickets ");
   await dialog.getByRole("button", { name: "Save credential", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(api.credentials).toEqual([{ purpose: "execution", body: { expectedVersion: 5, expectedCatalogRevision: 6, token: "svc-example", username: "svc-tickets" } }]);
@@ -311,11 +314,14 @@ test("a username-and-token execution credential is saved with its username", asy
 test("a token execution credential is saved without a username", async ({ page }) => {
   const accepted = commandAccepted();
   accepted.service.acceptedMetadata = { ...accepted.service.acceptedMetadata!, credential: { kind: "token", modes: ["service", "per_user"] } };
+  accepted.service.credentialInputs.execution = { ...TOKEN_INPUT, inputPolicy: "command_stdin" };
   const api = await mockCommandImportApi(page, accepted);
   await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
   await page.getByRole("button", { name: "Rotate execution credential", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Rotate execution credential", exact: true });
   await expect(dialog.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await dialog.getByLabel("Token", { exact: true }).fill(" ");
+  await expect(dialog.getByRole("button", { name: "Save credential", exact: true })).toBeDisabled();
   await dialog.getByLabel("Token", { exact: true }).fill("svc-token-only");
   await dialog.getByRole("button", { name: "Save credential", exact: true }).click();
   await expect(dialog).toHaveCount(0);

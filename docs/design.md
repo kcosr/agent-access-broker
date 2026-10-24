@@ -813,6 +813,17 @@ existence, ownership of a particular object, or an authorization outcome.
   rejected. See
   [imported services](imported-services.md) and [OpenAPI imports](imported-openapi.md).
 
+  Swagger 2.0 and OpenAPI 3.1 JSON readers normalize operations inside the same
+  `openapi_http` adapter, sharing bounded schema compilation, frozen-plan
+  validation and HTTP execution. JSON and scalar URL-encoded bodies use that
+  common dispatch boundary. A generic offline adapter credential contract
+  declares execution and dedicated-slot material requirements; core uses it for
+  encrypted persistence, personal profiles, local availability and management
+  input descriptions. Basic uses existing username/token storage and SDK
+  placement. Prepared credential writes check the exact import record in the
+  store and retain the admitted snapshot under the host publication lock,
+  including personal and administered writes.
+
 - **CloudBees CI** (`cloudbees_ci`) — separately granted, read-only `job.list`
   filters live recursive inventory through normalized job authority. It proves
   descendant reachability before fetching containers, preserves independent

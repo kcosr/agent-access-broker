@@ -28,7 +28,7 @@ const personal = { profile: "personal", label: null, credentialKind: "bearer", i
 const target = { connection: "work-account", displayName: "Jira", consumers, otherConsumers: 0, tokenProfiles: [personal] };
 const credential = { credentialId: "credential-123", ownerPrincipal: "viewer", ownerKind: "user", connection: target.connection, profile: "personal", label: null, credentialKind: "bearer", metadata: {}, status: "active", ...stamp };
 const credentialList = { connections: [{ connection: target.connection, displayName: "Jira", method: "token", consumers, otherConsumers: 0, tokenProfiles: [personal], registration: null, credential }], retained: [] };
-const draftImport = { definition: { service: "metrics-draft", displayName: "Metrics draft", adapterKind: "mcp_http", endpoint: "https://metrics.example.test/mcp", executionBindings: [], connectionSettings: {}, discovery: { kind: "anonymous" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, ...stamp };
+const draftImport = { definition: { service: "metrics-draft", displayName: "Metrics draft", adapterKind: "mcp_http", endpoint: "https://metrics.example.test/mcp", executionBindings: [], connectionSettings: {}, discovery: { kind: "anonymous" }, transportAuth: false }, status: "draft", version: 1, actions: [], slotVersions: {}, credentialInputs: {}, ...stamp };
 
 test.beforeAll(async () => {
   server = createServer(async (request, response) => {

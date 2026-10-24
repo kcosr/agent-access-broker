@@ -9,6 +9,7 @@ mod command;
 mod command_facts;
 mod command_registry;
 mod command_request;
+mod credentials;
 mod definition;
 mod metadata;
 mod registration;
@@ -29,6 +30,7 @@ pub(crate) use command_request::{
     RequestAuthorization, RequestBoundary, RequestCredentials, RequestGrant, RequestResource,
     VerifyRequest, wire_deadline, wire_mode,
 };
+pub use credentials::*;
 pub use definition::*;
 pub use metadata::*;
 pub use registration::{

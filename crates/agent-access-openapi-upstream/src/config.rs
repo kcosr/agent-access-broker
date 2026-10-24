@@ -15,11 +15,19 @@ impl Settings {
             );
         }
         for binding in &definition.execution_bindings {
+            if !matches!(
+                binding.delivery,
+                ImportedCredentialDelivery::Basic
+                    | ImportedCredentialDelivery::Bearer
+                    | ImportedCredentialDelivery::RawHeader { .. }
+            ) {
+                return Err("unsupported OpenAPI credential delivery".into());
+            }
             if let ImportedCredentialDelivery::RawHeader { name } = &binding.delivery {
                 parameter_header(name)?;
             }
             if binding.mechanism != ImportedAuthMechanism::StaticToken {
-                return Err("OpenAPI imports currently require static bearer or header API-key execution credentials".into());
+                return Err("OpenAPI imports currently require static Basic, bearer or header API-key execution credentials".into());
             }
         }
         let settings = &definition.connection_settings;
@@ -43,13 +51,14 @@ impl Settings {
             .unwrap_or("none");
         let document_delivery = match kind {
             "none" if definition.discovery == ImportedDiscoveryCredential::Anonymous => None,
+            "basic" if definition.discovery == ImportedDiscoveryCredential::Slot => Some(ImportedCredentialDelivery::Basic),
             "bearer" if definition.discovery == ImportedDiscoveryCredential::Slot => Some(ImportedCredentialDelivery::Bearer),
             "raw_header" if definition.discovery == ImportedDiscoveryCredential::Slot => {
                 let delivery = ImportedCredentialDelivery::RawHeader { name: settings.get("definitionAuthHeader").ok_or("definitionAuthHeader is required")?.clone() };
                 parameter_header(settings.get("definitionAuthHeader").expect("required header"))?;
                 Some(delivery)
             }
-            _ => return Err("public definitions use anonymous discovery; private definitions require a dedicated discovery slot and bearer or raw_header authentication".into()),
+            _ => return Err("public definitions use anonymous discovery; private definitions require a dedicated discovery slot and basic, bearer or raw_header authentication".into()),
         };
         if kind != "raw_header" && settings.contains_key("definitionAuthHeader") {
             return Err("definitionAuthHeader is only valid for raw_header authentication".into());

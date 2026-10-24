@@ -42,7 +42,7 @@ export const SERVICES_STATE = {
 
 const ORIGIN_GROUP: Record<ServiceOrigin, { title: string; sub: string; rank: number }> = {
   builtin: { title: "Built-in", sub: "backends compiled into the broker", rank: 0 },
-  imported: { title: "Imported", sub: "MCP tools, OpenAPI operations and local commands", rank: 1 }
+  imported: { title: "Imported", sub: "MCP tools, OpenAPI / Swagger operations and local commands", rank: 1 }
 };
 
 /** Rows open the service page, so Enter opens rather than showing details. */
@@ -178,7 +178,7 @@ export function ServicesPage() {
           )
         }
       >
-        Import MCP tools, OpenAPI operations or operator-approved local commands as actions: create a draft, configure credentials, then discover and review the actions.
+        Import MCP tools, OpenAPI / Swagger operations or operator-approved local commands as actions: create a draft, configure credentials, then discover and review the actions.
       </EmptyState>
     );
 

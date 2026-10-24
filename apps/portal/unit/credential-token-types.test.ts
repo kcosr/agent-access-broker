@@ -227,6 +227,19 @@ describe("the token form", () => {
     ]);
   });
 
+  test("personal and administered HTTP Basic saves preserve exact bytes", async () => {
+    let actions: ReturnType<typeof useCredentialActions> | undefined;
+    const Probe = ({ subject }: { subject: AccountSubject }) => { actions = useCredentialActions(subject); return null; };
+    const basic: CredentialTokenProfile = { ...gitBasic, inputSchema: { ...gitBasic.inputSchema, inputPolicy: "http_basic" } };
+    const secret = { username: " opérateur ", token: " päss word: " };
+    mocks.saved.length = 0;
+    renderToStaticMarkup(createElement(Probe, { subject: { administered: false, principalId: "viewer" } }));
+    await actions!.save("git", basic, secret);
+    renderToStaticMarkup(createElement(Probe, { subject: adminSubject("build-bot") }));
+    await actions!.save("git", basic, secret);
+    expect(mocks.saved.map((request) => request.secret)).toEqual([secret, secret]);
+  });
+
   test("lets an administrator choose a service account's token type", () => {
     const subject = adminSubject("build-bot");
     const empty = render([connection("git", "Git", [gitBearer, gitBasic])], "git", { subject });

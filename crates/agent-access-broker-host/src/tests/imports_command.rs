@@ -827,6 +827,10 @@ async fn username_token_commands_store_a_username_with_the_service_slot() {
             ImportedCredentialPurpose::Execution,
             &record.slot_versions[&ImportedCredentialPurpose::Execution],
             restarted.credential_key_ring().unwrap(),
+            &restarted
+                .imported_connection_requirement("tickets")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -1208,7 +1212,7 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
         }
     }
     store
-        .upsert_user_credential(
+        .upsert_imported_user_credential(
             runtime.credential_key_ring().unwrap(),
             CredentialWriteRequest {
                 owner_principal_id: "alice".into(),
@@ -1221,6 +1225,10 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
                 actor: "admin".into(),
             },
             agent_access_core::CredentialManagementPurpose::Administrative,
+            &runtime
+                .prepare_imported_connection_contract("tickets")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
     for grant in [
@@ -1408,7 +1416,7 @@ async fn command_enforced_personal_grants_pass_alone_without_a_service_slot() {
     let runtime = broker.runtime();
     let store = runtime.managed_store().unwrap();
     store
-        .upsert_user_credential(
+        .upsert_imported_user_credential(
             runtime.credential_key_ring().unwrap(),
             CredentialWriteRequest {
                 owner_principal_id: "alice".into(),
@@ -1421,6 +1429,10 @@ async fn command_enforced_personal_grants_pass_alone_without_a_service_slot() {
                 actor: "admin".into(),
             },
             agent_access_core::CredentialManagementPurpose::Administrative,
+            &runtime
+                .prepare_imported_connection_contract("tickets")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
     for grant in [

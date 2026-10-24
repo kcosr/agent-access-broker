@@ -790,7 +790,11 @@ the owner can delete it. `tokenProfiles` lists the token profiles (token types)
 the caller may store for a `token`-method connection, in configuration order,
 each with its `label` (the name a consuming service declares, or `null`; show
 the profile then), its `credentialKind` and the `inputSchema` storing it takes;
-it is empty for the other methods. They come from the connection's
+it is empty for the other methods. Imported input schemas also carry read-only
+`inputPolicy` (`token_header`, `http_basic` or `command_stdin`), which selects
+their input handling without changing stored credential kinds. Native schemas
+omit it. The same descriptor is returned by the personal and administered
+connection input-schema routes. They come from the connection's
 `token_profiles`, or its implicit type when it sets neither a list nor `oauth`;
 a service account's or `system` principal's come from its
 `service_account_token_profiles` instead when set. `credential` is the active

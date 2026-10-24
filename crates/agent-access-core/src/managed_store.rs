@@ -4017,6 +4017,26 @@ impl ManagedStore {
         request: CredentialWriteRequest,
         purpose: CredentialManagementPurpose,
     ) -> Result<CredentialMetadata, ManagedStoreError> {
+        self.upsert_user_credential_with_contract(key_ring, request, purpose, None)
+    }
+
+    pub fn upsert_imported_user_credential(
+        &self,
+        key_ring: &CredentialKeyRing,
+        request: CredentialWriteRequest,
+        purpose: CredentialManagementPurpose,
+        contract: &crate::PreparedImportedCredentialContract,
+    ) -> Result<CredentialMetadata, ManagedStoreError> {
+        self.upsert_user_credential_with_contract(key_ring, request, purpose, Some(contract))
+    }
+
+    fn upsert_user_credential_with_contract(
+        &self,
+        key_ring: &CredentialKeyRing,
+        request: CredentialWriteRequest,
+        purpose: CredentialManagementPurpose,
+        contract: Option<&crate::PreparedImportedCredentialContract>,
+    ) -> Result<CredentialMetadata, ManagedStoreError> {
         validate_credential_write_request(&request)?;
         validate_credential_metadata(&request.metadata)?;
         validate_credential_secret(&request.credential_kind, &request.secret)?;
@@ -4026,6 +4046,31 @@ impl ManagedStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
         purpose.check_active_owner(&tx, &request.owner_principal_id)?;
+        match (
+            imported_store::service_record(&tx, &request.service)?,
+            contract,
+        ) {
+            (Some(record), Some(contract)) => {
+                let requirement = contract.validate(
+                    imported_store::revision(&tx)?,
+                    &record,
+                    crate::imports::ImportedCredentialPurpose::Execution,
+                    true,
+                )?;
+                let kind = requirement.require_kind()?;
+                if request.profile != kind.personal_profile()
+                    || request.credential_kind != kind.credential_kind()
+                {
+                    return Err(ManagedStoreError::CredentialInvalid(
+                        "imported credential profile does not match its contract".into(),
+                    ));
+                }
+                requirement.validate_secret(&request.credential_kind, &request.secret)?;
+            }
+            (None, None) => {}
+            _ => return Err(ManagedStoreError::VersionConflict),
+        }
+
         let existing: Option<(String, String, String, String)> = tx
             .query_row(
                 "SELECT credential_id, created_at, secret_backend, secret_ref
@@ -4315,13 +4360,41 @@ impl ManagedStore {
         name: &str,
         accepted_profiles: &[String],
     ) -> Result<ExecutionCredential, ManagedStoreError> {
+        self.resolve_user_credential_with_imported_contract(
+            key_ring,
+            owner_principal_id,
+            service,
+            name,
+            accepted_profiles,
+            None,
+        )
+    }
+
+    pub fn resolve_user_credential_with_imported_contract(
+        &self,
+        key_ring: &CredentialKeyRing,
+        owner_principal_id: &str,
+        service: &str,
+        name: &str,
+        accepted_profiles: &[String],
+        requirement: Option<&crate::imports::ImportedCredentialRequirement>,
+    ) -> Result<ExecutionCredential, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
         validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
+        if imported_store::contains_service(&conn, service)? != requirement.is_some() {
+            return Err(ManagedStoreError::CredentialInvalid(
+                "imported credential contract is required exactly for imported connections".into(),
+            ));
+        }
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        let credential =
-            execution_credential_from_encrypted_row(key_ring, &row, accepted_profiles)?;
+        let credential = execution_credential_from_encrypted_row_with_imported_contract(
+            key_ring,
+            &row,
+            accepted_profiles,
+            requirement,
+        )?;
         conn.execute(
             "UPDATE credentials SET last_used_at = ?2 WHERE credential_id = ?1",
             params![row.credential_id, now_string()],
@@ -4332,20 +4405,32 @@ impl ManagedStore {
 
     /// Check the same stored material as execution, without recording use or
     /// applying management permissions. Discovery is not a verification attempt.
-    pub(crate) fn check_user_credential(
+    pub(crate) fn check_user_credential_with_imported_contract(
         &self,
         key_ring: &CredentialKeyRing,
         owner_principal_id: &str,
         service: &str,
         name: &str,
         accepted_profiles: &[String],
+        requirement: Option<&crate::imports::ImportedCredentialRequirement>,
     ) -> Result<(), ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
         validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
+        if imported_store::contains_service(&conn, service)? != requirement.is_some() {
+            return Err(ManagedStoreError::CredentialInvalid(
+                "imported credential contract is required exactly for imported connections".into(),
+            ));
+        }
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        execution_credential_from_encrypted_row(key_ring, &row, accepted_profiles).map(drop)
+        execution_credential_from_encrypted_row_with_imported_contract(
+            key_ring,
+            &row,
+            accepted_profiles,
+            requirement,
+        )
+        .map(drop)
     }
 
     /// The caller's personal credential as a command import receives it,
@@ -4407,15 +4492,47 @@ impl ManagedStore {
         accepted_profiles: &[String],
         purpose: CredentialManagementPurpose,
     ) -> Result<CredentialVerificationCandidate, ManagedStoreError> {
+        self.resolve_user_credential_for_verification_with_imported_contract(
+            key_ring,
+            owner_principal_id,
+            service,
+            name,
+            accepted_profiles,
+            purpose,
+            None,
+        )
+    }
+
+    // Keep the existing verification tuple together with its imported policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_user_credential_for_verification_with_imported_contract(
+        &self,
+        key_ring: &CredentialKeyRing,
+        owner_principal_id: &str,
+        service: &str,
+        name: &str,
+        accepted_profiles: &[String],
+        purpose: CredentialManagementPurpose,
+        requirement: Option<&crate::imports::ImportedCredentialRequirement>,
+    ) -> Result<CredentialVerificationCandidate, ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
         validate_profiles(accepted_profiles)?;
         let mut connection = self.connection.lock().unwrap();
         let conn = connection.transaction().map_err(sql_unavailable)?;
         purpose.check_active_owner(&conn, owner_principal_id)?;
+        if imported_store::contains_service(&conn, service)? != requirement.is_some() {
+            return Err(ManagedStoreError::CredentialInvalid(
+                "imported credential contract is required exactly for imported connections".into(),
+            ));
+        }
         let row = encrypted_credential_by_tuple(&conn, owner_principal_id, service, name)?;
-        let credential =
-            execution_credential_from_encrypted_row(key_ring, &row, accepted_profiles)?;
+        let credential = execution_credential_from_encrypted_row_with_imported_contract(
+            key_ring,
+            &row,
+            accepted_profiles,
+            requirement,
+        )?;
         Ok(CredentialVerificationCandidate {
             credential,
             target: CredentialVerificationTarget {
@@ -6966,7 +7083,10 @@ fn validate_right_name(right: &str) -> Result<(), ManagedStoreError> {
     }
 }
 
-fn validate_credential_secret(kind: &str, secret: &Value) -> Result<(), ManagedStoreError> {
+pub(crate) fn validate_credential_secret(
+    kind: &str,
+    secret: &Value,
+) -> Result<(), ManagedStoreError> {
     let Some(object) = secret.as_object() else {
         return Err(input_invalid("secret must be a JSON object"));
     };
@@ -9161,17 +9281,38 @@ fn encrypted_credential_from_row(
     })
 }
 
-fn execution_credential_from_encrypted_row(
+fn execution_credential_from_encrypted_row_with_imported_contract(
     key_ring: &CredentialKeyRing,
     row: &EncryptedCredentialRow,
     accepted_profiles: &[String],
+    requirement: Option<&crate::imports::ImportedCredentialRequirement>,
 ) -> Result<ExecutionCredential, ManagedStoreError> {
     check_usable_encrypted_row(row, accepted_profiles)?;
-    decrypt_execution_credential(key_ring, row)
+    let Some(requirement) = requirement else {
+        return decrypt_execution_credential(key_ring, row);
+    };
+    if requirement
+        .kind()
+        .is_none_or(|kind| kind.personal_profile() != row.profile)
+    {
+        return Err(ManagedStoreError::CredentialInvalid(
+            "stored credential profile does not match the imported contract".into(),
+        ));
+    }
+    let secret = key_ring.decrypt(
+        &row.key_id,
+        &row.secret_nonce,
+        &row.secret_ciphertext,
+        &credential_aad(row),
+    )?;
+    requirement.validate_stored_secret(&row.credential_kind, &secret)?;
+    execution_credential_from_secret(&row.credential_kind, secret).map(|credential| {
+        agent_access_provider::host::credential_with_profile(credential, row.profile.clone())
+    })
 }
 
 /// The command credential of a usable stored row, as
-/// [`execution_credential_from_encrypted_row`] checks usability.
+/// [`execution_credential_from_encrypted_row_with_imported_contract`] checks usability.
 fn command_credential_from_encrypted_row(
     key_ring: &CredentialKeyRing,
     row: &EncryptedCredentialRow,

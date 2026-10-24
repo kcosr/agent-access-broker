@@ -168,7 +168,7 @@ async function createDraft(page: Page, privateDocument = false) {
   await dialog.getByLabel("Service ID").fill(privateDocument ? "private_inventory" : "inventory");
   await dialog.getByLabel("Display name").fill(privateDocument ? "Private inventory" : "Inventory");
   await dialog.getByLabel("API base URL").fill(privateDocument ? privateEndpoint : endpoint);
-  await dialog.getByLabel("OpenAPI definition URL").fill(privateDocument ? privateDefinitionUrl : definitionUrl);
+  await dialog.getByLabel("OpenAPI / Swagger definition URL").fill(privateDocument ? privateDefinitionUrl : definitionUrl);
   await expect(dialog.getByLabel("Personal authentication")).toHaveCount(0);
   await expect(dialog.getByLabel("Separate transport bearer token")).toHaveCount(0);
   if (privateDocument) {
@@ -209,10 +209,10 @@ test("administrator imports public and private OpenAPI definitions with separate
   expect(documentRequests[0].headers["x-api-key"]).toBeUndefined();
   await dialog.getByRole("button", { name: "Configure API authentication" }).click();
   dialog = page.getByRole("dialog", { name: "Edit imported service" });
-  await expect(dialog.getByLabel("OpenAPI definition URL")).toBeEnabled();
+  await expect(dialog.getByLabel("OpenAPI / Swagger definition URL")).toBeEnabled();
   await expect(dialog.locator('option[value="UnsupportedCookie"]')).toHaveCount(0);
   await dialog.getByLabel("API security scheme").selectOption("HeaderKey");
-  await expect(dialog.getByText("Token delivery: X-Api-Key.", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Credential delivery: X-Api-Key.", { exact: false })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("openapi-scheme.png"), fullPage: true });
   await dialog.getByRole("button", { name: "Save configuration" }).click(); await expect(dialog).not.toBeVisible();
   const selectedScheme = await browserManagementRequest<ImportPreviewResult>(page, "/v1/admin/imports/inventory/preview");
@@ -256,7 +256,7 @@ test("administrator imports public and private OpenAPI definitions with separate
   dialog = page.getByRole("dialog", { name: "Edit imported service" });
   await expect(dialog.getByLabel("API security scheme")).toBeDisabled();
   await expect(dialog.getByLabel("Definition authentication")).toBeDisabled();
-  await expect(dialog.getByLabel("OpenAPI definition URL")).toBeDisabled();
+  await expect(dialog.getByLabel("OpenAPI / Swagger definition URL")).toBeDisabled();
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   changed = true;

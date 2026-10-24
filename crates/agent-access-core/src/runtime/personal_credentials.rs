@@ -157,18 +157,22 @@ impl BrokerRuntime {
                 "credential encryption key ring is not configured",
             )
         })?;
+        let requirement = self
+            .imported_connection_requirement(connection)
+            .map_err(provider_error_from_managed_store)?;
         let (principal, connection, profiles) = (
             identity.principal.clone(),
             connection.to_owned(),
             profiles.to_vec(),
         );
         managed_store_blocking(move || {
-            store.resolve_user_credential(
+            store.resolve_user_credential_with_imported_contract(
                 &key_ring,
                 &principal,
                 &connection,
                 CONNECTION_CREDENTIAL_NAME,
                 &profiles,
+                requirement.as_ref(),
             )
         })
         .await

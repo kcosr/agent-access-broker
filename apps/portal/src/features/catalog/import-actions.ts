@@ -145,7 +145,7 @@ export function useImportActions() {
       });
     }
 
-    /** `username` accompanies the token of a command import whose credential is a username and token. */
+    /** `username` accompanies the token when the Broker-derived input descriptor declares it. */
     function writeToken(data: Versioned, purpose: ImportPurpose, token: string, username?: string) {
       return run(
         (current) => brokerApi.writeImportToken(current, data.service.definition.service, purpose, { ...importVersions(data), token, ...(username !== undefined ? { username } : {}) }),
@@ -165,14 +165,16 @@ export function useImportActions() {
     }
 
     function confirmDeleteToken(data: Versioned, purpose: ImportPurpose) {
+      const descriptor = data.service.credentialInputs[purpose];
+      const noun = data.service.definition.adapterKind === "command" || descriptor?.state === "ready" && descriptor.credentialKind === "basic_api_token" ? "credential" : "token";
       confirm({
-        title: `Delete ${purpose} token?`,
-        body: "Calls requiring this token will fail until a replacement is saved. Grant references remain.",
-        confirmLabel: "Delete token",
+        title: `Delete ${purpose} ${noun}?`,
+        body: `Calls requiring this ${noun} will fail until a replacement is saved. Grant references remain.`,
+        confirmLabel: `Delete ${noun}`,
         onConfirm: () =>
           run(
             (current) => brokerApi.deleteImportToken(current, data.service.definition.service, purpose, importVersions(data)),
-            `${purpose[0]!.toUpperCase()}${purpose.slice(1)} token deleted`
+            `${purpose[0]!.toUpperCase()}${purpose.slice(1)} ${noun} deleted`
           )
       });
     }

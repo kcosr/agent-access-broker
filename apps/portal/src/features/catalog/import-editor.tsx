@@ -467,7 +467,7 @@ function OpenApiImportForm({
   const unknownNewScheme = Boolean(securityScheme && !selectedScheme && securityScheme !== old?.connectionSettings.securityScheme);
 
   const issues = commonIssues({ creating: !old, name, label, endpoint, requests, windowSeconds }, "API base URL");
-  if (mutable && !isUrl(definitionUrl)) issues.definitionUrl = "Enter the OpenAPI definition URL as an http(s) URL.";
+  if (mutable && !isUrl(definitionUrl)) issues.definitionUrl = "Enter the OpenAPI / Swagger definition URL as an http(s) URL.";
   if (mutable && documentAuth === "raw_header" && !documentHeader.trim()) issues.documentHeader = "Enter the header that carries the discovery token.";
   const shown = save.attempted ? issues : {};
   const blocked = (!old && !operatorEnabled) || (!shared && !personal) || unknownNewScheme || (affected.length > 0 && !confirmed);
@@ -511,8 +511,8 @@ function OpenApiImportForm({
         <Input mono required type="url" placeholder="https://api.example.test/v1" value={endpoint} disabled={Boolean(old) || busy} onChange={(event) => setEndpoint(event.target.value)} spellCheck={false} />
       </Field>
       <Field
-        label="OpenAPI definition URL"
-        hint="Both URLs must be allowed by the operator. The definition describes operations; calls use the API base URL. OpenAPI 3.1 JSON is supported."
+        label="OpenAPI / Swagger definition URL"
+        hint="Both URLs must be allowed by the operator. The definition describes operations; calls use the API base URL. OpenAPI 3.1 and Swagger 2.0 JSON are supported."
         error={shown.definitionUrl}
       >
         <Input
@@ -528,7 +528,7 @@ function OpenApiImportForm({
       </Field>
       {old && mutable ? (
         <Banner tone="warning" slim>
-          Changing definition settings or API token delivery removes stored execution and discovery tokens. Set them again after saving. Existing personal credentials must be
+          Changing definition settings or API credential delivery removes stored execution and discovery credentials. Set them again after saving. Existing personal credentials must be
           removed first.
         </Banner>
       ) : null}
@@ -540,6 +540,7 @@ function OpenApiImportForm({
               <option value="none">Public document (no credentials)</option>
               <option value="bearer">Separate discovery Bearer token</option>
               <option value="raw_header">Separate discovery header token</option>
+              <option value="basic">Separate discovery Basic credential</option>
             </Select>
           </Field>
           {documentAuth === "raw_header" ? (
@@ -551,13 +552,13 @@ function OpenApiImportForm({
         <p className="pt-prose wb-small">
           {documentAuth === "none"
             ? "Loading this document sends no credentials."
-            : "Save the draft, then set its discovery token. This token only reads the definition document."}
+            : "Save the draft, then set its discovery credential. It only reads the definition document."}
         </p>
       </fieldset>
       <fieldset className="pt-fieldset">
         <legend>API execution credentials</legend>
         <Checkbox
-          label="Shared service token"
+          label="Shared service credential"
           checked={shared}
           disabled={busy || old?.executionBindings.some((binding) => binding.ownerMode === "service")}
           onChange={(event) => setShared(event.target.checked)}
@@ -569,7 +570,7 @@ function OpenApiImportForm({
           onChange={(event) => setPersonal(event.target.checked)}
         />
         <p className="pt-prose wb-small">
-          API calls use static tokens. Grants select shared or personal credentials. Personal credentials never fall back to a shared token. Existing credential modes are retained.
+          API calls use static credentials. Grants select shared or personal credentials. Personal credentials never fall back to a shared credential. Existing credential modes are retained.
         </p>
         <Field label="API security scheme">
           <Select value={securityScheme} disabled={busy || !mutable || !schemes.length} onChange={(event) => setSecurityScheme(event.target.value)}>
@@ -584,17 +585,17 @@ function OpenApiImportForm({
         </Field>
         {securityScheme ? (
           <p className="pt-prose wb-small">
-            Token delivery: {delivery.kind === "raw_header" ? delivery.name : "Authorization: Bearer"}.{mutable ? " Save changes, then refresh the definition to review operations." : ""}
+            Credential delivery: {delivery.kind === "raw_header" ? delivery.name : delivery.kind === "basic" ? "Authorization: Basic" : "Authorization: Bearer"}.{mutable ? " Save changes, then refresh the definition to review operations." : ""}
           </p>
         ) : (
           <p className="pt-prose wb-small">Create the draft and load its definition first. Operations remain unavailable until you select an API security scheme and refresh.</p>
         )}
         {!mutable && selectedScheme && importSourceKey(delivery) !== importSourceKey(openApiDelivery(selectedScheme)) ? (
           <Banner tone="warning" slim>
-            The discovered scheme now uses different token delivery. Create a new service to use that destination.
+            The discovered scheme now uses different credential delivery. Create a new service to use that destination.
           </Banner>
         ) : null}
-        {!mutable ? <p className="pt-prose wb-small">The definition settings and token delivery are fixed after accepting actions. Create a new service to change them.</p> : null}
+        {!mutable ? <p className="pt-prose wb-small">The definition settings and credential delivery are fixed after accepting actions. Create a new service to change them.</p> : null}
       </fieldset>
       <LimitFields requests={requests} windowSeconds={windowSeconds} onRequests={setRequests} onWindow={setWindowSeconds} disabled={busy} issues={shown} />
       <AffectedGrantsCheck count={affected.length} checked={confirmed} onChange={setConfirmed} disabled={busy} />

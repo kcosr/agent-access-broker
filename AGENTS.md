@@ -460,8 +460,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   single-attempt execution over the host transport with the pinned SDK. Its
   `registration()` selects the `mcp_http` adapter together with its `mcp_oauth`
   companion dialect; the dialect has no separate export.
-- `crates/agent-access-openapi-upstream`: imported OpenAPI 3.1 JSON parsing,
-  bounded operation plans and single-attempt HTTP execution; `registration()`
+- `crates/agent-access-openapi-upstream`: Swagger 2.0 and OpenAPI 3.1 JSON readers,
+  shared normalization and bounded operation plans, JSON/scalar-form encoding,
+  Basic/Bearer/header-key delivery and single-attempt HTTP execution; `registration()`
   selects it, with no OAuth companion.
 - `crates/agent-access-command-import`: the `command` import kind for
   operator-approved local executables (`[command_imports.<name>]`, endpoints
@@ -655,7 +656,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   assembly template in step with `ASSEMBLY_GUIDE_SHARED_FILES`.
 - `docs/imported-services.md`: generic MCP import setup, administrator review,
   credential ownership, refresh, limits, and invocation outcomes.
-- `docs/imported-openapi.md`: OpenAPI document/API destination setup, discovery
+- `docs/imported-openapi.md`: OpenAPI/Swagger document/API destination setup, discovery
   authentication, scheme selection, supported operation profile and write receipts.
 - `docs/imported-oauth.md`: approved MCP OAuth registrations, metadata validation,
   discovery onboarding, unknown upstream identity, and optional refresh.
@@ -987,6 +988,15 @@ of API base URLs. Keep schema/operation plans bounded and offline at execution;
 never fetch external references, follow redirects, or infer resource grants.
 Empty drafts may choose settings before accepting actions; accepted connection
 settings and delivery cannot change underneath existing action identities.
+Both source readers use the common compiler and executor. Preserve existing
+JSON plan bytes; strictly validate the optional form plan and reject duplicate
+JSON members during discovery. Resolve imported credential kinds and input rules
+through the adapter's offline credential contract, never by guessing token
+material or parsing protocol settings in core. Imported Basic validation belongs
+at the core plaintext-to-opaque boundary; keep native SDK placement unchanged.
+Slot and personal credential writes require both the admitted snapshot fence and
+transactional prepared-contract checks. New form/Basic records do not promise
+compatibility with older binaries.
 
 Imported resource types come only from accepted import metadata and keep their
 Broker type IDs once accepted. They change in place only under the safe-change

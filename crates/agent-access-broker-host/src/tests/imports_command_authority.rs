@@ -288,7 +288,7 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
         }
     }
     store
-        .upsert_user_credential(
+        .upsert_imported_user_credential(
             runtime.credential_key_ring().unwrap(),
             CredentialWriteRequest {
                 owner_principal_id: "alice".into(),
@@ -301,6 +301,10 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
                 actor: "admin".into(),
             },
             agent_access_core::CredentialManagementPurpose::Administrative,
+            &runtime
+                .prepare_imported_connection_contract("tickets")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
     let broker_enforced = ["issue.view", "issue.bulk"];

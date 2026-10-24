@@ -181,7 +181,7 @@ pub(super) fn input_schema(
     connection: &str,
     profile: &ConnectionTokenProfile,
 ) -> Option<CredentialInputSchema> {
-    agent_access_core::credential_input_schema(
+    runtime.connection_credential_input_schema(
         connection,
         &display_name(runtime, connection),
         &profile.profile,

@@ -3,9 +3,8 @@
 use super::*;
 use crate::imports::{
     IMPORT_MAX_MANIFEST_BYTES, IMPORT_MAX_METADATA_BYTES, IMPORT_MAX_SERVICES, IMPORT_MAX_TOOLS,
-    IMPORT_PREVIEW_TTL_SECONDS, ImportEndpointForm, ImportedActionDefinition,
-    ImportedCredentialKind, ImportedCredentialPurpose, ImportedServiceDefinition,
-    ImportedServiceMetadata,
+    IMPORT_PREVIEW_TTL_SECONDS, ImportedActionDefinition, ImportedCredentialPurpose,
+    ImportedServiceDefinition, ImportedServiceMetadata,
 };
 
 // Retired identities have their own bounded retention allowance so replacing
@@ -159,12 +158,30 @@ impl ManagedStore {
         &self,
         service: &str,
         expected_service_version: u64,
+        requirement: Option<&crate::imports::ImportedCredentialRequirement>,
     ) -> Result<BTreeMap<String, String>, ManagedStoreError> {
         let conn = self.connection.lock().unwrap();
         let record = service_record(&conn, service)?
             .ok_or_else(|| input_invalid("imported service was not found"))?;
         if record.version != expected_service_version {
             return Err(ManagedStoreError::VersionConflict);
+        }
+        if let crate::imports::ImportedDiscoveryCredential::PerUser { principal } =
+            &record.definition.discovery
+            && !record.definition.execution_bindings.iter().any(|b| {
+                b.owner_mode == crate::imports::ImportedCredentialMode::PerUser
+                    && b.mechanism == crate::imports::ImportedAuthMechanism::Oauth
+            })
+        {
+            let kind = requirement
+                .ok_or(ManagedStoreError::CredentialNotFound)?
+                .require_kind()?;
+            let metadata = credential_metadata_by_tuple(&conn, principal, service, "default")?;
+            if metadata.profile != kind.personal_profile()
+                || metadata.credential_kind != kind.credential_kind()
+            {
+                return Err(ManagedStoreError::CredentialNotFound);
+            }
         }
         discovery_versions(&conn, &record)
     }
@@ -663,10 +680,7 @@ fn discovery_versions(
                     &record.definition.service,
                     "default",
                 )?;
-                if metadata.status != "active"
-                    || metadata.profile != "token"
-                    || metadata.credential_kind != "bearer_token"
-                {
+                if metadata.status != "active" {
                     return Err(ManagedStoreError::CredentialNotFound);
                 }
                 versions.insert(format!("user:{principal}"), metadata.material_version);
@@ -794,7 +808,7 @@ fn row_version(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
         rusqlite::Error::FromSqlConversionFailure(index, Type::Integer, Box::new(error))
     })
 }
-fn revision(conn: &Connection) -> Result<u64, ManagedStoreError> {
+pub(crate) fn revision(conn: &Connection) -> Result<u64, ManagedStoreError> {
     conn.query_row(
         "SELECT revision FROM imported_catalog_revision WHERE singleton=1",
         [],
@@ -925,7 +939,19 @@ fn catalog_at(
     bounded_json(&result, 64 * 1024 * 1024)?;
     Ok(result)
 }
-fn service_record(
+pub(crate) fn contains_service(
+    conn: &Connection,
+    service: &str,
+) -> Result<bool, ManagedStoreError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM imported_services WHERE service=?1)",
+        [service],
+        |row| row.get(0),
+    )
+    .map_err(sql_unavailable)
+}
+
+pub(crate) fn service_record(
     conn: &Connection,
     service: &str,
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
@@ -1039,71 +1065,11 @@ pub struct ImportedSecretWriteRequest {
     pub expected_version: u64,
     pub expected_catalog_revision: u64,
     pub token: String,
-    /// Required exactly for an execution slot of an import whose accepted
-    /// credential kind is `username_token`.
+    /// Required exactly when this slot's resolved contract uses username/token material.
     pub username: Option<String>,
     pub actor: String,
 }
 
-/// The stored kind of an import's slot, and whether it takes a username.
-/// Discovery and transport slots, and execution slots of imports without
-/// accepted metadata, hold bearer material. A command import's execution
-/// slot follows its accepted credential declaration and exists only once
-/// that declaration is accepted.
-fn slot_kind(
-    record: &ImportedServiceRecord,
-    purpose: ImportedCredentialPurpose,
-) -> Result<ImportedCredentialKind, ManagedStoreError> {
-    if purpose != ImportedCredentialPurpose::Execution {
-        return Ok(ImportedCredentialKind::Token);
-    }
-    let command = record
-        .definition
-        .endpoint()
-        .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command);
-    match (&record.accepted_metadata, command) {
-        (Some(metadata), _) => metadata
-            .credential
-            .as_ref()
-            .map(|credential| credential.kind)
-            .ok_or_else(|| input_invalid("this import declares no execution credential")),
-        (None, true) => Err(input_invalid(
-            "accept the command's manifest before setting its credential",
-        )),
-        (None, false) => Ok(ImportedCredentialKind::Token),
-    }
-}
-
-/// The slot plaintext: the raw token for `bearer_token`, and the managed
-/// credential encoding `{"token","username"}` for `basic_api_token`.
-fn slot_plaintext(
-    kind: ImportedCredentialKind,
-    token: &str,
-    username: Option<&str>,
-) -> Result<String, ManagedStoreError> {
-    match (kind, username) {
-        (ImportedCredentialKind::Token, None) => Ok(token.to_owned()),
-        (ImportedCredentialKind::UsernameToken, Some(username))
-            if !username.is_empty()
-                && username.len() <= 256
-                && !username.chars().any(char::is_control) =>
-        {
-            let plaintext =
-                serde_json::to_string(&serde_json::json!({"username": username, "token": token}))
-                    .map_err(|_| input_invalid("import credential cannot be encoded"))?;
-            if plaintext.len() > 32768 {
-                return Err(input_invalid("import credential exceeds the size limit"));
-            }
-            Ok(plaintext)
-        }
-        (ImportedCredentialKind::UsernameToken, _) => Err(input_invalid(
-            "this import's credential requires a username of at most 256 characters",
-        )),
-        (ImportedCredentialKind::Token, Some(_)) => {
-            Err(input_invalid("this import's credential takes no username"))
-        }
-    }
-}
 /// Ephemeral attestation of the plaintext and version written by this transaction.
 /// Never serialized, logged, persisted, or constructible by publication callers.
 pub struct ImportedSecretWriteProof {
@@ -1154,20 +1120,13 @@ impl ManagedStore {
         &self,
         request: ImportedSecretWriteRequest,
         ring: &CredentialKeyRing,
+        contract: &crate::PreparedImportedCredentialContract,
         validate: impl FnOnce(
             &ImportedCatalog,
             &ImportedSecretWriteProof,
         ) -> Result<T, ManagedStoreError>,
     ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
         validate_actor(&request.actor)?;
-        if request.token.is_empty()
-            || request.token.len() > 32768
-            || !request.token.bytes().all(|b| (0x21..=0x7e).contains(&b))
-        {
-            return Err(input_invalid(
-                "import token must contain visible ASCII characters and fit the size limit",
-            ));
-        }
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1184,8 +1143,9 @@ impl ManagedStore {
                 "retired imports cannot receive new credentials",
             ));
         }
-        let kind = slot_kind(&record, request.purpose)?;
-        let plaintext = slot_plaintext(kind, &request.token, request.username.as_deref())?;
+        let requirement = contract.validate(revision(&tx)?, &record, request.purpose, false)?;
+        let kind = requirement.require_kind()?;
+        let plaintext = requirement.plaintext(&request.token, request.username.as_deref())?;
         let mut row = SecretRow {
             service: request.service.clone(),
             purpose: request.purpose.as_str().into(),
@@ -1252,21 +1212,18 @@ impl ManagedStore {
         purpose: ImportedCredentialPurpose,
         expected_material_version: &str,
         ring: &CredentialKeyRing,
+        requirement: &crate::imports::ImportedCredentialRequirement,
     ) -> Result<ExecutionCredential, ManagedStoreError> {
         let (kind, plaintext) =
             self.imported_secret_plaintext(service, purpose, expected_material_version, ring)?;
-        match kind.as_str() {
-            // Bearer slots keep the raw token, as every earlier release wrote.
-            "bearer_token" => Ok(agent_access_provider::host::bearer_credential(plaintext)),
-            "basic_api_token" => {
-                let secret = serde_json::from_str(&plaintext)
-                    .map_err(|_| ManagedStoreError::CredentialDecryptFailed)?;
-                super::execution_credential_from_secret("basic_api_token", secret)
-            }
-            _ => Err(ManagedStoreError::CredentialInvalid(
-                "unsupported credential kind".to_string(),
-            )),
-        }
+        let secret = if kind == "bearer_token" {
+            serde_json::json!({"token": plaintext})
+        } else {
+            serde_json::from_str(&plaintext)
+                .map_err(|_| ManagedStoreError::CredentialDecryptFailed)?
+        };
+        requirement.validate_stored_secret(&kind, &secret)?;
+        super::execution_credential_from_secret(&kind, secret)
     }
 
     /// A service-owned slot as a command import receives it, decrypted at
@@ -1526,16 +1483,102 @@ pub(super) fn validate_structure_with_extension(
 }
 
 #[cfg(test)]
+impl ManagedStore {
+    fn write_imported_secret_for_test<T>(
+        &self,
+        request: ImportedSecretWriteRequest,
+        ring: &CredentialKeyRing,
+        validate: impl FnOnce(
+            &ImportedCatalog,
+            &ImportedSecretWriteProof,
+        ) -> Result<T, ManagedStoreError>,
+    ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
+        let prepared = crate::PreparedImportedCredentialContract::for_test(
+            self.imported_catalog()?,
+            &request.service,
+            request.purpose,
+            false,
+        )?;
+        self.write_imported_secret(request, ring, &prepared, validate)
+    }
+    fn resolve_imported_secret_for_test(
+        &self,
+        service: &str,
+        purpose: ImportedCredentialPurpose,
+        version: &str,
+        ring: &CredentialKeyRing,
+    ) -> Result<ExecutionCredential, ManagedStoreError> {
+        let catalog = self.imported_catalog()?;
+        let record = catalog
+            .service(service)
+            .ok_or(ManagedStoreError::CredentialNotFound)?;
+        let contract = crate::imports::test_credential_contract(
+            &record.definition,
+            &crate::imports::ImportedAdapterContext::new(record.accepted_metadata.as_ref(), None),
+        )
+        .map_err(input_invalid)?;
+        self.resolve_imported_secret(
+            service,
+            purpose,
+            version,
+            ring,
+            contract
+                .requirement(purpose)
+                .ok_or(ManagedStoreError::CredentialNotFound)?,
+        )
+    }
+    fn imported_discovery_credential_versions_for_test(
+        &self,
+        service: &str,
+        version: u64,
+    ) -> Result<BTreeMap<String, String>, ManagedStoreError> {
+        let catalog = self.imported_catalog()?;
+        let record = catalog
+            .service(service)
+            .ok_or(ManagedStoreError::CredentialNotFound)?;
+        let contract = crate::imports::test_credential_contract(
+            &record.definition,
+            &crate::imports::ImportedAdapterContext::new(record.accepted_metadata.as_ref(), None),
+        )
+        .map_err(input_invalid)?;
+        self.imported_discovery_credential_versions(
+            service,
+            version,
+            contract.requirement(ImportedCredentialPurpose::Execution),
+        )
+    }
+    fn upsert_user_credential_for_test(
+        &self,
+        ring: &CredentialKeyRing,
+        request: CredentialWriteRequest,
+        purpose: CredentialManagementPurpose,
+    ) -> Result<CredentialMetadata, ManagedStoreError> {
+        let catalog = self.imported_catalog()?;
+        if catalog.service(&request.service).is_none() {
+            return self.upsert_user_credential(ring, request, purpose);
+        }
+        let prepared = crate::PreparedImportedCredentialContract::for_test(
+            catalog,
+            &request.service,
+            ImportedCredentialPurpose::Execution,
+            true,
+        )?;
+        self.upsert_imported_user_credential(ring, request, purpose, &prepared)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::imports::{
-        ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
-        ImportedDiscoveryCredential,
+        ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialKind,
+        ImportedCredentialMode, ImportedDiscoveryCredential,
     };
     use agent_access_provider::test_support::bearer_credential;
     use serde_json::json;
     include!("managed_store/imported_store_golden_tests.rs");
     include!("managed_store/command_imports_store_tests.rs");
+    include!("managed_store/imported_basic_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,
@@ -1712,7 +1755,10 @@ mod tests {
             .catalog;
         assert!(
             store
-                .imported_discovery_credential_versions("observability", draft.services[0].version)
+                .imported_discovery_credential_versions_for_test(
+                    "observability",
+                    draft.services[0].version
+                )
                 .unwrap()
                 .is_empty()
         );
@@ -1772,7 +1818,7 @@ mod tests {
                 let mut write = slot(&catalog, "draft-secret");
                 write.purpose = purpose;
                 catalog = store
-                    .write_imported_secret(write, &ring, |catalog, _| accept(catalog))
+                    .write_imported_secret_for_test(write, &ring, |catalog, _| accept(catalog))
                     .unwrap()
                     .catalog;
             }
@@ -1797,7 +1843,7 @@ mod tests {
             for (purpose, version) in &saved.services[0].slot_versions {
                 assert!(
                     store
-                        .resolve_imported_secret("observability", *purpose, version, &ring)
+                        .resolve_imported_secret_for_test("observability", *purpose, version, &ring)
                         .is_ok()
                 );
             }
@@ -1808,7 +1854,7 @@ mod tests {
             assert!(catalog.services[0].slot_versions.is_empty());
             assert!(
                 store
-                    .imported_discovery_credential_versions(
+                    .imported_discovery_credential_versions_for_test(
                         "observability",
                         catalog.services[0].version
                     )
@@ -1816,7 +1862,12 @@ mod tests {
             );
             for (purpose, version) in &saved.services[0].slot_versions {
                 assert!(matches!(
-                    store.resolve_imported_secret("observability", *purpose, version, &ring),
+                    store.resolve_imported_secret_for_test(
+                        "observability",
+                        *purpose,
+                        version,
+                        &ring
+                    ),
                     Err(ManagedStoreError::CredentialNotFound)
                 ));
             }
@@ -1831,7 +1882,7 @@ mod tests {
             .unwrap()
             .catalog;
         store
-            .upsert_user_credential(
+            .upsert_user_credential_for_test(
                 &ring,
                 CredentialWriteRequest {
                     owner_principal_id: "admin".into(),
@@ -2066,7 +2117,7 @@ mod tests {
             .unwrap()
             .catalog;
         let draft = store
-            .write_imported_secret(slot(&draft, "discovery-token"), &ring, |catalog, _| {
+            .write_imported_secret_for_test(slot(&draft, "discovery-token"), &ring, |catalog, _| {
                 accept(catalog)
             })
             .unwrap()
@@ -2127,7 +2178,7 @@ mod tests {
             .unwrap()
             .catalog;
         let draft = store
-            .write_imported_secret(slot(&draft, "discovery-token"), &ring, |catalog, _| {
+            .write_imported_secret_for_test(slot(&draft, "discovery-token"), &ring, |catalog, _| {
                 accept(catalog)
             })
             .unwrap()
@@ -2154,9 +2205,11 @@ mod tests {
             .catalog;
         assert!(store.imported_preview("observability").unwrap().is_some());
         store
-            .write_imported_secret(slot(&refreshed, "sentinel-token"), &ring, |catalog, _| {
-                accept(catalog)
-            })
+            .write_imported_secret_for_test(
+                slot(&refreshed, "sentinel-token"),
+                &ring,
+                |catalog, _| accept(catalog),
+            )
             .unwrap();
         assert!(store.imported_preview("observability").unwrap().is_none());
     }
@@ -2169,14 +2222,16 @@ mod tests {
             .catalog;
         assert!(
             store
-                .write_imported_secret(slot(&draft, "do-not-commit"), &ring, |catalog, _| reject(
-                    catalog
-                ))
+                .write_imported_secret_for_test(
+                    slot(&draft, "do-not-commit"),
+                    &ring,
+                    |catalog, _| reject(catalog)
+                )
                 .is_err()
         );
         assert!(store.active_credential_key_ids().unwrap().is_empty());
         let with_secret = store
-            .write_imported_secret(
+            .write_imported_secret_for_test(
                 slot(&draft, "unique-private-sentinel"),
                 &ring,
                 |catalog, _| accept(catalog),
@@ -2192,7 +2247,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .resolve_imported_secret(
+                .resolve_imported_secret_for_test(
                     "observability",
                     ImportedCredentialPurpose::Execution,
                     version,
@@ -2202,7 +2257,7 @@ mod tests {
             bearer_credential("unique-private-sentinel")
         );
         assert!(matches!(
-            store.resolve_imported_secret(
+            store.resolve_imported_secret_for_test(
                 "observability",
                 ImportedCredentialPurpose::Execution,
                 "stale",
@@ -2239,7 +2294,7 @@ mod tests {
         assert_eq!(store.imported_catalog().unwrap(), retired);
         assert_eq!(
             store
-                .resolve_imported_secret(
+                .resolve_imported_secret_for_test(
                     "observability",
                     ImportedCredentialPurpose::Execution,
                     version,
@@ -2270,7 +2325,7 @@ mod tests {
             .unwrap()
             .catalog;
         store
-            .write_imported_secret(slot(&draft, "private-token"), &ring, |catalog, _| {
+            .write_imported_secret_for_test(slot(&draft, "private-token"), &ring, |catalog, _| {
                 accept(catalog)
             })
             .unwrap();
@@ -2366,8 +2421,9 @@ mod tests {
             Err(ManagedStoreError::RightMissing)
         ));
         assert!(matches!(
-            store
-                .write_imported_secret(slot(&draft, "secret"), &ring, |catalog, _| accept(catalog)),
+            store.write_imported_secret_for_test(slot(&draft, "secret"), &ring, |catalog, _| {
+                accept(catalog)
+            }),
             Err(ManagedStoreError::RightMissing)
         ));
         let mut other = definition();
@@ -2396,7 +2452,7 @@ mod tests {
             .unwrap()
             .catalog;
         let draft = store
-            .write_imported_secret(slot(&draft, "service-token"), &ring, |catalog, _| {
+            .write_imported_secret_for_test(slot(&draft, "service-token"), &ring, |catalog, _| {
                 accept(catalog)
             })
             .unwrap()
@@ -2412,7 +2468,7 @@ mod tests {
             actor: "admin".into(),
         };
         store
-            .upsert_user_credential(
+            .upsert_user_credential_for_test(
                 &ring,
                 token("first-token"),
                 crate::CredentialManagementPurpose::Administrative,
@@ -2420,7 +2476,10 @@ mod tests {
             .unwrap();
         let mut request = pending(&draft);
         request.credential_versions = store
-            .imported_discovery_credential_versions("observability", draft.services[0].version)
+            .imported_discovery_credential_versions_for_test(
+                "observability",
+                draft.services[0].version,
+            )
             .unwrap();
         let observed = store
             .write_imported_preview(request.clone(), accept)
@@ -2428,7 +2487,7 @@ mod tests {
             .catalog;
         let preview = store.imported_preview("observability").unwrap().unwrap();
         store
-            .upsert_user_credential(
+            .upsert_user_credential_for_test(
                 &ring,
                 token("rotated-token"),
                 crate::CredentialManagementPurpose::Administrative,
@@ -2460,7 +2519,7 @@ mod tests {
             let (_temp, _config, store, ring) = fixture();
             if leftover == "credential" {
                 store
-                    .upsert_user_credential(
+                    .upsert_user_credential_for_test(
                         &ring,
                         CredentialWriteRequest {
                             owner_principal_id: "admin".into(),
@@ -2550,13 +2609,13 @@ mod tests {
             .unwrap()
             .catalog;
         let draft = store
-            .write_imported_secret(slot(&draft, "service-token"), &ring, |catalog, _| {
+            .write_imported_secret_for_test(slot(&draft, "service-token"), &ring, |catalog, _| {
                 accept(catalog)
             })
             .unwrap()
             .catalog;
         store
-            .upsert_user_credential(
+            .upsert_user_credential_for_test(
                 &ring,
                 CredentialWriteRequest {
                     owner_principal_id: "admin".into(),
@@ -2581,7 +2640,10 @@ mod tests {
         ));
         let mut observation = pending(&draft);
         observation.credential_versions = store
-            .imported_discovery_credential_versions("observability", draft.services[0].version)
+            .imported_discovery_credential_versions_for_test(
+                "observability",
+                draft.services[0].version,
+            )
             .unwrap();
         observation.actor = "second-admin".into();
         assert!(matches!(

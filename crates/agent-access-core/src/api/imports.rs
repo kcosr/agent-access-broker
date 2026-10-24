@@ -11,7 +11,7 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
         "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"importAuthentication":import_authentication(),
         "commandImports":{"type":"array","description":"Operator-approved command names a command import may name as command:<name>; paths are never returned.",
             "items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}},
-        "catalogRevision":revision(),"services":{"type":"array","items":service_record()}
+        "catalogRevision":revision(),"services":{"type":"array","items":service_view()}
     }}));
     routes.push(list);
     let mut get = get_management_route(DETAIL, "admin.imports.inspect", RouteAccess::AdminRead);
@@ -106,9 +106,9 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let credential_path = format!("{DETAIL}/credentials/{{purpose}}");
     let mut secret = versioned_request();
     secret["properties"]["token"] = json!({"type":"string","minLength":1,"maxLength":32768,
-        "pattern":"^[!-~]+$","writeOnly":true,"description":"Backend token; never returned by management reads."});
+        "writeOnly":true,"description":"Credential secret matching this slot's credentialInputs policy; never returned by management reads."});
     secret["properties"]["username"] = json!({"type":"string","minLength":1,"maxLength":256,
-        "description":"Username of a username_token command credential; required for that execution slot and rejected for every other slot."});
+        "description":"Username required exactly when this slot's credentialInputs declares it; preserve bytes."});
     secret["required"]
         .as_array_mut()
         .unwrap()
@@ -179,6 +179,7 @@ fn action_name() -> Value {
 fn delivery() -> Value {
     json!({"oneOf":[
         {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"bearer"}}},
+        {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"basic"}}},
         {"type":"object","additionalProperties":false,"required":["kind","name"],"properties":{"kind":{"const":"raw_header"},"name":{"type":"string","minLength":1,"maxLength":128}}},
         {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"stdin"}}}
     ]})
@@ -259,9 +260,17 @@ fn action_definition() -> Value {
         "inputSchema":{},"outputSchema":{},"annotations":{},"readOnly":{"type":"boolean"}
     }})
 }
-fn service_record() -> Value {
+fn credential_input() -> Value {
+    json!({"oneOf":[
+        {"type":"object","additionalProperties":false,"required":["state","credentialKind","inputPolicy","fields"],"properties":{
+            "state":{"const":"ready"},"credentialKind":{"enum":["bearer_token","basic_api_token"]},
+            "inputPolicy":{"enum":["token_header","http_basic","command_stdin"]},"fields":{"type":"array","items":{"type":"object"}}}},
+        {"type":"object","additionalProperties":false,"required":["state","reason"],"properties":{"state":{"const":"unavailable"},"reason":{"type":"string","maxLength":256}}}
+    ]})
+}
+fn service_view() -> Value {
     json!({"type":"object","additionalProperties":false,
-    "required":["definition","status","version","actions","slotVersions","createdAt","createdBy","updatedAt","updatedBy"],"properties":{
+    "required":["definition","status","version","actions","slotVersions","credentialInputs","createdAt","createdBy","updatedAt","updatedBy"],"properties":{
         "definition":stored_service_definition(),"status":{"enum":["draft","disabled","enabled","retired"]},"version":version(),
         "actions":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["definition","status","version","definitionHash"],"properties":{
@@ -269,6 +278,7 @@ fn service_record() -> Value {
                 "version":version(),"definitionHash":{"type":"string"}
             }}},
         "slotVersions":{"type":"object","additionalProperties":{"type":"string"},"description":"Opaque credential slot versions; no token values."},
+        "credentialInputs":{"type":"object","propertyNames":{"enum":["execution","discovery","transport"]},"additionalProperties":credential_input()},
         "acceptedMetadata":accepted_metadata(),
         "createdAt":{"type":"string","format":"date-time"},"createdBy":{"type":"string"},
         "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
@@ -385,7 +395,7 @@ fn command_version() -> Value {
 fn service_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
         "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
-        "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
+        "catalogRevision":revision(),"service":service_view(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
         "resourceTypeEffects":resource_type_effects()
     }})
 }
@@ -433,7 +443,7 @@ fn preview_record() -> Value {
 fn preview_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings","resourceTypeChanges"],"properties":{
         "resourceTypeChanges":resource_type_change_status(),
-        "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_record(),
+        "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_view(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
         "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings(),

@@ -1,3 +1,4 @@
+import { COMMAND_INPUT } from "./credential-input.fixture";
 import type {
   ImportActionDefinition,
   ImportActionRecord,
@@ -93,7 +94,7 @@ export function commandDraft(definition = commandDefinition()): ImportPreviewRes
     importAuthentication: [],
     scopedMcp: { ready: true, issues: [], truncated: false },
     scopedMcpWarnings: [],
-    service: { definition, status: "draft", version: 1, actions: [], slotVersions: {}, ...stamp },
+    service: { definition, status: "draft", version: 1, actions: [], slotVersions: {}, credentialInputs: { execution: { state: "unavailable", reason: "Accept the command manifest before setting its credential" } }, ...stamp },
     preview: null,
     resourceTypeChanges: [],
     affectedGrants: [],
@@ -138,6 +139,7 @@ export function commandAccepted(): ImportPreviewResult {
     status: "enabled",
     version: 5,
     slotVersions: { execution: "1" },
+    credentialInputs: { execution: COMMAND_INPUT },
     acceptedMetadata: commandMetadata("1.4.0", [PROJECT, QUEUE]),
     actions: [record("view", "enabled", VIEW, true), record("search", "enabled", SEARCH, true), record("create", "enabled", CREATE, false), record("whoami", "enabled", WHOAMI, true)]
   };

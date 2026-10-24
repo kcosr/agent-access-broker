@@ -80,8 +80,8 @@ struct SecretBody {
     #[serde(flatten)]
     versions: Versions,
     token: String,
-    /// Required for an execution slot whose accepted credential kind is
-    /// `username_token`, and rejected otherwise.
+    /// Required when the slot's derived contract declares username/token
+    /// material, and rejected otherwise.
     #[serde(default)]
     username: Option<String>,
 }
@@ -132,10 +132,27 @@ fn check_versions(
     }
     Ok(())
 }
+/// Administrative projection only: derived input guidance never enters the stored
+/// record, a discovery manifest, or preview hashing.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceView<'a> {
+    #[serde(flatten)]
+    record: &'a ImportedServiceRecord,
+    credential_inputs: BTreeMap<ImportedCredentialPurpose, imports::ImportedCredentialInput>,
+}
+
+fn service_view<'a>(runtime: &BrokerRuntime, record: &'a ImportedServiceRecord) -> ServiceView<'a> {
+    ServiceView {
+        record,
+        credential_inputs: runtime.imported_credential_inputs(record),
+    }
+}
+
 fn record_result(runtime: &BrokerRuntime, catalog: &ImportedCatalog, service: &str) -> Value {
     let record = catalog.service(service);
     let unavailable = runtime.imported_service_unavailable_reason(service);
-    let mut result = json!({"catalogRevision": catalog.revision, "service":record, "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)});
+    let mut result = json!({"catalogRevision": catalog.revision, "service":record.map(|record| service_view(runtime, record)), "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)});
     if let Some(version) = record.and_then(command_version) {
         result["commandVersion"] = json!(version);
     }
@@ -354,7 +371,12 @@ pub(crate) async fn list(
         Err(r) => return *r,
     };
     let catalog = context.snapshot.runtime.imported_catalog();
-    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":catalog.services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"commandImports":command_imports(&context.snapshot.runtime),"importAuthentication":context.snapshot.runtime.import_authentication()})).await
+    let services = catalog
+        .services
+        .iter()
+        .map(|record| service_view(&context.snapshot.runtime, record))
+        .collect::<Vec<_>>();
+    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"commandImports":command_imports(&context.snapshot.runtime),"importAuthentication":context.snapshot.runtime.import_authentication()})).await
 }
 
 pub(crate) async fn get(
@@ -438,7 +460,7 @@ async fn preview_response(
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
         let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
-        let mut result = json!({"catalogRevision":catalog.revision,"service":record,"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        let mut result = json!({"catalogRevision":catalog.revision,"service":service_view(&runtime, record),"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
         }
@@ -739,6 +761,8 @@ async fn change(
                         if record.status == ImportedServiceStatus::Retired {
                             return Err(invalid("retired imports cannot receive credentials"));
                         }
+                        let contract =
+                            runtime.prepare_imported_secret_contract(&service, purpose)?;
                         // The placeholder only signals presence; the store assigns the material version.
                         record.slot_versions.insert(purpose, "pending".into());
                         let override_token = (purpose == ImportedCredentialPurpose::Transport)
@@ -759,6 +783,7 @@ async fn change(
                             runtime
                                 .credential_key_ring()
                                 .ok_or_else(|| invalid("import encryption is unavailable"))?,
+                            &contract,
                             |catalog, proof| {
                                 runtime.with_imported_catalog(
                                     catalog.clone(),

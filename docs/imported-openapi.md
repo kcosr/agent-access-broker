@@ -1,6 +1,7 @@
-# OpenAPI imports
+# OpenAPI and Swagger imports
 
-The `openapi_http` adapter turns reviewed operations from an OpenAPI document into
+The `openapi_http` adapter turns reviewed operations from a Swagger 2.0 or
+OpenAPI 3.1 JSON document into
 ordinary broker actions. It uses the same imported-service administration, grants,
 execution contexts, credential selection, limits, audit, CLI and MCP interfaces as
 MCP imports. It does not infer business resources or resource scopes.
@@ -30,33 +31,40 @@ accepted operations from the database without fetching the document.
 
 In **Admin > Catalog > Import service**, a base administrator:
 
-1. Selects OpenAPI and enters a service name, API base URL and document URL.
+1. Selects OpenAPI / Swagger and enters a service name, API base URL and document URL.
 2. Chooses public document discovery, or a separate discovery credential for a
-   private document. The document credential can use Bearer or a named API-key
+   private document. The document credential can use Basic, Bearer or a named API-key
    header. It is independent of the credential used for API calls.
 3. Fetches the document and selects a supported security scheme from the discovered
-   names. The broker maps HTTP Bearer or a header API key into the execution
+   names. The broker maps HTTP Basic, HTTP Bearer or a header API key into the execution
    credential's delivery settings. Operations remain unavailable until a scheme
    is selected and discovery is refreshed.
 4. Reviews operations and explicitly assigns read-only or write-capable status,
    accepts the selection, provisions the execution credential and enables the
    service. Existing action/context grants control access. Operations stay
-   write-capable until reviewed as read-only, and the classification also limits
+   write-capable until reviewed as read-only, including POST search operations,
+   and the classification also limits
    [read-only identity paths](imported-services.md#classification-and-read-only-identity-access).
 
 Shared execution credentials and personal tokens use the existing service and
 per-user modes. A missing personal token never falls back to the shared token or
 the document credential. OpenAPI OAuth declarations do not create a working OAuth
-integration: this adapter supports static Bearer and header API keys.
+integration: this adapter supports static Basic, Bearer and header API keys.
+Basic uses the existing encrypted username/token credential and the personal
+`username-token` profile; its `token` field contains the password or API token.
+The username and secret preserve spaces and Unicode exactly. Usernames cannot
+contain a colon, and neither field can contain control characters. Both must be
+nonempty; usernames are limited to 256 UTF-8 bytes, with a 32 KiB combined
+serialized-secret limit. There is no credential normalization or challenge retry.
 
 The API uses `adapterKind: "openapi_http"`, `endpoint` for the API base URL, and
 these string-valued `connectionSettings`:
 
 | Setting | Meaning |
 | --- | --- |
-| `definitionUrl` | URL of the OpenAPI JSON document |
-| `securityScheme` | Selected `components.securitySchemes` name; omitted in an empty draft |
-| `definitionAuthKind` | `none`, `bearer`, or `raw_header` |
+| `definitionUrl` | URL of the OpenAPI or Swagger JSON document |
+| `securityScheme` | Selected Swagger `securityDefinitions` or OpenAPI `components.securitySchemes` name; omitted in an empty draft |
+| `definitionAuthKind` | `none`, `basic`, `bearer`, or `raw_header` |
 | `definitionAuthHeader` | Header name for `raw_header` document authentication |
 
 Public document discovery uses `discovery.kind: "anonymous"`. Private document
@@ -78,7 +86,12 @@ request is rejected. Use a new service identity for a different connection.
 
 ## Supported document and request profile
 
-The supported document profile accepts OpenAPI **3.1.x JSON**. Operations use unique
+The supported document profile accepts Swagger **2.0 JSON** and OpenAPI
+**3.1.x JSON**, using the same compiler and HTTP executor. The root `swagger` or
+`openapi` marker selects the reader; `info.version` is the upstream API's version
+and does not select a specification dialect. Duplicate JSON members fail discovery
+with a `duplicate JSON member` diagnostic; failed refresh keeps the accepted
+generation. Operations use unique
 `operationId` values as their source identities, or stable method/path identities
 when no operation ID exists. Suggested action names derive from those IDs or
 method/path values; administrators can edit them before acceptance. The accepted
@@ -89,7 +102,9 @@ acquire new operations.
 
 Inputs separate `path`, `query`, `headers` and `body` values. The adapter supports
 primitive path and header parameters, primitive query parameters and primitive
-query arrays using form serialization, and JSON request bodies. Required fields
+query arrays using form serialization, JSON request bodies, and the scalar
+URL-encoded form profile below. JSON bodies may be objects or arrays, and DELETE
+may carry a body. GET, HEAD and OPTIONS bodies are unsupported. Required fields
 and supported JSON Schema constraints are validated before dispatch. Path values
 cannot contain slash, backslash, percent signs or dot-only segments, which avoids
 upstream path normalization changing the selected operation. Query values are
@@ -103,7 +118,8 @@ discovery fails with an explicit limit error. A document server answering HTTP
 when the response carries a valid `Retry-After`.
 
 References are local and bounded, targeting the appropriate `components`
-collection; schema references target `components.schemas`. Request and response
+collection in OpenAPI, or `definitions`, `parameters` and `responses` in Swagger.
+Reusable parameter map keys need not equal their wire names. Request and response
 schemas are self-contained; external references are not fetched. Server definitions and their overrides must
 resolve to the configured API destination, with server variables fixed at their
 document defaults. Input values, links and document metadata cannot choose another
@@ -111,12 +127,74 @@ destination. Operation security overrides are honored. A supported single-scheme
 alternative may be selected; combined authentication requirements and unsupported
 security profiles remain visible as unsupported operations.
 
-OpenAPI 3.0 conversion, 3.2, YAML, cookie/query API-key authentication, multipart or
-binary transfers, complex parameter serialization, callbacks/webhooks and external
+Swagger schema references must be acyclic; path-item references are unsupported.
+Schema references may carry descriptive annotations, but not sibling validation
+keywords. The Swagger profile rejects `x-nullable`, null or union types, and
+`readOnly: true` in request schemas. These limits apply to referenced schemas too.
+
+OpenAPI 3.0 conversion, 3.2, YAML, cookie/query API-key authentication, anonymous
+execution, combined security schemes, multipart or binary transfers, complex
+parameter serialization, callbacks/webhooks and external
 references are outside this profile. Unsupported operations remain visible with a
 reason instead of becoming partially executable actions. The
 [OpenAPI 3.1.1 specification](https://spec.openapis.org/oas/v3.1.1.html) defines the
 upstream format; these are explicit broker implementation limits.
+
+### URL-encoded forms
+
+Swagger `formData` parameters and supported OpenAPI form request bodies become
+an ordinary JSON `body` object. MCP adds its usual `inputs` wrapper:
+
+```json
+{"inputs":{"body":{"query":"open items","ids":"123,456","page":2}}}
+```
+
+For fields with those declared types, the Broker validates the JSON and sends
+`ids=123%2C456&page=2&query=open+items` with
+`Content-Type: application/x-www-form-urlencoded`. Callers supply values rather
+than encoded strings. Basic credentials are stored separately, never passed as
+action inputs. HTTP MCP, local stdio MCP and generic CLI invocation support the
+same accepted form actions; this encoding does not require file-upload support.
+
+Forms contain 1–128 declared scalar fields: string, integer, number or boolean.
+Unknown fields, nulls, arrays, nested objects and files are rejected. Comma-list
+strings remain single strings. An omitted optional field is absent from the
+request; an empty string sends `name=`. An omitted optional body sends no body
+or content type; an explicit allowed `{}` sends an empty form with its content
+type. Fields are emitted once in deterministic name order and escaped once.
+
+OpenAPI form schemas must be closed objects (`additionalProperties: false`) of
+declared scalar properties. Local schema references and scalar constraints are
+supported. Encoding Objects may be absent, empty, or explicitly use
+`style: form`, `explode: true`, `allowReserved: false`; other serialization,
+per-property content types, nonempty headers and content-encoding schema
+annotations are unsupported. Swagger's declared form parameters determine its
+closed object and required fields. Requiredness is validated before dispatch.
+
+Request media declarations use parameter-free `application/json` or
+`application/x-www-form-urlencoded`. If an OpenAPI request offers both supported
+representations, JSON is selected; callers do not switch encodings. An invalid
+JSON representation does not silently fall back to form.
+
+Swagger body parameters require an effective `consumes` array containing
+`application/json`; `formData` parameters require
+`application/x-www-form-urlencoded`. Schema-bearing responses require an effective
+`produces` array containing `application/json` or a supported JSON media type
+ending in `+json`. Each operation inherits these arrays from the root unless it
+declares its own. Missing or invalid required media declarations make the
+operation unsupported. Bodyless operations do not require `consumes`.
+
+Response media declarations must also be parameter-free and contain no whitespace.
+This validation applies to accepted frozen plans at startup. Older versions could
+load malformed `+json` declarations containing parameters or spaces; those
+services now become unavailable. Correct the source declaration, refresh the
+import and accept the corrected actions before using the service again. Valid
+previously accepted JSON plans retain their stored representation.
+
+Serialized invocation
+inputs and the encoded form body each have a 1 MiB limit, including escaping
+expansion. Pagination is explicit: callers supply the documented page or token;
+the Broker does not follow it automatically.
 
 ## Results and execution
 
@@ -129,7 +207,11 @@ as `status` and `body`. The opaque payload is marked sensitive across the catalo
 runtime OpenAPI, JSON-send and MCP surfaces. Declared response status/content and
 schemas are validated. Error bodies that do not match a declared response are
 omitted while retaining the HTTP failure status. Empty successful responses have
-a null body.
+a null body. A Swagger response without a schema declares no response content,
+even when `produces` names JSON. Nonempty content for that response is a protocol
+failure. For a dispatched write, this yields an unknown mutation receipt with
+`retrySafe: false`; correct the upstream response schema, rediscover and review
+the changed contract rather than retrying the mutation to repair its receipt.
 
 Successful write responses are `applied_unverified`: receiving a success response
 does not establish a verified business outcome. A failed write reports whether
@@ -144,6 +226,11 @@ its request was dispatched in `operationDispatched`, with a mutation receipt:
 
 The failure keeps its ordinary reason code. Local output saving uses the
 existing receipt behavior and never replays the API operation.
+
+Accepted plans load offline after restart. Existing JSON plan bytes retain their
+meaning. Newly accepted Basic or form definitions require a compatible Broker;
+before rolling back to an older binary, restore a compatible backup or remove
+the affected imports through the newer binary.
 
 ## Connecting one imported service
 

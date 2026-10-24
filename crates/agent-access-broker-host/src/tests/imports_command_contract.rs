@@ -452,7 +452,7 @@ fn personal_credential(runtime: &BrokerRuntime, token: &str) {
     runtime
         .managed_store()
         .unwrap()
-        .upsert_user_credential(
+        .upsert_imported_user_credential(
             runtime.credential_key_ring().unwrap(),
             agent_access_core::CredentialWriteRequest {
                 owner_principal_id: "avery".into(),
@@ -465,6 +465,10 @@ fn personal_credential(runtime: &BrokerRuntime, token: &str) {
                 actor: "admin".into(),
             },
             agent_access_core::CredentialManagementPurpose::Administrative,
+            &runtime
+                .prepare_imported_connection_contract("tickets")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
 }
@@ -1459,7 +1463,7 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
     runtime
         .managed_store()
         .unwrap()
-        .upsert_user_credential(
+        .upsert_imported_user_credential(
             runtime.credential_key_ring().unwrap(),
             agent_access_core::CredentialWriteRequest {
                 owner_principal_id: "avery".into(),
@@ -1472,6 +1476,10 @@ async fn verification_runs_verify_only_for_commands_that_declare_it() {
                 actor: "admin".into(),
             },
             agent_access_core::CredentialManagementPurpose::Administrative,
+            &runtime
+                .prepare_imported_connection_contract("notes")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
     let runs = contract.started("verify").len();

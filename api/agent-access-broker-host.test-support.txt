@@ -644,6 +644,7 @@ impl core::marker::UnsafeUnpin for agent_access_core::imports::definition::Impor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::definition::ImportedBindingStatus
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::definition::ImportedBindingStatus
 pub enum agent_access_core::imports::definition::ImportedCredentialDelivery
+pub agent_access_core::imports::definition::ImportedCredentialDelivery::Basic
 pub agent_access_core::imports::definition::ImportedCredentialDelivery::Bearer
 pub agent_access_core::imports::definition::ImportedCredentialDelivery::RawHeader
 pub agent_access_core::imports::definition::ImportedCredentialDelivery::RawHeader::name: alloc::string::String
@@ -661,7 +662,7 @@ impl core::marker::StructuralPartialEq for agent_access_core::imports::definitio
 impl serde_core::ser::Serialize for agent_access_core::imports::definition::ImportedCredentialDelivery
 pub fn agent_access_core::imports::definition::ImportedCredentialDelivery::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for agent_access_core::imports::definition::ImportedCredentialDelivery
-pub fn agent_access_core::imports::definition::ImportedCredentialDelivery::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn agent_access_core::imports::definition::ImportedCredentialDelivery::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 impl core::marker::Freeze for agent_access_core::imports::definition::ImportedCredentialDelivery
 impl core::marker::Send for agent_access_core::imports::definition::ImportedCredentialDelivery
 impl core::marker::Sync for agent_access_core::imports::definition::ImportedCredentialDelivery

@@ -198,6 +198,81 @@ async fn rpc_response(response: reqwest::Response) -> Value {
         .unwrap()
 }
 
+fn seed_import_identities(directory: &FixtureDir, hash: &Path) -> (String, String, String, String) {
+    // Seed the managed store before the broker opens and locks it.
+    let store = ManagedStore::open(
+        &ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: directory.join("store.sqlite").display().to_string(),
+            auto_migrate: true,
+            require_registered_principal_for_invocation: true,
+        },
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
+    for principal in ["admin", "agent", "personal", "missing"] {
+        store
+            .create_principal(PrincipalWriteRequest {
+                role: PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: principal.into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            })
+            .unwrap();
+    }
+    store
+        .patch_principal_access(PrincipalAccessPatchRequest {
+            principal_id: "admin".into(),
+            role: Some(PrincipalRole::Admin),
+            self_service_enabled: None,
+            actor: "test".into(),
+        })
+        .unwrap();
+    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
+        hash_key_ref: format!("file:{}", hash.display()),
+        ..Default::default()
+    })
+    .unwrap();
+    let issue = |principal: &str, class, scopes| {
+        store
+            .issue_broker_token(
+                &hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: principal.into(),
+                    name: "import smoke".into(),
+                    token_class: class,
+                    scopes,
+                    expires_at: None,
+                    created_by: "admin".into(),
+                },
+            )
+            .unwrap()
+            .token
+    };
+    let admin = issue("admin", BrokerTokenClass::Admin, json!({}));
+    let agent = issue(
+        "agent",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedExecutionContexts":["default"]}),
+    );
+    let personal = issue(
+        "personal",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedExecutionContexts":["default"]}),
+    );
+    let missing = issue(
+        "missing",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedExecutionContexts":["default"]}),
+    );
+    drop(store);
+    (admin, agent, personal, missing)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn imported_service_cli_setup_invoke_send_and_http_stdio_mcp_share_the_accepted_actions() {
     exercise_import(false).await;
@@ -301,77 +376,7 @@ async fn exercise_import(openapi: bool) {
         },
     };
 
-    // Seed the managed store before the broker opens and locks it.
-    let store = ManagedStore::open(
-        &ManagedStoreConfig {
-            kind: "sqlite".into(),
-            path: directory.join("store.sqlite").display().to_string(),
-            auto_migrate: true,
-            require_registered_principal_for_invocation: true,
-        },
-        ManagedStoreOpenMode::Startup,
-    )
-    .unwrap();
-    for principal in ["admin", "agent", "personal", "missing"] {
-        store
-            .create_principal(PrincipalWriteRequest {
-                role: PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
-            .unwrap();
-    }
-    store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            principal_id: "admin".into(),
-            role: Some(PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
-        .unwrap();
-    let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
-        hash_key_ref: format!("file:{}", hash.display()),
-        ..Default::default()
-    })
-    .unwrap();
-    let issue = |principal: &str, class, scopes| {
-        store
-            .issue_broker_token(
-                &hasher,
-                BrokerTokenIssueRequest {
-                    principal_id: principal.into(),
-                    name: "import smoke".into(),
-                    token_class: class,
-                    scopes,
-                    expires_at: None,
-                    created_by: "admin".into(),
-                },
-            )
-            .unwrap()
-            .token
-    };
-    let admin = issue("admin", BrokerTokenClass::Admin, json!({}));
-    let agent = issue(
-        "agent",
-        BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts":["default"]}),
-    );
-    let personal = issue(
-        "personal",
-        BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts":["default"]}),
-    );
-    let missing = issue(
-        "missing",
-        BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts":["default"]}),
-    );
-    drop(store);
+    let (admin, agent, personal, missing) = seed_import_identities(&directory, &hash);
     let personal_config = config_file(directory.path(), "personal", &base, &personal);
     let missing_config = config_file(directory.path(), "missing", &base, &missing);
     let admin_config = config_file(directory.path(), "admin", &base, &admin);
@@ -1055,3 +1060,6 @@ async fn exercise_import(openapi: bool) {
         stop(restarted).await;
     }
 }
+
+#[path = "imports/openapi.rs"]
+mod openapi;

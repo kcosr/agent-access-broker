@@ -1077,6 +1077,15 @@ Rules:
 
 All of the above are CLI-local input errors and exit `3`.
 
+Imported connection schemas may declare `inputPolicy: "http_basic"`. For those
+fields, literal and environment values are preserved exactly; file/stdin values
+remove at most one terminal LF or CRLF and preserve all other spaces. Both
+username and password/API token must be nonempty and contain no control
+characters; usernames also reject colon and are limited to 256 UTF-8 bytes.
+The secret remains the `token` field. Token-header and command-stdin profiles
+retain their own input conventions; credential kind alone does not select Basic
+validation.
+
 ## Rich-content write formats
 
 - The six Jira rich-content mutations use exactly one of `--content STRING` or
@@ -2090,14 +2099,18 @@ Search accepts `--query`, `--max-results` (1–50), `--page-token`, and
 See [Gmail examples and semantics](providers-gmail.md).
 
 
-## Imported MCP actions
+## Imported actions
 
 Base administrators use `admin imports list/get/create/update/discover/preview/accept`,
 `admin imports status/action-status`, and `admin imports credentials put/delete`.
 Complex writes use `--request-file`; versioned writes require `--expected-version`
 and `--expected-catalog-revision`. Token writes use `--secret-file`, `--secret-env`,
-or `--secret-stdin`, plus `--username` for a command import's `username_token`
-execution credential. Use `--confirm` for retirement and when re-enabling a service
+or `--secret-stdin`, plus `--username` when the selected slot's `credentialInputs`
+requires it, including Basic. Before reading secret material, the CLI checks the
+current descriptor and requires its service and catalog revisions to equal the
+explicit expected flags. It does not replace those flags or retry a stale write.
+Basic environment values are exact; file/stdin removes at most one final LF or
+CRLF, preserving spaces. Use `--confirm` for retirement and when re-enabling a service
 or action with retained grants. See the [import management command workflow](imported-services.md#cli-and-http-management)
 for exact request shapes, discovery timeouts and credential ownership.
 
@@ -2110,3 +2123,10 @@ exports. Writes are reported as applied but unverified on upstream success; fail
 after dispatch may be uncertain and are never automatically replayed. Saving a local
 response is separate from operation success. See the imported-services guide in
 `docs/imported-services.md` for administrative setup and supported protocol limits.
+
+Swagger 2.0 and OpenAPI 3.1 JSON imports use the same generic `invoke` and `send`
+commands. Their accepted inputs separate `path`, `query`, `headers` and `body`.
+For a URL-encoded operation, provide the declared scalar fields as a JSON `body`
+object; the Broker encodes it for the upstream. Results are bounded JSON under
+`result.upstreamHttp`. There are no generated per-import CLI subcommands. See
+[OpenAPI and Swagger imports](imported-openapi.md).

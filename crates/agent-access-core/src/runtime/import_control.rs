@@ -136,11 +136,19 @@ impl BrokerRuntime {
         } else {
             None
         };
+        let contract = self
+            .imported_credential_contracts
+            .get(service)
+            .cloned()
+            .ok_or_else(import_control_unavailable)?;
         let selected = record.clone();
         let (execution, transport, versions) = managed_store_blocking(move || {
             let service = &selected.definition.service;
-            let versions =
-                store.imported_discovery_credential_versions(service, selected.version)?;
+            let versions = store.imported_discovery_credential_versions(
+                service,
+                selected.version,
+                contract.requirement(ImportedCredentialPurpose::Execution),
+            )?;
             let slot = |purpose| {
                 store.resolve_imported_secret(
                     service,
@@ -150,6 +158,9 @@ impl BrokerRuntime {
                         .get(&purpose)
                         .ok_or(ManagedStoreError::CredentialNotFound)?,
                     &ring,
+                    contract
+                        .requirement(purpose)
+                        .ok_or(ManagedStoreError::CredentialNotFound)?,
                 )
             };
             use crate::imports::ImportedDiscoveryAuthentication::{Delegated, Static};
@@ -167,14 +178,21 @@ impl BrokerRuntime {
                     if let Some(credential) = oauth_lease {
                         Delegated(credential)
                     } else {
-                        let candidate = store.resolve_user_credential_for_verification(
-                            &ring,
-                            principal,
-                            service,
-                            "default",
-                            &["token".to_string()],
-                            crate::CredentialManagementPurpose::Administrative,
-                        )?;
+                        let candidate = store
+                            .resolve_user_credential_for_verification_with_imported_contract(
+                                &ring,
+                                principal,
+                                service,
+                                "default",
+                                &[contract
+                                    .requirement(ImportedCredentialPurpose::Execution)
+                                    .ok_or(ManagedStoreError::CredentialNotFound)?
+                                    .require_kind()?
+                                    .personal_profile()
+                                    .to_string()],
+                                crate::CredentialManagementPurpose::Administrative,
+                                contract.requirement(ImportedCredentialPurpose::Execution),
+                            )?;
                         if versions.get(&format!("user:{principal}"))
                             != Some(&candidate.target.material_version)
                         {

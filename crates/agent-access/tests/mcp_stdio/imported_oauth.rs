@@ -4,7 +4,7 @@ use agent_access_broker_host::test_support::{FixtureDir, RunningBroker};
 use agent_access_core::imports::{
     ImportedActionDefinition, ImportedAuthMechanism, ImportedBindingStatus,
     ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
-    ImportedCredentialPurpose, ImportedDiscoveryCredential, ImportedServiceDefinition,
+    ImportedDiscoveryCredential, ImportedServiceDefinition,
 };
 use agent_access_core::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -23,6 +23,7 @@ use wiremock::{
 const ACCESS: &str = "synthetic-personal-mcp-access";
 const DISCOVERY: &str = "synthetic-discovery-only-access";
 const SHARED: &str = "shared-execution-fallback-must-not-be-used";
+const RETAINED_PAT: &str = "personal-PAT-fallback-must-not-be-used";
 const PROTOCOL: &str = "2025-11-25";
 const CURRENT_PROTOCOL: &str = "2026-07-28";
 const STALLED_RESPONSE: Duration = Duration::from_millis(1_500);
@@ -546,41 +547,19 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         transport_auth: false,
         invocation_limit: None,
     };
-    let mut catalog = store
-        .create_imported_service(definition, "alice", |_| Ok(()))
+    // Retain a once-valid personal PAT when this same-destination import moves
+    // from static bearer to OAuth. All credential setup goes through the live
+    // Broker's prepared-contract admission below.
+    let oauth_definition = definition.clone();
+    let mut static_definition = definition;
+    static_definition.execution_bindings[1] = ImportedCredentialBinding::token(
+        ImportedCredentialMode::PerUser,
+        ImportedCredentialDelivery::Bearer,
+    );
+    let catalog = store
+        .create_imported_service(static_definition, "alice", |_| Ok(()))
         .unwrap()
         .catalog;
-    let ring = CredentialKeyRing::load(&CredentialEncryptionConfig {
-        active_key: "test".into(),
-        keys: vec![CredentialEncryptionKeyConfig {
-            id: "test".into(),
-            provider: "file".into(),
-            env: None,
-            path: Some(key.display().to_string()),
-        }],
-    })
-    .unwrap();
-    for (purpose, token) in [
-        (ImportedCredentialPurpose::Execution, SHARED),
-        (ImportedCredentialPurpose::Discovery, DISCOVERY),
-    ] {
-        catalog = store
-            .write_imported_secret(
-                ImportedSecretWriteRequest {
-                    service: "metrics".into(),
-                    purpose,
-                    expected_version: catalog.service("metrics").unwrap().version,
-                    expected_catalog_revision: catalog.revision,
-                    token: token.into(),
-                    username: None,
-                    actor: "alice".into(),
-                },
-                &ring,
-                |_, _| Ok(()),
-            )
-            .unwrap()
-            .catalog;
-    }
     let record = catalog.service("metrics").unwrap();
     store
         .update_imported_service(
@@ -619,7 +598,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     // stay hidden until it has its own setup grant; cleanup is registration-wide.
     let current = store.imported_catalog().unwrap();
     let primary = current.service("metrics").unwrap();
-    let mut secondary = primary.definition.clone();
+    let mut secondary = oauth_definition.clone();
     secondary.service = "metrics_secondary".into();
     secondary.display_name = "Secondary personal metrics".into();
     let secondary_actions = primary
@@ -647,23 +626,6 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
                 actor: "alice".into(),
             },
             |_| Ok(()),
-        )
-        .unwrap();
-    // Even a stored personal PAT must not satisfy a selected OAuth binding.
-    store
-        .upsert_user_credential(
-            &ring,
-            CredentialWriteRequest {
-                owner_principal_id: "alice".into(),
-                service: "metrics".into(),
-                name: "default".into(),
-                profile: "token".into(),
-                credential_kind: "bearer_token".into(),
-                secret: json!({"token":"personal-PAT-fallback-must-not-be-used"}),
-                metadata: json!({}),
-                actor: "alice".into(),
-            },
-            agent_access_core::CredentialManagementPurpose::Administrative,
         )
         .unwrap();
     if group_grant {
@@ -732,6 +694,113 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
+    let personal_pat = client
+        .put(format!(
+            "{base}/v1/admin/principals/alice/credentials/connections/metrics"
+        ))
+        .bearer_auth(&admin_token)
+        .header(
+            "X-Agent-Access-Request-Id",
+            uuid::Uuid::new_v4().to_string(),
+        )
+        .json(&json!({"profile":"token","secret":{"token":RETAINED_PAT}}))
+        .send()
+        .await
+        .unwrap();
+    let status = personal_pat.status();
+    let body: Value = personal_pat.json().await.unwrap();
+    assert!(status.is_success(), "personal PAT setup: {body}");
+    let retained_pat = body["result"].clone();
+    assert!(retained_pat["credentialId"].is_string(), "{body}");
+    let detail = client
+        .get(format!("{base}/v1/admin/imports/metrics"))
+        .bearer_auth(&admin_token)
+        .header(
+            "X-Agent-Access-Request-Id",
+            uuid::Uuid::new_v4().to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    let status = detail.status();
+    let detail: Value = detail.json().await.unwrap();
+    assert!(
+        status.is_success(),
+        "import detail before OAuth switch: {detail}"
+    );
+    let switched = client.patch(format!("{base}/v1/admin/imports/metrics"))
+        .bearer_auth(&admin_token)
+        .header("X-Agent-Access-Request-Id", uuid::Uuid::new_v4().to_string())
+        .json(&json!({"expectedVersion":detail["result"]["service"]["version"],
+            "expectedCatalogRevision":detail["result"]["catalogRevision"],"definition":oauth_definition}))
+        .send().await.unwrap();
+    let status = switched.status();
+    let body: Value = switched.json().await.unwrap();
+    assert!(status.is_success(), "OAuth binding switch: {body}");
+    let retained = client
+        .get(format!("{base}/v1/admin/principals/alice/credentials"))
+        .bearer_auth(&admin_token)
+        .header(
+            "X-Agent-Access-Request-Id",
+            uuid::Uuid::new_v4().to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    let status = retained.status();
+    let retained: Value = retained.json().await.unwrap();
+    assert!(
+        status.is_success(),
+        "retained personal credential metadata: {retained}"
+    );
+    let after_switch = retained["result"]["retained"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["credentialId"] == retained_pat["credentialId"])
+        .expect("the previous personal PAT remains a retained credential");
+    assert_eq!(after_switch["updatedAt"], retained_pat["updatedAt"]);
+    assert_eq!(after_switch["credentialKind"], "bearer_token");
+    // The stored PAT must not satisfy the newly selected OAuth binding.
+    // Use the real admission and publication path to prepare each slot's
+    // credential contract against the current runtime and catalog revision.
+    for (purpose, token) in [("execution", SHARED), ("discovery", DISCOVERY)] {
+        let detail = client
+            .get(format!("{base}/v1/admin/imports/metrics"))
+            .bearer_auth(&admin_token)
+            .header(
+                "X-Agent-Access-Request-Id",
+                uuid::Uuid::new_v4().to_string(),
+            )
+            .send()
+            .await
+            .unwrap();
+        let status = detail.status();
+        let detail: Value = detail.json().await.unwrap();
+        assert!(
+            status.is_success(),
+            "import detail before {purpose} credential: {detail}"
+        );
+        let response = client
+            .put(format!(
+                "{base}/v1/admin/imports/metrics/credentials/{purpose}"
+            ))
+            .bearer_auth(&admin_token)
+            .header(
+                "X-Agent-Access-Request-Id",
+                uuid::Uuid::new_v4().to_string(),
+            )
+            .json(
+                &json!({"expectedVersion":detail["result"]["service"]["version"],
+                "expectedCatalogRevision":detail["result"]["catalogRevision"],"token":token}),
+            )
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: Value = response.json().await.unwrap();
+        assert!(status.is_success(), "{purpose}: {body}");
+    }
     // The administrator grants alice personal access through the running
     // broker's management API.
     write_policy_grant(
@@ -1270,6 +1339,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         ACCESS,
         DISCOVERY,
         SHARED,
+        RETAINED_PAT,
         "private-upstream-session-",
         "private-upstream-instructions",
         "personal result",
@@ -1517,6 +1587,7 @@ async fn exercise_deadline_case(
         ACCESS,
         DISCOVERY,
         SHARED,
+        RETAINED_PAT,
         "private-upstream-session-",
         "private-upstream-instructions",
         "personal result",

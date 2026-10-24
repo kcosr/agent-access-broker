@@ -11,7 +11,7 @@ not initiate consent or change the exact upstream resource, audience or target.
 Never use the broker's scoped URL as the upstream OAuth resource. Missing or
 revoked OAuth connections do not fall back to stored personal tokens, service
 credentials or discovery credentials; a failed upstream write is never replayed.
-OpenAPI imports support static Bearer/header-key credentials only.
+OpenAPI and Swagger imports support static Basic, Bearer or header-key credentials only.
 
 Upstream MCP selects `2026-07-28` or `2025-11-25` automatically before tool dispatch.
 This protocol negotiation uses the existing OAuth connection, resource, audience

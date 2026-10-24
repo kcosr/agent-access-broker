@@ -1,6 +1,11 @@
-//! OpenAPI 3.1 JSON discovery and frozen, single-attempt HTTP operation execution.
+//! Swagger 2.0 / OpenAPI 3.1 JSON discovery and frozen single-attempt HTTP execution.
+mod compile;
 mod config;
 mod document;
+mod forms;
+mod json;
+mod model;
+mod readers;
 mod refs;
 mod transport;
 
@@ -39,6 +44,40 @@ impl ImportedAdapter for OpenApiAdapter {
     }
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         Settings::parse(definition).map(|_| ())
+    }
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        _import: &ImportedAdapterContext<'_>,
+    ) -> Result<ImportedCredentialContract, String> {
+        let settings = Settings::parse(definition)?;
+        fn requirement(
+            delivery: &ImportedCredentialDelivery,
+        ) -> Result<ImportedCredentialRequirement, String> {
+            match delivery {
+                ImportedCredentialDelivery::Basic => {
+                    Ok(ImportedCredentialRequirement::http_basic())
+                }
+                ImportedCredentialDelivery::Bearer
+                | ImportedCredentialDelivery::RawHeader { .. } => {
+                    Ok(ImportedCredentialRequirement::token_header())
+                }
+                _ => Err("unsupported HTTP credential delivery".into()),
+            }
+        }
+        let execution = definition
+            .execution_bindings
+            .first()
+            .map(|binding| requirement(&binding.delivery))
+            .transpose()?;
+        let discovery = settings
+            .document_delivery
+            .as_ref()
+            .map(requirement)
+            .transpose()?;
+        let contract = ImportedCredentialContract::new(execution, discovery, None);
+        contract.validate(definition)?;
+        Ok(contract)
     }
     fn additional_destinations(
         &self,
@@ -206,8 +245,7 @@ impl ImportedAdapter for OpenApiAdapter {
             let definition = definition.clone();
             let parse_definition = definition.clone();
             let document = tokio::task::spawn_blocking(move || {
-                let value = serde_json::from_slice(&bytes)
-                    .map_err(|_| "definition must be bounded JSON".to_owned())?;
+                let value = json::decode(&bytes)?;
                 Document::new(value, &parse_definition)
             })
             .await
@@ -296,7 +334,7 @@ impl Provider for OpenApiProvider {
             return Err(input_error());
         }
         let action = self.actions.get(request.action()).ok_or_else(input_error)?;
-        let (url, headers) = action.request(&self.endpoint, request.inputs())?;
+        let prepared = action.request(&self.endpoint, request.inputs())?;
         let binding = self
             .definition
             .execution_bindings
@@ -318,8 +356,8 @@ impl Provider for OpenApiProvider {
         // of a parameter header of the same name.
         let mut upstream = self
             .client
-            .request(method(&action.plan), url)
-            .headers(headers);
+            .request(method(&action.plan), prepared.url)
+            .headers(prepared.headers);
         let accepted_media = action
             .plan
             .responses
@@ -332,8 +370,8 @@ impl Provider for OpenApiProvider {
         if !accepted_media.is_empty() {
             upstream = upstream.header("Accept", accepted_media);
         }
-        if let Some(body) = request.inputs().get("body") {
-            upstream = upstream.json(body);
+        if let Some((media, bytes)) = prepared.body {
+            upstream = upstream.header("Content-Type", media).body(bytes);
         }
         let started = Instant::now();
         let mut dispatched = false;

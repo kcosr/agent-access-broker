@@ -40,18 +40,39 @@ pub enum ImportedBindingStatus {
     Unsupported,
 }
 /// Where an imported service's execution credential is presented. HTTP(S)
-/// endpoints use `Bearer` or `RawHeader`; a `command:<name>` endpoint uses
+/// endpoints use `Bearer`, `Basic`, or `RawHeader`; a `command:<name>` endpoint uses
 /// `Stdin`, and only it may.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ImportedCredentialDelivery {
     Bearer,
+    Basic,
     RawHeader {
         name: String,
     },
     /// The command import's request on stdin carries the credential; it is
     /// never placed in arguments or the environment.
     Stdin,
+}
+impl<'de> Deserialize<'de> for ImportedCredentialDelivery {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Empty struct variants enforce unknown-field rejection; Serde unit
+        // variants do not, even on a deny_unknown_fields tagged enum.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Wire {
+            Bearer {},
+            Basic {},
+            RawHeader { name: String },
+            Stdin {},
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Bearer {} => Self::Bearer,
+            Wire::Basic {} => Self::Basic,
+            Wire::RawHeader { name } => Self::RawHeader { name },
+            Wire::Stdin {} => Self::Stdin,
+        })
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -313,9 +334,14 @@ impl ImportedServiceDefinition {
                         .into(),
                 );
             }
-            if self.transport_auth && binding.delivery == ImportedCredentialDelivery::Bearer {
+            if self.transport_auth
+                && matches!(
+                    binding.delivery,
+                    ImportedCredentialDelivery::Bearer | ImportedCredentialDelivery::Basic
+                )
+            {
                 return Err(
-                    "transport bearer and execution bearer cannot share Authorization".into(),
+                    "transport bearer and execution credential cannot share Authorization".into(),
                 );
             }
         }
@@ -620,6 +646,24 @@ pub fn validate_import_schema(schema: &Value) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn basic_delivery_is_strict_and_occupies_authorization() {
+        assert_eq!(
+            serde_json::to_value(ImportedCredentialDelivery::Basic).unwrap(),
+            serde_json::json!({"kind":"basic"})
+        );
+        assert!(
+            serde_json::from_value::<ImportedCredentialDelivery>(
+                serde_json::json!({"kind":"basic","header":"Authorization"})
+            )
+            .is_err()
+        );
+        let mut service = definition();
+        service.execution_bindings[0].delivery = ImportedCredentialDelivery::Basic;
+        service.validate().unwrap();
+        service.transport_auth = true;
+        assert!(service.validate().is_err());
+    }
     #[test]
     fn broker_namespace_cannot_be_registered_as_an_import() {
         let mut service = definition();

@@ -57,6 +57,13 @@ static PLANNED_COMMAND: PlannedCommand = PlannedCommand;
 
 #[async_trait::async_trait]
 impl ImportedAdapter for PlannedCommand {
+    fn credential_contract(
+        &self,
+        definition: &crate::imports::ImportedServiceDefinition,
+        import: &crate::imports::ImportedAdapterContext<'_>,
+    ) -> Result<crate::imports::ImportedCredentialContract, String> {
+        crate::imports::test_credential_contract(definition, import)
+    }
     fn kind(&self) -> &'static str {
         "command"
     }

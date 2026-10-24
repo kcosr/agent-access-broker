@@ -1,4 +1,20 @@
-import type { ImportAuthentication, ImportBinding, ImportDelivery, ImportOAuthRegistration } from "../import-types";
+import type { ImportAuthentication, ImportBinding, ImportCredentialInput, ImportDelivery, ImportOAuthRegistration } from "../import-types";
+
+type ReadyCredentialInput = Extract<ImportCredentialInput, { state: "ready" }>;
+
+/** Import slots reject blank values except HTTP Basic, where spaces are credential bytes. */
+export function importCredentialReady(descriptor: ReadyCredentialInput, values: Record<string, string>): boolean {
+  const filled = (name: string) => descriptor.inputPolicy === "http_basic" ? Boolean(values[name]) : Boolean(values[name]?.trim());
+  return descriptor.fields.some((field) => filled(field.name)) && descriptor.fields.every((field) => !field.required || filled(field.name));
+}
+
+/** Retain command-slot username normalization without changing personal credential forms. */
+export function importCredentialValues(descriptor: ReadyCredentialInput, values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(descriptor.fields.map((field) => {
+    const value = values[field.name] ?? "";
+    return [field.name, descriptor.inputPolicy === "command_stdin" && field.name === "username" ? value.trim() : value];
+  }));
+}
 
 export type ImportPersonalAuth = "static_token" | "oauth" | "retained";
 export type ImportCredentialDraft = { shared: boolean; personal: boolean; personalAuth: ImportPersonalAuth; registrationId: string; profile: string; delivery: ImportDelivery };

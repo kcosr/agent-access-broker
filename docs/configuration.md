@@ -609,7 +609,7 @@ personal binding. It mirrors that binding and never adds a second method:
 | Import's personal binding | Published connection |
 | --- | --- |
 | None, unsupported or not allowed (service-only, credential-free, unapproved OAuth) | None |
-| Static personal token | `token_profiles` with the one profile, for every principal kind: `token`, or `username-token` for a command import that declares `username_token` |
+| Static personal credential | `token_profiles` with the one profile, for every principal kind: `token`, or `username-token` for HTTP Basic and command imports that declare `username_token` |
 | Approved MCP OAuth | `oauth` only, with the import's registration and profile |
 
 Imported connections are not configured in TOML. See

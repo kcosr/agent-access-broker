@@ -79,8 +79,7 @@ pub(crate) enum ImportCredentialsCommand {
         version: ImportVersionArgs,
         #[command(flatten)]
         secret: ImportSecretArgs,
-        /// Username for the execution slot of a command import whose
-        /// credential kind is `username_token`.
+        /// Username when the broker's credential input description requires it.
         #[arg(long)]
         username: Option<String>,
     },
@@ -96,13 +95,16 @@ pub(crate) enum ImportCredentialsCommand {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 pub(crate) struct ImportSecretArgs {
-    /// Read the backend token from a regular UTF-8 file (maximum 32 KiB).
+    /// Read the backend token/password from a regular UTF-8 file (maximum 32 KiB).
+    /// HTTP Basic removes one terminal LF or CRLF and preserves other spaces.
     #[arg(long)]
     secret_file: Option<PathBuf>,
-    /// Read the backend token from an environment variable.
+    /// Read the backend token/password from an environment variable.
+    /// HTTP Basic preserves the exact value.
     #[arg(long)]
     secret_env: Option<String>,
-    /// Read the backend token from stdin (maximum 32 KiB).
+    /// Read the backend token/password from stdin (maximum 32 KiB).
+    /// HTTP Basic removes one terminal LF or CRLF and preserves other spaces.
     #[arg(long)]
     secret_stdin: bool,
 }
@@ -154,8 +156,22 @@ fn validate_secret(token: String) -> Result<String> {
 }
 
 impl ImportSecretArgs {
-    fn read(&self) -> Result<String> {
+    fn source(&self) -> CredentialFieldSource {
+        if self.secret_file.is_some() {
+            CredentialFieldSource::File
+        } else if self.secret_env.is_some() {
+            CredentialFieldSource::Env
+        } else {
+            CredentialFieldSource::Stdin
+        }
+    }
+
+    fn read(&self, policy: ImportedCredentialInputPolicy) -> Result<String> {
+        let http_basic = policy == ImportedCredentialInputPolicy::HttpBasic;
         if let Some(path) = &self.secret_file {
+            if http_basic {
+                return credential_input::read_basic_file(path);
+            }
             if !fs::metadata(path)
                 .context("cannot inspect imported service token file")?
                 .is_file()
@@ -171,13 +187,159 @@ impl ImportSecretArgs {
             let token = env::var(name).map_err(|_| {
                 anyhow::anyhow!("cannot read imported service token environment variable")
             })?;
-            validate_secret(token)
+            if http_basic {
+                Ok(token)
+            } else {
+                validate_secret(token)
+            }
         } else if self.secret_stdin {
-            read_secret_reader(std::io::stdin().lock())
+            if http_basic {
+                credential_input::read_basic_reader(std::io::stdin().lock())
+            } else {
+                read_secret_reader(std::io::stdin().lock())
+            }
         } else {
             anyhow::bail!("select a backend token source");
         }
     }
+}
+
+fn credential_input_from_detail(
+    value: &Value,
+    service: &str,
+    purpose: &str,
+    expected: &ImportVersionArgs,
+) -> Result<CredentialInputSchema> {
+    let malformed =
+        || anyhow::anyhow!("malformed broker response: import credential description is invalid");
+    if value.get("decision").and_then(Value::as_str) != Some("allow") {
+        return Err(malformed());
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or_else(malformed)?;
+    let record = result
+        .get("service")
+        .and_then(Value::as_object)
+        .ok_or_else(malformed)?;
+    if record
+        .get("definition")
+        .and_then(|v| v.get("service"))
+        .and_then(Value::as_str)
+        != Some(service)
+    {
+        return Err(malformed());
+    }
+    let version = record
+        .get("version")
+        .and_then(Value::as_i64)
+        .filter(|v| *v > 0)
+        .ok_or_else(malformed)?;
+    let revision = result
+        .get("catalogRevision")
+        .and_then(Value::as_i64)
+        .filter(|v| *v >= 0)
+        .ok_or_else(malformed)?;
+    if version != expected.expected_version || revision != expected.expected_catalog_revision {
+        anyhow::bail!(
+            "import version conflict: current service version and catalog revision must match --expected-version and --expected-catalog-revision; inspect the import before retrying"
+        );
+    }
+    let description = record.get("credentialInputs").and_then(Value::as_object)
+        .and_then(|inputs| inputs.get(purpose))
+        .ok_or_else(|| anyhow::anyhow!("import credential input is unavailable for this purpose; inspect the import setup before supplying a secret"))?;
+    let description: agent_access_core::imports::ImportedCredentialInput =
+        serde_json::from_value(description.clone()).map_err(|_| malformed())?;
+    let agent_access_core::imports::ImportedCredentialInput::Ready {
+        credential_kind,
+        input_policy,
+        fields,
+    } = description
+    else {
+        anyhow::bail!(
+            "import credential input is unavailable; inspect the import setup and accepted manifest before supplying a secret"
+        );
+    };
+    let schema = CredentialInputSchema {
+        profile: credential_kind.clone(),
+        credential_kind,
+        input_policy: Some(input_policy),
+        fields,
+    };
+    validate_imported_credential_input_schema(&schema)?;
+    Ok(schema)
+}
+
+fn credential_put_body(
+    version: &ImportVersionArgs,
+    schema: &CredentialInputSchema,
+    secret: &ImportSecretArgs,
+    username: &Option<String>,
+) -> Result<Value> {
+    let policy = schema
+        .input_policy
+        .ok_or_else(|| anyhow::anyhow!("import credential input policy is missing"))?;
+    let token_field = credential_schema_field(schema, "token")
+        .ok_or_else(|| anyhow::anyhow!("import credential token description is missing"))?;
+    if !credential_field_allows_source(token_field, secret.source()) {
+        anyhow::bail!(
+            "selected secret source is not supported by the import credential description"
+        );
+    }
+    match (credential_schema_field(schema, "username"), username) {
+        (Some(field), Some(username)) => {
+            if !credential_field_allows_source(field, CredentialFieldSource::Literal) {
+                anyhow::bail!("the import credential description does not permit --username");
+            }
+            if policy == ImportedCredentialInputPolicy::HttpBasic {
+                credential_input::validate_basic_field("username", username)?;
+            }
+        }
+        (Some(_), None) => anyhow::bail!("this imported credential requires --username"),
+        (None, Some(_)) => anyhow::bail!("this imported credential does not accept --username"),
+        (None, None) => {}
+    }
+    let mut material = serde_json::Map::new();
+    material.insert("token".into(), json!(secret.read(policy)?));
+    if let Some(username) = username {
+        material.insert("username".into(), json!(username));
+    }
+    if policy == ImportedCredentialInputPolicy::HttpBasic {
+        credential_input::validate_basic_material(&material)?;
+    }
+    let mut body = version.body();
+    body.as_object_mut()
+        .expect("version body is an object")
+        .extend(material);
+    Ok(body)
+}
+
+async fn put_credential(
+    ctx: &CliContext<'_>,
+    service: &str,
+    purpose: &str,
+    version: &ImportVersionArgs,
+    secret: &ImportSecretArgs,
+    username: &Option<String>,
+) -> Result<(u16, Value)> {
+    // The input convention is a server-derived contract. Resolve it, and
+    // reconcile the operator's fence, before consuming any secret source.
+    let (status, detail) =
+        send_broker_get(ctx, &service_path(service), ResponseShape::ManagementObject).await?;
+    if status >= 400 {
+        return Ok((status, detail));
+    }
+    let schema = credential_input_from_detail(&detail, service, purpose, version)?;
+    let body =
+        credential_put_body(version, &schema, secret, username).map_err(DeferredCliError::input)?;
+    send_broker_json_method(
+        ctx,
+        reqwest::Method::PUT,
+        &format!("{}/credentials/{purpose}", service_path(service)),
+        Some(body),
+    )
+    .await
 }
 
 pub(crate) async fn run(ctx: &CliContext<'_>, command: &AdminImportsCommand) -> Result<()> {
@@ -265,16 +427,9 @@ pub(crate) async fn run(ctx: &CliContext<'_>, command: &AdminImportsCommand) -> 
                 secret,
                 username,
             } => {
-                let mut body = version.body();
-                body["token"] = json!(require_cli_input(secret.read()));
-                if let Some(username) = username {
-                    body["username"] = json!(username);
-                }
-                (
-                    reqwest::Method::PUT,
-                    format!("{}/credentials/{purpose}", service_path(service)),
-                    body,
-                )
+                let (status, value) =
+                    put_credential(ctx, service, purpose, version, secret, username).await?;
+                print_value_and_exit(status, value);
             }
             ImportCredentialsCommand::Delete {
                 service,
@@ -309,6 +464,305 @@ pub(crate) async fn run(ctx: &CliContext<'_>, command: &AdminImportsCommand) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn version() -> ImportVersionArgs {
+        ImportVersionArgs {
+            expected_version: 2,
+            expected_catalog_revision: 7,
+        }
+    }
+
+    fn detail(policy: ImportedCredentialInputPolicy) -> Value {
+        let requirement = match policy {
+            ImportedCredentialInputPolicy::TokenHeader => {
+                agent_access_core::imports::ImportedCredentialRequirement::token_header()
+            }
+            ImportedCredentialInputPolicy::HttpBasic => {
+                agent_access_core::imports::ImportedCredentialRequirement::http_basic()
+            }
+            ImportedCredentialInputPolicy::CommandStdin => {
+                agent_access_core::imports::ImportedCredentialRequirement::command_stdin(
+                    agent_access_core::imports::ImportedCredentialKind::UsernameToken,
+                )
+            }
+        };
+        json!({"requestId":"request", "brokerRequestId":"broker", "decision":"allow", "result": {"catalogRevision":7, "service": {
+            "definition":{"service":"example"}, "version":2,
+            "credentialInputs":{"execution":requirement.input()}
+        }}})
+    }
+
+    fn test_settings(url: String) -> ResolvedCliSettings {
+        ResolvedCliSettings {
+            url,
+            tls: CliTlsConfig::default(),
+            token: None,
+            token_from_literal_arg: false,
+            identity_header: "Authorization".into(),
+            identity_scheme: "Bearer".into(),
+            allow_insecure_broker_http: false,
+            read_content_format: ReadContentFormat::Native,
+            output_format: ResponseFormat::Json,
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_preflight_failures_do_not_read_secrets_or_send_writes() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        let settings = test_settings(server.uri());
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let secret = ImportSecretArgs {
+            secret_file: Some(PathBuf::from("missing-import-secret")),
+            secret_env: None,
+            secret_stdin: false,
+        };
+        for status in [403, 503] {
+            server.reset().await;
+            let denial =
+                json!({"requestId":"request", "brokerRequestId":"broker", "decision":"deny"});
+            Mock::given(method("GET"))
+                .and(path("/v1/admin/imports/example"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(&denial))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = put_credential(
+                &ctx,
+                "example",
+                "execution",
+                &version(),
+                &secret,
+                &Some("user".into()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response, (status, denial));
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
+        for value in [
+            json!({"requestId":"request", "brokerRequestId":"broker", "decision":"allow", "result":{}}),
+            json!({"not":"a management envelope"}),
+        ] {
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/admin/imports/example"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(value))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = put_credential(
+                &ctx,
+                "example",
+                "execution",
+                &version(),
+                &secret,
+                &Some("user".into()),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("malformed broker response"));
+            assert!(!error.contains("credential file"));
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_write_race_preserves_supplied_fence_and_never_retries() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{body_json, method, path},
+        };
+        let server = MockServer::start().await;
+        let settings = test_settings(server.uri());
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/imports/example"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(detail(ImportedCredentialInputPolicy::HttpBasic)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let conflict = json!({"requestId":"request", "brokerRequestId":"broker", "decision":"deny", "reasonCode":"version_conflict"});
+        Mock::given(method("PUT")).and(path("/v1/admin/imports/example/credentials/execution"))
+            .and(body_json(json!({"expectedVersion":2,"expectedCatalogRevision":7,"username":" user ","token":" token "})))
+            .respond_with(ResponseTemplate::new(409).set_body_json(&conflict))
+            .expect(1).mount(&server).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credential");
+        fs::write(&path, " token \n").unwrap();
+        let secret = ImportSecretArgs {
+            secret_file: Some(path),
+            secret_env: None,
+            secret_stdin: false,
+        };
+        let response = put_credential(
+            &ctx,
+            "example",
+            "execution",
+            &version(),
+            &secret,
+            &Some(" user ".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response, (409, conflict));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn imported_credential_detail_requires_matching_revisions_and_consistent_descriptor() {
+        let valid = detail(ImportedCredentialInputPolicy::HttpBasic);
+        let schema =
+            credential_input_from_detail(&valid, "example", "execution", &version()).unwrap();
+        assert_eq!(
+            schema.input_policy,
+            Some(ImportedCredentialInputPolicy::HttpBasic)
+        );
+        for (path, replacement) in [
+            ("/result/service/version", json!(3)),
+            ("/result/catalogRevision", json!(8)),
+        ] {
+            let mut value = valid.clone();
+            *value.pointer_mut(path).unwrap() = replacement;
+            assert!(
+                credential_input_from_detail(&value, "example", "execution", &version())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("version conflict")
+            );
+        }
+        for (path, replacement) in [
+            ("/decision", json!("deny")),
+            ("/result/service/definition/service", json!("other")),
+            ("/result/service/version", json!("2")),
+            ("/result/catalogRevision", json!(-1)),
+            (
+                "/result/service/credentialInputs/execution/inputPolicy",
+                json!("unknown"),
+            ),
+            (
+                "/result/service/credentialInputs/execution/inputPolicy",
+                Value::Null,
+            ),
+            (
+                "/result/service/credentialInputs/execution/credentialKind",
+                json!("bearer_token"),
+            ),
+            (
+                "/result/service/credentialInputs/execution/fields",
+                json!([]),
+            ),
+            (
+                "/result/service/credentialInputs/execution",
+                json!({"state":"unavailable","reason":"accept first"}),
+            ),
+            ("/result/service/credentialInputs", json!({})),
+        ] {
+            let mut value = valid.clone();
+            *value.pointer_mut(path).unwrap() = replacement;
+            assert!(
+                credential_input_from_detail(&value, "example", "execution", &version()).is_err(),
+                "accepted malformed path {path}"
+            );
+        }
+        assert!(credential_input_from_detail(&valid, "example", "discovery", &version()).is_err());
+    }
+
+    #[test]
+    fn basic_import_secret_sources_preserve_values_and_original_version_fence() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("credential");
+        fs::write(&file, "  päss: + word  \r\n").unwrap();
+        let schema = credential_input_from_detail(
+            &detail(ImportedCredentialInputPolicy::HttpBasic),
+            "example",
+            "execution",
+            &version(),
+        )
+        .unwrap();
+        let secret = ImportSecretArgs {
+            secret_file: Some(file),
+            secret_env: None,
+            secret_stdin: false,
+        };
+        let body =
+            credential_put_body(&version(), &schema, &secret, &Some(" 用户 ".into())).unwrap();
+        assert_eq!(
+            body,
+            json!({"expectedVersion":2,"expectedCatalogRevision":7,"username":" 用户 ","token":"  päss: + word  "})
+        );
+        let env_name = format!("AGENT_ACCESS_TEST_BASIC_{}", Uuid::new_v4().simple());
+        // SAFETY: this test owns a unique environment variable.
+        unsafe {
+            env::set_var(&env_name, "  päss: + word  ");
+        }
+        let secret = ImportSecretArgs {
+            secret_file: None,
+            secret_env: Some(env_name.clone()),
+            secret_stdin: false,
+        };
+        assert_eq!(
+            credential_put_body(&version(), &schema, &secret, &Some(" ".into())).unwrap()["token"],
+            "  päss: + word  "
+        );
+        // SAFETY: this test owns the variable being updated and removed.
+        unsafe {
+            env::set_var(&env_name, "secret\n");
+        }
+        assert!(credential_put_body(&version(), &schema, &secret, &Some("user".into())).is_err());
+        unsafe {
+            env::remove_var(env_name);
+        }
+    }
+
+    #[test]
+    fn token_and_command_import_sources_keep_existing_trimming_and_ascii_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("credential");
+        let secret = ImportSecretArgs {
+            secret_file: Some(file.clone()),
+            secret_env: None,
+            secret_stdin: false,
+        };
+        for policy in [
+            ImportedCredentialInputPolicy::TokenHeader,
+            ImportedCredentialInputPolicy::CommandStdin,
+        ] {
+            fs::write(&file, "  token\r\n").unwrap();
+            assert_eq!(secret.read(policy).unwrap(), "token");
+            fs::write(&file, "päss").unwrap();
+            assert!(secret.read(policy).is_err());
+        }
+        let schema = credential_input_from_detail(
+            &detail(ImportedCredentialInputPolicy::HttpBasic),
+            "example",
+            "execution",
+            &version(),
+        )
+        .unwrap();
+        let unreadable = ImportSecretArgs {
+            secret_file: Some(dir.path().join("missing")),
+            secret_env: None,
+            secret_stdin: false,
+        };
+        let error = credential_put_body(&version(), &schema, &unreadable, &None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("requires --username"));
+    }
 
     #[test]
     fn credentials_require_a_single_nonliteral_backend_secret_source() {

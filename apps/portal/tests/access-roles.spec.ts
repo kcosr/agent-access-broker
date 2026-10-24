@@ -505,7 +505,7 @@ test("Auditor can inspect a stored import preview while discovery and acceptance
   const definition = { action: "inspect", description: "Inspect the imported service", source: { toolName: "inspect" }, inputSchema: { type: "object" }, annotations: {}, readOnly: true };
   const imported = {
     definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint: "https://example.test/mcp", executionBindings: [], connectionSettings: {}, discovery: { kind: "anonymous" }, transportAuth: false },
-    status: "draft", version: 1, actions: [], slotVersions: {}, createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin", updatedBy: "admin"
+    status: "draft", version: 1, actions: [], slotVersions: {}, credentialInputs: {}, createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin", updatedBy: "admin"
   };
   const data = {
     service: imported, operatorAllowed: false, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {},

@@ -5,8 +5,10 @@ import { AdminButton } from "../../components/admin-access";
 // credential slots, and the administrator's OAuth discovery connection. The
 // dialogs it opens (editor, review, token) live here too.
 import { useState, type ReactNode } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
-import type { ImportBinding, ImportListResult, ImportPreviewResult, ImportPurpose } from "../../import-types";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { brokerApi } from "../../api";
+import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
+import type { ImportCredentialInput, ImportBinding, ImportListResult, ImportPreviewResult, ImportPurpose } from "../../import-types";
 import { errorMessage } from "../../lib/helpers";
 import { importItemNoun } from "../../lib/imports";
 import { COMMAND_KIND, commandCredentialText, commandName } from "../../lib/import-command";
@@ -47,22 +49,22 @@ export type ImportDialog =
 const PURPOSES: ImportPurpose[] = ["execution", "discovery", "transport"];
 
 export function bindingLabel(binding: ImportBinding) {
-  const secret = binding.delivery.kind === "stdin" ? "credential" : "token";
+  const secret = ["stdin", "basic"].includes(binding.delivery.kind) ? "credential" : "token";
   const mode = binding.ownerMode === "service" ? `Shared service ${secret}` : binding.mechanism === "oauth" ? "Personal OAuth connection" : `Personal ${secret}`;
   return `${mode}${binding.status === "unsupported" ? " (unsupported authentication)" : ""}`;
 }
 
 function deliveryLabel(binding: ImportBinding | undefined) {
   if (!binding) return null;
-  return binding.delivery.kind === "bearer" ? "Authorization: Bearer" : binding.delivery.kind === "stdin" ? "Request on stdin" : binding.delivery.name;
+  return binding.delivery.kind === "bearer" ? "Authorization: Bearer" : binding.delivery.kind === "basic" ? "Authorization: Basic" : binding.delivery.kind === "stdin" ? "Request on stdin" : binding.delivery.name;
 }
 
 function discoveryText(data: ImportPreviewResult) {
   const discovery = data.service.definition.discovery;
   if (data.service.definition.adapterKind === COMMAND_KIND) return "Discovery runs the command's describe without credentials.";
   if (discovery.kind === "anonymous") return "The public definition document is loaded without credentials.";
-  if (discovery.kind === "execution") return "Discovery uses the shared execution token.";
-  if (discovery.kind === "slot") return "Discovery uses a separate discovery token.";
+  if (discovery.kind === "execution") return "Discovery uses the shared execution credential.";
+  if (discovery.kind === "slot") return "Discovery uses a separate discovery credential.";
   return `Discovery uses the personal credentials belonging to ${discovery.principal}.`;
 }
 
@@ -79,7 +81,7 @@ function ownDiscovery(data: ImportPreviewResult, principal: string | undefined, 
 const STATUS_TEXT: Record<ImportPreviewResult["service"]["status"], string> = {
   draft: "A draft cannot execute. Configure credentials, discover and accept actions, then enable it.",
   enabled: "Enabled actions execute for grants that select a configured credential mode.",
-  disabled: "No action executes. Definitions, tokens and grants remain for later review.",
+  disabled: "No action executes. Definitions, credentials and grants remain for later review.",
   retired: "Retired permanently. Action identities and grant references remain, but nothing executes."
 };
 
@@ -152,9 +154,8 @@ export function ImportTab({
           ? definition.discovery.kind === "slot"
           : definition.transportAuth;
     if (!used && !configured) return [];
-    // A command's execution credential takes the kind its accepted manifest declares.
-    const pendingManifest = command && purpose === "execution" && !accepted?.credential;
-    const secret = command && purpose === "execution" ? "credential" : "token";
+    const descriptor = record.credentialInputs[purpose];
+    const secret = command && purpose === "execution" || descriptor?.state === "ready" && descriptor.credentialKind === "basic_api_token" ? "credential" : "token";
     return [
       <SettingsRow
         key={purpose}
@@ -165,13 +166,13 @@ export function ImportTab({
               {configured ? "Configured" : "Missing"}
             </Badge>
             {!used ? " Retained, not selected by the configuration." : null}
-            {pendingManifest && used ? " Accept the command's manifest first; it declares the credential kind." : null}
+            {descriptor?.state === "unavailable" && used ? ` ${descriptor.reason}` : null}
           </>
         }
         group
       >
         <span className="wb-btn-group">
-          <AdminButton size="sm" icon="key" disabled={!allowed || !used || pendingManifest} onClick={() => onDialog({ kind: "token", purpose, rotate: configured, data })}>
+          <AdminButton size="sm" icon="key" disabled={!allowed || !used || descriptor?.state !== "ready"} onClick={() => onDialog({ kind: "token", purpose, rotate: configured, data })}>
             {configured ? "Rotate" : "Set"} {purpose} {secret}
           </AdminButton>
           <AdminButton size="sm" variant="danger-ghost" icon="trash" disabled={!configured} onClick={() => actions.confirmDeleteToken(data, purpose)}>
@@ -187,7 +188,7 @@ export function ImportTab({
     <SettingsPage>
       {imports && !imports.operatorEnabled ? (
         <Banner tone="warning" slim>
-          Imports are disabled by operator configuration. Retained services can be inspected, disabled or retired, and stored tokens can be deleted.
+          Imports are disabled by operator configuration. Retained services can be inspected, disabled or retired, and stored credentials can be deleted.
         </Banner>
       ) : null}
       {record.status === "enabled" && data.available === false ? (
@@ -254,7 +255,7 @@ export function ImportTab({
         title="Definition"
         description={
           openapi
-            ? "The OpenAPI document describes operations; agent calls go to the API base URL."
+            ? "The OpenAPI or Swagger document describes operations; agent calls go to the API base URL."
             : command
               ? "Each agent call runs the approved command once, with the request on its stdin. Service ID and command are fixed after creation."
               : "Agent calls go to this HTTP MCP endpoint. Service ID and endpoint are fixed after creation."
@@ -303,7 +304,9 @@ export function ImportTab({
                       ? "Public document"
                       : definition.connectionSettings.definitionAuthKind === "bearer"
                         ? "Discovery Bearer token"
-                        : <>Discovery token in <span className="wb-mono">{definition.connectionSettings.definitionAuthHeader}</span></>
+                        : definition.connectionSettings.definitionAuthKind === "basic"
+                          ? "Discovery Basic credential"
+                          : <>Discovery token in <span className="wb-mono">{definition.connectionSettings.definitionAuthHeader}</span></>
                 }
               : null,
             openapi
@@ -324,7 +327,7 @@ export function ImportTab({
               ? definition.executionBindings.length
                 ? { label: "Credential delivery", value: "Request on stdin" }
                 : null
-              : { label: "Token delivery", value: <span className="wb-mono">{deliveryLabel(definition.executionBindings[0]) ?? "—"}</span> },
+              : { label: "Credential delivery", value: <span className="wb-mono">{deliveryLabel(definition.executionBindings[0]) ?? "—"}</span> },
             !openapi && definition.transportAuth ? { label: "Transport", value: "Separate transport bearer token" } : null,
             { label: "Discovery", value: discoveryText(data) },
             {
@@ -387,7 +390,7 @@ export function ImportTab({
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Credentials" description={<>Execution credentials are used for agent calls. {discoveryText(data)} Tokens are never displayed after saving.</>}>
+      <SettingsSection title="Credentials" description={<>Execution credentials are used for agent calls. {discoveryText(data)} Secrets are never displayed after saving.</>}>
         {credentialRows}
         {personalToken ? (
           <SettingsRow label="Your personal discovery token" help={<span className="wb-num">{session.principal}</span>} group>
@@ -397,7 +400,7 @@ export function ImportTab({
           </SettingsRow>
         ) : null}
         {!credentialRows.length && !personalToken ? (
-          <p className="pt-prose">{command && !definition.executionBindings.length ? "This command takes no credential." : "This configuration uses no service-owned tokens."}</p>
+          <p className="pt-prose">{command && !definition.executionBindings.length ? "This command takes no credential." : "This configuration uses no service-owned credentials."}</p>
         ) : null}
       </SettingsSection>
 
@@ -479,17 +482,27 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
     );
   }
   const { purpose, data } = dialog;
-  // A command's execution slot holds the kind its accepted manifest declares.
-  const withUsername = purpose === "execution" && data.service.acceptedMetadata?.credential?.kind === "username_token";
-  return (
-    <ImportTokenModal
-      key={`token-${purpose}`}
-      purpose={purpose}
-      rotate={dialog.rotate}
-      withUsername={withUsername}
-      noun={purpose === "execution" && data.service.definition.adapterKind === COMMAND_KIND ? "credential" : "token"}
-      onClose={close}
-      onSave={(token, username) => (purpose === "personal" ? actions.writePersonalToken(data, token) : actions.writeToken(data, purpose, token, username))}
-    />
-  );
+  if (purpose === "personal") return <PersonalDiscoveryCredential data={data} rotate={dialog.rotate} onClose={close} onSave={(token) => actions.writePersonalToken(data, token)} />;
+  const descriptor: ImportCredentialInput = data.service.credentialInputs[purpose] ?? { state: "unavailable", reason: "This service does not declare this credential slot." };
+  return <ImportTokenModal
+    key={`token-${purpose}`}
+    purpose={purpose}
+    rotate={dialog.rotate}
+    descriptor={descriptor}
+    noun={data.service.definition.adapterKind === COMMAND_KIND || descriptor.state === "ready" && descriptor.credentialKind === "basic_api_token" ? "credential" : "token"}
+    onClose={close}
+    onSave={(token, username) => actions.writeToken(data, purpose, token, username)}
+  />;
+}
+
+/** Per-user discovery gets the same connection schema as administered credential forms. */
+function PersonalDiscoveryCredential({ data, rotate, onClose, onSave }: { data: ImportPreviewResult; rotate: boolean; onClose: () => void; onSave: (token: string) => Promise<unknown> }) {
+  const { session, runQuery } = useSession();
+  const service = data.service.definition.service;
+  const schema = useQuery({
+    queryKey: [...portalQueryKeys.adminRoot(viewerKey(session)), "import-personal-credential-schema", session.principal, service, data.service.version, data.catalogRevision],
+    queryFn: () => runQuery((current) => brokerApi.adminPrincipalCredentialInputSchema(current, session.principal!, service, "token"))
+  });
+  const descriptor: ImportCredentialInput = schema.data?.inputPolicy ? { state: "ready", ...schema.data, inputPolicy: schema.data.inputPolicy } : { state: "unavailable", reason: schema.isPending ? "Loading credential fields…" : schema.isError ? "Credential fields could not be loaded. Close and try again." : "Personal discovery credentials are unavailable." };
+  return <ImportTokenModal purpose="personal" rotate={rotate} descriptor={descriptor} noun="token" onClose={onClose} onSave={onSave} />;
 }

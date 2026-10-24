@@ -550,7 +550,9 @@ impl BrokerRuntime {
             }
             _ => return Err(admission_mismatch()),
         };
-        if credential.kind() != imports::execution_credential_kind(record) {
+        if Some(credential.kind())
+            != imports::execution_credential_kind(self.imported_credential_contracts.get(service))
+        {
             return Err(ProviderError::deny(
                 ReasonCode::CredentialInvalid,
                 "stored credential kind does not match the command's credential",

@@ -396,6 +396,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
     BrokerRuntime {
         effective_credentials: Arc::new(config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
+        imported_credential_contracts: runtime.imported_credential_contracts.clone(),
         import_dispatch: runtime.import_dispatch.clone(),
         command_registry: runtime.command_registry.clone(),
         scoped_mcp: runtime.scoped_mcp.clone(),
@@ -7904,6 +7905,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
     let invalid_runtime = BrokerRuntime {
         effective_credentials: Arc::new(invalid_config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
+        imported_credential_contracts: runtime.imported_credential_contracts.clone(),
         import_dispatch: runtime.import_dispatch.clone(),
         command_registry: runtime.command_registry.clone(),
         scoped_mcp: runtime.scoped_mcp.clone(),

@@ -20,6 +20,7 @@ import type {
   CredentialList,
   CredentialMetadata,
   CredentialTarget,
+  CredentialInputSchema,
   CredentialVerificationInput,
   GroupDetail,
   ExternalGroupBinding,
@@ -568,6 +569,8 @@ export const brokerApi = {
       { method: "DELETE" },
       session
     ),
+  adminPrincipalCredentialInputSchema: (session: Session, principalId: string, connection: string, profile: string) =>
+    managementRequest<CredentialInputSchema>(`/v1/admin/principals/${encodeURIComponent(principalId)}/credentials/connections/${encodeURIComponent(connection)}/input-schema?profile=${encodeURIComponent(profile)}`, {}, session),
   adminPrincipalCredentialTargets: (session: Session, principalId: string) =>
     managementRequest<CredentialTarget[]>(
       `/v1/admin/principals/${enc(principalId)}/credentials/targets`,

@@ -166,6 +166,7 @@ pub(super) fn fixture() -> Fixture {
         .create_imported_service(definition(), "admin", |_| Ok(()))
         .unwrap()
         .catalog;
+    let draft_runtime = BrokerRuntime::new(config.clone()).unwrap();
     let configured = store
         .write_imported_secret(
             ImportedSecretWriteRequest {
@@ -178,6 +179,12 @@ pub(super) fn fixture() -> Fixture {
                 actor: "admin".into(),
             },
             ring,
+            &draft_runtime
+                .prepare_imported_secret_contract(
+                    "observability",
+                    ImportedCredentialPurpose::Execution,
+                )
+                .unwrap(),
             |_, _| Ok(()),
         )
         .unwrap()
@@ -188,8 +195,9 @@ pub(super) fn fixture() -> Fixture {
         status: ImportedActionStatus::Enabled,
     }];
     store.update_imported_service(accept, |_| Ok(())).unwrap();
+    let accepted_runtime = BrokerRuntime::new(config.clone()).unwrap();
     store
-        .upsert_user_credential(
+        .upsert_imported_user_credential(
             ring,
             CredentialWriteRequest {
                 owner_principal_id: "bob".into(),
@@ -202,6 +210,10 @@ pub(super) fn fixture() -> Fixture {
                 actor: "admin".into(),
             },
             agent_access_core::CredentialManagementPurpose::Administrative,
+            &accepted_runtime
+                .prepare_imported_connection_contract("observability")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
