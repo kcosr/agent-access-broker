@@ -236,7 +236,7 @@ space grants. Inputs accept only `maxResults` and optional `pageToken`. Continue
 stream. Authorization uses canonical keys, including personal `~` keys, never
 URL aliases. Listing grants no content access and leaves local discovery unchanged.
 
-## Jira project listing
+## Jira project discovery
 
 For live authorized projects, use the exposed Jira `project.list` tool with `{"inputs":{"maxResults":50}}`.
 This separately grantable action accepts only pagination, lists live projects,
@@ -246,6 +246,25 @@ unchanged `maxResults` through `more` and empty `scan_budget` pages until
 by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
 page and reject changed authority. Local resource-access discovery describes policy and registered references.
+
+Use the discovered Jira `project.view` tool with `{"inputs":{"project":"PROJ"}}`
+to inspect project details and searchable fields.
+
+This read-only action has its own project grant and uses the selected execution
+credential; it grants no search or issue access. Optional `include` selects
+`fields` (the default), `versions`, `components`, `issueTypes`, or `statuses`;
+`[]` requests project details only. Optional `query` filters collection names,
+IDs, and field JQL references before the 100-item cap. Collections report
+`items`, `count`, and `truncated`; narrow a truncated collection with `query`.
+
+Field entries contain `id`, `name`, `jqlReference`, `types`, and `operators`.
+Use the stable `jqlReference`, such as `cf[12345]`, in a project-scoped `search`
+JQL query: `cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"`. Do not substitute
+a display name or `customfield_12345`. Operators are the intersection of Jira's
+discovery and Broker's parser; Jira still validates the field's type. Text `~`
+means text matching, not strict whole-value equality. Custom-field functions
+and sorting are unsupported. Discovery is a searchable catalog visible to the
+credential, not every issue type's field configuration or option inventory.
 
 ## Jira issue views
 

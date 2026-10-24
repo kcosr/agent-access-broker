@@ -429,6 +429,14 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   versus empty lists stay distinct without linked-issue requests. This uses a
   stub Jira backend; live upstream permissions and embedded field behavior
   require the [manual link checks](manual-live-smoke.md#jira-embedded-link-checks).
+  Project-view discovery uses the production Jira HTTP transport against a
+  synthetic Jira server through typed CLI, invoke, send, direct HTTP, and
+  stdio/HTTP MCP. It covers service and personal execution credentials,
+  metadata selection, name/ID filtering, identity-only reads, Markdown,
+  catalog/documentation/OpenAPI/send projections, offline local discovery,
+  project-ID-bound autocomplete, and project-constrained custom-field JQL.
+  Scope/action denials and removal of the selected credential exercise the
+  authorization boundary. These fixtures do not validate a live Jira tenant.
 - `confluence_smoke.rs`
 - `gitlab_smoke.rs`
 - `gitlab_search_smoke.rs` drives repository discovery and all six native
@@ -1130,6 +1138,12 @@ policy authorization, credential selection, or provider access. Projection
 tests also require every action-specific OpenAPI/send invoke schema to accept
 explicit `native`/`json` protocol defaults when capability arrays are absent.
 
+Custom-field JQL parser cases cover stable numeric `cf[ID]` references, supported
+operators, quoted text operands, bounded lists, canonicalization, and project
+scope composition. Malformed IDs, field-name aliases, custom-field functions,
+and sorting are rejected. Project-view fixtures intersect upstream operators
+with that grammar and distinguish omitted, empty and truncated metadata sections.
+
 Jira descriptor completeness tests enumerate every declared issue-description
 and comment-body result path, including mutation readbacks, and the issue-view
 custom-field owner path `/result/customFields/*`. They assert that
@@ -1181,14 +1195,14 @@ responses; they do not validate a live tenant.
 Capability projection tests require `readContentFormats` on exactly
 `issue.view`, `issue.create`, `issue.update`, `comment.view`, `comment.add`,
 `comment.reply`, and `comment.update`. They require `responseFormats` on exactly
-`project.list`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
+`project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
 `comment.property.list`, `comment.property.get`, `attachment.list`, and
 `verify`. Representative child-create, property mutation, attachment mutation,
 and raw-download actions assert absence rather than accepting a compatibility
 fallback.
 
 Whole-result contract snapshots cover every eligible Jira retrieval family:
-project issue-type metadata, singleton issue/comment, body-free search, metadata-only comment and attachment
+project details/searchable fields, project issue-type metadata, singleton issue/comment, body-free search, metadata-only comment and attachment
 lists, comment-property list/get with arbitrary JSON, verification success, and
 the `allow_with_result` verification mismatch. Assertions require stable field
 and collection ordering, exact identifiers/timestamps/URLs/booleans/counts and

@@ -1784,6 +1784,16 @@ enum JiraCommand {
 
 #[derive(Debug, Subcommand)]
 enum JiraProjectCommand {
+    /// Inspect project details and discover fields for JQL searches.
+    View {
+        project: String,
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 0.., help = "Metadata sections (default: fields); pass --include alone for identity only")]
+        include: Option<Vec<JiraProjectSection>>,
+        #[arg(long, help = "Filter included metadata by name, ID, or JQL reference")]
+        query: Option<String>,
+        #[arg(long, value_enum)]
+        output_format: Option<OutputFormatArg>,
+    },
     List {
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         max_results: Option<u32>,
@@ -1792,6 +1802,28 @@ enum JiraProjectCommand {
         #[arg(long, value_enum)]
         output_format: Option<OutputFormatArg>,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum JiraProjectSection {
+    Fields,
+    Versions,
+    Components,
+    #[value(name = "issueTypes")]
+    IssueTypes,
+    Statuses,
+}
+
+impl JiraProjectSection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fields => "fields",
+            Self::Versions => "versions",
+            Self::Components => "components",
+            Self::IssueTypes => "issueTypes",
+            Self::Statuses => "statuses",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -14497,6 +14529,40 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
     match command {
         JiraCommand::Project {
             command:
+                JiraProjectCommand::View {
+                    project,
+                    include,
+                    query,
+                    output_format,
+                },
+        } => {
+            let mut inputs = serde_json::Map::new();
+            inputs.insert("project".to_string(), serde_json::json!(project));
+            if let Some(include) = include {
+                inputs.insert(
+                    "include".to_string(),
+                    serde_json::json!(
+                        include
+                            .iter()
+                            .map(|section| section.as_str())
+                            .collect::<Vec<_>>()
+                    ),
+                );
+            }
+            if let Some(query) = query {
+                inputs.insert("query".to_string(), serde_json::json!(query));
+            }
+            run_typed_invoke_value(
+                ctx,
+                "jira.project.view",
+                inputs.into(),
+                None,
+                *output_format,
+            )
+            .await
+        }
+        JiraCommand::Project {
+            command:
                 JiraProjectCommand::List {
                     max_results,
                     page_token,
@@ -19161,6 +19227,7 @@ upload_spool_dir = "upload-spool"
 
         let whole_result = [
             (&["jira", "project", "list"][..], "project.list"),
+            (&["jira", "project", "view"][..], "project.view"),
             (&["jira", "issue-type", "list"][..], "issue_type.list"),
             (&["jira", "issue", "view"][..], "issue.view"),
             (&["jira", "issue", "search"][..], "search"),

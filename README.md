@@ -44,7 +44,7 @@ Native integrations pair action permissions with the following resource controls
 
 | Integration | Supported operations | Resource controls |
 | --- | --- | --- |
-| [Jira](docs/providers-jira.md) | Live project listing, issues, search, comments, and attachments | Projects |
+| [Jira](docs/providers-jira.md) | Project discovery, issues, search, comments, and attachments | Projects |
 | [Confluence](docs/providers-confluence.md) | Live space listing, pages, blogs, drafts, comments, and attachments | Spaces, including personal spaces |
 | [GitLab REST](docs/providers-gitlab-rest.md) | Repository discovery, content search, issues, merge requests, CI, uploads, and webhooks | Repositories and namespaces |
 | [CloudBees CI](docs/providers-cloudbees-ci.md) | Live job listing, builds, Pipelines, logs, artifacts, queues, and triggers | Jobs, folders, and controllers |
@@ -60,6 +60,11 @@ Jira’s separately grantable [`project.list`](docs/providers-jira.md#live-proje
 action lists visible live projects within effective project grants. It needs only
 pagination inputs, supports service and personal credentials including OAuth,
 and returns confidential continuations when more scanning remains.
+[`project.view`](docs/providers-jira.md#project-details-and-searchable-fields)
+then describes an authorized project and its searchable fields. Use the returned
+stable JQL references, such as `cf[12345]`, in the existing issue search action;
+supported operators come from both Jira and Broker's bounded grammar. Project
+view and search have independent grants.
 
 Jira issue views include [resolution, dates, components, versions and status
 category](docs/providers-jira.md#standard-context), plus [supported custom-field

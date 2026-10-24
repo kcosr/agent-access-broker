@@ -289,7 +289,8 @@ isolated broker and invokes it through the real `agent-access` binary.
 
 The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
 backend as a provider fixture and drives typed `agent-access jira issue
-view/search`, live project listing, project issue-type discovery and its create workflow, and issue
+view/search`, live project listing, project details and searchable-field discovery,
+project issue-type discovery and its create workflow, and issue
 comment commands.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
@@ -395,6 +396,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
+  `project_view.rs` authorized project details and searchable-field discovery,
   `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
@@ -403,7 +405,11 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   universal same-mode issue-link gate and never triggers target fetches.
   Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
   or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
-  `test-support` feature serves the production provider with its gateway
+  project discovery uses the selected execution credential after authorization,
+  and advertises only the intersection of upstream operators and Broker's JQL
+  grammar. Custom-field queries use canonical `cf[<numeric ID>]` references;
+  preserve scope composition and result containment independently of discovery.
+  Its `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`space_list.rs` live space collection, `backend.rs` wire
   seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
@@ -658,7 +664,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   Broker- versus command-enforced resources, credentials, the describe/invoke/
   verify stdin and stdout contract, error codes and receipts, network settings,
   process lifecycle and limits, audit, and the trust model.
-- `docs/providers-jira.md`: Jira issue, search, comment, attachment,
+- `docs/providers-jira.md`: Jira project discovery, issue, search, comment, attachment,
   verification, URL locator, and attribution behavior, and OAuth connections
   with each action's Atlassian scopes.
 - `docs/providers-gmail.md`: Google connection setup, Gmail actions, MIME bounds,

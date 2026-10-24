@@ -180,7 +180,7 @@ Each action needs these Atlassian OAuth scopes:
 
 | Actions | Scopes |
 | --- | --- |
-| `project.list`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
+| `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
 | `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
 
 `read:jira-user` serves only token verification and is not needed. The
@@ -357,13 +357,88 @@ pages fail explicitly; start a fresh listing with a smaller `maxResults`.
 Permission failures, malformed pagination, rate limits and timeouts remain
 errors, never successful exhaustion. Jira’s `nextPage` URL is never followed.
 
+## Project details and searchable fields
+
+Use `project.list` to find a project, `project.view` to inspect its searchable
+fields, then `search` to run bounded JQL in that project:
+
+```bash
+agent-access jira project list
+agent-access jira project view PROJ
+agent-access jira project view PROJ --output-format markdown
+agent-access jira project view PROJ --include fields,versions --query external
+agent-access jira issue search --project PROJ --jql 'cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"'
+agent-access invoke jira.project.view --input-json '{"project":"PROJ","include":["fields","versions"]}'
+```
+
+`project.view` is a separately granted, read-only action. Its required `project`
+is an uppercase project key; it does not accept an issue key, numeric project
+ID, or URL. The Broker authorizes that key before any upstream request, then
+uses the selected service or personal execution credential, including OAuth,
+for all metadata. No lookup credential is required. The returned project's
+current key must match the authorized key, so a renamed project's old key does
+not disclose its new metadata. The execution credential needs Jira's Browse
+Projects access. Discovery does not grant search or issue access.
+
+`include` selects any of `fields`, `versions`, `components`, `issueTypes`, and
+`statuses`. Omitting it selects only `fields`; an empty array requests only
+project details. Typed CLI uses comma-separated `--include` values. Optional
+`query` (`--query`) accepts at most 256 Unicode characters, contains no control
+characters, and must be nonempty after trimming. It filters each requested
+collection by case-insensitive name or ID substring,
+also matching `jqlReference` for fields, before the item cap. Use it to narrow
+a large catalog. The result contains `operation: "project.view"` and `project`
+with `id`, `key`, `name`, `description`, and a tenant browser `webUrl`. Requested
+sections contain `items`, `count`, and `truncated`; unrequested sections are
+absent. Each section returns at most 100 items, and `truncated: true` means
+additional entries were omitted. Text previews are bounded to 4096 UTF-8 bytes
+and marked `previewTruncated` when shortened. Response and result byte limits
+still apply; a successful bounded section is not a promise of complete inventory.
+
+Each `fields.items` entry contains:
+
+| Property | Meaning |
+| --- | --- |
+| `id` | Stable field ID, such as `customfield_12345`. |
+| `name` | Jira's display name; names need not be unique. |
+| `jqlReference` | Broker-supported query reference, such as `cf[12345]`. |
+| `types` | Jira's reported search types. |
+| `operators` | Operators supported by both Jira's discovery response and Broker's parser. |
+
+System-field clause aliases are consolidated to canonical query references.
+The JQL-only `text` and `statusCategory` clauses remain available in search but
+are not field entries.
+
+Versions include their ID, name, description, released/archived flags and
+optional release and start dates. Components include ID, name and description. Issue
+types add a `subtask` flag; statuses are deduplicated by ID and may include
+`statusCategory`. Statuses do not report per-issue-type mappings.
+
+Use `jqlReference` rather than the display name or REST `id` when constructing
+JQL. A text field might advertise `~`, while a select field might advertise `=`
+or `IN`. Text `~` uses Jira's text-search semantics, not strict whole-value
+equality. Discovery describes search capabilities visible to this credential;
+it is not a complete configuration inventory for every issue type and does not
+enumerate custom-field options. Jira still validates each query against the
+field's current type, searcher, permissions and configuration. Search preserves
+the existing [project containment and continuation rules](#search-and-jql).
+
+Project identity comes from `GET /rest/api/3/project/{project}`. After validating
+that identity, field discovery calls `POST /rest/api/3/jql/autocompletedata`
+with the confirmed numeric project ID and `includeCollapsedFields: false`.
+Optional project metadata comes from that project response and the project's
+statuses endpoint. These reads do not use administrator field catalogs or
+creation metadata. Use [`issue_type.list`](#project-issue-types) for the
+separately authorized, paginated Create issues workflow.
+
 ## Actions and lookup requirements
 
-Twenty-three actions:
+Twenty-four actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
 | `project.list` | `project` | no |
+| `project.view` | `project` | no |
 | `issue_type.list` | `project` | no |
 | `issue.view` | `project` | yes |
 | `issue.create` | `project` | no |
@@ -387,7 +462,9 @@ Twenty-three actions:
 | `attachment.list` | `project` | yes |
 | `verify` | `project` | yes |
 
-`project.list`, `issue_type.list`, `issue.create`, and `search` do not require pre-authorization metadata lookup.
+`project.list`, `project.view`, `issue_type.list`, `issue.create`, and `search` do not require pre-authorization metadata lookup.
+`project.view` authorizes the supplied project key before requesting details or
+search metadata with the selected execution credential.
 `issue.create` resolves scope from the caller-supplied project after input
 validation; `search` resolves scope from policy rather than from an upstream
 metadata lookup. `issue.child.create` is lookup-backed because the broker must
@@ -492,8 +569,8 @@ traversal without Markdown markers. Conversion is offline, preserves source
 order, never fetches linked content, and never truncates or returns a partial
 rendering.
 
-`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly ten
-retrievals advertise whole-result Markdown: `project.list`, `issue_type.list`, `issue.view`, `search`,
+`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly eleven
+retrievals advertise whole-result Markdown: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`,
 `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`. Their deterministic
 templates represent every meaningful present field, preserve exact identifiers,
@@ -1310,8 +1387,10 @@ Accepted JQL fields: `project`, `key`/`issuekey`, `status`, `statusCategory`,
 `issuetype`/`type`, `priority`, `resolution`, `assignee`, `reporter`, `creator`,
 `labels`/`label`, `component`/`components`, `fixVersion`/`fixVersions`,
 `affectedVersion`/`affectedVersions`, `created`, `updated`, `resolutiondate`,
-`duedate`, `summary`, `description`, and `text`. The `currentUser()` function is
-accepted only when the request's credential mode is `per_user`.
+`duedate`, `summary`, `description`, and `text`, plus stable custom-field
+references such as `cf[12345]`. Discover custom fields with
+[`project.view`](#project-details-and-searchable-fields). The `currentUser()`
+function is accepted only when the request's credential mode is `per_user`.
 
 Supported JQL is intentionally bounded:
 
@@ -1325,6 +1404,20 @@ Supported JQL is intentionally bounded:
   `!=`, `<`, `<=`, `>`, and `>=`, with date literals or date functions.
 - Text fields (`summary`, `description`, `text`) accept only `~` with a quoted
   string.
+- Custom fields accept `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`,
+  `IS EMPTY`, `IS NOT EMPTY`, and `~`. Use only operators advertised for the
+  selected field; Jira validates type compatibility. `~` requires a quoted
+  string. Custom-field values use the existing scalar/list literal grammar
+  and limits; functions and custom-field sorting are not supported.
+  Quoted custom-field values remain quoted, including option names such as
+  `"No"` or `"Default"` that Jira reserves as unquoted keywords.
+
+Custom-field IDs must be positive decimal integers within the unsigned 64-bit
+range, with no leading zero, sign, or whitespace inside `cf[...]`. The `cf`
+prefix is case-insensitive and canonicalizes to lowercase. Display names and
+REST IDs such as `customfield_12345` are not query aliases. The parser's literal
+handling and project predicates apply to custom fields exactly as to other
+filters; a custom field cannot supply or widen project authority.
 
 Supported date functions are `now()`, `startOfDay()`, `endOfDay()`,
 `startOfWeek()`, `endOfWeek()`, `startOfMonth()`, `endOfMonth()`,
@@ -1376,6 +1469,7 @@ Examples with a finite project scope of `PROJ`:
 | `--jql 'status = "In Progress" AND (priority = High OR priority = Highest)'` | `(status = "In Progress" AND (priority = High OR priority = Highest)) AND project IN (PROJ)` |
 | `--jql 'labels NOT IN (security, "needs triage")'` | `(labels NOT IN (security, "needs triage")) AND project IN (PROJ)` |
 | `--jql 'resolution IS NOT EMPTY'` | `(resolution IS NOT EMPTY) AND project IN (PROJ)` |
+| `--jql 'cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"'` | `(cf[12345] ~ "EXT-4812" AND fixVersion = 2.4) AND project IN (PROJ)` |
 | `--jql 'updated >= startOfDay(-7d) ORDER BY updated DESC, key'` | `(updated >= startOfDay(-7d)) AND project IN (PROJ) ORDER BY updated DESC, key ASC` |
 
 Examples accepted only in `per_user` credential mode:
@@ -1400,8 +1494,9 @@ A search result's `nextPageToken` is an opaque broker-signed continuation, not
 Jira's own token. To fetch the next page, pass it back unchanged as
 `nextPageToken` with the same search:
 
-- the same `query` type and canonical JQL (equivalent spellings, such as quoted
-  and bare values, are the same query);
+- the same `query` type and canonical JQL (single- and double-quoted strings
+  normalize alike; custom-field strings retain quotes and remain distinct
+  from bare values);
 - the same `projects`, compared as a set;
 - the same effective `maxResults`; an omitted value equals the configured
   default, and values above `providers.jira.search.max_results` equal the cap.

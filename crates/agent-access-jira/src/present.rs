@@ -11,6 +11,7 @@ mod custom_fields_fixture;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
     ProjectList,
+    ProjectView,
     IssueTypeList,
     Issue,
     Search,
@@ -57,6 +58,11 @@ const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
         action: "project.list",
         embedded_bodies: NO_BODIES,
         whole: Some(WholeRenderer::ProjectList),
+    },
+    ResultDescriptor {
+        action: "project.view",
+        embedded_bodies: NO_BODIES,
+        whole: Some(WholeRenderer::ProjectView),
     },
     ResultDescriptor {
         action: "issue_type.list",
@@ -199,6 +205,7 @@ impl WholeResultRenderer for WholeRenderer {
         let max_body_bytes = *max_body_bytes;
         match *self {
             WholeRenderer::ProjectList => render_project_list(result, out, budget)?,
+            WholeRenderer::ProjectView => render_project_view(result, out, budget)?,
             WholeRenderer::IssueTypeList => render_issue_type_list(result, out, budget)?,
             WholeRenderer::Issue => render_issue(result, true, "# ", out, max_body_bytes, budget)?,
             WholeRenderer::Search => render_search(result, out, budget)?,
@@ -649,6 +656,104 @@ fn render_issue_type_list(
     Ok(())
 }
 
+fn render_project_view(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let object = as_object(value)?;
+    let project = as_object(required(object, "project")?)?;
+    budget.charge_work(object.len().saturating_add(project.len()))?;
+    out.push("# Jira project ")?;
+    out.push_code(required_scalar(project, "key")?)?;
+    out.push("\n\n")?;
+    for (key, label) in [
+        ("id", "ID"),
+        ("name", "Name"),
+        ("description", "Description"),
+        ("webUrl", "Web URL"),
+        ("previewTruncated", "Preview truncated"),
+    ] {
+        if let Some(value) = optional_display(project, key)? {
+            field(out, label, &value)?;
+        }
+    }
+    for (key, label) in [
+        ("fields", "Searchable fields"),
+        ("versions", "Versions"),
+        ("components", "Components"),
+        ("issueTypes", "Issue types"),
+        ("statuses", "Statuses"),
+    ] {
+        let Some(section) = object.get(key) else {
+            continue;
+        };
+        let section = as_object(section)?;
+        let items = array(required(section, "items")?)?;
+        budget.charge_work(section.len().saturating_add(items.len()))?;
+        out.push("\n## ")?;
+        out.push(label)?;
+        out.push("\n\n")?;
+        for (key, label) in [("count", "Count"), ("truncated", "Truncated")] {
+            field(
+                out,
+                label,
+                &optional_display(section, key)?.ok_or(RenderError)?,
+            )?;
+        }
+        for item in items {
+            let item = as_object(item)?;
+            budget.charge_work(item.len())?;
+            out.push("\n### ")?;
+            out.push_heading_text(required_scalar(item, "name")?)?;
+            out.push("\n")?;
+            code_fields(
+                out,
+                &[
+                    ("ID", optional_scalar(item, "id")?),
+                    ("JQL reference", optional_scalar(item, "jqlReference")?),
+                ],
+            )?;
+            for (key, label) in [
+                ("description", "Description"),
+                ("released", "Released"),
+                ("archived", "Archived"),
+                ("releaseDate", "Release date"),
+                ("startDate", "Start date"),
+                ("subtask", "Subtask"),
+                ("previewTruncated", "Preview truncated"),
+            ] {
+                if let Some(value) = optional_display(item, key)? {
+                    field(out, label, &value)?;
+                }
+            }
+            for (key, label) in [("types", "Types"), ("operators", "Operators")] {
+                if let Some(values) = item.get(key) {
+                    let values = array(values)?;
+                    budget.charge_work(values.len())?;
+                    let values = values.iter().map(scalar).collect::<Result<Vec<_>, _>>()?;
+                    field(out, label, &values.join(", "))?;
+                }
+            }
+            if let Some(category) = item.get("statusCategory") {
+                let category = as_object(category)?;
+                budget.charge_work(category.len())?;
+                for (key, label) in [
+                    ("id", "Status category ID"),
+                    ("key", "Status category key"),
+                    ("name", "Status category"),
+                    ("previewTruncated", "Status category preview truncated"),
+                ] {
+                    if let Some(value) = optional_display(category, key)? {
+                        field(out, label, &value)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn render_project_list(
     value: &Value,
     out: &mut MarkdownWriter,
@@ -1056,6 +1161,43 @@ mod tests {
     }
 
     #[test]
+    fn project_view_markdown_keeps_search_references_and_collection_limits() {
+        let source = json!({
+            "project": {"id":"1","key":"PROJ","name":"Example project", "description":"Project details", "webUrl":"https://example.atlassian.net/plugins/servlet/project-config/PROJ"},
+            "fields": {"items":[{"id":"customfield_12345","name":"External ticket","jqlReference":"cf[12345]","types":["java.lang.String"],"operators":["~","IS EMPTY"]}],"count":1,"truncated":true},
+            "versions": {"items":[{"id":"2","name":"2.4","released":false,"archived":false}],"count":1,"truncated":false},
+            "components": {"items":[],"count":0,"truncated":false},
+            "issueTypes": {"items":[{"id":"3","name":"Task","subtask":false}],"count":1,"truncated":false},
+            "statuses": {"items":[{"id":"4","name":"Done","statusCategory":{"id":"5","key":"done","name":"Done"}}],"count":1,"truncated":false}
+        });
+        let options = ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown);
+        let mut result = source.clone();
+        present_provider_result("project.view", &mut result, options, 4096, 16384).unwrap();
+        let rendered = result["value"].as_str().unwrap();
+        for expected in [
+            "Jira project",
+            "Searchable fields",
+            "cf[12345]",
+            "External ticket",
+            "IS EMPTY",
+            "Truncated",
+            "true",
+            "Versions",
+            "2.4",
+            "Components",
+            "Issue types",
+            "Statuses",
+            "Status category",
+            "Status category ID",
+            "Status category key",
+        ] {
+            assert!(rendered.contains(expected), "{expected}: {rendered}");
+        }
+        let mut result = source;
+        assert!(present_provider_result("project.view", &mut result, options, 4096, 32).is_err());
+    }
+
+    #[test]
     fn registry_has_exact_jira_coverage_and_derived_capabilities() {
         let embedded = RESULT_DESCRIPTORS
             .iter()
@@ -1083,6 +1225,7 @@ mod tests {
             whole,
             [
                 "project.list",
+                "project.view",
                 "issue_type.list",
                 "issue.view",
                 "comment.view",

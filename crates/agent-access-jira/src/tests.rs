@@ -14,6 +14,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 #[path = "issue_type_tests.rs"]
 mod issue_type_tests;
 
+#[path = "jql_custom_field_tests.rs"]
+mod jql_custom_field_tests;
+
 #[path = "underscore_key_tests.rs"]
 mod underscore_key_tests;
 
@@ -103,7 +106,7 @@ fn rejects_unsafe_jql_shapes() {
         "description !~ \"secret\"",
         "NOT project = PROJ",
         "updated WAS \"2024-01-01\"",
-        "cf[12345] = value",
+        "cf[0] = value",
         "key = PROJ-124 ORDER BY unknown DESC",
         "(key = PROJ-124 ORDER BY updated DESC)",
         "status = foo:bar",

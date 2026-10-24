@@ -1,12 +1,11 @@
 //! Production Jira transport behind the real broker and CLI; only Jira is synthetic.
+use super::list_mcp;
 use super::*;
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path, query_param},
 };
-#[path = "../common/list_mcp.rs"]
-mod list_mcp;
 
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const ROUTE: &str = "/ex/jira/11111111-2222-4333-8444-555555555555/rest/api/3/project/search";
