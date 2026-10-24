@@ -15298,6 +15298,14 @@ impl Provider for TestJiraReadPresentationProvider {
             "key": "PROJ-7",
             "project": "PROJ",
             "summary": "Normalized read fixture",
+            "resolution": null,
+            "resolutionDate": null,
+            "dueDate": null,
+            "components": null,
+            "fixVersions": null,
+            "affectedVersions": null,
+            "statusCategory": null,
+            "customFields": [],
             "description": {
                 "type": "doc",
                 "version": 1,
@@ -18292,7 +18300,7 @@ fn assert_jira_read_response_capability_matrix(
             ("comment.view", json!(["/result/comment"])),
             ("issue.create", json!(["/result/issue"])),
             ("issue.update", json!(["/result/issue"])),
-            ("issue.view", json!(["/result"])),
+            ("issue.view", json!(["/result", "/result/customFields/*"])),
         ])
     );
 

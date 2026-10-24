@@ -1352,10 +1352,21 @@ dependency_inward = "is blocked by"
   catalog and policy grants naming them fail validation as unknown actions. Jira issue-description actions always target ADF
   and continue to advertise all three formats. `max_body_bytes` defaults to 1
   MiB and must be non-zero. It independently bounds write source/final ADF and
-  every declared native Jira description or comment body returned by a read or
-  mutation readback. Oversized writes return `body_size_denied` (HTTP 413);
-  malformed or oversized returned content fails without truncation as the fixed
-  sanitized `upstream_protocol_failed` (HTTP 502).
+  every declared native Jira description, comment body, or supported custom-field
+  ADF document returned by a read or mutation readback. The cap applies to each
+  document separately, not to the custom-field collection. Oversized writes
+  return `body_size_denied` (HTTP 413); oversized returned content fails the
+  complete request without truncation as sanitized `upstream_protocol_failed`
+  (HTTP 502). Malformed description/comment content also fails the request;
+  malformed custom-field ADF is explicitly marked `withheld` instead.
+- `issue.view` automatically returns supported custom fields with Jira display
+  names; it needs no custom-field configuration. Shared content-complexity
+  guards and `limits.max_upstream_response_bytes` (default 512 MiB) still apply
+  to the complete response. HTTP MCP has the separate configurable
+  `mcp.max_response_bytes` limit (default 16 MiB), counting structured content
+  and its text copy; the local stdio MCP adapter caps Broker-JSON receipt at
+  16 MiB. There is no additional custom-field count or aggregate byte cap. See
+  [Jira custom fields](providers-jira.md#custom-fields).
 - Normalized write format remains explicit caller input with no write default.
   Read response defaults are separate client presentation settings under
   `[defaults]`; they become top-level Broker request fields and never

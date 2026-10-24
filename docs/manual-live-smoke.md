@@ -444,7 +444,7 @@ Inspect the corresponding audit record (with a SQLite audit store,
 service logs. They may record requested/effective format names, byte counts,
 and conversion outcome, but must not contain native ADF, rendered text,
 whole-result Markdown, property values, pagination tokens, parser excerpts, or
-extracted links. If an isolated
+extracted links, new context values, or custom-field names/values. If an isolated
 smoke broker is deliberately configured with a low Jira `max_body_bytes`, an
 oversized returned issue description or comment body must fail with the fixed
 sanitized `upstream_protocol_failed`/502 response and no partial output. Do
@@ -486,6 +486,59 @@ same source. Confirm:
 Preserve sanitized observations and mark unavailable fixture cases as untested.
 Offline synthetic tests do not validate Jira's tenant-specific embedded
 visibility behavior.
+
+### Jira context and hierarchy checks
+
+Use existing, explicitly authorized fixtures for these read-only observations:
+an issue with a direct parent, a subtask whose parent is a standard issue, an
+issue with no parent returned, and issues with populated and empty subtasks.
+Where available, include resolution/due dates, components, versions, status
+category, and a custom Labels field. Fixture preparation remains a separate
+administrator task; these checks create or change no Jira objects.
+
+Read each source in native JSON, embedded Markdown, and whole-result Markdown.
+For example:
+
+```bash
+"$AAB_BIN" --config "$AGENT_CONFIG" \
+  jira issue view "$JIRA_ISSUE" \
+  --output-format markdown \
+  > "$SMOKE_DIR/jira-issue-context.out.md"
+```
+
+- Confirm all seven standard-context keys are present in JSON. Compare IDs,
+  names, dates, collection order and duplicates with the source response under
+  the same execution account. Null means unset, hidden, or not returned; record
+  the actual upstream distinction where observable. Markdown omits null
+  context, shows `None.` for empty collections, and retains IDs when names are
+  unavailable. Custom Labels preserve the string array and render literal
+  labels; embedded normalization changes only declared ADF companions.
+- With an agent token whose effective `issue.view` access covers every project
+  in its selected mode, confirm `parent` is present. Record separately whether
+  Jira's source response omits `fields.parent`, returns null, or returns an
+  object. Omission and null both produce Broker `parent: null` and Markdown
+  `No parent returned.` This does not independently establish that the issue
+  has no parent. A parent object exposes only `key`, `summary`, and `issueType`.
+- Confirm subtasks use the same reference shape, preserving order and
+  duplicates. An omitted upstream field stays absent; an empty array becomes
+  `[]` and `None.` under **Subtasks**. Record Browse/issue-security effects
+  where available. Do not interpret this collection as all epic children or
+  descendants, and do not infer an ancestor beyond the direct parent.
+- Repeat with a project-restricted token able to read the same source. Confirm
+  `parent`, `subtasks`, and `issueLinks` are all omitted, including references
+  in the source project. Each separate related-issue view still uses normal
+  authorization and lookup. No related-issue fetch should appear in upstream
+  traces; ordinary source reads keep two metadata checks and one issue fetch.
+- Check audit: `parent` has only disclosure status and, when disclosed, count
+  0 or 1; `subtasks` has only disclosure status and, when disclosed, its count.
+  New context and hierarchy content must not enter audit or logs. Search must
+  retain its existing result fields; check create/update readbacks during the
+  separately authorized mutation checks below.
+
+Record execution credential mode, source parent presence/null observations,
+reference visibility, and any fixture cases not exercised. Keep captured
+upstream data private. These manual observations are separate from deterministic
+synthetic coverage and do not imply validation of another tenant.
 
 ### Jira mutation checks
 

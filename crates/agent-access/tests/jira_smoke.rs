@@ -11,8 +11,10 @@ use agent_access_jira::{
     JiraIssueCreateRequest, JiraIssueLink, JiraIssueLinkCreateRequest, JiraIssueLinkDirection,
     JiraIssueLinkType, JiraIssueLinks, JiraIssueParent, JiraIssueParentReadback,
     JiraIssueParentSetRequest, JiraIssueType, JiraIssueTypeListRequest, JiraIssueTypePage,
-    JiraIssueUpdateRequest, JiraIssueView, JiraIssueViewLink, JiraPrioritySummary, JiraProvider,
-    JiraProviderConfig, JiraSearchPage, JiraSearchRequest, JiraUserSummary,
+    JiraIssueUpdateRequest, JiraIssueView, JiraIssueViewContext, JiraIssueViewLink,
+    JiraIssueViewNamedValue, JiraIssueViewReference, JiraIssueViewStatusCategory,
+    JiraPrioritySummary, JiraProvider, JiraProviderConfig, JiraSearchPage, JiraSearchRequest,
+    JiraUserSummary,
 };
 use agent_access_provider::test_support::basic_credential;
 use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, SearchLimitsConfig};
@@ -636,6 +638,7 @@ async fn jira_issue_links_require_universal_token_authority_and_preserve_absence
                 labels: None,
             },
         )]),
+        issue_view_context: Mutex::new(issue_context::complete_context()),
         issue_view_links: Mutex::new(Some(vec![
             JiraIssueViewLink {
                 key: "CM-42".to_string(),
@@ -845,8 +848,13 @@ execution_contexts = ["default"]
         &mut cursor,
         &["issue_metadata", "issue_metadata", "issue"],
     );
+    issue_context::assert_context(&result["result"], true);
     let markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
     assert!(markdown.contains("## Issue links"));
+    assert!(markdown.contains("## Parent"));
+    assert!(markdown.contains("## Subtasks"));
+    assert!(markdown.contains("PARENT-42"));
+    assert!(markdown.contains("CHILD-42"));
     for text in [
         "CM-42",
         "Linked release title",
@@ -864,8 +872,13 @@ execution_contexts = ["default"]
     let scoped: serde_json::Value = serde_json::from_slice(&run(&scoped_token, "json")).unwrap();
     assert!(scoped["result"].get("issueLinks").is_none(), "{scoped}");
     assert_eq!(scoped["result"]["summary"], "Source issue");
+    issue_context::assert_context(&scoped["result"], false);
     let scoped_markdown = String::from_utf8(run(&scoped_token, "markdown")).unwrap();
     assert!(!scoped_markdown.contains("## Issue links"));
+    assert!(!scoped_markdown.contains("## Parent"));
+    assert!(!scoped_markdown.contains("## Subtasks"));
+    assert!(!scoped_markdown.contains("PARENT-42"));
+    assert!(!scoped_markdown.contains("CHILD-42"));
     for text in ["CM-42", "OPS-7", "Linked release title", "is blocked by"] {
         assert!(!scoped_markdown.contains(text), "{scoped_markdown}");
     }
@@ -883,17 +896,37 @@ execution_contexts = ["default"]
     );
 
     *backend.issue_view_links.lock().unwrap() = Some(vec![]);
+    {
+        let mut context = backend.issue_view_context.lock().unwrap();
+        context.parent = None;
+        context.subtasks = Some(vec![]);
+    }
     let empty: serde_json::Value =
         serde_json::from_slice(&run(&unrestricted_token, "json")).unwrap();
     assert_eq!(empty["result"]["issueLinks"], json!([]));
+    assert_eq!(
+        empty["result"].get("parent"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(empty["result"]["subtasks"], json!([]));
     let empty_markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
     assert!(empty_markdown.contains("## Issue links\n\nNone."));
+    assert!(empty_markdown.contains("## Parent\n\nNo parent returned."));
+    assert!(empty_markdown.contains("## Subtasks\n\nNone."));
     *backend.issue_view_links.lock().unwrap() = None;
+    backend.issue_view_context.lock().unwrap().subtasks = None;
     let absent: serde_json::Value =
         serde_json::from_slice(&run(&unrestricted_token, "json")).unwrap();
     assert!(absent["result"].get("issueLinks").is_none(), "{absent}");
+    assert!(absent["result"].get("subtasks").is_none());
+    assert_eq!(
+        absent["result"].get("parent"),
+        Some(&serde_json::Value::Null)
+    );
     let absent_markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
     assert!(!absent_markdown.contains("## Issue links"));
+    assert!(!absent_markdown.contains("## Subtasks"));
+    assert!(absent_markdown.contains("No parent returned."));
     assert_eq!(
         *backend.issue_view_requests.lock().unwrap(),
         vec![true, true, false, false, true, true, true, true]
@@ -917,7 +950,16 @@ execution_contexts = ["default"]
         ],
     );
     let audit = broker.audit().unwrap().text();
-    for hidden in ["Linked release title", "CM-42", "OPS-7"] {
+    for hidden in [
+        "Linked release title",
+        "CM-42",
+        "OPS-7",
+        "PARENT-42",
+        "CHILD-42",
+        "CONTEXT_SENTINEL",
+        "API context",
+        "Resolved context",
+    ] {
         assert!(!audit.contains(hidden), "{audit}");
     }
     stop(broker).await;
@@ -1274,6 +1316,10 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jira_moved_issue_denial_does_not_leak_content() {
     let backend = Arc::new(StubJiraBackend {
+        custom_fields: vec![serde_json::json!({
+            "id":"customfield_10001", "name":"secret moved custom name",
+            "type":"text", "status":"supported", "value":"secret moved custom value"
+        })],
         issues: BTreeMap::from([(
             "PROJ-2".to_string(),
             JiraIssue {
@@ -1331,10 +1377,12 @@ async fn jira_moved_issue_denial_does_not_leak_content() {
     assert_eq!(issue_json["decision"], "deny");
     assert_eq!(issue_json["reasonCode"], "scope_unresolved");
     assert!(!String::from_utf8_lossy(&issue.stdout).contains("secret moved issue summary"));
+    assert!(!String::from_utf8_lossy(&issue.stdout).contains("secret moved custom"));
 
     let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"reasonCode\":\"scope_unresolved\""));
     assert!(!audit.contains("secret moved issue summary"));
+    assert!(!audit.contains("secret moved custom"));
 
     stop(broker).await;
 }
@@ -1360,6 +1408,10 @@ fn renamed_issue_backend(alias: &str, key: &str, project: &str, secret: &str) ->
     };
     StubJiraBackend {
         issues: BTreeMap::from([(alias.to_string(), issue.clone()), (key.to_string(), issue)]),
+        custom_fields: vec![serde_json::json!({
+            "id":"customfield_10001", "name":format!("{secret} custom name"),
+            "type":"text", "status":"supported", "value":format!("{secret} custom value")
+        })],
         // The comment belongs to the current key, so listing it proves the
         // Broker sends the key Jira confirmed rather than the alias.
         comments: Mutex::new(BTreeMap::from([(
@@ -3378,6 +3430,8 @@ struct StubJiraBackend {
     issues: BTreeMap<String, JiraIssue>,
     issue_view_requests: Mutex<Vec<bool>>,
     issue_view_links: Mutex<Option<Vec<JiraIssueViewLink>>>,
+    issue_view_context: Mutex<JiraIssueViewContext>,
+    custom_fields: Vec<serde_json::Value>,
     created_issue: Mutex<Option<JiraCreatedIssue>>,
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
@@ -3529,17 +3583,21 @@ impl JiraBackend for StubJiraBackend {
         &self,
         issue_key: &str,
         credential: &agent_access_jira::AtlassianCredential,
-        include_issue_links: bool,
+        include_issue_references: bool,
     ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
         self.issue_view_requests
             .lock()
             .unwrap()
-            .push(include_issue_links);
+            .push(include_issue_references);
         let response = self.issue(issue_key, credential).await?;
         Ok(JiraBackendResponse {
             value: JiraIssueView {
                 issue: response.value,
-                issue_links: if include_issue_links {
+                // Deliberately return references even when not requested, so
+                // smoke tests exercise the provider output boundary too.
+                context: self.issue_view_context.lock().unwrap().clone(),
+                custom_fields: self.custom_fields.clone(),
+                issue_links: if include_issue_references {
                     self.issue_view_links.lock().unwrap().clone()
                 } else {
                     None
@@ -4333,3 +4391,9 @@ fn assert_new_backend_operations(backend: &StubJiraBackend, cursor: &mut usize, 
 #[path = "support/temp_dirs.rs"]
 mod temp_dirs;
 use temp_dirs::temp_path;
+
+#[path = "jira_custom_fields/mod.rs"]
+mod custom_fields;
+
+#[path = "jira_issue_context/mod.rs"]
+mod issue_context;

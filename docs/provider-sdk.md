@@ -676,8 +676,11 @@ carried in the same upstream response. It grants no additional authority:
 Providers must not use the value to make requests for other resources, acquire
 credentials, widen the source scopes, or infer that a later direct read will
 succeed. Upstream permissions and separate lookup visibility still apply.
-Jira uses it to request embedded `issuelinks` in the source issue read; it does
-not resolve or fetch linked issues.
+Jira uses it to request embedded `issuelinks`, `parent`, and `subtasks` in the
+source issue read under one disclosure decision. Without it, both HTTP
+projection and provider output assembly suppress those references, including
+unsolicited values. It does not resolve or fetch related issues, infer epic
+ancestry, or enumerate all epic children.
 
 The host rejects this opt-in for unscoped actions, writes, native searches,
 resource-attribute-bound actions and imported or command-enforced actions.
