@@ -333,16 +333,44 @@ fn filenames_media_types_and_supplied_secrets_are_validated_without_content_snif
         "text/plain\r\nX-Evil: 1",
         "téxt/plain",
         "text/",
+        "/plain",
+        "/",
+        "text//plain",
+        "text /plain",
+        "text/ plain",
+        "text/plain, application/json",
+        "text/plain; charset=",
+        "text/plain; charset=; next=value",
+        "text/plain; =utf-8",
+        "text/plain; charset =utf-8",
+        "text/plain; charset= utf-8",
+        "text/plain; charset",
+        "text/plain; charset=\"unterminated",
+        "text/plain; charset=\"escaped-end\\\"",
+        "text/plain; charset=\"valid\"junk",
         "text/plain\t",
     ] {
         doc["download"]["contentType"] = json!(content_type);
-        assert_eq!(
-            violation(read(&doc, 1).unwrap_err()),
-            "download_content_type"
+        let error = match read(&doc, 1) {
+            Err(error) => error,
+            Ok(_) => panic!("accepted invalid media type {content_type:?}"),
+        };
+        assert_eq!(violation(error), "download_content_type");
+    }
+    for content_type in [
+        "text/plain; charset=utf-8",
+        "application/vnd.example.report+json; version=2",
+        "Text/Plain ; charset=\"UTF-8\"; note=\"a;b=c\"",
+        "text/plain; note=\"\"",
+        "text/plain; note=\"quote\\\" and slash\\\\\"",
+        "text/plain; ; charset=utf-8;",
+    ] {
+        doc["download"]["contentType"] = json!(content_type);
+        assert!(
+            read(&doc, 1).is_ok(),
+            "rejected valid media type {content_type:?}"
         );
     }
-    doc["download"]["contentType"] = json!("text/plain; charset=utf-8");
-    assert!(read(&doc, 1).is_ok());
     let mut secrets = CommandSecrets::new();
     secrets.insert("secret-token");
     for (field, value) in [

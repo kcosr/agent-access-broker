@@ -214,7 +214,6 @@ dependencies = [
  "futures-util",
  "http",
  "libc",
- "mime_guess",
  "serde",
  "serde_json",
  "sha2",

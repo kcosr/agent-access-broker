@@ -232,7 +232,7 @@ fn parse(
         || content_type.len() > 255
         || !content_type.is_ascii()
         || content_type.bytes().any(|ch| ch.is_ascii_control())
-        || content_type.parse::<mime_guess::Mime>().is_err()
+        || !valid_media_type(&content_type)
         || http::HeaderValue::from_str(&content_type).is_err()
     {
         return Err(Violation("download_content_type").into());
@@ -308,6 +308,97 @@ fn parse(
         content_type,
         chunks,
     ))))
+}
+
+/// HTTP media-type syntax (RFC 9110 sections 8.3.1, 5.6.4 and 5.6.6).
+/// The caller also bounds the field to 255 printable ASCII bytes. Parsing
+/// directly avoids permissive MIME parsers accepting an empty subtype or
+/// unquoted parameter value, and handles quoted-pair escapes without copying.
+fn valid_media_type(value: &str) -> bool {
+    let Some(mut rest) = media_token(value)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .and_then(media_token)
+    else {
+        return false;
+    };
+    loop {
+        rest = rest.trim_start_matches(' ');
+        if rest.is_empty() {
+            return true;
+        }
+        let Some(parameter) = rest.strip_prefix(';') else {
+            return false;
+        };
+        rest = parameter.trim_start_matches(' ');
+        // HTTP permits empty parameter positions, including trailing
+        // semicolons. A parameter that has a name must have a valid value.
+        if rest.is_empty() || rest.starts_with(';') {
+            continue;
+        }
+        let Some(value) = media_token(rest).and_then(|rest| rest.strip_prefix('=')) else {
+            return false;
+        };
+        let Some(tail) = (if value.starts_with('"') {
+            quoted_parameter(value)
+        } else {
+            media_token(value)
+        }) else {
+            return false;
+        };
+        rest = tail;
+    }
+}
+
+/// Consume one nonempty HTTP token and return its unconsumed suffix.
+fn media_token(value: &str) -> Option<&str> {
+    let length = value
+        .bytes()
+        .take_while(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+        .count();
+    (length != 0).then(|| &value[length..])
+}
+
+/// The input begins with a quote. Escapes consume the next printable ASCII
+/// byte, so an escaped quote cannot terminate the parameter value.
+fn quoted_parameter(value: &str) -> Option<&str> {
+    let bytes = value.as_bytes();
+    let mut index = 1;
+    while let Some(byte) = bytes.get(index) {
+        match byte {
+            b'"' => return Some(&value[index + 1..]),
+            b'\\' => {
+                if !bytes
+                    .get(index + 1)
+                    .is_some_and(|byte| matches!(byte, b' '..=b'~'))
+                {
+                    return None;
+                }
+                index += 2;
+            }
+            b' '..=b'~' => index += 1,
+            _ => return None,
+        }
+    }
+    None
 }
 
 fn check_overhead(total: usize, encoded: usize) -> Result<(), Violation> {
