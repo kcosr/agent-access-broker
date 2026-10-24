@@ -25,6 +25,16 @@ pub(crate) enum AdminImportsCommand {
         #[command(flatten)]
         version: ImportVersionArgs,
     },
+    /// Upload or replace an OpenAPI/Swagger JSON document and create a review preview.
+    UploadDocument {
+        service: String,
+        /// Read exact UTF-8 JSON bytes from a regular file (maximum 4 MiB).
+        /// A valid basename is sent as display metadata; the local path is never sent.
+        #[arg(long)]
+        document_file: PathBuf,
+        #[command(flatten)]
+        version: ImportVersionArgs,
+    },
     Preview {
         service: String,
     },
@@ -125,6 +135,89 @@ impl ImportVersionArgs {
 
 fn service_path(service: &str) -> String {
     format!("/v1/admin/imports/{}", encoded_path_segment(service))
+}
+
+const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Read the source as text, not a JSON value: the adapter must receive original
+/// duplicate members and formatting for its strict decoder and source digest.
+fn read_document_file(path: &Path) -> Result<String> {
+    if !fs::metadata(path)
+        .context("cannot inspect imported document file")?
+        .is_file()
+    {
+        anyhow::bail!("imported document file must be a regular file");
+    }
+    let file = fs::File::open(path).context("cannot open imported document file")?;
+    let metadata = file
+        .metadata()
+        .context("cannot inspect imported document file")?;
+    if !metadata.is_file() {
+        anyhow::bail!("imported document file must be a regular file");
+    }
+    if metadata.len() > MAX_DOCUMENT_BYTES as u64 {
+        anyhow::bail!("imported document exceeds 4 MiB");
+    }
+    read_document_reader(file)
+}
+
+fn read_document_reader(mut reader: impl Read) -> Result<String> {
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take((MAX_DOCUMENT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("cannot read imported document file")?;
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        anyhow::bail!("imported document exceeds 4 MiB");
+    }
+    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("imported document must be UTF-8"))
+}
+
+fn document_filename(path: &Path) -> Option<&str> {
+    let filename = path.file_name()?.to_str()?;
+    (!filename.is_empty()
+        && filename.len() <= 255
+        && !filename.chars().any(char::is_control)
+        && !filename.contains(['/', '\\'])
+        && !filename.chars().all(|ch| ch == '.'))
+    .then_some(filename)
+}
+
+fn document_upload_path(service: &str, version: &ImportVersionArgs, file: &Path) -> String {
+    let mut query = form_urlencoded::Serializer::new(String::new());
+    query.append_pair("expectedVersion", &version.expected_version.to_string());
+    query.append_pair(
+        "expectedCatalogRevision",
+        &version.expected_catalog_revision.to_string(),
+    );
+    if let Some(filename) = document_filename(file) {
+        query.append_pair("filename", filename);
+    }
+    format!("{}/document?{}", service_path(service), query.finish())
+}
+
+async fn upload_document(
+    ctx: &CliContext<'_>,
+    service: &str,
+    version: &ImportVersionArgs,
+    file: &Path,
+) -> Result<(u16, Value)> {
+    let source = read_document_file(file).map_err(DeferredCliError::input)?;
+    let path = document_upload_path(service, version, file);
+    let endpoint = endpoint(&ctx.settings.url, &path).map_err(DeferredCliError::input)?;
+    let client = http_client(ctx.settings).map_err(DeferredCliError::input)?;
+    // Import preparation has a broker-side 60-second operation limit. Preserve
+    // its administrative deadline independently of normal invocation settings.
+    let response = request_builder(client.put(endpoint), ctx.settings)
+        .timeout(Duration::from_secs(75))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(source)
+        .send()
+        .await
+        .context("broker document upload request failed")
+        .map_err(DeferredCliError::remote)?;
+    response_value(response, ResponseShape::ManagementObject).await
 }
 
 fn read_secret_reader(mut reader: impl Read) -> Result<String> {
@@ -358,6 +451,14 @@ pub(crate) async fn run(ctx: &CliContext<'_>, command: &AdminImportsCommand) -> 
             )
             .await;
         }
+        AdminImportsCommand::UploadDocument {
+            service,
+            document_file,
+            version,
+        } => {
+            let (status, value) = upload_document(ctx, service, version, document_file).await?;
+            print_value_and_exit(status, value);
+        }
         AdminImportsCommand::Create { request_file } => (
             reqwest::Method::POST,
             "/v1/admin/imports".into(),
@@ -465,6 +566,233 @@ pub(crate) async fn run(ctx: &CliContext<'_>, command: &AdminImportsCommand) -> 
 mod tests {
     use super::*;
 
+    #[test]
+    fn document_upload_requires_file_and_explicit_version_fences() {
+        let args = [
+            "agent-access",
+            "admin",
+            "imports",
+            "upload-document",
+            "example",
+            "--document-file",
+            "definition.json",
+            "--expected-version",
+            "2",
+            "--expected-catalog-revision",
+            "7",
+        ];
+        assert!(Cli::try_parse_from(args).is_ok());
+        assert!(Cli::try_parse_from(&args[..7]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "agent-access",
+                "admin",
+                "imports",
+                "upload-document",
+                "example",
+                "--expected-version",
+                "2",
+                "--expected-catalog-revision",
+                "7",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-access",
+                "admin",
+                "imports",
+                "create",
+                "--request-file",
+                "draft.json",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn document_upload_preserves_source_bytes_and_bounds_utf8_input() {
+        let source =
+            " {\"swagger\":\"2.0\", \"duplicate\":1,\"duplicate\":2,\"title\":\"café\"} \r\n";
+        assert_eq!(read_document_reader(source.as_bytes()).unwrap(), source);
+        assert_eq!(
+            read_document_reader(vec![b' '; MAX_DOCUMENT_BYTES].as_slice())
+                .unwrap()
+                .len(),
+            MAX_DOCUMENT_BYTES
+        );
+        assert!(
+            read_document_reader(vec![b' '; MAX_DOCUMENT_BYTES + 1].as_slice())
+                .unwrap_err()
+                .to_string()
+                .contains("4 MiB")
+        );
+        assert!(
+            read_document_reader(&[255][..])
+                .unwrap_err()
+                .to_string()
+                .contains("UTF-8")
+        );
+        assert!(
+            read_document_reader("not JSON".as_bytes()).is_ok(),
+            "the adapter owns JSON admission"
+        );
+    }
+
+    #[test]
+    fn document_upload_query_contains_only_safe_basename_metadata() {
+        let path = document_upload_path(
+            "a/b",
+            &version(),
+            Path::new("/private/source/café api.json"),
+        );
+        assert_eq!(
+            path,
+            "/v1/admin/imports/a%2Fb/document?expectedVersion=2&expectedCatalogRevision=7&filename=caf%C3%A9+api.json"
+        );
+        for name in ["...", "bad\\name.json", "bad\nname.json", &"é".repeat(128)] {
+            let path = document_upload_path("example", &version(), Path::new(name));
+            assert!(
+                !path.contains("filename="),
+                "unsafe optional metadata must be omitted"
+            );
+        }
+        assert_eq!(
+            document_filename(Path::new("/private/source/definition.json")),
+            Some("definition.json")
+        );
+    }
+
+    #[tokio::test]
+    async fn document_upload_sends_exact_file_once_and_keeps_fence_on_conflict() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method, path, query_param},
+        };
+        let server = MockServer::start().await;
+        let settings = test_settings(server.uri());
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("synthetic api.json");
+        let source = " {\"swagger\":\"2.0\",\"duplicate\":1,\"duplicate\":2,\"title\":\"café\"} \n";
+        fs::write(&file, source).unwrap();
+        for status in [200, 409] {
+            server.reset().await;
+            let result = json!({"requestId":"request", "brokerRequestId":"broker", "decision":if status == 200 { "allow" } else { "deny" }});
+            Mock::given(method("PUT"))
+                .and(path("/v1/admin/imports/example/document"))
+                .and(header("content-type", "application/json"))
+                .and(query_param("expectedVersion", "2"))
+                .and(query_param("expectedCatalogRevision", "7"))
+                .and(query_param("filename", "synthetic api.json"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(&result))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                upload_document(&ctx, "example", &version(), &file)
+                    .await
+                    .unwrap(),
+                (status, result)
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].body.as_slice(), source.as_bytes());
+            assert!(
+                !requests[0]
+                    .url
+                    .as_str()
+                    .contains(dir.path().to_str().unwrap())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn document_upload_rejects_bad_local_input_without_contacting_broker() {
+        let server = wiremock::MockServer::start().await;
+        let settings = test_settings(server.uri());
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = dir.path().join("invalid.json");
+        fs::write(&invalid, [255]).unwrap();
+        let oversized = dir.path().join("oversized.json");
+        fs::File::create(&oversized)
+            .unwrap()
+            .set_len((MAX_DOCUMENT_BYTES + 1) as u64)
+            .unwrap();
+        for file in [
+            &invalid,
+            &oversized,
+            &dir.path().to_path_buf(),
+            &dir.path().join("absent.json"),
+        ] {
+            let error = upload_document(&ctx, "example", &version(), file)
+                .await
+                .unwrap_err();
+            assert_eq!(error.downcast_ref::<DeferredCliError>().unwrap().code, 3);
+            assert!(!error.to_string().contains(dir.path().to_str().unwrap()));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn document_upload_keeps_admin_deadline_independent_of_invocation_timeout() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let result = json!({"requestId":"request", "brokerRequestId":"broker", "decision":"allow"});
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("definition.json");
+        fs::write(&file, "{}").unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&result)
+                    .set_delay(Duration::from_millis(200)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut settings = test_settings(server.uri());
+        settings.request_timeout_ms = 10;
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        assert_eq!(
+            upload_document(&ctx, "example", &version(), &file)
+                .await
+                .unwrap(),
+            (200, result.clone())
+        );
+        server.verify().await;
+
+        let (url, task) = crate::request_timeout_tests::delayed_body_server(
+            "application/json",
+            "",
+            serde_json::to_vec(&result).unwrap(),
+        )
+        .await;
+        settings.url = url;
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        assert_eq!(
+            upload_document(&ctx, "example", &version(), &file)
+                .await
+                .unwrap(),
+            (200, result)
+        );
+        task.await.unwrap();
+    }
+
     fn version() -> ImportVersionArgs {
         ImportVersionArgs {
             expected_version: 2,
@@ -495,6 +823,7 @@ mod tests {
     fn test_settings(url: String) -> ResolvedCliSettings {
         ResolvedCliSettings {
             url,
+            request_timeout_ms: 30_000,
             tls: CliTlsConfig::default(),
             token: None,
             token_from_literal_arg: false,

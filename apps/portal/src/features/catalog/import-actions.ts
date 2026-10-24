@@ -91,6 +91,19 @@ export function useImportActions() {
       return result;
     }
 
+    /** An uploaded replacement publishes the same review/quarantine result as discovery. */
+    async function uploadDocument(data: Versioned, file: File): Promise<ImportPreviewResult> {
+      try {
+        const result = await attempt((current) => brokerApi.uploadImportDocument(current, data.service.definition.service, importVersions(data), file));
+        await refresh();
+        return result;
+      } catch (failure) {
+        // A response can be lost after the upload commits. Refresh reads without replaying the write.
+        await refresh().catch(() => undefined);
+        throw failure;
+      }
+    }
+
     /** Accepts the selected actions; a command preview also takes the chosen Broker type IDs of its new resource types. */
     function accept(data: ImportPreviewResult, rows: ImportReviewRow[], confirmAffectedGrants: boolean, typeIds: ResourceTypeIdChoices): Promise<ImportAcceptResult> {
       const preview = data.preview;
@@ -179,7 +192,7 @@ export function useImportActions() {
       });
     }
 
-    return { refresh, create, update, discover, accept, confirmServiceStatus, confirmActionStatus, writeToken, writePersonalToken, confirmDeleteToken };
+    return { refresh, create, update, discover, uploadDocument, accept, confirmServiceStatus, confirmActionStatus, writeToken, writePersonalToken, confirmDeleteToken };
   }, [queryClient, viewer, attempt, confirm, toast, session.principal]);
 }
 

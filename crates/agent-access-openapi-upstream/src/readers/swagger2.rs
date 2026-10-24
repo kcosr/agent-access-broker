@@ -190,7 +190,7 @@ pub(crate) fn operation(
         responses.insert(status.clone(), spec);
     }
     Ok(Operation {
-        destinations: Some(destinations(document, value, &settings.document)?),
+        destinations: Some(destinations(document, value, &settings.document_base)?),
         security_schemes: security_schemes(document),
         security_requirements: value
             .get("security")
@@ -268,9 +268,13 @@ fn require_media(
     }
     Ok(())
 }
-fn destinations(document: &Value, operation: &Value, definition: &Url) -> Result<Vec<Url>, String> {
+fn destinations(
+    document: &Value,
+    operation: &Value,
+    document_base: &Url,
+) -> Result<Vec<Url>, String> {
     let host = match document.get("host") {
-        None => &definition[Position::BeforeHost..Position::AfterPort],
+        None => &document_base[Position::BeforeHost..Position::AfterPort],
         Some(v) => v
             .as_str()
             .filter(|s| bounded(s, 512))
@@ -291,7 +295,7 @@ fn destinations(document: &Value, operation: &Value, definition: &Url) -> Result
     {
         return Err("invalid Swagger basePath".into());
     }
-    let fallback = vec![json!(definition.scheme())];
+    let fallback = vec![json!(document_base.scheme())];
     let schemes = operation
         .get("schemes")
         .or_else(|| document.get("schemes"))

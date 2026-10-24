@@ -45,6 +45,7 @@ fn change_draft_delivery(runtime: BrokerRuntime) -> Result<(BrokerRuntime, ()), 
     let providers = runtime.prepare_imported_service_change(&candidate, None)?;
     let mutation = runtime.managed_store().unwrap().update_imported_service(
         ImportedServiceUpdateRequest {
+            discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
             definition: candidate.definition,
             status: record.status,
             actions: vec![],
@@ -456,6 +457,7 @@ async fn missing_personal_basic_material_hides_tools_until_provisioned_and_owner
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Enabled,
                 actions: vec![ImportedActionWrite {

@@ -111,6 +111,10 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             "/v1/admin/imports/{service}/discover",
             post(imports::discover),
         )
+        .route(
+            "/v1/admin/imports/{service}/document",
+            put(imports::document_put),
+        )
         .route("/v1/admin/imports/{service}/preview", get(imports::preview))
         .route("/v1/admin/imports/{service}/accept", post(imports::accept))
         .route("/v1/admin/imports/{service}/status", post(imports::status))

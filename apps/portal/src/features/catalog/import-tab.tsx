@@ -11,6 +11,7 @@ import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import type { ImportCredentialInput, ImportBinding, ImportListResult, ImportPreviewResult, ImportPurpose } from "../../import-types";
 import { errorMessage } from "../../lib/helpers";
 import { importItemNoun } from "../../lib/imports";
+import { openApiDocumentSource } from "../../lib/import-openapi";
 import { COMMAND_KIND, commandCredentialText, commandName } from "../../lib/import-command";
 import { formatServiceLimit } from "../../lib/service-limits";
 import {
@@ -28,6 +29,7 @@ import {
   SkeletonBlock,
   StatePill,
   Time,
+  formatBytes,
   plural
 } from "../../workbench";
 import { paths } from "../../app/paths";
@@ -39,10 +41,12 @@ import { useImportActions, type ServiceStatusChange } from "./import-actions";
 import { ImportEditor } from "./import-editor";
 import { ImportReview, ScopedMcpStatus } from "./import-review";
 import { ImportTokenModal, type TokenPurpose } from "./import-token-modal";
+import { ImportDocumentModal } from "./import-document-modal";
 
 export type ImportDialog =
   | { kind: "edit"; data: ImportPreviewResult }
   | { kind: "review"; data: ImportPreviewResult }
+  | { kind: "document"; data: ImportPreviewResult }
   | { kind: "token"; purpose: TokenPurpose; rotate: boolean; data: ImportPreviewResult }
   | null;
 
@@ -62,6 +66,7 @@ function deliveryLabel(binding: ImportBinding | undefined) {
 function discoveryText(data: ImportPreviewResult) {
   const discovery = data.service.definition.discovery;
   if (data.service.definition.adapterKind === COMMAND_KIND) return "Discovery runs the command's describe without credentials.";
+  if (data.service.definition.adapterKind === "openapi_http" && openApiDocumentSource(data.service.definition.connectionSettings) === "upload") return "Discovery reads the stored uploaded document without a discovery credential.";
   if (discovery.kind === "anonymous") return "The public definition document is loaded without credentials.";
   if (discovery.kind === "execution") return "Discovery uses the shared execution credential.";
   if (discovery.kind === "slot") return "Discovery uses a separate discovery credential.";
@@ -115,6 +120,7 @@ export function ImportTab({
   const record = data.service;
   const definition = record.definition;
   const openapi = definition.adapterKind === "openapi_http";
+  const uploaded = openapi && openApiDocumentSource(definition.connectionSettings) === "upload";
   const command = definition.adapterKind === COMMAND_KIND;
   const accepted = record.acceptedMetadata;
   const noun = importItemNoun(definition.adapterKind);
@@ -123,7 +129,7 @@ export function ImportTab({
   const actionCounts = (["enabled", "quarantined", "disabled", "retired"] as const)
     .map((key) => ({ key, count: record.actions.filter((action) => action.status === key).length }))
     .filter((entry) => entry.count > 0);
-  const discoverLabel = openapi ? (data.preview || record.actions.length ? "Refresh definition" : "Load definition") : record.actions.length ? "Refresh discovery" : `Discover ${noun}s`;
+  const discoverLabel = uploaded ? "Load saved definition" : openapi ? (data.preview || record.actions.length ? "Refresh definition" : "Load definition") : record.actions.length ? "Refresh discovery" : `Discover ${noun}s`;
 
   async function discover() {
     if (!data) return;
@@ -295,8 +301,10 @@ export function ImportTab({
                   )
                 }
               : null,
-            openapi ? { label: "Definition URL", value: <span className="wb-mono pt-catalog-break">{definition.connectionSettings.definitionUrl}</span> } : null,
-            openapi
+            openapi ? { label: "Definition source", value: uploaded ? "Uploaded file" : "From URL" } : null,
+            uploaded ? { label: "Stored document", value: record.document ? <span className="pt-catalog-break">{record.document.filename ?? "Uploaded JSON document"} · {formatBytes(record.document.byteLength)}</span> : <span className="wb-muted">No specification uploaded</span> } : null,
+            openapi && !uploaded ? { label: "Definition URL", value: <span className="wb-mono pt-catalog-break">{definition.connectionSettings.definitionUrl}</span> } : null,
+            openapi && !uploaded
               ? {
                   label: "Definition access",
                   value:
@@ -352,15 +360,16 @@ export function ImportTab({
 
       <SettingsSection
         title="Discovery and review"
-        description="Discovery is manual. New or changed actions need review before use; existing grant action lists do not expand."
+        description={uploaded ? "Upload a replacement to refresh operations, or load the stored document again. New or changed actions need review; existing grant action lists do not expand." : "Discovery is manual. New or changed actions need review before use; existing grant action lists do not expand."}
         actions={
           <span className="wb-btn-group">
             <Button icon="eye" disabled={!data.preview} onClick={() => onDialog({ kind: "review", data })}>
               Review preview
             </Button>
-            <AdminButton variant="primary" icon="download" pending={discovering} disabled={!allowed || (definition.discovery.kind === "per_user" && !canUseSelfService(session))} onClick={() => void discover()}>
+            <AdminButton variant={uploaded ? "default" : "primary"} icon="download" pending={discovering} disabled={!allowed || (uploaded && !record.document) || (definition.discovery.kind === "per_user" && !canUseSelfService(session))} onClick={() => void discover()}>
               {discoverLabel}
             </AdminButton>
+            {uploaded ? <AdminButton variant="primary" icon="upload" disabled={!allowed || discovering} onClick={() => onDialog({ kind: "document", data })}>{record.document ? "Upload replacement" : "Upload file"}</AdminButton> : null}
           </span>
         }
       >
@@ -450,10 +459,21 @@ function DiscoveryConnection({ service, registration }: { service: string; regis
 
 /** The dialog the Import tab (or Limits) opened, wired to the import mutations. */
 export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDialog; imports: ImportListResult | null; onDialog: (dialog: ImportDialog) => void }) {
-  const { session } = useSession();
+  const { session, runQuery } = useSession();
   const actions = useImportActions();
   const close = () => onDialog(null);
   if (!dialog || (dialog.kind !== "review" && !canWriteAdmin(session)) || (dialog.kind === "token" && dialog.purpose === "personal" && !canUseSelfService(session))) return null;
+  if (dialog.kind === "document") return <ImportDocumentModal
+    data={dialog.data}
+    replacement={Boolean(dialog.data.service.document)}
+    onReload={async () => {
+      const data = await runQuery((current) => brokerApi.importPreview(current, dialog.data.service.definition.service));
+      onDialog({ kind: "document", data });
+    }}
+    onUpload={(file) => actions.uploadDocument(dialog.data, file)}
+    onUploaded={(data) => onDialog({ kind: "review", data })}
+    onClose={close}
+  />;
   if (dialog.kind === "edit") {
     return (
       <ImportEditor

@@ -167,6 +167,11 @@ resource boundary. See [Teams](providers-teams.md),
 [imported OAuth](imported-oauth.md).
 
 Swagger 2.0 and OpenAPI 3.1 JSON use the same OpenAPI / Swagger import flow.
+Choose a document URL or upload a JSON file, with a separate approved API base
+URL in either case. The Broker retains an uploaded document for refresh after
+restart; upload a replacement to review changes. If uploading fails after the
+draft is created, correct and retry that draft. Existing accepted actions stay
+unchanged after a failed replacement.
 Basic credentials have Username and Password or API token fields; preserve their
 spaces exactly. Document-fetch credentials are separate from execution
 credentials. Review POST searches explicitly as read-only before accepting them;

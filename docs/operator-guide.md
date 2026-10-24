@@ -522,8 +522,11 @@ Optional `serve` flags tune request, reload, and shutdown behavior:
 The startup body hard cap defaults to the configured body limit. Set an explicit
 larger `--max-http-body-hard-cap-bytes` only when a future reload needs a larger
 transfer limit. Authentication bodies have a separate 16 KiB ceiling and
-five-second receive maximum; control-plane JSON and management bodies use 1 MiB
-and fifteen seconds. A smaller `limits.request_body_timeout_ms` applies too.
+five-second receive maximum; control-plane JSON and management bodies use 1 MiB,
+except authenticated imported-document uploads, which allow 4 MiB. Anonymous
+uploads retain the 1 MiB cap. These management routes, including document uploads,
+have a fifteen-second total receive maximum. A smaller
+`limits.request_body_timeout_ms` applies too.
 Invocation JSON, multipart files and Git uploads retain the configured transfer
 cap and total receive deadline (five minutes by default). Public idle timing uses
 `limits.streaming_idle_timeout_ms`; Git uses its matched gateway idle setting.
@@ -1386,6 +1389,15 @@ holds no tokens stored after it, but those tokens stay valid at Microsoft:
 deleting the Broker's copy of a refresh token does not revoke it there, so
 follow [revoking stored refresh tokens](#revoking-stored-refresh-tokens) when
 that matters.
+
+Migration `032_imported_source_documents` follows `031_oidc_membership_renewal`.
+It adds an empty table for uploaded Swagger/OpenAPI definitions and leaves
+existing imports unchanged. Apply the usual backup and forward-migration steps,
+and deploy matching Broker, CLI and portal artifacts for the upload flow.
+Uploaded documents are retained in the database and its backups; URL imports
+continue to fetch only for discovery or manual refresh. Rolling back across
+`032` requires the pre-migration backup, even if no document has been uploaded.
+See [uploaded documents](imported-openapi.md#uploading-and-replacing-a-document).
 
 Command imports can opt resource types out of exclusions with
 `supportsExclusions: false`. Before deploying a command version that cannot

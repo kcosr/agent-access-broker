@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use url::Url;
 
-pub(crate) const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(crate) struct CompiledAction {
     pub definition: ImportedActionDefinition,

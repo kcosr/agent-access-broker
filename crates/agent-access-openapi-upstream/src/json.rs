@@ -62,7 +62,7 @@ impl<'de> Visitor<'de> for Seed {
     }
 }
 pub(crate) fn decode(bytes: &[u8]) -> Result<Value, String> {
-    if bytes.len() > crate::transport::MAX_DOCUMENT_BYTES {
+    if bytes.len() > agent_access_core::imports::IMPORT_MAX_DOCUMENT_BYTES {
         return Err("definition exceeds JSON byte limit".into());
     }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);

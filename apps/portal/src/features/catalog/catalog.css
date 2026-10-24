@@ -17,6 +17,43 @@
   gap: 12px;
 }
 
+/* Definition documents: an app-specific file choice built from kit controls. */
+.pt-import-file,
+.pt-import-file-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.pt-import-file-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 18px;
+  border: 1px dashed var(--wb-border-strong);
+  border-radius: var(--wb-radius-md);
+  background: var(--wb-surface-2);
+  font-size: var(--wb-fs-13);
+}
+.pt-import-file-area > .wb-icon {
+  flex: none;
+  color: var(--wb-muted);
+}
+.pt-import-file-area.has-file {
+  justify-content: flex-start;
+  border-style: solid;
+  border-color: var(--wb-success-border);
+  background: var(--wb-success-weak);
+}
+.pt-import-file-area.has-file > .wb-icon {
+  color: var(--wb-success-text);
+}
+.pt-import-file-area.is-dragging {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent-weak);
+}
+
 /* Upstream text: URLs, JSON, long identifiers */
 .pt-catalog-break {
   overflow-wrap: anywhere;

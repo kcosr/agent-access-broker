@@ -3,6 +3,7 @@ use agent_access_core::{ImportedActionRecord, ImportedServiceRecord};
 
 fn request(record: &ImportedServiceRecord, revision: u64) -> ImportedServiceUpdateRequest {
     ImportedServiceUpdateRequest {
+        discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
         definition: record.definition.clone(),
         status: record.status,
         actions: record

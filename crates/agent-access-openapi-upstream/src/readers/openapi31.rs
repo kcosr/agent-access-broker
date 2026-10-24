@@ -102,7 +102,7 @@ pub(crate) fn operation(
             document,
             item,
             value,
-            &settings.document,
+            &settings.document_base,
             &definition.endpoint,
         )?,
         security_schemes: security_schemes(document),
@@ -169,7 +169,7 @@ fn destinations(
     document: &Value,
     item: &Value,
     operation: &Value,
-    definition_url: &Url,
+    document_base: &Url,
     endpoint: &str,
 ) -> Result<Option<Vec<Url>>, String> {
     let Some(servers) = operation
@@ -213,7 +213,7 @@ fn destinations(
         if raw.contains(['{', '}']) {
             continue;
         }
-        if let Ok(url) = definition_url.join(&raw)
+        if let Ok(url) = document_base.join(&raw)
             && url.query().is_none()
             && url.fragment().is_none()
             && url.username().is_empty()

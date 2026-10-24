@@ -2241,6 +2241,12 @@ plans, percent-encoding expansion, and independent Basic definition/API origins.
 Form values include long strings, Unicode and control characters; field names
 and URL parameters retain their separate restrictions.
 
+The adapter's `tests/uploads.rs` runs both dialects through URL and uploaded
+sources, compares their compiled output, and exercises relative/default server
+resolution against the API endpoint. Uploaded discovery and accepted-plan builds
+make no document HTTP request. Source-mode validation, duplicate members, UTF-8,
+depth/size limits and refused external references retain the shared bounds.
+
 The shared CLI fixture's `mcp_stdio/imports/openapi.rs` journeys use a real
 isolated Broker and synthetic HTTP API. They check service/personal Basic
 credentials, form POST reads, unaccepted-write refusal, CLI and aggregate/scoped
@@ -2249,12 +2255,27 @@ write-enabled JSON-array/form DELETE receipts. Core and host tests cover invalid
 encrypted material, contract publication, and both orderings of a first personal
 save racing an empty-draft delivery change.
 
+The paired upload lifecycle in `mcp_stdio/imports/openapi/uploaded.rs` uses the
+real CLI upload command and Broker with only the API endpoint allowlisted. It
+checks exact-byte filename/length/digest receipts, Basic/form calls through
+CLI and HTTP/stdio MCP, rejected malformed/duplicate/oversized replacements,
+changed-action quarantine, stale acceptance, and retained-source discovery after
+restart and deletion of the caller's file. Core storage tests cover migration,
+transaction rollback, stale preparation, source retention and empty-draft source
+changes; host router tests cover administrator/CSRF admission and request caps.
+
 The portal OpenAPI fixture covers public/private definition discovery, the
 security-scheme picker, reviewed actions, refresh and invocation. The ordinary
 MCP and OAuth fixtures remain regression checks. `imports-swagger.spec.ts` adds a
 real-service Basic/form journey, including shared, personal and administered
 credential entry. Descriptor rendering and unavailable guidance also have
 mocked browser contracts; those do not establish upstream integration.
+`imports-openapi-upload.spec.ts` uses mocked browser contracts for source
+switching, browse/drop selection, local file checks, document replacement, and
+recovery of the created draft after an upload response is lost.
+`imports-openapi-upload-live.spec.ts` runs the upload journey against the
+isolated Broker, checking saved metadata and review behavior. The mocked tests
+do not establish real-service validation.
 
 ## Command imports
 

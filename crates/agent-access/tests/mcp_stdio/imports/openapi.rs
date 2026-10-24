@@ -10,6 +10,9 @@ use axum::{
 use base64::engine::general_purpose::STANDARD;
 use std::{io::Write, process::Stdio};
 
+#[path = "openapi/uploaded.rs"]
+mod uploaded;
+
 const SERVICE_USER: &str = " service usér ";
 const SERVICE_SECRET: &str = " päss:+ &= ";
 const PERSONAL_USER: &str = " 個人 user ";

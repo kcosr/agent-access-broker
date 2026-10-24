@@ -322,7 +322,7 @@ one-request contract instead.
 
 ## CLI and HTTP management
 
-`agent-access admin imports` has `list`, `get`, `create`, `update`, `discover`,
+`agent-access admin imports` has `list`, `get`, `create`, `update`, `discover`, `upload-document`,
 `preview`, `accept`, `status`, `action-status`, and nested `credentials put/delete`
 commands. Create/update/accept take `--request-file`. Versioned commands take
 `--expected-version` and `--expected-catalog-revision`. Shared token writes read
@@ -338,6 +338,13 @@ Retirement uses `--confirm`. Typed discovery allows 75 seconds for the server's
 60-second discovery deadline. If a client times out, inspect the preview before
 starting another discovery.
 
+For an OpenAPI/Swagger upload source, `upload-document SERVICE --document-file
+PATH --expected-version N --expected-catalog-revision N` sends the exact bounded
+UTF-8 JSON bytes with the same discovery timeout and no automatic retry. It
+atomically stores a validated document and its review preview. See
+[uploaded documents](imported-openapi.md#uploading-and-replacing-a-document) for
+creation, replacement, retention and failure recovery.
+
 The matching admin routes are under `/v1/admin/imports`:
 
 | Method | Suffix | Purpose |
@@ -345,6 +352,7 @@ The matching admin routes are under `/v1/admin/imports`:
 | GET / POST | collection | List / create draft |
 | GET / PATCH | `/{service}` | Inspect / update settings |
 | POST | `/{service}/discover` | Discover or manually refresh |
+| PUT | `/{service}/document` | Validate and retain an uploaded source document with its preview |
 | GET | `/{service}/preview` | Inspect pending preview and affected grants |
 | POST | `/{service}/accept` | Accept reviewed source selections |
 | POST | `/{service}/status` | Enable, disable, or retire |

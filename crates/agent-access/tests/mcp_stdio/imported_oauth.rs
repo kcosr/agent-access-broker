@@ -4,7 +4,7 @@ use agent_access_broker_host::test_support::{FixtureDir, RunningBroker};
 use agent_access_core::imports::{
     ImportedActionDefinition, ImportedAuthMechanism, ImportedBindingStatus,
     ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
-    ImportedDiscoveryCredential, ImportedServiceDefinition,
+    ImportedDiscoveryCredential, ImportedDiscoverySource, ImportedServiceDefinition,
 };
 use agent_access_core::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -564,6 +564,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Enabled,
                 actions: [
@@ -617,6 +618,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: ImportedDiscoverySource::Remote,
                 definition: secondary.definition.clone(),
                 status: ImportedServiceStatus::Enabled,
                 actions: secondary_actions,

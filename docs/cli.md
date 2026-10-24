@@ -510,6 +510,11 @@ percent-encodes `pathParams`, encodes declared scalar/array query parameters,
 rejects unknown path/query keys, rejects `body: null`, and never accepts
 arbitrary external URLs.
 
+Routes marked `requestBodyKind: "raw_json"` require exact document bytes and are
+excluded from the generated `send` schema. Generic `send` rejects those routes.
+For imported documents, use `admin imports upload-document` with `--document-file`
+so whitespace and duplicate JSON members reach the Broker unchanged.
+
 Upload sources must be regular files; directories, named pipes, and devices are
 rejected before hashing or opening a transfer. A symlink to a regular file is
 accepted. Keep the source unchanged until the upload completes; an integrity
@@ -2130,7 +2135,8 @@ See [Gmail examples and semantics](providers-gmail.md).
 ## Imported actions
 
 Base administrators use `admin imports list/get/create/update/discover/preview/accept`,
-`admin imports status/action-status`, and `admin imports credentials put/delete`.
+`admin imports upload-document`, `admin imports status/action-status`, and
+`admin imports credentials put/delete`.
 Complex writes use `--request-file`; versioned writes require `--expected-version`
 and `--expected-catalog-revision`. Token writes use `--secret-file`, `--secret-env`,
 or `--secret-stdin`, plus `--username` when the selected slot's `credentialInputs`
@@ -2141,6 +2147,18 @@ Basic environment values are exact; file/stdin removes at most one final LF or
 CRLF, preserving spaces. Use `--confirm` for retirement and when re-enabling a service
 or action with retained grants. See the [import management command workflow](imported-services.md#cli-and-http-management)
 for exact request shapes, discovery timeouts and credential ownership.
+
+For an uploaded Swagger/OpenAPI source, use `admin imports upload-document
+SERVICE --document-file PATH --expected-version N --expected-catalog-revision N`.
+Generic `send` cannot represent this exact-byte upload and rejects its route.
+The CLI reads at most 4 MiB of UTF-8 JSON, sends the exact bytes and the file's
+basename, and allows 75 seconds for validation and preview creation. The Broker
+separately requires the entire body within the smaller of
+`limits.request_body_timeout_ms` and 15 seconds; the CLI timeout does not extend
+that receive deadline. The Broker rejects duplicate JSON members. A successful upload retains the source and
+creates a preview; review and acceptance remain separate. A rejected replacement
+preserves the previously retained source and accepted generation. See
+[uploaded document workflow](imported-openapi.md#uploading-and-replacing-a-document).
 
 Use the caller-filtered catalog for the service/action names and accepted schemas of
 imported MCP tools. These are action-only grants without resource scopes. Results

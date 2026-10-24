@@ -9,13 +9,13 @@ use super::common::{
 use crate::state::AppState;
 use agent_access_core::imports::{
     ImportedActionDefinition, ImportedCredentialMode, ImportedCredentialPurpose, ImportedDiscovery,
-    ImportedDiscoveryCredential, ImportedServiceDefinition,
+    ImportedDiscoveryCredential, ImportedDiscoverySource, ImportedServiceDefinition,
 };
 use agent_access_core::*;
 use agent_access_provider::{is_action_name, is_service_name};
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, RawQuery, State},
     http::HeaderMap,
     response::Response,
 };
@@ -107,6 +107,40 @@ fn parse_versions(body: Bytes) -> Result<Versions, ManagedStoreError> {
         return Err(invalid("invalid import version request fields"));
     }
     serde_json::from_value(value).map_err(|_| invalid("import versions are required"))
+}
+fn document_query(query: Option<&str>) -> Result<(Versions, Option<String>), ManagedStoreError> {
+    let mut expected_version = None;
+    let mut expected_catalog_revision = None;
+    let mut filename = None;
+    for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        match key.as_ref() {
+            "expectedVersion" if expected_version.is_none() => {
+                expected_version = Some(
+                    value
+                        .parse()
+                        .map_err(|_| invalid("invalid import document version"))?,
+                );
+            }
+            "expectedCatalogRevision" if expected_catalog_revision.is_none() => {
+                expected_catalog_revision = Some(
+                    value
+                        .parse()
+                        .map_err(|_| invalid("invalid import document catalog revision"))?,
+                );
+            }
+            "filename" if filename.is_none() => filename = Some(value.into_owned()),
+            _ => return Err(invalid("invalid or repeated import document query field")),
+        }
+    }
+    Ok((
+        Versions {
+            expected_version: expected_version
+                .ok_or_else(|| invalid("import document versions are required"))?,
+            expected_catalog_revision: expected_catalog_revision
+                .ok_or_else(|| invalid("import document versions are required"))?,
+        },
+        filename,
+    ))
 }
 fn current_record(
     context: &ManagementContext,
@@ -280,8 +314,10 @@ fn mutation_request(
     record: &ImportedServiceRecord,
     versions: Versions,
     actor: String,
+    discovery_source: ImportedDiscoverySource,
 ) -> ImportedServiceUpdateRequest {
     ImportedServiceUpdateRequest {
+        discovery_source,
         definition: record.definition.clone(),
         status: record.status,
         actions: record
@@ -740,6 +776,7 @@ async fn change(
                             actions: vec![],
                             slot_versions: Default::default(),
                             accepted_metadata: None,
+                            document: None,
                             created_at: String::new(),
                             created_by: actor.clone(),
                             updated_at: String::new(),
@@ -842,6 +879,15 @@ async fn change(
                         let mut candidate = record.clone();
                         candidate.definition = request.definition.clone();
                         candidate.status = request.status;
+                        if record.status == ImportedServiceStatus::Draft
+                            && record.actions.is_empty()
+                            && request.actions.is_empty()
+                            && request.accepted_preview.is_none()
+                            && !record.definition.same_destination(&request.definition)
+                            && request.discovery_source == ImportedDiscoverySource::Remote
+                        {
+                            candidate.document = None;
+                        }
                         candidate.actions = request
                             .actions
                             .iter()
@@ -1060,7 +1106,12 @@ fn prepare_update(
                     "credential binding changes affect existing grants; confirmAffectedGrants is required",
                 ));
             }
-            let mut request = mutation_request(record, body.versions, actor);
+            let mut request = mutation_request(
+                record,
+                body.versions,
+                actor,
+                runtime.imported_discovery_source(&body.definition)?,
+            );
             request.definition = body.definition;
             Ok(Prepared::Update(Box::new(request), None))
         }
@@ -1088,7 +1139,12 @@ fn prepare_update(
             if status == ImportedServiceStatus::Retired && !body.confirm {
                 return Err(invalid("retirement requires confirm"));
             }
-            let mut request = mutation_request(record, body.versions, actor);
+            let mut request = mutation_request(
+                record,
+                body.versions,
+                actor,
+                ImportedDiscoverySource::Remote,
+            );
             request.status = status;
             Ok(Prepared::Update(Box::new(request), None))
         }
@@ -1131,7 +1187,12 @@ fn prepare_update(
             if status == ImportedActionStatus::Retired && !body.confirm {
                 return Err(invalid("retirement requires confirm"));
             }
-            let mut request = mutation_request(record, body.versions, actor);
+            let mut request = mutation_request(
+                record,
+                body.versions,
+                actor,
+                ImportedDiscoverySource::Remote,
+            );
             request
                 .actions
                 .iter_mut()
@@ -1183,7 +1244,12 @@ fn prepare_update(
             {
                 return Err(invalid("select at least one discovered tool"));
             }
-            let mut request = mutation_request(record, body.versions, actor);
+            let mut request = mutation_request(
+                record,
+                body.versions,
+                actor,
+                ImportedDiscoverySource::Remote,
+            );
             let mut sources = BTreeSet::new();
             let mut names = BTreeSet::new();
             let mut changed = BTreeSet::new();
@@ -1369,6 +1435,135 @@ pub(crate) async fn discover(
             return management_provider_error_response(&context, operation, target, error).await;
         }
     };
+    publish_discovery(
+        state,
+        context,
+        operation,
+        DiscoveryPublication {
+            record,
+            versions,
+            discovery,
+            credential_versions,
+            document: None,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn document_put(
+    State(state): State<AppState>,
+    Path(service): Path<String>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let operation = "admin.imports.document.upload";
+    let context = match management_context(
+        &state,
+        remote,
+        &headers,
+        operation,
+        ManagementAccess::AdminWrite,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let target = Some(json!({"service":service}));
+    let prepared = (|| {
+        let (versions, filename) = document_query(query.as_deref())?;
+        let content_type = axum::http::header::CONTENT_TYPE;
+        if headers.get_all(&content_type).iter().count() != 1
+            || !headers
+                .get(&content_type)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("application/json"))
+        {
+            return Err(invalid(
+                "uploaded import documents require application/json",
+            ));
+        }
+        let record = current_record(&context, &service)?;
+        check_versions(&context, &record, &versions)?;
+        let document = context.snapshot.runtime.prepare_imported_document_upload(
+            &service,
+            filename,
+            body.to_vec(),
+        )?;
+        Ok::<_, ManagedStoreError>((record, versions, document))
+    })();
+    let (record, versions, document) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    };
+    if let Err(response) =
+        management_write_audit_preflight(&context, operation, target.clone()).await
+    {
+        return *response;
+    }
+    let (discovery, credential_versions) = match context
+        .snapshot
+        .runtime
+        .discover_imported_service_with_document(&service, &context.identity.principal, &document)
+        .await
+    {
+        Ok(discovered) => discovered,
+        Err(ImportDiscoveryError::Preparation(error)) => {
+            return management_host_error_response(
+                &context,
+                operation,
+                target,
+                error.reason_code(),
+                error.message(),
+            )
+            .await;
+        }
+        Err(ImportDiscoveryError::Discovery(error)) => {
+            return management_provider_error_response(&context, operation, target, error).await;
+        }
+    };
+    publish_discovery(
+        state,
+        context,
+        operation,
+        DiscoveryPublication {
+            record,
+            versions,
+            discovery,
+            credential_versions,
+            document: Some(document),
+        },
+    )
+    .await
+}
+
+struct DiscoveryPublication {
+    record: ImportedServiceRecord,
+    versions: Versions,
+    discovery: ImportedDiscovery,
+    credential_versions: BTreeMap<String, String>,
+    document: Option<PreparedImportedDocumentUpload>,
+}
+
+async fn publish_discovery(
+    state: AppState,
+    context: ManagementContext,
+    operation: &'static str,
+    publication: DiscoveryPublication,
+) -> Response {
+    let DiscoveryPublication {
+        record,
+        versions,
+        discovery,
+        credential_versions,
+        document,
+    } = publication;
+    let service = record.definition.service.clone();
+    let target = Some(json!({"service":service}));
     let actor = context.identity.principal.clone();
     let config_revision = format!(
         "{}:{}",
@@ -1395,6 +1590,9 @@ pub(crate) async fn discover(
                 super::import_types::plan_discovery(store, &record, &mut discovery)?;
                 let quarantine = quarantined_actions(&record, &discovery);
                 let mut candidate = record;
+                if let Some(document) = &document {
+                    candidate.document = Some(document.metadata().clone());
+                }
                 for action in &mut candidate.actions {
                     if quarantine.contains(&action.definition.action) {
                         action.status = ImportedActionStatus::Quarantined;
@@ -1418,9 +1616,15 @@ pub(crate) async fn discover(
                     quarantine_actions: quarantine,
                     actor,
                 };
-                let mutation = store.write_imported_preview(request, |catalog| {
+                let validate = |catalog: &ImportedCatalog| {
                     runtime.with_imported_catalog(catalog.clone(), providers)
-                })?;
+                };
+                let mutation = match document {
+                    Some(document) => {
+                        store.write_imported_document_preview(request, &document, validate)
+                    }
+                    None => store.write_imported_preview(request, validate),
+                }?;
                 // Always publish the committed catalog even if a subsequent metadata read fails.
                 let response = (|| {
                     let preview = store.imported_preview(&service_for_store)?;
@@ -1514,6 +1718,7 @@ mod tests {
             actions: vec![],
             slot_versions: BTreeMap::new(),
             accepted_metadata: None,
+            document: None,
             created_at: String::new(),
             created_by: String::new(),
             updated_at: String::new(),

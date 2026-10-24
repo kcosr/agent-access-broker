@@ -314,6 +314,7 @@ fn record(
     actions: Vec<ImportedActionRecord>,
 ) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        document: None,
         definition: ImportedServiceDefinition {
             service: SERVICE.into(),
             display_name: "Ticketing".into(),

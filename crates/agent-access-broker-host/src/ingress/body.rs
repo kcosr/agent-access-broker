@@ -289,6 +289,16 @@ async fn admit_body_inner(
         AUTH_BODY_CAP
     } else if gateway || invoke {
         usize::MAX
+    } else if authenticated
+        && request.method() == Method::PUT
+        && request
+            .uri()
+            .path()
+            .strip_prefix("/v1/admin/imports/")
+            .and_then(|path| path.strip_suffix("/document"))
+            .is_some_and(agent_access_provider::is_service_name)
+    {
+        agent_access_core::imports::IMPORT_MAX_DOCUMENT_BYTES
     } else {
         JSON_BODY_CAP
     };

@@ -824,6 +824,19 @@ existence, ownership of a particular object, or an authorization outcome.
   store and retain the admitted snapshot under the host publication lock,
   including personal and administered writes.
 
+  URL and uploaded JSON sources enter that same compiler. The generic adapter
+  source contract selects retained document input without core interpreting
+  protocol settings. Route metadata marks the upload as `raw_json`, preserving its
+  exact-byte requirement in OpenAPI and excluding it from generic JSON `send`.
+  Uploaded raw bytes live in a bounded per-service store row,
+  separate from catalog definitions. Preparation compiles outside the database;
+  the mutation owner checks the admitted snapshot and service/catalog revisions,
+  then commits source bytes, preview and quarantine together before publication.
+  Invalid or stale replacements change none of them. Offline refresh loads the
+  retained source; execution and startup use the accepted plans. Uploads resolve
+  relative destinations against the separately approved API endpoint and never
+  turn filenames or external references into fetches.
+
 - **CloudBees CI** (`cloudbees_ci`) — separately granted, read-only `job.list`
   filters live recursive inventory through normalized job authority. It proves
   descendant reachability before fetching containers, preserves independent
@@ -2417,8 +2430,11 @@ limited to a quarter of global capacity (minimum one) and a source slot; verifie
 management identities instead use a separate per-principal body pool until
 extraction finishes, capped by `max_concurrent_requests_per_principal`. Bodiless writes skip body
 slots, keeping owner pause/revoke available during body saturation. Browser-auth bodies
-have a 16 KiB cap and five-second receive ceiling, other control-plane bodies
-1 MiB and fifteen seconds. A smaller configured receive deadline still applies.
+have a 16 KiB cap and five-second receive ceiling; other control-plane bodies
+allow 1 MiB, except authenticated imported-document uploads, which allow 4 MiB.
+Anonymous uploads retain the 1 MiB cap. All non-authentication control-plane
+bodies, including uploads, have a fifteen-second total receive ceiling. A smaller
+configured receive deadline still applies.
 Invocation JSON and streamed files retain the configured transfer cap, while
 multipart JSON metadata is capped at 1 MiB. Invocation and Git bodies use the
 total `request_body_timeout_ms` deadline; public idle timing uses the global

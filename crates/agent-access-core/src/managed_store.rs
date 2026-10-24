@@ -13,6 +13,9 @@ use principal_access::{
 #[path = "imported_store.rs"]
 mod imported_store;
 pub use imported_store::*;
+mod imported_documents;
+pub use imported_documents::ImportedDocumentMetadata;
+pub(crate) use imported_documents::{validate_document_bytes, validate_document_filename};
 mod imported_resource_types;
 pub use imported_resource_types::{
     DeletedResourceAttributes, ImportedTypeEffects, ImportedTypeTransaction,
@@ -80,7 +83,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION;
+const MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION: &str = "032_imported_source_documents";
 const MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION: &str = "031_oidc_membership_renewal";
 const MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION: &str = "030_group_auto_enrollment";
 const MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION: &str =
@@ -265,6 +269,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/oidc_membership_renewal.sql"),
         seed: None,
         structural_validation: imported_store::validate_oidc_membership_renewal_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION,
+        checksum: "7bb4ffc66c168f07768af876c95698bade177ef668af99fda60621a6cd20ea9c",
+        sql: include_str!("managed_store/imported_source_documents.sql"),
+        seed: None,
+        structural_validation: imported_store::validate_imported_source_documents_structure,
     },
 ];
 

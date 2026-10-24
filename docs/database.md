@@ -60,8 +60,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `023_imported_services`, `024_oauth_discovery_revision`, and
 `025_principal_access`, `026_trusted_user_identity`,
 `027_command_imports`, `028_oauth_revocations`,
-`029_identity_access_path_controls`, `030_group_auto_enrollment`, and
-`031_oidc_membership_renewal` in order. The
+`029_identity_access_path_controls`, `030_group_auto_enrollment`,
+`031_oidc_membership_renewal`, and `032_imported_source_documents` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -890,6 +890,16 @@ it belongs to a Microsoft login method, and still requires one identity-token
 row for every human. Rollback requires a pre-migration backup: an older binary
 refuses the newer ledger.
 
+Migration `032_imported_source_documents`, appended after
+`031_oidc_membership_renewal`, adds `imported_source_documents` for retained
+uploaded import definitions. It changes no existing rows; URL, MCP and command
+imports have no source-document row. Each source belongs to one imported service
+and holds at most 4 MiB of raw document bytes with safe filename, length and SHA-256
+metadata. A successful upload writes it in the same transaction as the preview
+and quarantine changes. The metadata is projected on the service record as
+optional `document`; bytes never enter that record. Rollback requires a
+pre-migration backup because an older binary refuses the newer ledger.
+
 ### Identity-token inventory
 
 `principal_identity_tokens` stores fingerprint identity inventory for managed
@@ -1207,6 +1217,22 @@ credential kind is `username_token`. Transport slots remain `bearer_token`.
 Basic reuses the existing row, encrypted payload and AAD contract and needs no
 credential-table migration. Its imported input policy preserves UTF-8 bytes and
 validates username/password grammar before encryption and local resolution.
+
+`imported_source_documents` stores the exact UTF-8 JSON bytes of an uploaded
+Swagger/OpenAPI document, independently of service definitions and accepted
+plans. Its optional service projection is `document: {filename?, byteLength,
+sha256}`; the digest is lowercase hexadecimal and the filename, when present,
+is a validated basename. Raw source is not credential-key encrypted, is not
+returned by management reads or included in Debug/audit, and is included in
+database backups. Offline rediscovery loads the retained bytes after checking
+the current import and operator gates. Execution and startup use accepted plans
+without recompiling or fetching the document. Store integrity validation also
+checks the retained bytes against their recorded length and digest.
+
+Source replacement and its preview/quarantine commit together under service and
+catalog revision checks. Failed preparation or publication rolls back the
+replacement. Empty-draft scheme/delivery edits retain uploaded bytes; changing
+the draft away from upload deletes the row in that same update transaction.
 
 `accepted_metadata_json` holds the service-level metadata a command import's
 acceptance stored with its actions: manifest format, command version, the

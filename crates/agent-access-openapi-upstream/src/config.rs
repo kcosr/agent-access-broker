@@ -2,9 +2,16 @@ use agent_access_core::imports::*;
 use url::Url;
 
 pub(crate) struct Settings {
-    pub document: Url,
+    pub source: DefinitionSource,
+    /// Relative/default source destinations resolve against this fixed base.
+    /// Uploads use the approved API endpoint, never a local filename or URL.
+    pub document_base: Url,
     pub scheme: Option<String>,
     pub document_delivery: Option<ImportedCredentialDelivery>,
+}
+pub(crate) enum DefinitionSource {
+    Url(Url),
+    Upload,
 }
 impl Settings {
     pub fn parse(definition: &ImportedServiceDefinition) -> Result<Self, String> {
@@ -34,17 +41,42 @@ impl Settings {
         if settings.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "definitionUrl" | "securityScheme" | "definitionAuthKind" | "definitionAuthHeader"
+                "definitionSource"
+                    | "definitionUrl"
+                    | "securityScheme"
+                    | "definitionAuthKind"
+                    | "definitionAuthHeader"
             )
         }) {
             return Err("unknown OpenAPI connection setting".into());
         }
-        let document = endpoint(
-            settings
-                .get("definitionUrl")
-                .ok_or("definitionUrl is required")?,
-        )?;
-        endpoint(&definition.endpoint)?;
+        let api_endpoint = endpoint(&definition.endpoint)?;
+        let source = match settings.get("definitionSource").map(String::as_str) {
+            None => DefinitionSource::Url(endpoint(
+                settings
+                    .get("definitionUrl")
+                    .ok_or("definitionUrl is required")?,
+            )?),
+            Some("upload") => {
+                if [
+                    "definitionUrl",
+                    "definitionAuthKind",
+                    "definitionAuthHeader",
+                ]
+                .iter()
+                .any(|key| settings.contains_key(*key))
+                    || definition.discovery != ImportedDiscoveryCredential::Anonymous
+                {
+                    return Err("uploaded definitions require anonymous discovery without a document URL or authentication settings".into());
+                }
+                DefinitionSource::Upload
+            }
+            Some(_) => return Err("unsupported definitionSource".into()),
+        };
+        let document_base = match &source {
+            DefinitionSource::Url(url) => url.clone(),
+            DefinitionSource::Upload => api_endpoint,
+        };
         let kind = settings
             .get("definitionAuthKind")
             .map(String::as_str)
@@ -71,7 +103,8 @@ impl Settings {
             return Err("securityScheme must be a bounded component name".into());
         }
         Ok(Self {
-            document,
+            source,
+            document_base,
             scheme,
             document_delivery,
         })

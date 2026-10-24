@@ -49,6 +49,7 @@ pub(super) fn update(
 ) -> ImportedServiceUpdateRequest {
     let record = &catalog.services[0];
     ImportedServiceUpdateRequest {
+        discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
         definition: record.definition.clone(),
         status,
         actions: record
@@ -886,6 +887,7 @@ fn publish_draft(
         actions: vec![],
         slot_versions: Default::default(),
         accepted_metadata: None,
+        document: None,
         created_at: String::new(),
         created_by: "admin".into(),
         updated_at: String::new(),
@@ -1032,6 +1034,7 @@ fn configured_connection_ids_collide_with_imports_on_startup_reload_and_write() 
         actions: vec![],
         slot_versions: Default::default(),
         accepted_metadata: None,
+        document: None,
         created_at: String::new(),
         created_by: "admin".into(),
         updated_at: String::new(),
@@ -1113,6 +1116,7 @@ fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
         actions: vec![],
         slot_versions: Default::default(),
         accepted_metadata: None,
+        document: None,
         created_at: String::new(),
         created_by: "admin".into(),
         updated_at: String::new(),

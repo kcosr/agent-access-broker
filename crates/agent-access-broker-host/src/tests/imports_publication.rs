@@ -74,6 +74,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Enabled,
                 actions: vec![ImportedActionWrite {

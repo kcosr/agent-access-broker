@@ -2,7 +2,7 @@ import { canWriteAdmin } from "../../lib/capabilities";
 // The frame every Catalog page shares: the Catalog sidebar (services,
 // resources, resource groups) and the Import service dialog, which opens from
 // `?import=1` on any Catalog page (the command palette links there).
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Sidebar, SidebarItem, SidebarSection, SkeletonSidebar, StatusDot } from "../../workbench";
 import { PortalPage } from "../../app/top-bar";
@@ -13,6 +13,11 @@ import { useResourceCatalog } from "../../data/queries";
 import { stateNeedsAttention, useCatalogServices, type CatalogIndex } from "./catalog-data";
 import { ImportEditor } from "./import-editor";
 import { useImportActions } from "./import-actions";
+import { ImportDocumentModal } from "./import-document-modal";
+import type { ImportRecordResult } from "../../import-types";
+import type { OpenApiDocumentFile } from "../../lib/import-document";
+import { errorMessage } from "../../lib/helpers";
+import { brokerApi } from "../../api";
 import "./catalog.css";
 
 export type CatalogSection = { kind: "services"; service?: string } | { kind: "resources" } | { kind: "groups" };
@@ -76,12 +81,29 @@ function CatalogSidebar({ index, section, onImport }: { index: CatalogIndex; sec
 
 /** Import service: create a draft, then continue on its Import tab. */
 function NewImportDialog({ index, onClose }: { index: CatalogIndex; onClose: () => void }) {
-  const { session } = useSession();
+  const { session, runQuery } = useSession();
   const actions = useImportActions();
   const navigate = useNavigate();
   // After creating, the draft's page replaces this URL; closing must not rewrite it.
   const created = useRef(false);
+  const [uploadRetry, setUploadRetry] = useState<{ data: ImportRecordResult; file: OpenApiDocumentFile; error: string } | null>(null);
   const imports = index.imports;
+  const openDraft = (data: ImportRecordResult) => navigate(paths.catalogService(data.service.definition.service, "import"), { replace: true });
+  if (uploadRetry) return <ImportDocumentModal
+    data={uploadRetry.data}
+    initialFile={uploadRetry.file}
+    initialError={uploadRetry.error}
+    notice={<>Draft <span className="wb-mono">{uploadRetry.data.service.definition.service}</span> was created. Open it to check its document and preview, or reload its current state before retrying the selected file.</>}
+    closeLabel="Open draft"
+    onReload={async () => {
+      const current = await runQuery((session) => brokerApi.importPreview(session, uploadRetry.data.service.definition.service));
+      setUploadRetry((previous) => previous ? { ...previous, data: current } : previous);
+    }}
+    // The administrator sees this snapshot before explicitly retrying; never silently advance its fences.
+    onUpload={(file) => actions.uploadDocument(uploadRetry.data, file)}
+    onUploaded={() => openDraft(uploadRetry.data)}
+    onClose={() => openDraft(uploadRetry.data)}
+  />;
   return (
     <ImportEditor
       principal={session.principal ?? ""}
@@ -92,10 +114,19 @@ function NewImportDialog({ index, onClose }: { index: CatalogIndex; onClose: () 
       onClose={() => {
         if (!created.current) onClose();
       }}
-      onSave={async (definition) => {
+      onSave={async (definition, _confirmed, document) => {
         const result = await actions.create(definition);
         created.current = true;
-        navigate(paths.catalogService(result.service.definition.service, "import"), { replace: true });
+        if (document) {
+          try {
+            await actions.uploadDocument(result, document.file);
+          } catch (failure) {
+            // The first mutation succeeded. Retrying here must never create a second draft.
+            setUploadRetry({ data: result, file: document, error: errorMessage(failure) });
+            return;
+          }
+        }
+        openDraft(result);
       }}
     />
   );

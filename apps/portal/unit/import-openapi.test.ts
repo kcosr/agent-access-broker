@@ -19,12 +19,33 @@ function renderEditor(data?: ImportPreviewResult, availableKinds = ["openapi_htt
   return renderToStaticMarkup(createElement(ImportEditor, { principal: "admin", data, availableKinds, authentication: [], onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
 }
 describe("OpenAPI import configuration", () => {
+  test("upload configuration excludes retained URL authentication drafts and preserves accepted settings", () => {
+    const draft = { source: "upload" as const, definitionUrl: "https://docs.example.test/api.json", definitionAuthKind: "raw_header", definitionAuthHeader: "X-Document-Key", securityScheme: "basic" };
+    expect(openApiConnectionSettings(undefined, true, draft)).toEqual({ definitionSource: "upload", securityScheme: "basic" });
+    const stored = { definitionSource: "upload", securityScheme: "original" };
+    expect(openApiConnectionSettings(stored, false, draft)).toBe(stored);
+    expect(openApiConnectionSettings(stored, true, { ...draft, securityScheme: "original" })).toBe(stored);
+    expect(openApiConnectionSettings(stored, true, { ...draft, source: "url" })).toEqual({ definitionUrl: draft.definitionUrl, definitionAuthKind: "raw_header", definitionAuthHeader: "X-Document-Key", securityScheme: "basic" });
+  });
+  test("retained uploaded documents expose a summary and no document URL or credential controls", () => {
+    const data = fixture();
+    data.service.definition.connectionSettings = { definitionSource: "upload" };
+    data.service.document = { filename: "café.json", byteLength: 2048, sha256: "a".repeat(64) };
+    const html = renderEditor(data);
+    expect(html).toContain("café.json");
+    expect(html).toContain("Stored by the Broker");
+    expect(html).toContain("API base URL");
+    expect(html).not.toContain("OpenAPI / Swagger definition URL");
+    expect(html).not.toContain("Definition authentication");
+    expect(html).not.toContain("Definition token header");
+    expect(html).not.toContain("a".repeat(64));
+  });
   test("frozen label and limit edits preserve CLI-created settings with omitted defaults", () => {
     const stored = { definitionUrl: "https://docs.example.test/openapi.json", securityScheme: "apiKey" };
-    const settings = openApiConnectionSettings(stored, false, { definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme });
+    const settings = openApiConnectionSettings(stored, false, { source: "url", definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme });
     expect(settings).toEqual(stored);
     expect(settings).not.toHaveProperty("definitionAuthKind");
-    expect(openApiConnectionSettings(stored, true, { definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme })).toEqual(stored);
+    expect(openApiConnectionSettings(stored, true, { source: "url", definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme })).toEqual(stored);
     expect(renderEditor(fixture())).toContain("removes stored execution and discovery credentials");
   });
   test("public document onboarding separates API and document destinations and omits OAuth", () => {
@@ -126,7 +147,7 @@ describe("Swagger and Basic import presentation", () => {
     expect(html).toContain("Separate discovery Basic credential");
     expect(html).toContain("basicAuth · Authorization: Basic");
     expect(html).toContain("Credential delivery: Authorization: Basic");
-    expect(openApiConnectionSettings(undefined, true, { definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", definitionAuthHeader: "X-Unused", securityScheme: "basicAuth" })).toEqual({ definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", securityScheme: "basicAuth" });
+    expect(openApiConnectionSettings(undefined, true, { source: "url", definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", definitionAuthHeader: "X-Unused", securityScheme: "basicAuth" })).toEqual({ definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", securityScheme: "basicAuth" });
   });
   test("review shows source version, form encoding and empty response contracts without inferring read authority", () => {
     const data = fixture();

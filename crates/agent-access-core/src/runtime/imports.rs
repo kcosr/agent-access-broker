@@ -9,10 +9,12 @@ use crate::{ImportedActionStatus, ImportedCatalog, ImportedServiceRecord, Import
 mod authentication_tests;
 mod authority;
 mod credentials;
+mod documents;
 pub use credentials::PreparedImportedCredentialContract;
 pub(super) use credentials::{
     ImportedCredentialContracts, credential_contract, resolve_credential_contracts,
 };
+pub use documents::PreparedImportedDocumentUpload;
 #[cfg(test)]
 mod command_tests;
 #[cfg(test)]
@@ -32,6 +34,7 @@ pub struct PreparedImportedProviders {
     /// The accepted metadata the provider was built with; the committed
     /// record must carry the same.
     accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
+    document: Option<crate::ImportedDocumentMetadata>,
     transport: PreparedTransport,
     credential_contracts: ImportedCredentialContracts,
 }
@@ -79,6 +82,7 @@ impl PreparedImportedProviders {
             || record.status != self.status
             || enabled_definitions(record) != self.enabled_actions
             || record.accepted_metadata != self.accepted_metadata
+            || record.document != self.document
         {
             return Err(preparation_mismatch());
         }
@@ -1303,6 +1307,7 @@ impl BrokerRuntime {
             status: record.status,
             enabled_actions: enabled_definitions(record),
             accepted_metadata: record.accepted_metadata.clone(),
+            document: record.document.clone(),
             transport: transport_provenance,
             credential_contracts: contracts,
         };

@@ -30,7 +30,7 @@ mod import_control;
 mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
-pub use imports::PreparedImportedCredentialContract;
+pub use imports::{PreparedImportedCredentialContract, PreparedImportedDocumentUpload};
 mod lookup_access;
 mod mcp_views;
 mod owned;

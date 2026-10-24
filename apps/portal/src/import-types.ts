@@ -75,6 +75,8 @@ export type ImportServiceMetadata = {
   resourceTypes: ImportResourceTypeDeclaration[];
 };
 export type ImportCredentialInput = (CredentialInputDescriptor & { state: "ready"; inputPolicy: CredentialInputPolicy }) | { state: "unavailable"; reason: string };
+/** Uploaded source metadata only; source bytes are never returned by management reads. */
+export type ImportDocumentMetadata = { filename?: string; byteLength: number; sha256: string };
 export type ImportedServiceRecord = {
   /** Read-only administrative projection; not part of a saved definition. */
   credentialInputs: Partial<Record<ImportPurpose, ImportCredentialInput>>;
@@ -83,6 +85,7 @@ export type ImportedServiceRecord = {
   version: number;
   actions: ImportActionRecord[];
   slotVersions: Partial<Record<ImportPurpose, string>>;
+  document?: ImportDocumentMetadata;
   /** Command imports after their first acceptance. */
   acceptedMetadata?: ImportServiceMetadata;
   createdAt: string;

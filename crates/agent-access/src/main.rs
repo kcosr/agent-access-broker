@@ -11301,11 +11301,26 @@ fn catalog_route<'a>(
     if !route.starts_with("/v1/") {
         anyhow::bail!("send HTTP route must start with /v1/");
     }
-    catalog
+    let route_spec = catalog
         .routes
         .iter()
         .find(|candidate| candidate.method == method && candidate.route == route)
-        .ok_or_else(|| anyhow::anyhow!("runtime catalog does not expose route {method} {route}"))
+        .ok_or_else(|| anyhow::anyhow!("runtime catalog does not expose route {method} {route}"))?;
+    if !matches!(
+        route_spec.request_body_kind,
+        agent_access_core::RequestBodyKind::Json
+    ) {
+        let guidance = if route_spec.operation == "admin.imports.document.upload" {
+            "use agent-access admin imports upload-document to preserve the original document bytes"
+        } else {
+            "use a client that supports the route's request body format"
+        };
+        return Err(DeferredCliError::input(anyhow::anyhow!(
+            "route {method} {route} requires a request body format unsupported by kind=http; {guidance}"
+        ))
+        .into());
+    }
+    Ok(route_spec)
 }
 
 fn resolve_route_path(
@@ -23186,6 +23201,120 @@ upload_spool_dir = "upload-spool"
             "route": "/v1/services/{service}"
         });
         reject_literal_identity_token_for_send_management(&ctx, &catalog, &request).unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_http_rejects_raw_json_routes_before_dispatch() {
+        let server = wiremock::MockServer::start().await;
+        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        settings.url = server.uri();
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let mut upload = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs()
+            .into_iter()
+            .find(|route| route.operation == "admin.imports.document.upload")
+            .unwrap();
+        let mut catalog = agent_access_core::empty_catalog(serde_json::json!({}));
+        for dedicated_upload in [true, false] {
+            if !dedicated_upload {
+                upload.route = "/v1/synthetic/{service}/source".into();
+                upload.operation = "synthetic.source.upload".into();
+            }
+            catalog.routes = vec![upload.clone()];
+            for body in [
+                Some(
+                    serde_json::from_str(r#"{"swagger":"2.0","duplicate":1,"duplicate":2}"#)
+                        .unwrap(),
+                ),
+                None,
+            ] {
+                let error = run_send_http(
+                    &ctx,
+                    &catalog,
+                    "PUT",
+                    &upload.route,
+                    BTreeMap::from([("service".into(), "example".into())]),
+                    BTreeMap::from([
+                        ("expectedVersion".into(), serde_json::json!(2)),
+                        ("expectedCatalogRevision".into(), serde_json::json!(7)),
+                    ]),
+                    body,
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(error.downcast_ref::<DeferredCliError>().unwrap().code, 3);
+                assert!(error.to_string().contains("unsupported by kind=http"));
+                if dedicated_upload {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("agent-access admin imports upload-document")
+                    );
+                }
+            }
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_http_rejects_raw_json_before_reading_secret_sources() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        settings.url = server.uri();
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let mut catalog = agent_access_core::empty_catalog(serde_json::json!({}));
+        catalog.routes = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs();
+        Mock::given(method("GET"))
+            .and(path("/v1/spec/catalog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&catalog))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let request_file = dir.path().join("request.json");
+        fs::write(
+            &request_file,
+            serde_json::to_vec(&serde_json::json!({
+                "version": SEND_SCHEMA_VERSION,
+                "kind": "http",
+                "method": "PUT",
+                "route": "/v1/admin/imports/{service}/document",
+                "pathParams": {"service": "example"},
+                "query": {"expectedVersion": 2, "expectedCatalogRevision": 7},
+                "secretSources": [{
+                    "pointer": "/body",
+                    "source": {"type": "file", "path": dir.path().join("absent.json")}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = run_send_command(&ctx, &None, &Some(request_file), false)
+            .await
+            .unwrap_err();
+        assert_eq!(error.downcast_ref::<DeferredCliError>().unwrap().code, 3);
+        assert!(
+            error
+                .to_string()
+                .contains("agent-access admin imports upload-document")
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        server.verify().await;
     }
 
     #[test]

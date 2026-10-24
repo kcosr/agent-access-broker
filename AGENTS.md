@@ -1008,6 +1008,18 @@ when the authorization server provides none, or replay MCP calls after a 401.
 Imported OpenAPI document URLs are operator-controlled destinations independently
 of API base URLs. Keep schema/operation plans bounded and offline at execution;
 never fetch external references, follow redirects, or infer resource grants.
+Uploaded documents use the generic adapter source capability and the same readers
+and compiler. Keep raw bytes in their bounded dedicated store row, out of catalog
+definitions, administrative responses, Debug, audit and diagnostics. Prepare
+outside the transaction; persist source and preview/quarantine atomically under
+the admitted snapshot and service/catalog fences through the cancellation-safe
+publication owner. Failed uploads must preserve prior source, preview and versions.
+Mark exact-byte JSON routes with `RequestBodyKind::RawJson` in the catalog and
+OpenAPI; omit them from the JSON send schema and reject them in generic `send`.
+Relative uploaded destinations resolve against the approved API endpoint, never
+a filename. Retain bytes across scheme selection and offline rediscovery; remove
+them atomically when an empty draft switches away from upload. Portal creation
+and upload are separate mutations: preserve the created draft after upload failure.
 Empty drafts may choose settings before accepting actions; accepted connection
 settings and delivery cannot change underneath existing action identities.
 Both source readers use the common compiler and executor. Preserve existing

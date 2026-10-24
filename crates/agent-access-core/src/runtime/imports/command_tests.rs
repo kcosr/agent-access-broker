@@ -11,6 +11,7 @@ fn command_record(
     kind: Option<ImportedCredentialKind>,
 ) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        document: None,
         definition: ImportedServiceDefinition {
             service: "ticketing".into(),
             display_name: "Ticketing".into(),

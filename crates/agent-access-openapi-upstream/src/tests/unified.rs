@@ -1,6 +1,9 @@
 use super::*;
 use agent_access_provider::test_support::basic_credential;
 
+#[path = "uploads.rs"]
+mod uploads;
+
 fn basic_definition() -> ImportedServiceDefinition {
     let mut def = definition(
         "https://api.example.test/api",

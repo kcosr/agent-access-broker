@@ -539,7 +539,9 @@ fn failed_migration_keeps_the_old_schema_and_ledger() {
     let before_schema = schema(&previous.connection.lock().unwrap());
     drop(previous);
     let ledger = migration_ledger(&path);
-    let mut failing = MANAGED_STORE_MIGRATIONS.to_vec();
+    let mut failing = catalog_through(MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION)
+        .migrations
+        .to_vec();
     let last = failing.last_mut().unwrap();
     assert_eq!(last.version, MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION);
     last.structural_validation = rejected_validation;

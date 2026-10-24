@@ -64,10 +64,12 @@ independent admission. Anonymous control-plane bodies use at most one quarter of
 global capacity (minimum one); verified management callers bypass that pool and
 its source slots, with a per-principal body limit before extraction instead. Bodiless writes
 skip body slots, including owner token pause/revoke. Browser-auth bodies are capped at 16 KiB and control-plane
-JSON/management bodies at 1 MiB, additionally bounded by the configured transfer
-and startup hard caps. Invocation JSON retains the transfer cap for supported
+JSON/management bodies at 1 MiB. Authenticated imported-document uploads allow
+4 MiB; anonymous requests to that route retain the 1 MiB cap. All are additionally
+bounded by the configured transfer and startup hard caps. Invocation JSON retains the transfer cap for supported
 inline content. Auth and other control-plane bodies have five- and fifteen-second
-receive ceilings; a smaller configured deadline still applies. Their timeouts
+receive ceilings, including fifteen seconds for document uploads; a smaller
+configured deadline still applies. Their timeouts
 return HTTP 408 with a deadline message. Invocation timeouts retain
 `body_malformed` with `request body receive deadline exceeded`. Management responses
 include `Cache-Control: no-store`; internal store diagnostics stay in server logs.
@@ -455,6 +457,11 @@ advertised services and actions are filtered through it. Administrative
 `visibility=all` is context-independent and omits `executionContext`, so it is
 configuration inventory rather than proof of caller authorization.
 Gateway services and gateway broker hosts are not included in invoke/send specs.
+Routes with `requestBodyKind: "raw_json"` require the original UTF-8 JSON bytes.
+OpenAPI retains their `application/json` schema and marks the operation with
+`x-agent-access-request-body-kind: "raw_json"`. They are excluded from the JSON
+`send` schema, and generic `agent-access send` rejects them. Use the dedicated
+document-upload command for imported sources.
 Provider action capabilities and catalog entries may include `documentation`, a
 provider-owned JSON object containing extended usage guidance. It is metadata,
 never an invocation input. Runtime OpenAPI operations and action-specific send
@@ -3743,7 +3750,7 @@ tries to impose a resource restriction on that service.
 Import management routes live under `/v1/admin/imports`. Administrators and
 auditors may list, inspect, and read saved previews. Discovery, acceptance,
 credential writes, and every state change require administrator write authority.
-They cover list/create, inspect/update, discover/preview/accept, service/action
+They cover list/create, inspect/update, document upload, discover/preview/accept, service/action
 status, and encrypted execution/discovery/transport token writes and deletion.
 See the [management route table](imported-services.md#cli-and-http-management).
 Mutations use expected service/catalog versions and normal browser CSRF checks;
@@ -3751,6 +3758,24 @@ token input is marked sensitive and plaintext is never returned. These routes ar
 excluded from agent MCP tools. Restoring retained grants requires confirmation.
 Preview results include grant IDs by action, so reviewing one changed action need
 not confirm unrelated grants on the same service.
+
+`PUT /v1/admin/imports/{service}/document` is available for imports configured
+with an uploaded document source. Required query parameters are `expectedVersion`
+and `expectedCatalogRevision`; optional `filename` is a bounded basename, never
+a local path. Send the exact UTF-8 JSON document as `application/json`, up to
+4 MiB for authenticated requests and within the configured HTTP body, startup
+hard cap and upstream response limits. Anonymous requests retain the 1 MiB
+control-plane cap. The entire body must arrive within the smaller of
+`limits.request_body_timeout_ms` and 15 seconds from admission; a receive timeout
+returns HTTP 408. It uses
+administrator authorization, browser CSRF and operator gates before discovery.
+Successful validation atomically stores the document and the ordinary discovery
+preview, quarantining changed or missing accepted actions. Failure preserves the
+previous document, preview and versions. The response includes safe document
+metadata with the service and never the raw source. Invalid uploaded JSON or
+document structure returns HTTP 400 `input_invalid`; a document exceeding the
+effective byte cap returns HTTP 413 `body_size_denied`. See
+[upload lifecycle and CLI](imported-openapi.md#uploading-and-replacing-a-document).
 
 Command import type reviews also report exclusion-capability changes in
 `resourceTypeChanges`: `exclusions_supported` or `exclusions_unsupported` in

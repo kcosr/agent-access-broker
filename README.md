@@ -107,7 +107,9 @@ containment. A command can declare resource types: the Broker checks resources
 named in an action's inputs before the command runs, and hands other actions
 the caller's grants to filter by.
 OpenAPI/Swagger imports share JSON and scalar URL-encoded request handling,
-including Basic authentication, through ordinary CLI and MCP actions.
+including Basic authentication, through ordinary CLI and MCP actions. Import the
+definition from an approved URL or upload a JSON file; uploaded documents are
+retained for offline refresh and replaced through the same review process.
 Commands can also declare file-download actions when the operator enables an
 explicit download byte cap. [`agent-access invoke --output`](docs/cli.md#save-action-results-to-a-file)
 saves native and imported downloads with size/hash verification, atomic local

@@ -353,6 +353,7 @@ mod tests {
         };
         runtime.config = Arc::new(config);
         let record = ImportedServiceRecord {
+            document: None,
             definition: ImportedServiceDefinition {
                 service: "inventory".into(),
                 display_name: "Inventory".into(),

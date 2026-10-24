@@ -39,6 +39,9 @@ pub use registration::{
 pub use schema::*;
 pub use type_changes::*;
 
+/// Maximum retained raw discovery document, before protocol parsing.
+pub const IMPORT_MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+
 /// The implementation an imported protocol client names itself as, such as
 /// an imported MCP connection's `clientInfo`: the Broker host package and
 /// its version, which core shares. It never names the linking assembly or the

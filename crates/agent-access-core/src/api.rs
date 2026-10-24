@@ -155,6 +155,25 @@ pub enum ExitPolicy {
     RawStream,
 }
 
+/// How a client must carry a route's JSON request body.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RequestBodyKind {
+    /// A client may parse and serialize the JSON value.
+    #[default]
+    Json,
+    /// A client must send the original UTF-8 JSON bytes without parsing or
+    /// reserialization. Generic JSON `send` cannot represent this contract.
+    RawJson,
+}
+
+impl RequestBodyKind {
+    fn is_json(&self) -> bool {
+        matches!(self, Self::Json)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpRouteSpec {
@@ -168,6 +187,9 @@ pub struct HttpRouteSpec {
     pub query_params: Vec<RouteParamSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_body_schema: Option<Value>,
+    /// Transport handling required for the request body, when one is allowed.
+    #[serde(default, skip_serializing_if = "RequestBodyKind::is_json")]
+    pub request_body_kind: RequestBodyKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive_request_pointers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -578,6 +600,17 @@ pub fn openapi_from_catalog(
                     }),
                 );
             }
+            if matches!(route.request_body_kind, RequestBodyKind::RawJson) {
+                operation.insert(
+                    "x-agent-access-request-body-kind".into(),
+                    json!(route.request_body_kind),
+                );
+                if let Some(body) = operation.get_mut("requestBody") {
+                    body["description"] = json!(
+                        "Send the original UTF-8 JSON bytes without parsing or reserialization. Generic JSON send does not support this route; use an exact-byte upload client."
+                    );
+                }
+            }
             if !route.sensitive_response_pointers.is_empty() {
                 operation.insert(
                     "x-agent-access-sensitive-output-pointers".to_string(),
@@ -747,7 +780,11 @@ pub fn send_schema_from_catalog(catalog: &ApiCatalog) -> Value {
             variants.push(variant);
         }
     }
-    for route in &catalog.routes {
+    for route in catalog
+        .routes
+        .iter()
+        .filter(|route| matches!(route.request_body_kind, RequestBodyKind::Json))
+    {
         variants.push(http_send_variant(route));
     }
     json!({
@@ -3370,6 +3407,7 @@ fn get_route(
         path_params: route_path_params(route),
         query_params: Vec::new(),
         request_body_schema: None,
+        request_body_kind: RequestBodyKind::Json,
         sensitive_request_pointers: Vec::new(),
         sensitive_response_pointers: Vec::new(),
         response_kind,
@@ -3400,6 +3438,7 @@ fn no_body_route(
         path_params: route_path_params(route),
         query_params: Vec::new(),
         request_body_schema: None,
+        request_body_kind: RequestBodyKind::Json,
         sensitive_request_pointers: Vec::new(),
         sensitive_response_pointers: Vec::new(),
         response_kind,
@@ -3428,6 +3467,7 @@ fn body_route(
         path_params: route_path_params(route),
         query_params: Vec::new(),
         request_body_schema: Some(permissive_object_schema()),
+        request_body_kind: RequestBodyKind::Json,
         sensitive_request_pointers,
         sensitive_response_pointers: Vec::new(),
         response_kind,

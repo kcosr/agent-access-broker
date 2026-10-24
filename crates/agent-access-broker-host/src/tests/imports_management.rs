@@ -8,6 +8,7 @@ use agent_access_core::imports::ImportedDiscoveryCredential;
 use agent_access_core::*;
 
 mod credentials;
+mod documents;
 
 fn admin_token(fixture: &Fixture) -> String {
     admin_token_for(fixture, "admin")
@@ -257,6 +258,7 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
         .unwrap()
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: record.status,
                 actions,

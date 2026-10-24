@@ -81,6 +81,7 @@ fn accept_command(
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+            discovery_source: crate::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Disabled,
                 actions: vec![command_action()],

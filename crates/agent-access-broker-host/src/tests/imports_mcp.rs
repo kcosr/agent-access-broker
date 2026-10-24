@@ -241,6 +241,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
         store
             .update_imported_service(
                 ImportedServiceUpdateRequest {
+                    discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                     definition: record.definition.clone(),
                     status: ImportedServiceStatus::Enabled,
                     actions: vec![true, false]

@@ -1,12 +1,20 @@
 import type { ImportActionDefinition, ImportBinding, ImportDelivery, ImportDiscovery, ImportSecurityScheme } from "../import-types";
 
-export function openApiConnectionSettings(existing: Record<string, string> | undefined, mutable: boolean, draft: { definitionUrl: string; definitionAuthKind: string; definitionAuthHeader: string; securityScheme: string }): Record<string, string> {
+export type OpenApiDocumentSource = "url" | "upload";
+
+export function openApiDocumentSource(settings: Record<string, string> | undefined): OpenApiDocumentSource {
+  return settings?.definitionSource === "upload" ? "upload" : "url";
+}
+
+export function openApiConnectionSettings(existing: Record<string, string> | undefined, mutable: boolean, draft: { source: OpenApiDocumentSource; definitionUrl: string; definitionAuthKind: string; definitionAuthHeader: string; securityScheme: string }): Record<string, string> {
   // CLI-created services may omit defaults. Presentation and limit edits must
   // preserve a frozen definition exactly.
-  if (existing && (!mutable || draft.definitionUrl.trim() === existing.definitionUrl
-    && draft.definitionAuthKind === (existing.definitionAuthKind ?? "none")
-    && draft.definitionAuthHeader.trim() === (existing.definitionAuthHeader ?? "")
-    && draft.securityScheme === (existing.securityScheme ?? ""))) return existing;
+  const sameSource = draft.source === openApiDocumentSource(existing);
+  const sameDocument = draft.source === "upload" || draft.definitionUrl.trim() === existing?.definitionUrl
+    && draft.definitionAuthKind === (existing?.definitionAuthKind ?? "none")
+    && draft.definitionAuthHeader.trim() === (existing?.definitionAuthHeader ?? "");
+  if (existing && (!mutable || sameSource && sameDocument && draft.securityScheme === (existing.securityScheme ?? ""))) return existing;
+  if (draft.source === "upload") return { definitionSource: "upload", ...(draft.securityScheme ? { securityScheme: draft.securityScheme } : {}) };
   return { definitionUrl: draft.definitionUrl.trim(), definitionAuthKind: draft.definitionAuthKind, ...(draft.definitionAuthKind === "raw_header" ? { definitionAuthHeader: draft.definitionAuthHeader.trim() } : {}), ...(draft.securityScheme ? { securityScheme: draft.securityScheme } : {}) };
 }
 

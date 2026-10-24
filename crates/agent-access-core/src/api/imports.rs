@@ -48,6 +48,33 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
         preview_result(),
         vec![],
     ));
+    let mut upload = mutation(
+        "PUT",
+        &format!("{DETAIL}/document"),
+        "admin.imports.document.upload",
+        json!({"type":"object","description":"Exact UTF-8 JSON OpenAPI or Swagger document bytes, at most 4 MiB and the configured body/discovery limits. Duplicate object members are rejected. application/json is required; bytes are retained without reserialization."}),
+        preview_result(),
+        vec!["/body".into()],
+    );
+    upload.request_body_kind = RequestBodyKind::RawJson;
+    upload.query_params = vec![
+        RouteParamSpec {
+            name: "expectedVersion".into(),
+            required: true,
+            schema: version(),
+        },
+        RouteParamSpec {
+            name: "expectedCatalogRevision".into(),
+            required: true,
+            schema: revision(),
+        },
+        RouteParamSpec {
+            name: "filename".into(),
+            required: false,
+            schema: json!({"type":"string","minLength":1,"maxLength":255,"description":"Optional basename, at most 255 UTF-8 bytes; controls, path separators, and dot-only names are rejected."}),
+        },
+    ];
+    routes.push(upload);
     let mut preview = get_management_route(
         &format!("{DETAIL}/preview"),
         "admin.imports.preview",
@@ -280,6 +307,11 @@ fn service_view() -> Value {
         "slotVersions":{"type":"object","additionalProperties":{"type":"string"},"description":"Opaque credential slot versions; no token values."},
         "credentialInputs":{"type":"object","propertyNames":{"enum":["execution","discovery","transport"]},"additionalProperties":credential_input()},
         "acceptedMetadata":accepted_metadata(),
+        "document":{"type":"object","additionalProperties":false,"required":["byteLength","sha256"],"properties":{
+            "filename":{"type":"string","minLength":1,"maxLength":255},
+            "byteLength":{"type":"integer","minimum":1,"maximum":crate::imports::IMPORT_MAX_DOCUMENT_BYTES},
+            "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}
+        },"description":"Safe receipt for retained uploaded source bytes. Raw document contents are never returned."},
         "createdAt":{"type":"string","format":"date-time"},"createdBy":{"type":"string"},
         "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
     }})
@@ -540,7 +572,7 @@ mod tests {
     #[test]
     fn imports_are_admin_only_and_preserve_credential_secret_markers() {
         let routes = route_specs();
-        assert_eq!(routes.len(), 11);
+        assert_eq!(routes.len(), 12);
         for route in &routes {
             assert_eq!(
                 route.access,
@@ -562,6 +594,26 @@ mod tests {
             .find(|route| route.operation == "admin.imports.credentials.put")
             .unwrap();
         assert_eq!(secret.sensitive_request_pointers, ["/body/token"]);
+        let upload = routes
+            .iter()
+            .find(|route| route.operation == "admin.imports.document.upload")
+            .unwrap();
+        assert_eq!(upload.method, "PUT");
+        assert_eq!(upload.route, "/v1/admin/imports/{service}/document");
+        assert_eq!(upload.request_body_kind, RequestBodyKind::RawJson);
+        assert_eq!(upload.sensitive_request_pointers, ["/body"]);
+        assert_eq!(
+            upload
+                .query_params
+                .iter()
+                .map(|parameter| (parameter.name.as_str(), parameter.required))
+                .collect::<Vec<_>>(),
+            vec![
+                ("expectedVersion", true),
+                ("expectedCatalogRevision", true),
+                ("filename", false)
+            ]
+        );
         assert_eq!(
             secret.request_body_schema.as_ref().unwrap()["properties"]["token"]["writeOnly"],
             true

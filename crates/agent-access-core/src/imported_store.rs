@@ -70,6 +70,9 @@ pub struct ImportedServiceRecord {
     /// before a command import's first acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
+    /// Safe receipt for retained discovery bytes; the document itself is not a catalog field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<ImportedDocumentMetadata>,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
@@ -121,6 +124,8 @@ pub struct ImportedPreviewAcceptance {
 }
 #[derive(Debug, Clone)]
 pub struct ImportedServiceUpdateRequest {
+    /// Adapter source policy resolved against this exact definition before the transaction.
+    pub discovery_source: crate::imports::ImportedDiscoverySource,
     pub definition: ImportedServiceDefinition,
     pub status: ImportedServiceStatus,
     /// Complete retained action set: omission cannot delete an accepted identity.
@@ -308,6 +313,13 @@ impl ManagedStore {
             ));
         }
         if empty_draft_edit && !old.definition.same_destination(&request.definition) {
+            if request.discovery_source == crate::imports::ImportedDiscoverySource::Remote {
+                tx.execute(
+                    "DELETE FROM imported_source_documents WHERE service=?1",
+                    [&request.definition.service],
+                )
+                .map_err(sql_unavailable)?;
+            }
             // Settings are adapter-owned, so conservatively invalidate both token
             // purposes for any destination/settings/delivery change. Do not
             // repurpose another user's stored personal token or silently delete it.
@@ -476,6 +488,22 @@ impl ManagedStore {
         request: ImportedPreviewWriteRequest,
         validate: impl FnOnce(&ImportedCatalog) -> Result<T, ManagedStoreError>,
     ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
+        self.write_imported_preview_inner(request, None, validate)
+    }
+    pub fn write_imported_document_preview<T>(
+        &self,
+        request: ImportedPreviewWriteRequest,
+        upload: &crate::PreparedImportedDocumentUpload,
+        validate: impl FnOnce(&ImportedCatalog) -> Result<T, ManagedStoreError>,
+    ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
+        self.write_imported_preview_inner(request, Some(upload), validate)
+    }
+    fn write_imported_preview_inner<T>(
+        &self,
+        request: ImportedPreviewWriteRequest,
+        upload: Option<&crate::PreparedImportedDocumentUpload>,
+        validate: impl FnOnce(&ImportedCatalog) -> Result<T, ManagedStoreError>,
+    ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
         validate_actor(&request.actor)?;
         validate_preview_context(&request.config_revision, &request.credential_versions)?;
         let manifest = bounded_json(&request.manifest, IMPORT_MAX_MANIFEST_BYTES)?;
@@ -498,6 +526,10 @@ impl ManagedStore {
         }
         if discovery_versions(&tx, &record)? != request.credential_versions {
             return Err(ManagedStoreError::VersionConflict);
+        }
+        if let Some(upload) = upload {
+            upload.validate(&record, request.expected_catalog_revision)?;
+            super::imported_documents::write(&tx, &request.service, upload)?;
         }
         let mut seen = BTreeSet::new();
         for action in &request.quarantine_actions {
@@ -909,11 +941,13 @@ enum ImportSchema {
     /// `023_imported_services` through `026_trusted_user_identity`: no
     /// `accepted_metadata_json`.
     BeforeCommandImports,
-    /// `027_command_imports` and later.
+    /// `027_command_imports` through `031_oidc_membership_renewal`.
     CommandImports,
+    /// `032_imported_source_documents` and later.
+    SourceDocuments,
 }
 fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
-    catalog_at(conn, ImportSchema::CommandImports)
+    catalog_at(conn, ImportSchema::SourceDocuments)
 }
 fn catalog_at(
     conn: &Connection,
@@ -955,7 +989,7 @@ pub(crate) fn service_record(
     conn: &Connection,
     service: &str,
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
-    service_record_at(conn, service, ImportSchema::CommandImports)
+    service_record_at(conn, service, ImportSchema::SourceDocuments)
 }
 fn service_record_at(
     conn: &Connection,
@@ -964,7 +998,7 @@ fn service_record_at(
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
     let metadata_column = match schema {
         ImportSchema::BeforeCommandImports => "NULL",
-        ImportSchema::CommandImports => "accepted_metadata_json",
+        ImportSchema::CommandImports | ImportSchema::SourceDocuments => "accepted_metadata_json",
     };
     type ServiceRow = (
         String,
@@ -1044,7 +1078,13 @@ fn service_record_at(
             ))
         })
         .collect::<Result<BTreeMap<_, _>, ManagedStoreError>>()?;
+    let document = if schema == ImportSchema::SourceDocuments {
+        super::imported_documents::metadata(conn, service)?
+    } else {
+        None
+    };
     Ok(Some(ImportedServiceRecord {
+        document,
         definition,
         status,
         version,
@@ -1436,6 +1476,14 @@ pub(super) fn validate_oidc_membership_renewal_structure(
     identity_access::check_identity_token_rows(conn)?;
     oidc_membership_renewal::check_rows(conn)
 }
+pub(super) fn validate_imported_source_documents_structure(
+    conn: &Connection,
+) -> Result<(), ManagedStoreError> {
+    validate_structure_through(conn, MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION)?;
+    identity_access::check_identity_token_rows(conn)?;
+    oidc_membership_renewal::check_rows(conn)?;
+    super::imported_documents::check_rows(conn)
+}
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
 fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {
@@ -1454,7 +1502,14 @@ fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), Ma
     identity_access::check_integrity(conn)?;
     check_secret_material_ready(conn, None)?;
     check_policy_revision_ready(conn)?;
-    catalog(conn)?;
+    catalog_at(
+        conn,
+        if version == MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION {
+            ImportSchema::SourceDocuments
+        } else {
+            ImportSchema::CommandImports
+        },
+    )?;
     Ok(())
 }
 pub(super) fn validate_structure_with_extension(
@@ -1579,6 +1634,7 @@ mod tests {
     include!("managed_store/imported_store_golden_tests.rs");
     include!("managed_store/command_imports_store_tests.rs");
     include!("managed_store/imported_basic_tests.rs");
+    include!("managed_store/imported_document_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,
@@ -1668,6 +1724,7 @@ mod tests {
     fn update(catalog: &ImportedCatalog) -> ImportedServiceUpdateRequest {
         let service = &catalog.services[0];
         ImportedServiceUpdateRequest {
+            discovery_source: crate::imports::ImportedDiscoverySource::Remote,
             definition: service.definition.clone(),
             status: ImportedServiceStatus::Disabled,
             actions: service

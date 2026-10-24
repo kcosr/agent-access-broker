@@ -1,6 +1,6 @@
 //! Host-side preparation for administrative discovery and catalog publication.
 use super::*;
-use crate::imports::{ImportedDiscovery, ImportedDiscoveryCredential};
+use crate::imports::{ImportedDiscovery, ImportedDiscoveryCredential, ImportedDiscoverySource};
 use crate::{ImportedServiceStatus, assign_imported_action_names};
 
 /// Why administrative discovery produced no preview.
@@ -62,6 +62,26 @@ impl BrokerRuntime {
         service: &str,
         administrator: &str,
     ) -> Result<(ImportedDiscovery, BTreeMap<String, String>), ImportDiscoveryError> {
+        self.discover_imported_service_inner(service, administrator, None)
+            .await
+    }
+
+    pub async fn discover_imported_service_with_document(
+        &self,
+        service: &str,
+        administrator: &str,
+        upload: &crate::PreparedImportedDocumentUpload,
+    ) -> Result<(ImportedDiscovery, BTreeMap<String, String>), ImportDiscoveryError> {
+        self.discover_imported_service_inner(service, administrator, Some(upload))
+            .await
+    }
+
+    async fn discover_imported_service_inner(
+        &self,
+        service: &str,
+        administrator: &str,
+        upload: Option<&crate::PreparedImportedDocumentUpload>,
+    ) -> Result<(ImportedDiscovery, BTreeMap<String, String>), ImportDiscoveryError> {
         let record = self
             .imported_catalog
             .service(service)
@@ -85,6 +105,22 @@ impl BrokerRuntime {
             )
             .into());
         }
+        let source = self
+            .imported_discovery_source(&record.definition)
+            .map_err(ImportPreparationError::from)?;
+        if let Some(upload) = upload {
+            if source != ImportedDiscoverySource::StoredDocument {
+                return Err(ImportPreparationError::new(
+                    ReasonCode::InputInvalid,
+                    "import does not accept uploaded documents",
+                )
+                .into());
+            }
+            upload
+                .validate(&record, self.imported_catalog.revision)
+                .map_err(ImportPreparationError::from)?;
+        }
+        let supplied_document = upload.cloned();
         let store = self
             .managed_store
             .clone()
@@ -142,75 +178,83 @@ impl BrokerRuntime {
             .cloned()
             .ok_or_else(import_control_unavailable)?;
         let selected = record.clone();
-        let (execution, transport, versions) = managed_store_blocking(move || {
-            let service = &selected.definition.service;
-            let versions = store.imported_discovery_credential_versions(
-                service,
-                selected.version,
-                contract.requirement(ImportedCredentialPurpose::Execution),
-            )?;
-            let slot = |purpose| {
-                store.resolve_imported_secret(
+        let (execution, transport, versions, retained_document) =
+            managed_store_blocking(move || {
+                let service = &selected.definition.service;
+                let versions = store.imported_discovery_credential_versions(
                     service,
-                    purpose,
-                    selected
-                        .slot_versions
-                        .get(&purpose)
-                        .ok_or(ManagedStoreError::CredentialNotFound)?,
-                    &ring,
-                    contract
-                        .requirement(purpose)
-                        .ok_or(ManagedStoreError::CredentialNotFound)?,
-                )
-            };
-            use crate::imports::ImportedDiscoveryAuthentication::{Delegated, Static};
-            let execution = match &selected.definition.discovery {
-                ImportedDiscoveryCredential::Anonymous => {
-                    crate::imports::ImportedDiscoveryAuthentication::Anonymous
-                }
-                ImportedDiscoveryCredential::Execution => {
-                    Static(slot(ImportedCredentialPurpose::Execution)?)
-                }
-                ImportedDiscoveryCredential::Slot => {
-                    Static(slot(ImportedCredentialPurpose::Discovery)?)
-                }
-                ImportedDiscoveryCredential::PerUser { principal } => {
-                    if let Some(credential) = oauth_lease {
-                        Delegated(credential)
-                    } else {
-                        let candidate = store
-                            .resolve_user_credential_for_verification_with_imported_contract(
-                                &ring,
-                                principal,
-                                service,
-                                "default",
-                                &[contract
-                                    .requirement(ImportedCredentialPurpose::Execution)
-                                    .ok_or(ManagedStoreError::CredentialNotFound)?
-                                    .require_kind()?
-                                    .personal_profile()
-                                    .to_string()],
-                                crate::CredentialManagementPurpose::Administrative,
-                                contract.requirement(ImportedCredentialPurpose::Execution),
-                            )?;
-                        if versions.get(&format!("user:{principal}"))
-                            != Some(&candidate.target.material_version)
-                        {
-                            return Err(ManagedStoreError::VersionConflict);
-                        }
-                        Static(candidate.credential)
+                    selected.version,
+                    contract.requirement(ImportedCredentialPurpose::Execution),
+                )?;
+                let slot = |purpose| {
+                    store.resolve_imported_secret(
+                        service,
+                        purpose,
+                        selected
+                            .slot_versions
+                            .get(&purpose)
+                            .ok_or(ManagedStoreError::CredentialNotFound)?,
+                        &ring,
+                        contract
+                            .requirement(purpose)
+                            .ok_or(ManagedStoreError::CredentialNotFound)?,
+                    )
+                };
+                use crate::imports::ImportedDiscoveryAuthentication::{Delegated, Static};
+                let execution = match &selected.definition.discovery {
+                    ImportedDiscoveryCredential::Anonymous => {
+                        crate::imports::ImportedDiscoveryAuthentication::Anonymous
                     }
-                }
-            };
-            let transport = selected
-                .definition
-                .transport_auth
-                .then(|| slot(ImportedCredentialPurpose::Transport))
-                .transpose()?;
-            Ok((execution, transport, versions))
-        })
-        .await
-        .map_err(ImportPreparationError::from)?;
+                    ImportedDiscoveryCredential::Execution => {
+                        Static(slot(ImportedCredentialPurpose::Execution)?)
+                    }
+                    ImportedDiscoveryCredential::Slot => {
+                        Static(slot(ImportedCredentialPurpose::Discovery)?)
+                    }
+                    ImportedDiscoveryCredential::PerUser { principal } => {
+                        if let Some(credential) = oauth_lease {
+                            Delegated(credential)
+                        } else {
+                            let candidate = store
+                                .resolve_user_credential_for_verification_with_imported_contract(
+                                    &ring,
+                                    principal,
+                                    service,
+                                    "default",
+                                    &[contract
+                                        .requirement(ImportedCredentialPurpose::Execution)
+                                        .ok_or(ManagedStoreError::CredentialNotFound)?
+                                        .require_kind()?
+                                        .personal_profile()
+                                        .to_string()],
+                                    crate::CredentialManagementPurpose::Administrative,
+                                    contract.requirement(ImportedCredentialPurpose::Execution),
+                                )?;
+                            if versions.get(&format!("user:{principal}"))
+                                != Some(&candidate.target.material_version)
+                            {
+                                return Err(ManagedStoreError::VersionConflict);
+                            }
+                            Static(candidate.credential)
+                        }
+                    }
+                };
+                let transport = selected
+                    .definition
+                    .transport_auth
+                    .then(|| slot(ImportedCredentialPurpose::Transport))
+                    .transpose()?;
+                let document = match source {
+                    ImportedDiscoverySource::Remote => None,
+                    ImportedDiscoverySource::StoredDocument if supplied_document.is_some() => None,
+                    ImportedDiscoverySource::StoredDocument => {
+                        Some(store.imported_document(&selected)?)
+                    }
+                };
+                Ok((execution, transport, versions, document))
+            })
+            .await
+            .map_err(ImportPreparationError::from)?;
         let adapter = self
             .config
             .providers
@@ -236,16 +280,18 @@ impl BrokerRuntime {
             HookPhase::CredentialVerification,
             &[],
         );
+        let document = upload
+            .map(|value| value.bytes())
+            .or(retained_document.as_deref());
+        let context = super::imports::adapter_context(&self.config, &record)
+            .with_command_registry(&self.command_registry);
+        let context = match document {
+            Some(bytes) => context.with_document(bytes),
+            None => context,
+        };
         let mut discovery = match agent_access_provider::host::with_hook_context(
             hook.clone(),
-            adapter.discover(
-                &record.definition,
-                &execution,
-                transport,
-                &super::imports::adapter_context(&self.config, &record)
-                    .with_command_registry(&self.command_registry),
-                &host,
-            ),
+            adapter.discover(&record.definition, &execution, transport, &context, &host),
         )
         .await
         {

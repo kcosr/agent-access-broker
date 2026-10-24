@@ -242,6 +242,7 @@ fn imported_definitions_actions_and_previews_persist_frozen_json() {
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+            discovery_source: crate::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Disabled,
                 actions: golden_actions(),

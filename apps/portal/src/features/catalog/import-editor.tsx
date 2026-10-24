@@ -7,13 +7,15 @@ import { useState, type ReactNode } from "react";
 import type { ImportAuthentication, ImportDefinition, ImportPreviewResult } from "../../import-types";
 import { importSourceKey } from "../../lib/imports";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportPersonalAuth } from "../../lib/import-credentials";
-import { openApiBindings, openApiConnectionSettings, openApiDelivery, openApiSchemeLabel, openApiSecuritySchemes } from "../../lib/import-openapi";
+import { openApiBindings, openApiConnectionSettings, openApiDelivery, openApiDocumentSource, openApiSchemeLabel, openApiSecuritySchemes } from "../../lib/import-openapi";
+import type { OpenApiDocumentFile } from "../../lib/import-document";
 import { COMMAND_KIND, CREDENTIAL_KIND_LABEL, commandBindings, commandEndpoint, commandName, credentialModesText } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
-import { Banner, Button, Checkbox, Field, Input, Select } from "../../workbench";
+import { Banner, Button, Checkbox, Field, Input, Seg, Select } from "../../workbench";
 import { FormError } from "../../components/form";
 import { adapterLabel } from "./catalog-data";
 import { modalFrame, type EditorFrame } from "./catalog-ui";
+import { ImportDocumentFile, ImportDocumentSummary, useImportDocumentFile } from "./import-document-file";
 
 export type ImportEditorProps = {
   /** The signed-in administrator (per-user discovery uses their credentials). */
@@ -28,7 +30,7 @@ export type ImportEditorProps = {
   /** Imports are enabled by operator configuration (new imports only). */
   operatorEnabled?: boolean;
   onClose: () => void;
-  onSave: (definition: ImportDefinition, confirmAffectedGrants: boolean) => Promise<unknown>;
+  onSave: (definition: ImportDefinition, confirmAffectedGrants: boolean, document?: OpenApiDocumentFile) => Promise<unknown>;
   frame?: EditorFrame;
 };
 
@@ -70,13 +72,13 @@ function useSave(onSave: ImportEditorProps["onSave"], onClose: () => void) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
-  async function submit(issues: Record<string, string>, definition: () => ImportDefinition, confirmed: boolean) {
+  async function submit(issues: Record<string, string>, definition: () => ImportDefinition, confirmed: boolean, document?: OpenApiDocumentFile) {
     setAttempted(true);
     if (Object.keys(issues).length) return;
     setPending(true);
     setError(null);
     try {
-      await onSave(definition(), confirmed);
+      await onSave(definition(), confirmed, document);
       onClose();
     } catch (failure) {
       setError(errorMessage(failure));
@@ -447,6 +449,8 @@ function OpenApiImportForm({
   const [name, setName] = useState(old?.service ?? "");
   const [label, setLabel] = useState(old?.displayName ?? "");
   const [endpoint, setEndpoint] = useState(old?.endpoint ?? "");
+  const [source, setSource] = useState(() => openApiDocumentSource(old?.connectionSettings));
+  const documentFile = useImportDocumentFile();
   const [definitionUrl, setDefinitionUrl] = useState(old?.connectionSettings.definitionUrl ?? "");
   const [documentAuth, setDocumentAuth] = useState(old?.connectionSettings.definitionAuthKind ?? "none");
   const [documentHeader, setDocumentHeader] = useState(old?.connectionSettings.definitionAuthHeader ?? "");
@@ -467,10 +471,12 @@ function OpenApiImportForm({
   const unknownNewScheme = Boolean(securityScheme && !selectedScheme && securityScheme !== old?.connectionSettings.securityScheme);
 
   const issues = commonIssues({ creating: !old, name, label, endpoint, requests, windowSeconds }, "API base URL");
-  if (mutable && !isUrl(definitionUrl)) issues.definitionUrl = "Enter the OpenAPI / Swagger definition URL as an http(s) URL.";
-  if (mutable && documentAuth === "raw_header" && !documentHeader.trim()) issues.documentHeader = "Enter the header that carries the discovery token.";
+  if (source === "url" && mutable && !isUrl(definitionUrl)) issues.definitionUrl = "Enter the OpenAPI / Swagger definition URL as an http(s) URL.";
+  if (source === "url" && mutable && documentAuth === "raw_header" && !documentHeader.trim()) issues.documentHeader = "Enter the header that carries the discovery token.";
+  if (source === "upload" && !old && !documentFile.selected) issues.documentFile = "Choose a JSON specification file.";
+  if (source === "upload" && !old && (documentFile.reading || documentFile.error)) issues.documentFile = documentFile.error ?? "Wait for the specification file to finish loading.";
   const shown = save.attempted ? issues : {};
-  const blocked = (!old && !operatorEnabled) || (!shared && !personal) || unknownNewScheme || (affected.length > 0 && !confirmed);
+  const blocked = (!old && !operatorEnabled) || (!shared && !personal) || unknownNewScheme || (affected.length > 0 && !confirmed) || (source === "upload" && !old && (documentFile.reading || Boolean(documentFile.error)));
 
   function definition(): ImportDefinition {
     return {
@@ -479,13 +485,14 @@ function OpenApiImportForm({
       adapterKind: "openapi_http",
       endpoint: endpoint.trim(),
       connectionSettings: openApiConnectionSettings(old?.connectionSettings, mutable, {
+        source,
         definitionUrl,
         definitionAuthKind: documentAuth,
         definitionAuthHeader: documentHeader,
         securityScheme
       }),
       executionBindings: bindings,
-      discovery: { kind: documentAuth === "none" ? "anonymous" : "slot" },
+      discovery: { kind: source === "upload" || documentAuth === "none" ? "anonymous" : "slot" },
       transportAuth: false,
       ...invocationLimit(requests, windowSeconds)
     };
@@ -507,54 +514,52 @@ function OpenApiImportForm({
           <Input required maxLength={256} value={label} disabled={busy} onChange={(event) => setLabel(event.target.value)} />
         </Field>
       </div>
-      <Field label="API base URL" error={shown.endpoint}>
+      <Field label="API base URL" hint="API calls go here. This destination must be allowed by your operator." error={shown.endpoint}>
         <Input mono required type="url" placeholder="https://api.example.test/v1" value={endpoint} disabled={Boolean(old) || busy} onChange={(event) => setEndpoint(event.target.value)} spellCheck={false} />
       </Field>
-      <Field
-        label="OpenAPI / Swagger definition URL"
-        hint="Both URLs must be allowed by the operator. The definition describes operations; calls use the API base URL. OpenAPI 3.1 and Swagger 2.0 JSON are supported."
-        error={shown.definitionUrl}
-      >
-        <Input
-          mono
-          required
-          type="url"
-          placeholder="https://docs.example.test/openapi.json"
-          value={definitionUrl}
-          disabled={!mutable || busy}
-          onChange={(event) => setDefinitionUrl(event.target.value)}
-          spellCheck={false}
-        />
-      </Field>
+      <fieldset className="pt-fieldset">
+        <legend>Definition document</legend>
+        <Seg label="Definition source" value={source} onChange={setSource} full options={[
+          { value: "url", label: "From URL", icon: "link", disabled: !mutable || busy },
+          { value: "upload", label: "Upload file", icon: "upload", disabled: !mutable || busy }
+        ]} />
+        {source === "url" ? <>
+          <Field
+            label="OpenAPI / Swagger definition URL"
+            hint="This document URL must also be allowed by your operator. OpenAPI 3.1 and Swagger 2.0 JSON are supported."
+            error={shown.definitionUrl}
+          >
+            <Input mono required type="url" placeholder="https://docs.example.test/openapi.json" value={definitionUrl} disabled={!mutable || busy} onChange={(event) => setDefinitionUrl(event.target.value)} spellCheck={false} />
+          </Field>
+          <div className="pt-catalog-row">
+            <Field label="Definition authentication">
+              <Select value={documentAuth} disabled={busy || !mutable} onChange={(event) => setDocumentAuth(event.target.value)}>
+                <option value="none">Public document (no credentials)</option>
+                <option value="bearer">Separate discovery Bearer token</option>
+                <option value="raw_header">Separate discovery header token</option>
+                <option value="basic">Separate discovery Basic credential</option>
+              </Select>
+            </Field>
+            {documentAuth === "raw_header" ? (
+              <Field label="Definition token header" error={shown.documentHeader}>
+                <Input mono required value={documentHeader} disabled={busy || !mutable} onChange={(event) => setDocumentHeader(event.target.value)} spellCheck={false} />
+              </Field>
+            ) : null}
+          </div>
+          <p className="pt-prose wb-small">{documentAuth === "none" ? "Loading this document sends no credentials." : "Save the draft, then set its discovery credential. It only reads the definition document."}</p>
+          {old && openApiDocumentSource(old.connectionSettings) === "upload" ? <p className="pt-catalog-warn">Saving this source change removes the stored uploaded document.</p> : null}
+        </> : !old ? <ImportDocumentFile value={documentFile} disabled={busy} missing={Boolean(shown.documentFile)} /> : <>
+          {data.service.document ? <ImportDocumentSummary document={data.service.document} /> : null}
+          <p className="pt-prose wb-small">{data.service.document ? "The uploaded definition is retained. Upload a replacement from Discovery and review to refresh its operations." : "Save configuration, then upload a specification from Discovery and review."}</p>
+          <p className="pt-prose wb-small wb-muted">No document URL or discovery credential needed.</p>
+        </>}
+      </fieldset>
       {old && mutable ? (
         <Banner tone="warning" slim>
           Changing definition settings or API credential delivery removes stored execution and discovery credentials. Set them again after saving. Existing personal credentials must be
           removed first.
         </Banner>
       ) : null}
-      <fieldset className="pt-fieldset">
-        <legend>Definition document access</legend>
-        <div className="pt-catalog-row">
-          <Field label="Definition authentication">
-            <Select value={documentAuth} disabled={busy || !mutable} onChange={(event) => setDocumentAuth(event.target.value)}>
-              <option value="none">Public document (no credentials)</option>
-              <option value="bearer">Separate discovery Bearer token</option>
-              <option value="raw_header">Separate discovery header token</option>
-              <option value="basic">Separate discovery Basic credential</option>
-            </Select>
-          </Field>
-          {documentAuth === "raw_header" ? (
-            <Field label="Definition token header" error={shown.documentHeader}>
-              <Input mono required value={documentHeader} disabled={busy || !mutable} onChange={(event) => setDocumentHeader(event.target.value)} spellCheck={false} />
-            </Field>
-          ) : null}
-        </div>
-        <p className="pt-prose wb-small">
-          {documentAuth === "none"
-            ? "Loading this document sends no credentials."
-            : "Save the draft, then set its discovery credential. It only reads the definition document."}
-        </p>
-      </fieldset>
       <fieldset className="pt-fieldset">
         <legend>API execution credentials</legend>
         <Checkbox
@@ -607,7 +612,7 @@ function OpenApiImportForm({
     title: data ? "Edit imported service" : "Import service",
     body,
     footer: <EditorFooter onClose={onClose} pending={busy} disabled={blocked} editing={Boolean(data)} />,
-    onSubmit: () => void save.submit(issues, definition, confirmed),
+    onSubmit: () => void save.submit(issues, definition, confirmed, source === "upload" && !old ? documentFile.selected ?? undefined : undefined),
     onClose,
     pending: busy
   });
