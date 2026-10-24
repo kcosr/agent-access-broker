@@ -114,6 +114,13 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **Confluence space key validation.** Live listing and content access accept
+  ordinary space keys with mixed case, a leading digit, or one character.
+  Listings no longer fail when they encounter these keys. Resource grants,
+  exclusions, lookups, and CQL preserve exact case. Rejected listing fields
+  produce fixed operator-only diagnostic codes without logging their values.
+  ([#63](https://github.com/kcosr/agent-access-broker/pull/63))
+
 - **Confluence paging through the Atlassian gateway.** Comment and reply lists
   and `page.move`'s order check follow Confluence's site-relative next links
   on the gateway route (OAuth and bearer tokens). They failed whenever a next
