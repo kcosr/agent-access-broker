@@ -33,6 +33,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Live GitLab project listing.** The separately grantable, read-only
+  `project.list` action and `gitlab project list` command list current projects
+  within effective repository grants, including namespace descendants and
+  archived projects. Only pagination inputs are accepted. Results share the
+  bounded scan and confidential continuation contract of project search, with
+  action-specific authority and tokens. It is eligible for
+  [read-only trusted-identity paths](docs/managed-identity.md#read-only-paths)
+  when separately granted. Local resource discovery is unchanged.
+  ([#56](https://github.com/kcosr/agent-access-broker/pull/56))
+
 - **Richer Jira issue views.** `issue.view` returns resolution, dates, components,
   versions, status category, and supported named custom fields, including Labels,
   in typed JSON and readable Markdown. Custom fields have explicit unsupported

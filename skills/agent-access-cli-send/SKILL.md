@@ -602,12 +602,19 @@ Page attachment upload and stream download:
 
 ## GitLab REST
 
+`project.list` lists live authorized GitLab projects, including archived projects,
+and accepts only `maxResults` and `pageToken`. It is independently grantable from
+`project.search` and object reads. Its continuation is bound to the list action.
 `project.search` discovers or browses authorized GitLab projects live, including
 namespace-granted projects not individually listed by `agent-access resources list`.
 The six native categories are `search.issues`, `search.merge_requests`, `search.code`,
 `search.commits`, `search.wiki`, and `search.comments`. These full-text searches
 use the authorized repository set or an explicit `project`. `issue.search` and
 `merge_request.search` list/filter within one required project instead.
+
+```json
+{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.list","inputs":{"maxResults":20}}
+```
 
 ```json
 {"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"dispatch","archived":false,"maxResults":20}}
@@ -625,13 +632,13 @@ basic code/commits/wiki/comments need a project. Advanced/Zoekt need configured 
 `regex` is accepted only by code with Zoekt. Queries are 1–512 UTF-8 bytes after
 trimming. Do not add upstream scopes, endpoints, branch selectors, or fallbacks.
 
-All seven return `items` and `scanStatus`. `more` and `scan_budget` carry
-`nextPageToken` without promising another authorized match. An empty resumable
-page means “No matching authorized items in this page; continue the search.”
+All eight return `items` and `scanStatus`. `more` and `scan_budget` carry
+`nextPageToken` without promising another authorized match. An empty resumable page has no authorized items in that page; follow its
+continuation.
 `exhausted` ends the selected stream; `upstream_window` means incomplete coverage.
 A short page does not prove completion. Resume by adding `pageToken` with the
 same query, filters, project, engine, regex, and page size; tokens expire 15 minutes
-after the first page and invalid tokens require a fresh search. Whole-result
+after the first page and invalid tokens require a fresh listing or search. Whole-result
 Markdown uses the same bounded projection as JSON, without `readContentFormat`.
 Previews and URLs are untrusted data; object reads require their own grants.
 

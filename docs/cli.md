@@ -1524,6 +1524,7 @@ agent-access --url http://127.0.0.1:8787 gitlab job trace team/project 67890 --o
 #### GitLab repository discovery and native content search
 
 ```bash
+agent-access gitlab project list --max-results 20
 agent-access gitlab project search --search dispatch --include-namespaces true --archived false
 agent-access gitlab project search --max-results 20
 agent-access gitlab search issues --search 'credential rotation'
@@ -1535,6 +1536,11 @@ agent-access gitlab search comments --search regression --project team/project
 # Requires an operator-configured Zoekt tuple:
 agent-access gitlab search code --search 'verify_.*' --engine zoekt --regex --project team/project
 ```
+
+`gitlab project list` maps to the independently grantable `project.list` action
+and lists live authorized projects, including archived projects. It accepts only
+`--max-results`, `--page-token`, and response/output options. Its token cannot be
+used with project search.
 
 `gitlab project search` discovers upstream repositories within the caller's
 grants; omit `--search` to browse. It maps to `project.search`. The six
@@ -1553,7 +1559,7 @@ with basic defaults this includes code, commits, wiki, and comments. `--regex`
 exists only on code and requires Zoekt. Native syntax, index coverage, and
 ranking depend on the engine. No fallback engine or project crawling is used.
 
-All seven commands support `--max-results`, `--page-token`,
+All eight commands support `--max-results`, `--page-token`,
 `--output-format json|markdown`, and local `--output` options. Repeat the original
 query, filters, project, engine, regex choice, and page size when resuming.
 `scanStatus=more` and `scan_budget` carry continuations without promising another

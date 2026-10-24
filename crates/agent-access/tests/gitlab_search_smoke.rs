@@ -11,6 +11,14 @@ use fixture::{
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
+fn action_inputs(action: &str) -> Value {
+    if matches!(action, "project.list" | "project.search") {
+        json!({"maxResults":4})
+    } else {
+        json!({"search":QUERY,"maxResults":4})
+    }
+}
+
 fn successful_cli(output: std::process::Output) -> Value {
     assert!(
         output.status.success(),
@@ -129,41 +137,67 @@ async fn mcp_json(response: reqwest::Response) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn discovery_and_all_six_categories_use_selected_credentials_through_cli_and_http_mcp() {
+async fn project_collections_and_all_six_categories_use_selected_credentials_through_cli_and_http_mcp()
+ {
     for credentials in [
         Credentials::Service,
         Credentials::Personal,
         Credentials::OAuth,
     ] {
         let fixture = Fixture::start(credentials, &ACTIONS).await;
-        let before = fixture.requests().await.len();
-        let discovery =
-            successful_cli(fixture.cli(&["gitlab", "project", "search", "--max-results", "4"]));
-        assert_projects(&discovery["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
-        // The nested project has no exact resource entry: the namespace discovers it.
-        assert_eq!(discovery["resourceScopes"]["repository"], json!(["*"]));
-        assert_eq!(discovery["result"]["scanStatus"], "more");
-        let discovery_token = confidential_token(&discovery["result"]).0;
-        let requests = fixture.requests().await;
-        assert_eq!(
-            requests.len() - before,
-            1,
-            "discovery redundantly confirmed project IDs"
-        );
-        assert_eq!(requests[before].url.path(), "/api/v4/projects");
-        let terminal = successful_cli(fixture.cli(&[
+        for command in ["search", "list"] {
+            let before = fixture.requests().await.len();
+            let discovery =
+                successful_cli(fixture.cli(&["gitlab", "project", command, "--max-results", "4"]));
+            assert_projects(&discovery["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+            // The nested project has no exact resource entry: the namespace discovers it.
+            assert_eq!(discovery["resourceScopes"]["repository"], json!(["*"]));
+            assert_eq!(discovery["result"]["scanStatus"], "more");
+            let discovery_token = confidential_token(&discovery["result"]).0;
+            let requests = fixture.requests().await;
+            assert_eq!(
+                requests.len() - before,
+                1,
+                "discovery redundantly confirmed project IDs"
+            );
+            assert_eq!(requests[before].url.path(), "/api/v4/projects");
+            let terminal = successful_cli(fixture.cli(&[
+                "gitlab",
+                "project",
+                command,
+                "--max-results",
+                "4",
+                "--page-token",
+                &discovery_token,
+            ]));
+            assert_projects(&terminal["result"], &[]);
+            assert_eq!(terminal["result"]["scanStatus"], "exhausted");
+            assert!(terminal["result"].get("nextPageToken").is_none());
+            assert_eq!(fixture.requests().await.len() - before, 2);
+        }
+
+        let listing_markdown = fixture.cli(&[
             "gitlab",
             "project",
-            "search",
+            "list",
             "--max-results",
             "4",
-            "--page-token",
-            &discovery_token,
-        ]));
-        assert_projects(&terminal["result"], &[]);
-        assert_eq!(terminal["result"]["scanStatus"], "exhausted");
-        assert!(terminal["result"].get("nextPageToken").is_none());
-        assert_eq!(fixture.requests().await.len() - before, 2);
+            "--output-format",
+            "markdown",
+        ]);
+        assert!(listing_markdown.status.success());
+        let listing_markdown = String::from_utf8(listing_markdown.stdout).unwrap();
+        for marker in [
+            "GitLab projects",
+            "Scan status",
+            "more",
+            "Continuation",
+            FIRST_PROJECT,
+            SECOND_PROJECT,
+        ] {
+            assert!(listing_markdown.contains(marker), "missing {marker}");
+        }
+        assert_private(&listing_markdown);
 
         for (command, _) in CATEGORIES {
             let response = successful_cli(fixture.cli(&[
@@ -239,11 +273,7 @@ async fn discovery_and_all_six_categories_use_selected_credentials_through_cli_a
                 .iter()
                 .find(|tool| tool["_meta"]["agent-access/action"] == *action)
                 .unwrap_or_else(|| panic!("missing {action}"));
-            let inputs = if *action == "project.search" {
-                json!({"maxResults":4})
-            } else {
-                json!({"search":QUERY,"maxResults":4})
-            };
+            let inputs = action_inputs(action);
             let called = mcp_json(
                 fixture
                     .mcp_request(
@@ -302,11 +332,7 @@ async fn discovery_and_all_six_categories_use_selected_credentials_through_cli_a
 async fn namespace_holes_token_restrictions_and_action_grants_are_independent() {
     let fixture = Fixture::start(Credentials::Service, &ACTIONS).await;
     for action in ACTIONS {
-        let inputs = if action == "project.search" {
-            json!({"maxResults":4})
-        } else {
-            json!({"search":QUERY,"maxResults":4})
-        };
+        let inputs = action_inputs(action);
         let (status, response) = fixture.invoke(&fixture.narrow_token, action, inputs).await;
         assert_eq!(status, StatusCode::OK, "{response}");
         assert_projects(&response["result"], &[FIRST_PROJECT]);
@@ -318,7 +344,7 @@ async fn namespace_holes_token_restrictions_and_action_grants_are_independent() 
     let before = fixture.requests().await.len();
     for action in &ACTIONS[1..] {
         let (status, response) = fixture
-            .invoke(&fixture.discovery_token, action, json!({"search":QUERY}))
+            .invoke(&fixture.discovery_token, action, action_inputs(action))
             .await;
         assert!(!status.is_success(), "{response}");
         assert_ne!(response["decision"], "allow");
@@ -337,21 +363,13 @@ async fn namespace_holes_token_restrictions_and_action_grants_are_independent() 
         assert_ne!(document, original);
         std::fs::write(fixture.broker.config_path(), document).unwrap();
         assert!(fixture.broker.reload().await.unwrap().is_success());
-        let inputs = if granted == "project.search" {
-            json!({"maxResults":4})
-        } else {
-            json!({"search":QUERY,"maxResults":4})
-        };
+        let inputs = action_inputs(granted);
         let (status, response) = fixture.invoke(&fixture.token, granted, inputs).await;
         assert_eq!(status, StatusCode::OK, "{response}");
         assert_projects(&response["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
         let before = fixture.requests().await.len();
         for denied in ACTIONS.into_iter().filter(|action| *action != granted) {
-            let inputs = if denied == "project.search" {
-                json!({"maxResults":4})
-            } else {
-                json!({"search":QUERY,"maxResults":4})
-            };
+            let inputs = action_inputs(denied);
             let (status, response) = fixture.invoke(&fixture.token, denied, inputs).await;
             assert!(
                 !status.is_success(),
@@ -708,5 +726,259 @@ async fn delegated_refresh_preserves_continuation_but_reconnection_and_token_rev
     );
     assert_eq!(fixture.resource_request_count().await, before);
     assert_private(&fixture.broker.audit().unwrap().text());
+    fixture.stop().await;
+}
+
+async fn reload_document(fixture: &Fixture, document: &str) {
+    std::fs::write(fixture.broker.config_path(), document).unwrap();
+    let outcome = fixture.broker.reload().await.unwrap();
+    assert!(
+        outcome.is_success(),
+        "reload failed: {:?}: {:?}",
+        outcome.reason_code(),
+        outcome.message()
+    );
+}
+
+async fn assert_list_discovery_without_upstream(fixture: &Fixture, expected: bool) {
+    let before = fixture.requests().await.len();
+    let catalog = reqwest::Client::new()
+        .get(format!("{}/v1/spec/catalog", fixture.broker.public_url()))
+        .header(
+            agent_access_provider::REQUEST_ID_HEADER,
+            uuid::Uuid::new_v4().to_string(),
+        )
+        .bearer_auth(&fixture.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog: Value = catalog.json().await.unwrap();
+    let catalog_has_list = catalog["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|service| service["service"] == "gitlab")
+        .flat_map(|service| service["actions"].as_array().unwrap())
+        .any(|action| action["action"] == "project.list");
+    assert_eq!(catalog_has_list, expected, "{catalog}");
+    let initialize = fixture.mcp_request(None, json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"list-admission","version":"1"}
+    }})).await;
+    assert_eq!(initialize.status(), StatusCode::OK);
+    let session = initialize.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        mcp_json(initialize).await["result"]["protocolVersion"],
+        "2025-11-25"
+    );
+    assert_eq!(
+        fixture
+            .mcp_request(
+                Some(&session),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+            )
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    let tools = mcp_json(
+        fixture
+            .mcp_request(
+                Some(&session),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+            )
+            .await,
+    )
+    .await;
+    let mcp_has_list = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| {
+            tool["_meta"]["agent-access/service"] == "gitlab"
+                && tool["_meta"]["agent-access/action"] == "project.list"
+        });
+    assert_eq!(mcp_has_list, expected, "{tools}");
+    fixture.close_mcp(&session).await;
+    assert_eq!(
+        fixture.requests().await.len(),
+        before,
+        "local availability discovery contacted GitLab"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_list_discovery_requires_the_selected_locally_available_credential() {
+    for mode in [Credentials::Service, Credentials::Personal] {
+        let fixture = Fixture::start(mode, &["project.list"]).await;
+        assert_list_discovery_without_upstream(&fixture, true).await;
+        let original = std::fs::read_to_string(fixture.broker.config_path()).unwrap();
+        let config: toml::Value = toml::from_str(&original).unwrap();
+        match mode {
+            Credentials::Service => {
+                let reference = config["credentials"]["service"]["gitlab"]["token_ref"]
+                    .as_str()
+                    .unwrap();
+                std::fs::remove_file(reference.strip_prefix("file:").unwrap()).unwrap();
+            }
+            Credentials::Personal => {
+                let path = config["credentials"]["per_user"]["gitlab"]["path"]
+                    .as_str()
+                    .unwrap();
+                std::fs::write(path, r#"{"credentials":[]}"#).unwrap();
+            }
+            Credentials::OAuth => unreachable!(),
+        }
+        assert_list_discovery_without_upstream(&fixture, false).await;
+        let before = fixture.requests().await.len();
+        let (status, response) = fixture
+            .invoke(
+                &fixture.token,
+                "project.list",
+                action_inputs("project.list"),
+            )
+            .await;
+        assert!(!status.is_success(), "{response}");
+        assert_private(&response.to_string());
+        assert_eq!(fixture.requests().await.len(), before);
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_list_preserves_modes_precedence_subjects_groups_and_execution_contexts() {
+    let fixture = Fixture::start(Credentials::Personal, &["project.list"]).await;
+    assert_list_discovery_without_upstream(&fixture, true).await;
+    let original = std::fs::read_to_string(fixture.broker.config_path()).unwrap();
+    let mut config: toml::Value = toml::from_str(&original).unwrap();
+    let mut other = config["policy"]["resources"][2].clone();
+    other["id"] = toml::Value::String("other".into());
+    other["selector"]["value"] = toml::Value::String("labs/other".into());
+    config["policy"]["resources"]
+        .as_array_mut()
+        .unwrap()
+        .push(other);
+    let mut second = config["policy"]["grants"][0].clone();
+    second["credential_mode"] = toml::Value::String("service".into());
+    second["resources"] = toml::from_str::<toml::Value>("resource_ids = [\"other\"]").unwrap();
+    config["policy"]["grants"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    reload_document(&fixture, &toml::to_string(&config).unwrap()).await;
+    assert_list_discovery_without_upstream(&fixture, false).await;
+    let before = fixture.requests().await.len();
+    let (status, denied) = fixture
+        .invoke(
+            &fixture.token,
+            "project.list",
+            action_inputs("project.list"),
+        )
+        .await;
+    assert!(!status.is_success(), "{denied}");
+    assert_eq!(denied["reasonCode"], "service_action_denied");
+    assert_eq!(fixture.requests().await.len(), before);
+
+    config["policy"]["grants"][1]
+        .as_table_mut()
+        .unwrap()
+        .insert("priority".into(), toml::Value::Integer(10));
+    config["policy"]["grants"][1]["resources"] =
+        toml::from_str("resource_ids = [\"api\"]").unwrap();
+    reload_document(&fixture, &toml::to_string(&config).unwrap()).await;
+    let (status, response) = fixture
+        .invoke(
+            &fixture.token,
+            "project.list",
+            action_inputs("project.list"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_projects(&response["result"], &[FIRST_PROJECT]);
+    assert_eq!(
+        fixture.requests().await.last().unwrap().headers["authorization"],
+        "Bearer search-service-token"
+    );
+
+    // Direct-user authority outranks even a higher-priority group grant.
+    config["policy"]["grants"][1]["subjects"] =
+        toml::Value::Array(vec![toml::Value::String("group:list-members".into())]);
+    reload_document(&fixture, &toml::to_string(&config).unwrap()).await;
+    let (status, response) = fixture
+        .invoke(
+            &fixture.token,
+            "project.list",
+            action_inputs("project.list"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_projects(&response["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+    assert_eq!(
+        fixture.requests().await.last().unwrap().headers["authorization"],
+        "Bearer search-personal-token"
+    );
+
+    for subject in ["user:admin", "group:list-nonmembers", "group:list-members"] {
+        reload_document(&fixture, &original).await;
+        assert_list_discovery_without_upstream(&fixture, true).await;
+        let document = original.replace(
+            "subjects = [\"user:alice\"]",
+            &format!("subjects = [\"{subject}\"]"),
+        );
+        reload_document(&fixture, &document).await;
+        let before = fixture.requests().await.len();
+        let (status, response) = fixture
+            .invoke(
+                &fixture.token,
+                "project.list",
+                action_inputs("project.list"),
+            )
+            .await;
+        if subject == "group:list-members" {
+            assert_list_discovery_without_upstream(&fixture, true).await;
+            assert_eq!(status, StatusCode::OK, "{response}");
+            assert_projects(&response["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+        } else {
+            assert!(!status.is_success(), "{response}");
+            assert_eq!(fixture.requests().await.len(), before);
+            assert_list_discovery_without_upstream(&fixture, false).await;
+        }
+    }
+    let mut config: toml::Value = toml::from_str(&original).unwrap();
+    config.as_table_mut().unwrap().insert(
+        "execution_context".into(),
+        toml::from_str(
+            "allowed_values = [\"default\", \"external\"]\ndefault_context = \"default\"",
+        )
+        .unwrap(),
+    );
+    reload_document(&fixture, &toml::to_string(&config).unwrap()).await;
+    assert_list_discovery_without_upstream(&fixture, true).await;
+    let (status, response) = fixture
+        .invoke(
+            &fixture.token,
+            "project.list",
+            action_inputs("project.list"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_projects(&response["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+    config["policy"]["grants"][0]["execution_contexts"] =
+        toml::Value::Array(vec![toml::Value::String("external".into())]);
+    reload_document(&fixture, &toml::to_string(&config).unwrap()).await;
+    let before = fixture.requests().await.len();
+    let (status, response) = fixture
+        .invoke(
+            &fixture.token,
+            "project.list",
+            action_inputs("project.list"),
+        )
+        .await;
+    assert!(!status.is_success(), "{response}");
+    assert_eq!(fixture.requests().await.len(), before);
+    assert_list_discovery_without_upstream(&fixture, false).await;
     fixture.stop().await;
 }

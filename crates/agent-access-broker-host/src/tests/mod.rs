@@ -18431,6 +18431,7 @@ fn assert_gitlab_read_response_capability_matrix(
         "merge_request.view",
         "pipeline.list",
         "pipeline.view",
+        "project.list",
         "project.search",
         "project.view",
         "protected_branch.list",

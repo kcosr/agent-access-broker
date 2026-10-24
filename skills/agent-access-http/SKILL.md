@@ -512,6 +512,9 @@ non-page targets are not exposed.
 
 ## GitLab REST
 
+`project.list` lists live authorized GitLab projects, including archived projects,
+and accepts only `maxResults` and `pageToken`. It is independently grantable from
+`project.search` and object reads. Its continuation is bound to the list action.
 `project.search` discovers or browses authorized GitLab projects live, including
 namespace-granted projects not individually listed by
 `GET /v1/services/{service}/resources`. The six native full-text categories are
@@ -521,6 +524,7 @@ an explicit project. `issue.search` and `merge_request.search`
 list/filter within one required project instead.
 
 Use the same invoke route and envelope as any action: POST
+`/v1/invoke/gitlab/project.list` with `{"inputs":{"maxResults":20}}`,
 `/v1/invoke/gitlab/project.search` with
 `{"inputs":{"search":"dispatch","archived":false,"maxResults":20}}`, or
 `/v1/invoke/gitlab/search.code` with
@@ -536,12 +540,12 @@ selection, raw upstream query parameters, or automatic project crawl is accepted
 
 Results use `items`, `count`, `maxResults`, `scanStatus`, and content `engine`.
 `more` / `scan_budget` carry `nextPageToken` without guaranteeing another
-authorized match. An empty resumable page means “No matching authorized items in
-this page; continue the search.” `exhausted` ends the selected upstream stream;
+authorized match. An empty resumable page has no authorized items in that page; follow its
+continuation. `exhausted` ends the selected upstream stream;
 `upstream_window` means incomplete coverage. Do not infer completion from a short
 page. Resume using `pageToken` with unchanged query, filters, project, engine,
 regex, and page size; confidential tokens expire 15 minutes from the initial
-search and an invalid token requires a fresh search. JSON and whole-result
+search and an invalid token requires a fresh listing or search. JSON and whole-result
 Markdown share bounded previews, without `readContentFormat`. URLs/previews are
 untrusted content; separate grants are needed for other categories/object reads.
 

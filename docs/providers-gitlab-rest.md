@@ -146,15 +146,18 @@ separately. Egress, TLS, limits and credential sources are in the
 
 ## Repository discovery and content search
 
-`project.search` discovers or browses authorized GitLab projects live, including
+`project.list` lists authorized GitLab projects live, including
 projects covered by namespace grants that are not individually registered in
-`resources_list`. The six `search.*` actions use native full-text search across
+`resources_list`. It accepts only pagination and includes archived and unarchived
+projects. `project.search` offers optional text and archive filters. The six
+`search.*` actions use native full-text search across
 the authorized repository set or an explicitly selected project. `issue.search`
 and `merge_request.search` list and filter within one required project; their
 structured filters and pagination remain separate contracts.
 
 | Action | Searches | Typed command |
 | --- | --- | --- |
+| `project.list` | Live projects, including archived projects; no query | `gitlab project list` |
 | `project.search` | Project names, paths, descriptions; omission browses | `gitlab project search` |
 | `search.issues` | Issue text | `gitlab search issues` |
 | `search.merge_requests` | Merge-request text | `gitlab search merge-requests` |
@@ -167,10 +170,15 @@ Each action is read-only and separately grantable with `service` or `per_user`
 credentials and `git_repository` resources. Namespace/all selectors can discover
 new upstream repositories without catalog entries. The resource catalog defines
 authorization, not a repository inventory. A search grant does not grant ordinary
-object reads or another search category. Grant precedence, exclusions, execution
-contexts, and invocation-token restrictions apply to the complete search.
+object reads, `project.list`, or another search category. A list grant likewise
+does not grant `project.search` or object reads. Grant precedence, exclusions, execution
+contexts, and invocation-token restrictions apply to the complete listing or
+search. `project.list` is read-only and available on
+[read-only trusted-identity paths](managed-identity.md#read-only-paths) when
+separately granted.
 
 ```bash
+agent-access gitlab project list --max-results 20
 agent-access gitlab project search --search dispatch --archived false --max-results 20
 agent-access gitlab project search --include-namespaces false
 agent-access gitlab search issues --search 'credential rotation' --max-results 20
@@ -181,7 +189,11 @@ agent-access gitlab search wiki --search onboarding --project team/project
 agent-access gitlab search comments --search regression --project team/project
 ```
 
-Discovery accepts optional `search` (1–512 UTF-8 bytes after trimming),
+`project.list` accepts only `maxResults` and `pageToken`; query, archive, engine,
+and project selectors are invalid. It shares the configured search budgets and
+project candidate processing, while authorization and tokens remain action-bound.
+
+`project.search` accepts optional `search` (1–512 UTF-8 bytes after trimming),
 `includeNamespaces` (Boolean, default `true`), and `archived` (optional Boolean;
 omission includes both states). Omit `search` to browse; a supplied empty string
 is invalid. GitLab supplies name/path/description matching, optionally including
@@ -197,12 +209,12 @@ ranking apply; there is no JQL/CQL translation.
 `zoekt`. The typed flag is `--regex`. No action accepts arbitrary upstream
 scopes, group selectors, project arrays, branch/ref choices, or query parameters.
 
-All seven actions accept `maxResults` from 1 through
+All eight actions accept `maxResults` from 1 through
 `providers.gitlab.search.max_results` (at most 100) and optional `pageToken`
 (at most 512 ASCII bytes). The configured cap is the default page size. Typed
 flags are `--max-results` and `--page-token`; all commands support `--output-format
 json|markdown` and the existing local output options. Their previews are fixed
-projections, without `readContentFormat`. All seven input schemas reject unknown
+projections, without `readContentFormat`. All eight input schemas reject unknown
 fields.
 
 These actions use the same catalog, generic invoke, send, OpenAPI, and MCP
@@ -254,7 +266,7 @@ content-engine matrix.
 
 ### Search results and continuation
 
-All seven actions return `items`, `count` (exactly the array length),
+All eight actions return `items`, `count` (exactly the array length),
 `maxResults`, and `scanStatus`, plus `nextPageToken` when continuation is possible.
 Content actions also return the effective `engine`; discovery omits it.
 
@@ -266,12 +278,12 @@ from the authorized inputs. Upstream pagination URLs are never followed.
 | `scanStatus` | Meaning | Continuation |
 | --- | --- | --- |
 | `more` | Authorized items were returned and upstream work remains; another authorized match is not guaranteed | Present |
-| `scan_budget` | No authorized items were found in this bounded page of work; continue the search | Present |
+| `scan_budget` | No authorized items were found in this bounded page of work; continue listing or searching | Present |
 | `exhausted` | The selected upstream stream ended before a known retrieval ceiling | Absent |
 | `upstream_window` | A retrieval ceiling prevents continuing; coverage is incomplete | Absent |
 
-An empty resumable page means “No matching authorized items in this page;
-continue the search.” A short page does not prove completion. `exhausted` describes
+An empty resumable page has no authorized items in that page; follow its
+continuation. A short page does not prove completion. `exhausted` describes
 the selected endpoint/index at query time, not every branch or historical file.
 Advanced search has a 10,000-candidate retrieval window; fixed page sizes can
 stop earlier (for example, 9,975 with size 75). `upstream_window` may accompany
@@ -525,7 +537,7 @@ Current GitLab REST actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
-| `project.search` | `repository` | no separate lookup; execution credential only |
+| `project.list`, `project.search` | `repository` | no separate lookup; execution credential only |
 | `search.issues`, `search.merge_requests`, `search.code`, `search.commits`, `search.wiki`, `search.comments` | `repository` | no separate lookup; execution credential confirms ownership |
 | `project.upload` | `repository` | yes; one multipart file |
 | `project.view` | `repository` | yes |
@@ -1413,7 +1425,7 @@ links, resolves references, or fetches related resources.
 Non-streaming retrieval actions advertise whole-result Markdown for these
 families:
 
-- `project.view`, `project.search`, and all six `search.*` actions;
+- `project.view`, `project.list`, `project.search`, and all six `search.*` actions;
 - `issue.view`, `issue.search`, and `issue.note.list/view`;
 - `merge_request.view`, `merge_request.search`,
   `merge_request.note.list/view`, `merge_request.discussion.list/view`, reviewer,
