@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
   gains the public `download: bool` field. Downstream struct literals must
   supply it (`false` preserves existing JSON actions), and exhaustive
   destructuring must include it or use `..`.
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
 
 - **Resource-access discovery replaces resource listing.** Use MCP
   `resource_access_describe`, CLI `resource-access describe`, HTTP
@@ -64,6 +65,7 @@ All notable changes to this project are documented in this file.
   detail but excludes executable downloads. See [command downloads](docs/command-imports.md#download-responses).
   Accepted download definitions require a compatible backup or removal through
   the newer Broker before rollback; an older reader rejects the containing service.
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
 
 - **Live resource listing.** Separately grantable, read-only GitLab/Jira
   `project.list`, Confluence `space.list`, and CloudBees CI `job.list` actions
@@ -124,6 +126,7 @@ All notable changes to this project are documented in this file.
   downloads now cap their encoded metadata header at 16 KiB, report a bounded
   refusal warning, and honor sensitive-output `no-store`. See
   [download bounds](docs/command-imports.md#download-bounds).
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
 
 - **The portal Credentials list has no Permissions column.** An OAuth
   connection's permissions, scope evidence, connect availability and remote
