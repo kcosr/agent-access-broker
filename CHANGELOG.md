@@ -12,7 +12,7 @@ All notable changes to this project are documented in this file.
   supply it (`false` preserves existing JSON actions), and exhaustive
   destructuring must include it or use `..`. `ImportedCredentialDelivery`
   gains `Basic`; update exhaustive matches to handle that delivery explicitly.
-  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64), [#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Resource-access discovery replaces resource listing.** Use MCP
   `resource_access_describe`, CLI `resource-access describe`, HTTP
@@ -67,6 +67,7 @@ All notable changes to this project are documented in this file.
   See [OpenAPI and Swagger imports](docs/imported-openapi.md). Accepted Basic or
   form definitions require a compatible backup or removal through the newer
   Broker before rollback to a binary without those capabilities.
+  ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Jira project and search-field discovery.** The read-only `project.view`
   action and `jira project view` command describe an authorized project,
@@ -146,6 +147,7 @@ All notable changes to this project are documented in this file.
   Import credential writes check the
   server's current field policy and both explicit revisions before consuming
   secret input; upgrade the administrative CLI and Broker together.
+  ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Download limits and privacy.** Command downloads validate explicit decoded
   and envelope limits within the command deadline, holding command capacity
