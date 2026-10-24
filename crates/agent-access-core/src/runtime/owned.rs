@@ -152,16 +152,16 @@ impl BrokerRuntime {
                 Err(_) => Err(Box::new(PreparationFailure::new(fallback, Err(interrupted_error((ReasonCode::OperationFailed, "operation failed during preparation"), false))))),
             }
         };
-        // Preparation may itself probe or append audit (for example, identity
-        // renewal). Reserve the stream's started record only after that work,
-        // but before the provider can make any changes.
+        // Reserve the stream's started record after preparation, before the
+        // provider can make changes. Its dedicated pool leaves ordinary audit
+        // capacity available throughout command waits and execution.
         let mut started_permit = None;
         let prepared = match prepared {
             Ok(prepared) if require_stream => {
                 let reservation = tokio::select! {
                     biased;
                     message = control.interrupted(true) => Err(interrupted_error(message, false)),
-                    result = self.audit.reserve_required() => result.map_err(|_| {
+                    result = self.audit.reserve_stream_start() => result.map_err(|_| {
                         ProviderError::error(ReasonCode::AuditUnavailable, "audit sink unavailable")
                             .with_audit(json!({"executionState":"not_dispatched", "retrySafe":false}))
                     }),
@@ -808,11 +808,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_write_reserves_started_audit_after_preparation_before_dispatch() {
-        let provider = ControlledProvider::raw_write(false);
+    async fn raw_write_start_reservation_preserves_ordinary_audit_capacity() {
+        let provider = ControlledProvider::raw_write(true);
         let (runtime, dir) = fixture_with_audit_capacity(provider.clone(), Some(1));
-        // A preparation probe needs the only ordinary slot. Reserving that slot
-        // before preparation would deadlock or fail this otherwise valid call.
+        // Preparation can probe audit before the start reservation is acquired.
         *provider.preparation_audit.lock().unwrap() = Some(runtime.audit.clone());
         let control = InvocationControl::default();
         let operation = {
@@ -824,21 +823,41 @@ mod tests {
                     .await
             })
         };
-        entered(&provider.invoked).await;
+        entered(&provider.lookup_started).await;
         let writer = runtime.audit.writer.as_ref().unwrap();
-        assert_eq!(writer.normal_capacity.available_permits(), 0);
+        assert_eq!(writer.stream_start_capacity.available_permits(), 1);
+        provider.lookup_continue.add_permits(1);
+        entered(&provider.invoked).await;
+        assert_eq!(writer.stream_start_capacity.available_permits(), 0);
         assert_eq!(writer.terminal_capacity.available_permits(), 0);
-        // Competing ordinary audit work cannot take the started-record slot.
-        // Keep its reservation after handoff to also exercise terminal delivery
-        // while ordinary capacity remains exhausted.
-        let mut pressure = Box::pin(writer.normal_capacity.clone().acquire_owned());
-        assert!(pressure.as_mut().now_or_never().is_none());
-        provider.complete.add_permits(1);
-        let mut response = tokio::time::timeout(Duration::from_secs(10), operation)
+        assert_eq!(writer.normal_capacity.available_permits(), 1);
+        // The raw write is still paused with every stream-start and terminal
+        // slot reserved. Unrelated readiness and required audit must progress.
+        tokio::time::timeout(Duration::from_secs(2), runtime.check_audit_writable())
             .await
             .unwrap()
             .unwrap();
-        let pressure = tokio::time::timeout(Duration::from_secs(2), pressure)
+        let mut unrelated = super::super::tests::test_audit_record();
+        unrelated.broker_request_id = "unrelated-audit".into();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            runtime.append_audit_record(&unrelated),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!control.completed());
+        assert_eq!(writer.stream_start_capacity.available_permits(), 0);
+        // Also keep ordinary capacity exhausted during the response and body:
+        // neither of the reserved lifecycle records may depend on that pool.
+        let pressure = writer
+            .normal_capacity
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        provider.complete.add_permits(1);
+        let mut response = tokio::time::timeout(Duration::from_secs(10), operation)
             .await
             .unwrap()
             .unwrap();
@@ -874,16 +893,17 @@ mod tests {
             crate::AuditStoreType::Jsonl,
             &dir.path().join("audit.jsonl"),
         );
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0]["providerAudit"]["streamPhase"], "started");
-        assert_eq!(records[1]["providerAudit"]["streamPhase"], "completed");
-        assert_eq!(records[1]["providerAudit"]["streamBytes"], 3);
-        assert_eq!(records[0]["brokerRequestId"], records[1]["brokerRequestId"]);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0]["brokerRequestId"], "unrelated-audit");
+        assert_eq!(records[1]["providerAudit"]["streamPhase"], "started");
+        assert_eq!(records[2]["providerAudit"]["streamPhase"], "completed");
+        assert_eq!(records[2]["providerAudit"]["streamBytes"], 3);
+        assert_eq!(records[1]["brokerRequestId"], records[2]["brokerRequestId"]);
         drop(pressure);
     }
 
     #[tokio::test]
-    async fn raw_write_audit_capacity_failure_after_preparation_prevents_dispatch() {
+    async fn raw_write_start_capacity_failure_after_preparation_prevents_dispatch() {
         let provider = ControlledProvider::raw_write(true);
         let (runtime, dir) = fixture_with_audit_capacity(provider.clone(), Some(1));
         let control = InvocationControl::default();
@@ -898,10 +918,10 @@ mod tests {
         };
         entered(&provider.lookup_started).await;
         let writer = runtime.audit.writer.as_ref().unwrap();
-        // Initial audit admission has succeeded. Exhaust capacity while the
-        // provider's preparation is paused to exercise the dispatch reservation.
+        // Initial audit admission has succeeded. Exhaust stream-start capacity
+        // while preparation is paused to exercise the dispatch reservation.
         let pressure = writer
-            .normal_capacity
+            .stream_start_capacity
             .clone()
             .acquire_owned()
             .await

@@ -2241,13 +2241,20 @@ durability = "write"           # write | sync_data | sync_all; default
 - `rotate_bytes`, `retention_days`, `queue_capacity`, and
   `enqueue_timeout_ms` must be non-zero. If `terminal_queue_capacity` is set, it
   must also be non-zero.
-- `queue_capacity` bounds normal audit append and readiness probe work waiting
-  on the dedicated audit writer. `enqueue_timeout_ms` bounds how long a request
-  may wait for writer capacity before failing closed with `audit_unavailable`.
+- `queue_capacity` bounds normal audit append and readiness probe work queued
+  or awaiting acknowledgement from the dedicated audit writer.
+  `enqueue_timeout_ms` bounds how long a request may wait for writer capacity
+  before failing closed with `audit_unavailable`.
 - `terminal_queue_capacity` reserves writer capacity for streamed-response
   terminal audit records. When audit is enabled, an explicit value must be at
   least `limits.max_concurrent_requests`; when omitted, the effective value is
   exactly `limits.max_concurrent_requests`.
+- A separate internal stream-start reservation pool has the same size as the
+  effective `terminal_queue_capacity`. Command downloads reserve a slot after
+  preparation and before provider dispatch, retaining it through command-budget
+  waiting, execution, response validation and acknowledgement of the required
+  started record. The writer channel includes this pool in addition to ordinary
+  and terminal capacity; command execution does not hold `queue_capacity` slots.
 - `durability = "write"` performs normal OS writes only: it is page-cache-only
   and is not crash-durable across an OS or host failure. For JSONL, `sync_data`
   calls `fsync`-equivalent data sync after each record and durable rotation

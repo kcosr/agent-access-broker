@@ -2049,6 +2049,14 @@ for acknowledgement. If finalization fails after execution, the error preserves
 safe completion evidence and explicitly denies retry safety. Streaming responses
 and credentialed gateway forwarding reserve terminal-audit queue capacity before the started audit record is accepted, so
 terminal records have bounded writer capacity even when shutdown begins.
+After preparation and before provider dispatch, command downloads also reserve
+a dedicated stream-start audit slot. That reservation spans command-budget
+waiting, process execution and response validation through acknowledgement of
+the required started record; the terminal reservation stays with delivery. The
+internal start pool equals the effective `audit.terminal_queue_capacity`, and
+the writer channel includes its capacity alongside ordinary and terminal work.
+Ordinary `audit.queue_capacity` covers queued work through acknowledgement and
+is not held through command execution.
 `audit.durability` controls whether records are ordinary page-cache-only writes,
 `sync_data`, or `sync_all`; `write` is not crash-durable across an OS or host
 failure. For JSONL the sync modes sync each record and also make rotation and

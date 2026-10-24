@@ -1111,6 +1111,14 @@ revisions. `providerAudit.command` adds the process facts, for example:
   "contractViolation": false, "operationDispatched": true }
 ```
 
+With audit enabled, command downloads reserve a dedicated stream-start audit
+slot after preparation and before provider dispatch. It covers the command's
+budget wait, execution and response validation until the required started
+record is acknowledged. The separate terminal reservation covers final delivery
+audit. The internal start pool is sized to the effective
+`audit.terminal_queue_capacity`, so command execution leaves ordinary
+`audit.queue_capacity` available for queued writer work.
+
 Calls also record `providerAudit.commandAuthorization`, the authorization
 the request carried, never attributes. A Broker-enforced call records
 `{"mode": "broker", "resourceType", "credentialMode", "values", "grant"}`:

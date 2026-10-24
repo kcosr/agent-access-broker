@@ -913,9 +913,16 @@ records and 16 MiB and acknowledges each record after its batch commits.
 Streamed downloads reserve terminal-audit capacity before the
 started record is accepted; completion, error, shutdown cancellation, or client
 drop then queues one terminal audit record through that reserved capacity.
-`queue_capacity` bounds ordinary writer work, `terminal_queue_capacity` bounds
-reserved terminal records, and `enqueue_timeout_ms` bounds the fail-closed wait
-for capacity. When `terminal_queue_capacity` is omitted, it derives from
+`queue_capacity` bounds ordinary writer work queued or awaiting acknowledgement,
+`terminal_queue_capacity` bounds reserved terminal records, and
+`enqueue_timeout_ms` bounds the fail-closed wait for capacity. Command downloads
+also use a separate internal stream-start pool, sized to the effective
+`terminal_queue_capacity`. A slot is reserved after preparation and before
+provider dispatch, covering the command-budget wait, execution, response
+validation and acknowledgement of the required started record. The writer
+channel includes this extra capacity; long commands do not occupy ordinary
+`queue_capacity` slots. The terminal reservation remains with response delivery.
+When `terminal_queue_capacity` is omitted, it derives from
 `limits.max_concurrent_requests`; when set explicitly, it must be at least
 `limits.max_concurrent_requests`, and operators must raise it when raising
 global request concurrency above the configured terminal queue value.
