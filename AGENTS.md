@@ -375,7 +375,11 @@ binary and needs `python3`, whose absence fails it.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
-  client, `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Its
+  client, `custom_fields.rs` issue-view custom-field projection and validation,
+  `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Custom fields belong
+  only to `JiraIssueView`; search and mutation readbacks keep their own shapes.
+  Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
+  or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`backend.rs` wire

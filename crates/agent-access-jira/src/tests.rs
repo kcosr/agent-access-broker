@@ -566,6 +566,7 @@ impl JiraBackend for StubJiraBackend {
         Ok(JiraBackendResponse {
             value: JiraIssueView {
                 issue: response.value,
+                custom_fields: Vec::new(),
                 issue_links: include_issue_links
                     .then(|| self.issue_view_links.lock().unwrap().clone())
                     .flatten(),

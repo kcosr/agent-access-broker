@@ -1143,7 +1143,7 @@ fn gateway_issue(id: &str, key: &str, project: &str) -> Value {
     })
 }
 
-/// The path, `fields` query and presented authorization of each request
+/// The path, `fields`/`expand` queries and presented authorization of each request
 /// `server` got.
 async fn field_requests(server: &MockServer) -> Vec<String> {
     server
@@ -1158,8 +1158,14 @@ async fn field_requests(server: &MockServer) -> Vec<String> {
                 .find(|(name, _)| name == "fields")
                 .map(|(_, value)| value.into_owned())
                 .unwrap_or_default();
+            let expand = request
+                .url
+                .query_pairs()
+                .find(|(name, _)| name == "expand")
+                .map(|(_, value)| format!(" expand={value}"))
+                .unwrap_or_default();
             format!(
-                "{} {} fields={fields} {}",
+                "{} {} fields={fields}{expand} {}",
                 request.method,
                 request.url.path(),
                 request
@@ -1228,7 +1234,7 @@ async fn oauth_resolves_a_renamed_project_key_through_the_gateway() {
                 lookup.clone(),
                 lookup.clone(),
                 format!(
-                    "GET {GATEWAY}/issue/NEW-123 fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description Bearer oauth-1"
+                    "GET {GATEWAY}/issue/NEW-123 fields=*all,-comment,-attachment,-worklog,-subtasks,-parent,-issuelinks expand=names,schema Bearer oauth-1"
                 ),
             ],
             "{locator}"
@@ -1393,7 +1399,7 @@ async fn oauth_issue_view_discloses_embedded_links_through_the_gateway() {
         [
             format!("GET {route} fields=project Bearer oauth-1"),
             format!(
-                "GET {route} fields=project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels,description,issuelinks Bearer oauth-1"
+                "GET {route} fields=*all,-comment,-attachment,-worklog,-subtasks,-parent expand=names,schema Bearer oauth-1"
             ),
         ]
     );

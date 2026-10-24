@@ -1121,7 +1121,8 @@ tests also require every action-specific OpenAPI/send invoke schema to accept
 explicit `native`/`json` protocol defaults when capability arrays are absent.
 
 Jira descriptor completeness tests enumerate every declared issue-description
-and comment-body result path, including mutation readbacks. They assert that
+and comment-body result path, including mutation readbacks, and the issue-view
+custom-field owner path `/result/customFields/*`. They assert that
 Markdown/text rendering preserves native ADF and adds one correctly placed
 `renderedBody` for present content, distinguishes missing/null from
 present-empty bodies, never guesses similarly named or arbitrary property
@@ -1130,6 +1131,28 @@ adversarial ADF tests cover every supported node and mark, safe and unsafe
 links, unknown-container and unknown-leaf fallbacks, malformed roots, Unicode,
 depth/node/work/output boundaries, deterministic LF output, no truncation, no
 panic, and no network access.
+
+Deterministic Jira custom-field fixtures cover the expanded issue fetch with
+`fields=*all,-comment,-attachment,-worklog,-subtasks,-parent` and
+`expand=names,schema`, plus `-issuelinks` without universal same-mode access.
+They check the unchanged three-request Broker flow (two metadata checks and
+one authorized issue fetch), both link-access modes, unsolicited standard/link
+data containment, identity mismatches, and renamed-project handling. Projection cases cover
+canonical numeric-ID ordering, duplicate/missing names, every allowlisted type,
+null/empty sentinels, stripped option/user properties, unsupported app/reference
+data, malformed values marked `withheld`, and sanitized metadata-map failures.
+Search and create/update readbacks must retain their existing shapes.
+
+Presentation fixtures check escaped custom names and values, explicit status
+markers, empty fields versus no returned fields, and per-entry `renderedBody`
+only for supported non-null ADF. A substantial fixture with hundreds of fields
+and about 2 MiB of varied rich text exercises complete native JSON, normalized
+companions, whole-result Markdown, and stdio MCP delivery below transport caps.
+Separate cases exhaust shared render complexity, exceed per-document bytes,
+and lower the configured HTTP MCP response cap to require the explicit
+`mcp_response_too_large` failure. The CLI fixture exercises typed commands,
+generic invoke, JSON send, and direct HTTP. These fixtures use synthetic Jira
+responses; they do not validate a live tenant.
 
 Capability projection tests require `readContentFormats` on exactly
 `issue.view`, `issue.create`, `issue.update`, `comment.view`, `comment.add`,
@@ -1145,8 +1168,8 @@ project issue-type metadata, singleton issue/comment, body-free search, metadata
 lists, comment-property list/get with arbitrary JSON, verification success, and
 the `allow_with_result` verification mismatch. Assertions require stable field
 and collection ordering, exact identifiers/timestamps/URLs/booleans/counts and
-pagination tokens, omission of absent/null fields, one terminal newline, no raw
-ADF, and the same provider request count, endpoint, query, selected fields, and
+pagination tokens, field-specific absent/null handling, one terminal newline,
+no raw ADF, and the same provider request count, endpoint, query, selected fields, and
 pagination inputs as JSON mode. Mutations and raw attachment downloads must not
 advertise whole-result Markdown. Renderer snapshots also require identifiers and
 timestamps as code spans, safe URLs as autolinks, neutralized metadata controls
@@ -1168,10 +1191,12 @@ shapes.
 Bounds and observability tests apply Jira `max_body_bytes` to every declared
 native body even in omitted or explicit-native mode, plus traversal, rendered,
 aggregate, whole-document, and final-result limits. Malformed or oversized Jira
-read content returns sanitized `upstream_protocol_failed`/502 without partial
-stdout or a second provider request, including for oversized returned descriptions. Unique
-native/rendered/property/pagination/link sentinels must remain absent from audit
-JSONL, tracing/log captures, errors, object identifiers, and metric labels.
+description/comment content returns sanitized `upstream_protocol_failed`/502
+without partial stdout or a second provider request. Invalid custom values or
+malformed custom ADF are explicitly withheld; byte or complexity exhaustion
+fails the complete request. Unique native/rendered/property/pagination/link
+sentinels and custom-field names/values must remain absent from audit JSONL,
+tracing/log captures, errors, object identifiers, and metric labels.
 
 Deterministic Confluence normalized-read coverage uses the same top-level
 protocol and capability checks. Descriptor tests enumerate exactly 26 embedded

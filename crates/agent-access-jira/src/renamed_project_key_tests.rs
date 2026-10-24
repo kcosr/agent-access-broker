@@ -122,6 +122,7 @@ impl JiraBackend for RenamedJira {
         let response = self.issue(issue_key, credential).await?;
         ok(JiraIssueView {
             issue: response.value,
+            custom_fields: Vec::new(),
             issue_links: None,
         })
     }
