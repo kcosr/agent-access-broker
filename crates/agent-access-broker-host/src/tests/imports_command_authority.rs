@@ -399,13 +399,13 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
         &app,
         &alice,
         Method::GET,
-        "/v1/services/tickets/resources",
+        "/v1/services/tickets/resource-access",
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(
-        listed["resources"]
+        listed["registeredResources"]["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -414,8 +414,25 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
         BTreeSet::from(["ENG", "OPS"]),
         "{listed}"
     );
-    assert_eq!(listed["coverage"][0]["selector"], json!({"kind": "all"}));
-    assert_eq!(listed["coverage"][0]["restricted"], true);
+    let search = listed["access"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|access| access["action"] == "issue.search")
+        .unwrap();
+    assert_eq!(search["enforcement"], "command");
+    let coverage = search["coverage"].as_array().unwrap();
+    assert_eq!(coverage.len(), 2, "{search}");
+    let all = coverage
+        .iter()
+        .find(|entry| entry["selector"] == json!({"kind": "all"}))
+        .unwrap();
+    assert_eq!(all["restricted"], true, "{search}");
+    let ops = coverage
+        .iter()
+        .find(|entry| entry["selector"] == json!({"kind": "exact", "value": "OPS"}))
+        .unwrap();
+    assert_eq!(ops["restricted"], false, "{search}");
     assert_eq!(catalog_actions(&app, &alice).await, every);
     let tools = mcp_tool_names(&app, &alice).await;
     for action in &every {

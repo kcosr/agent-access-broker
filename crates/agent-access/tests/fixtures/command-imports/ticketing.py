@@ -42,6 +42,11 @@ Actions:
   issue.search   read; resources checked by the command (type `project`): it
                  keeps only issues of projects some passed grant covers and
                  reads each with that grant's credential
+  project.list   read; explicit live listing of `project`, checked by the
+                 command using this action's passed grants and exclusions;
+                 accepts no inputs, releases canonical keys in order, and
+                 reads each project with the covering grant's credential.
+                 This finite inventory is limited to 100 projects.
   issue.create   write; checked by the Broker, from /project. Nothing
                  persists, so the new key is always the project's highest
                  issue number plus one (OPS-43, SEC-8, WEB-14), returned as a
@@ -137,6 +142,7 @@ import unicodedata
 FORMAT = "agent-access-command/1"
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_MESSAGE_BYTES = 1024
+MAX_LIST_PROJECTS = 100
 SUBCOMMANDS = ("describe", "invoke", "verify")
 PROFILES = ("default", "no_credential", "v2", "trimmed", "bare")
 WRITES = ("issue.create", "issue.close", "issue.comment")
@@ -298,6 +304,25 @@ def actions(profile):
             "resources": {"type": "project"},
         },
         {
+            "name": "project.list",
+            "description": "List visible projects.",
+            "readOnly": True,
+            "listingOf": "project",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "outputSchema": {
+                "type": "object", "required": ["items", "count"],
+                "properties": {
+                    "items": {"type": "array", "maxItems": MAX_LIST_PROJECTS,
+                              "items": {"type": "object", "required": ["key", "name"],
+                                        "properties": {"key": {"type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}$", "maxLength": 10},
+                                                       "name": {"type": "string"}, "via": {"type": "string"}}}},
+                    "count": {"type": "integer", "minimum": 0, "maximum": MAX_LIST_PROJECTS},
+                    "access": {"type": "object"},
+                },
+            },
+            "resources": {"type": "project"},
+        },
+        {
             "name": "issue.create",
             "description": "Create an issue in a project.",
             "readOnly": False,
@@ -419,6 +444,7 @@ class Ticketing:
         self.handlers = {
             "issue.view": self.issue_view,
             "issue.search": self.issue_search,
+            "project.list": self.project_list,
             "issue.create": self.issue_create,
             "issue.close": self.issue_close,
         }
@@ -578,6 +604,31 @@ class Ticketing:
             access = {"accounts": accounts}
         return success({"issues": found, "total": total, "access": access,
                         "grants": [received_grant(grant) for grant in grants]})
+
+    def project_list(self, request):
+        inputs = request["inputs"]
+        if not isinstance(inputs, dict) or inputs:
+            raise invalid("Project listing accepts only an empty input object.")
+        grants = self.command_grants(request, typed=True)
+        if len(PROJECTS) > MAX_LIST_PROJECTS or any(
+                re.fullmatch(r"[A-Z][A-Z0-9]{1,9}", project) is None for project in PROJECTS):
+            raise CommandError("upstream_failed", "The project inventory is invalid or exceeds its limit.")
+        accounts = {}
+        items = []
+        for project, name in sorted(PROJECTS.items()):
+            grant = self.covering_grant(grants, project)
+            if grant is None:
+                continue
+            mode = grant.get("credential")
+            item = {"key": project, "name": name}
+            if mode is not None:
+                if mode not in accounts:
+                    accounts[mode] = self.account(request, mode, write=False)
+                item["via"] = mode
+            items.append(item)
+        access = ({"account": self.account(request, None, write=False)}
+                  if self.profile == "no_credential" else {"accounts": accounts})
+        return success({"items": items, "count": len(items), "access": access})
 
     def issue_create(self, request):
         inputs = request["inputs"]

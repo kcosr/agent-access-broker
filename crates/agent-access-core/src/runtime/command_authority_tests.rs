@@ -42,6 +42,10 @@ fn declared_authority(action: &ImportedActionDefinition) -> ImportedActionAuthor
         credential_modes: command
             .get("credentialModes")
             .map(|modes| serde_json::from_value(modes.clone()).unwrap()),
+        listing_of: command
+            .get("listingOf")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     }
 }
 
@@ -365,6 +369,41 @@ fn published_types(record: &ImportedServiceRecord) -> ResourceTypeRegistry {
         .unwrap()
         .registry()
         .clone()
+}
+
+#[test]
+fn imported_listing_metadata_maps_the_accepted_type_id_and_preserves_unscoped_actions() {
+    let mut record = record(
+        &[],
+        vec![
+            action(
+                "projects.enumerate",
+                json!({"resources": {"type": "project"}, "listingOf": "project"}),
+            ),
+            action("whoami", json!({})),
+        ],
+    );
+    let broker_type = ResourceType::new("accepted_projects").unwrap();
+    record.accepted_metadata.as_mut().unwrap().resource_types[0].broker_type =
+        broker_type.as_str().into();
+    let types = published_types(&record);
+    let descriptor = imports::descriptor(&record, &config(), &types);
+    descriptor.validate().unwrap();
+    assert!(descriptor.validate_resource_types(&types).is_empty());
+    assert_eq!(
+        descriptor.actions[0].listing_of.as_ref(),
+        Some(&broker_type)
+    );
+    assert_eq!(
+        descriptor
+            .action_resource_scope("projects.enumerate")
+            .unwrap()
+            .1
+            .resource_type,
+        broker_type
+    );
+    assert!(descriptor.actions[1].listing_of.is_none());
+    assert!(descriptor.actions[1].resource_scope.is_none());
 }
 
 fn import_config() -> BrokerConfig {
@@ -864,20 +903,46 @@ async fn command_enforced_calls_pass_the_top_band_with_per_grant_credentials_and
     let listed = runtime
         .service_discovery(&caller, &context(), SERVICE)
         .unwrap()
-        .resources(&ResourceListQuery::default())
+        .resource_access(&ResourceAccessQuery::default())
         .unwrap();
     assert_eq!(
         listed
-            .resources
+            .registered_resources
+            .items
             .iter()
             .map(|resource| resource.value.as_str())
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["ENG", "OPS"]),
         "excluded, disabled and ineligible entries are not listed"
     );
-    assert_eq!(listed.coverage.len(), 1);
-    assert_eq!(listed.coverage[0].selector, ResourceSelector::All);
-    assert!(listed.coverage[0].restricted);
+    let access = listed
+        .access
+        .iter()
+        .find(|access| access.action() == "issue.search")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(access).unwrap()["enforcement"],
+        "command"
+    );
+    assert!(matches!(
+        access,
+        ActionResourceAccess::Resource {
+            enforcement: ResourceAccessEnforcement::Command,
+            ..
+        }
+    ));
+    let coverage = access.coverage().unwrap();
+    assert_eq!(coverage.len(), 2);
+    assert!(
+        coverage
+            .iter()
+            .any(|entry| entry.selector == ResourceSelector::All && entry.restricted)
+    );
+    assert!(
+        coverage
+            .iter()
+            .any(|entry| entry.selector == exact("OPS") && !entry.restricted)
+    );
 }
 
 #[tokio::test]

@@ -255,9 +255,10 @@ async fn mcp_discovery_and_native_calls_use_real_policy_and_shared_definitions()
     let session = fixture.initialize().await;
     let listing = fixture.rpc(&session, 2, "tools/list", json!({})).await;
     let tools = listing["result"]["tools"].as_array().unwrap();
+    assert!(!tools.iter().any(|tool| tool["name"] == "resources_list"));
     for name in [
         "services_list",
-        "resources_list",
+        "resource_access_describe",
         "actions_list",
         "actions_describe",
         "services_describe",
@@ -291,11 +292,14 @@ async fn mcp_discovery_and_native_calls_use_real_policy_and_shared_definitions()
         .call(
             &session,
             4,
-            "resources_list",
+            "resource_access_describe",
             json!({"service":"fake","limit":1}),
         )
         .await;
-    assert_eq!(structured(&resources)["resources"][0]["value"], "TEST");
+    assert_eq!(
+        structured(&resources)["registeredResources"]["items"][0]["value"],
+        "TEST"
+    );
     let actions = fixture
         .call(
             &session,
@@ -381,13 +385,17 @@ async fn mcp_file_fields_and_helper_errors_are_rejected_without_poisoning_sessio
         .call(
             &session,
             10,
-            "resources_list",
+            "resource_access_describe",
             json!({"service":"fake","limit":101}),
         )
         .await;
     assert_eq!(malformed_helper["result"]["isError"], true);
     let unknown = fixture.call(&session, 11, "unknown_tool", json!({})).await;
     assert!(unknown.get("error").is_some(), "{unknown}");
+    let retired = fixture
+        .call(&session, 14, "resources_list", json!({"service":"fake"}))
+        .await;
+    assert_eq!(retired["error"]["code"], -32602, "{retired}");
     let legacy = fixture
         .call(&session, 13, "fake_echo_245a0744f1fbd877", json!({}))
         .await;
@@ -603,6 +611,42 @@ async fn mcp_static_token_reload_and_idle_expiry_do_not_keep_stale_authority() {
         .await;
     assert_eq!(expired.status(), StatusCode::NOT_FOUND);
     fixture.initialize_version(TOKEN_B, VERSION).await;
+}
+
+#[tokio::test]
+async fn resource_access_size_failure_requests_filters_without_truncating_coverage() {
+    let fixture = Fixture::new(|config| {
+        config.mcp.max_response_bytes = 64 * 1024;
+        for index in 0..500 {
+            let id = format!("project-{index:04}");
+            let mut resource = config.policy.resources[0].clone();
+            resource.id = id.clone();
+            resource.selector = ResourceSelector::Exact {
+                value: format!("PROJECT{index:04}"),
+            };
+            config.policy.resources.push(resource);
+            config.policy.grants[0].resources.resource_ids.push(id);
+        }
+    })
+    .await;
+    let session = fixture.initialize().await;
+    let result = fixture
+        .call(
+            &session,
+            2,
+            "resource_access_describe",
+            json!({"service":"fake", "limit":1}),
+        )
+        .await;
+    assert_eq!(result["result"]["isError"], true, "{result}");
+    assert_eq!(
+        structured(&result)["error"]["message"],
+        "Resource access result exceeds MCP response limit; use action or resourceType filters, or actions_list for known resources"
+    );
+    assert!(structured(&result).get("access").is_none());
+    assert!(structured(&result).get("registeredResources").is_none());
+    assert!(result.to_string().len() < 64 * 1024);
+    assert!(!fixture.audit_path.exists() || read_audit_records(&fixture.audit_path).is_empty());
 }
 
 #[tokio::test]

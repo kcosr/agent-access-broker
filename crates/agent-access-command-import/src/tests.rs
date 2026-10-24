@@ -94,6 +94,51 @@ fn the_selection_names_the_command_kind_and_its_endpoint_form() {
 }
 
 #[test]
+fn live_listing_survives_preview_and_persistence_but_requires_reviewed_read_only() {
+    let mut manifest = manifest::tests::sample();
+    manifest["actions"][1]["name"] = serde_json::json!("project.list");
+    manifest["actions"][1]["listingOf"] = serde_json::json!("project");
+    let manifest = manifest::parse(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let preview = mapping::discovery(
+        &definition(&[ImportedCredentialMode::Service]),
+        "ticketing",
+        &manifest,
+        None,
+    )
+    .unwrap();
+    let tool = &preview.tools[1];
+    assert!(tool.unsupported_reason.is_none(), "{tool:?}");
+    assert!(
+        !tool.definition.read_only,
+        "source hints never classify an action"
+    );
+    assert_eq!(
+        tool.definition.annotations["command"]["listingOf"],
+        "project"
+    );
+    assert!(
+        CommandAdapter
+            .validate_action(&tool.definition)
+            .unwrap_err()
+            .contains("reviewed read-only")
+    );
+    let mut accepted: ImportedActionDefinition =
+        serde_json::from_value(serde_json::to_value(&tool.definition).unwrap()).unwrap();
+    accepted.read_only = true;
+    CommandAdapter.validate_action(&accepted).unwrap();
+    assert_eq!(
+        CommandAdapter
+            .action_authority(&accepted)
+            .unwrap()
+            .listing_of
+            .as_deref(),
+        Some("project")
+    );
+    accepted.annotations["command"]["listingOf"] = serde_json::json!("other");
+    assert!(CommandAdapter.validate_action(&accepted).is_err());
+}
+
+#[test]
 fn definitions_use_command_endpoints_anonymous_discovery_and_static_credentials() {
     let both = [
         ImportedCredentialMode::Service,

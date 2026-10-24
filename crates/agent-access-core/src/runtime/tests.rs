@@ -422,6 +422,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         audit_registry: Arc::clone(&runtime.audit_registry),
         node_id: Arc::clone(&runtime.node_id),
         config_generation: runtime.config_generation,
+        resource_cursor_key: Arc::clone(&runtime.resource_cursor_key),
         provider_fixtures: runtime.provider_fixtures.clone(),
     }
 }
@@ -7929,6 +7930,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         audit_registry,
         node_id: Arc::clone(&runtime.node_id),
         config_generation: None,
+        resource_cursor_key: Arc::new(discovery::DiscoveryCursorKey::new()),
         provider_fixtures: ProviderFixtureSlot::default(),
     };
     let response = invalid_runtime

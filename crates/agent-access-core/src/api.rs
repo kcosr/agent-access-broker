@@ -69,6 +69,9 @@ pub struct ApiActionSpec {
     pub action: String,
     /// Provider-declared read semantics; never inferred from the action name.
     pub read_only: bool,
+    /// Resource type this explicitly declared live-listing action enumerates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_of: Option<agent_access_provider::ResourceType>,
     pub description: String,
     /// Extended usage details, omitted from MCP tools/list definitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,6 +321,7 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
             .map(str::to_owned),
         action: action.action.clone(),
         read_only: action.read_only,
+        listing_of: action.listing_of.clone(),
         description: action.description.clone(),
         documentation: action.documentation.clone(),
         required_scope_types: action.required_scope_types(),
@@ -520,6 +524,9 @@ pub fn openapi_from_catalog(
             });
             if let Some(documentation) = &action.documentation {
                 operation["post"]["x-agent-access-documentation"] = documentation.clone();
+            }
+            if let Some(resource_type) = &action.listing_of {
+                operation["post"]["x-agent-access-listing-of"] = json!(resource_type);
             }
             operation["post"]["description"] = json!(action.description);
             paths.insert(path, operation);
@@ -871,17 +878,23 @@ fn discovery_route_specs() -> Vec<HttpRouteSpec> {
             ResponseKind::RawJson,
         ),
         discovery_route(
-            "resources",
+            "resource-access",
+            "resource_access.describe",
             vec![
+                RouteParamSpec {
+                    name: "action".into(),
+                    required: false,
+                    schema: json!({"type":"string", "minLength":1, "description":"Describe one canonical action's resource access."}),
+                },
                 RouteParamSpec {
                     name: "resourceType".into(),
                     required: false,
-                    schema: json!({"type":"string", "minLength":1, "description":"Registered resource type to list. Required when the service authorizes more than one resource type."}),
+                    schema: json!({"type":"string", "minLength":1, "description":"Optional resource type filter; otherwise describe all action-bound types and unscoped actions."}),
                 },
                 RouteParamSpec {
                     name: "prefix".into(),
                     required: false,
-                    schema: json!({"type":"string", "minLength":1}),
+                    schema: json!({"type":"string", "minLength":1, "description":"Filter registered resource values only; does not narrow the access summary."}),
                 },
                 RouteParamSpec {
                     name: "limit".into(),
@@ -891,12 +904,13 @@ fn discovery_route_specs() -> Vec<HttpRouteSpec> {
                 RouteParamSpec {
                     name: "cursor".into(),
                     required: false,
-                    schema: json!({"type":"string", "minLength":1, "description":"Opaque continuation; repeat service, prefix and limit. Restart without cursor after discovery changes."}),
+                    schema: json!({"type":"string", "minLength":1, "description":"Opaque registered-resource continuation; repeat service, action, resourceType, prefix and limit. Restart without cursor after discovery changes."}),
                 },
             ],
         ),
         discovery_route(
             "actions",
+            "actions.list",
             vec![
                 RouteParamSpec {
                     name: "resource".into(),
@@ -918,10 +932,14 @@ fn discovery_route_specs() -> Vec<HttpRouteSpec> {
     ]
 }
 
-fn discovery_route(kind: &str, query_params: Vec<RouteParamSpec>) -> HttpRouteSpec {
+fn discovery_route(
+    kind: &str,
+    operation: &str,
+    query_params: Vec<RouteParamSpec>,
+) -> HttpRouteSpec {
     let mut route = get_route(
         &format!("/v1/services/{{service}}/{kind}"),
-        &format!("{kind}.list"),
+        operation,
         RouteAccess::Authenticated,
         ResponseKind::RawJson,
     );
@@ -955,37 +973,7 @@ fn route_response_schema(route: &HttpRouteSpec, resource_type_ids: &[String]) ->
                 }
             }}}
         }),
-        "resources.list" => json!({
-            "type":"object", "additionalProperties":false,
-            "description":"Registered enabled concrete resources, plus the caller's broader namespace or all-resource coverage on the first page. An empty resources list with coverage means broad access, not no access; check known locators with actions.list.",
-            "required":["service","resources","nextCursor"],
-            "properties": {
-                "service":{"type":"string"},
-                "resources":{"type":"array","items":{
-                    "type":"object","additionalProperties":false,"required":["id","type","value"],
-                    "properties":{
-                        "id":{"type":"string"},"type":{"enum":resource_type_ids},
-                        "value":{"type":"string"},"displayName":{"type":"string"},
-                        "inputs":{"type":"object","description":"Action inputs that address this resource."}
-                    }
-                }},
-                "coverage":{"type":"array","description":"First page only; omitted when empty. Resources inside are not enumerated.","items":{
-                    "type":"object","additionalProperties":false,"required":["type","selector","restricted"],
-                    "properties":{
-                        "type":{"enum":resource_type_ids},
-                        "selector":{"oneOf":[
-                            {"type":"object","additionalProperties":false,"required":["kind","value"],
-                                "properties":{"kind":{"const":"namespace"},"value":{"type":"string"}}},
-                            {"type":"object","additionalProperties":false,"required":["kind"],
-                                "properties":{"kind":{"const":"all"}}}
-                        ]},
-                        "inputs":{"type":"object","description":"Action inputs shared by resources inside, such as a controller."},
-                        "restricted":{"type":"boolean","description":"Some resources inside are withheld; they are not named."}
-                    }
-                }},
-                "nextCursor":{"type":["string","null"]}
-            }
-        }),
+        "resource_access.describe" => resource_access_response_schema(resource_type_ids),
         "actions.list" => json!({
             "type":"object","additionalProperties":false,"required":["service","actions"],
             "description":"Caller-visible actions; optional resource filtering checks one locator against effective policy. Actual execution reauthorizes all targets and credentials.",
@@ -1000,6 +988,91 @@ fn route_response_schema(route: &HttpRouteSpec, resource_type_ids: &[String]) ->
             _ => envelope_schema(route.response_kind),
         },
     }
+}
+
+fn resource_access_response_schema(resource_type_ids: &[String]) -> Value {
+    let coverage = json!({"type":"array",
+        "description":"Positive selectors for this action. Restricted regions withhold unnamed targets. Empty coverage does not rule out an authorized compound request.",
+        "items":{
+            "type":"object","additionalProperties":false,"required":["selector","restricted"],
+            "properties":{
+                "selector":{"oneOf":[
+                    {"type":"object","additionalProperties":false,"required":["kind","value"],
+                        "properties":{"kind":{"enum":["exact","namespace"]},"value":{"type":"string"}}},
+                    {"type":"object","additionalProperties":false,"required":["kind"],
+                        "properties":{"kind":{"const":"all"}}}
+                ]},
+                "inputs":{"type":"object","description":"Action inputs projected from this selector, when available."},
+                "restricted":{"type":"boolean","description":"Some targets inside are withheld; denied identities are not named."}
+            }
+        }
+    });
+    let access = json!({"type":"array","items":{"oneOf":[
+        {"type":"object","additionalProperties":false,
+            "required":["action","scope"],
+            "properties":{"action":{"type":"string"},"scope":{"const":"unscoped"}}},
+        {"type":"object","additionalProperties":false,
+            "required":["action","scope","resourceType","enforcement","coverage"],
+            "properties":{
+                "action":{"type":"string"},"scope":{"const":"resource"},
+                "resourceType":{"enum":resource_type_ids},
+                "enforcement":{"enum":["request","results","command"],"description":"Authority is checked for the complete request, enforced over native results, or delegated to the approved command."},
+                "coverage":coverage
+            }
+        }
+    ]}});
+    let registered = json!({
+        "type":"object","additionalProperties":false,
+        "required":["source","items","nextCursor"],
+        "properties":{
+            "source":{"const":"broker_configuration"},
+            "items":{"type":"array","items":{
+                "type":"object","additionalProperties":false,"required":["id","type","value"],
+                "properties":{
+                    "id":{"type":"string"},"type":{"enum":resource_type_ids},
+                    "value":{"type":"string"},"displayName":{"type":"string"},
+                    "inputs":{"type":"object","description":"Action inputs that address this registered resource."}
+                }
+            }},
+            "nextCursor":{"type":["string","null"]}
+        }
+    });
+    let availability = json!({
+        "type":"object","additionalProperties":false,
+        "required":["state","requirements","message"],
+        "properties":{
+            "state":{"enum":["available","partial","unavailable","unknown"]},
+            "message":{"type":"string"},
+            "requirements":{"type":"array","items":{
+                "type":"object","additionalProperties":false,
+                "required":["reason","credentialMode","resolution"],
+                "properties":{
+                    "reason":{"type":"string"},"credentialMode":{"type":"string"},
+                    "resolution":{"enum":["user","administrator"]}
+                }
+            }}
+        }
+    });
+    json!({
+        "type":"object", "additionalProperties":false,
+        "description":"Local per-action single-target policy summaries, repeated on every page. Complete requests are reauthorized at invocation; upstream existence and access are not verified. Registered resources are configuration references, not an inventory.",
+        "required":["service","executionContext","availability","coverageSemantics","access","registeredResources"],
+        "properties": {
+            "service":{"type":"string"},
+            "executionContext":{"type":"string"},
+            "availability":availability,
+            "coverageSemantics":{"const":"single_target"},
+            "access":access,
+            "registeredResources":registered,
+            "liveListings":{"type":"array","minItems":1,
+                "description":"Explicitly declared, caller-available enumeration actions. Each action's own grants and credentials govern its results, independently of the access summaries above.",
+                "items":{
+                    "type":"object","additionalProperties":false,"required":["service","action","resourceType"],
+                    "properties":{"service":{"type":"string"},"action":{"type":"string"},"resourceType":{"enum":resource_type_ids}}
+                }
+            }
+        }
+    })
 }
 
 /// The audit query routes: the admin tier (all records for admins, managed
@@ -3453,6 +3526,9 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
     });
     if let Some(documentation) = &action.documentation {
         schema["x-agent-access-documentation"] = documentation.clone();
+    }
+    if let Some(resource_type) = &action.listing_of {
+        schema["x-agent-access-listing-of"] = json!(resource_type);
     }
     schema
 }

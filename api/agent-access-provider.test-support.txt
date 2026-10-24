@@ -1918,6 +1918,7 @@ pub agent_access_provider::ActionCapabilities::credential_modes: alloc::vec::Vec
 pub agent_access_provider::ActionCapabilities::description: alloc::string::String
 pub agent_access_provider::ActionCapabilities::documentation: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::ActionCapabilities::input_schema: serde_json::value::Value
+pub agent_access_provider::ActionCapabilities::listing_of: core::option::Option<agent_access_provider::ResourceType>
 pub agent_access_provider::ActionCapabilities::lookup_required: bool
 pub agent_access_provider::ActionCapabilities::read_only: bool
 pub agent_access_provider::ActionCapabilities::required_scope_types: alloc::vec::Vec<alloc::string::String>
@@ -1948,6 +1949,7 @@ pub agent_access_provider::ActionDescriptor::description: alloc::string::String
 pub agent_access_provider::ActionDescriptor::documentation: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::ActionDescriptor::input_schema: serde_json::value::Value
 pub agent_access_provider::ActionDescriptor::io: agent_access_provider::ActionIo
+pub agent_access_provider::ActionDescriptor::listing_of: core::option::Option<agent_access_provider::ResourceType>
 pub agent_access_provider::ActionDescriptor::lookup: agent_access_provider::LookupRequirement
 pub agent_access_provider::ActionDescriptor::native_search: core::option::Option<agent_access_provider::NativeSearchEnforcement>
 pub agent_access_provider::ActionDescriptor::presentation: core::option::Option<agent_access_provider::presentation::ActionPresentation>
@@ -1965,6 +1967,7 @@ pub fn agent_access_provider::ActionDescriptor::attribution(self, agent_access_p
 pub fn agent_access_provider::ActionDescriptor::capabilities(&self) -> agent_access_provider::ActionCapabilities
 pub fn agent_access_provider::ActionDescriptor::credential_modes<I, S>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::documentation(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::ActionDescriptor::listing_of(self, agent_access_provider::ResourceType) -> Self
 pub fn agent_access_provider::ActionDescriptor::lookup(self, agent_access_provider::LookupRequirement) -> Self
 pub fn agent_access_provider::ActionDescriptor::multipart_upload(self, agent_access_provider::MultipartUploadSpec) -> Self
 pub fn agent_access_provider::ActionDescriptor::native_search(self, agent_access_provider::NativeSearchEnforcement) -> Self

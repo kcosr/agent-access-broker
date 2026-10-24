@@ -620,6 +620,8 @@ export type PolicyActionCatalog = {
   readOnly: boolean;
   description: string;
   requiredScopeTypes: string[];
+  /** Explicit live enumeration under this action's own permissions. */
+  listingOf?: ResourceType;
   credentialModes: string[];
   lookupRequired: boolean;
   inputSchema: Record<string, unknown>;

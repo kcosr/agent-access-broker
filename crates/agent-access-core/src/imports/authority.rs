@@ -12,9 +12,10 @@
 //! | type without input pointers | the command, from the passed grants | `scope(type)`, separately classified as command-enforced |
 //! | no type | the command, from action grants | action-only |
 //!
-//! MCP and OpenAPI imports declare neither: their actions are action-only and
-//! use every bound credential mode. Every imported descriptor keeps native search
-//! enforcement unset; command classification reads this accepted declaration.
+//! MCP and OpenAPI imports declare no resource authority or live listing:
+//! their actions are action-only and use every bound credential mode. Every
+//! imported descriptor keeps native search enforcement unset; command
+//! classification reads this accepted declaration.
 use super::ImportedCredentialMode;
 
 /// The resource and credential declaration of one accepted imported action.
@@ -26,6 +27,9 @@ pub struct ImportedActionAuthority {
     /// The credential modes the action supports, a subset of the import's
     /// declared modes; `None` for every mode the import binds.
     pub credential_modes: Option<Vec<ImportedCredentialMode>>,
+    /// Explicit live enumeration of a declared source resource type. Core
+    /// maps this to the accepted Broker type; it grants no other action access.
+    pub listing_of: Option<String>,
 }
 
 /// A declared resource type and the inputs that name its resources.

@@ -208,7 +208,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
     discovery["properties"]["archived"] = json!({"type":"boolean"});
     let mut actions = vec![common(
         "project.search",
-        "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are not individually registered in resources_list",
+        "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are absent from resource_access_describe registeredResources.items",
         discovery,
         json!({"query":"Omit search to browse. A supplied query must contain 1–512 UTF-8 bytes after trimming; GitLab matches name, path, description and optionally ancestor namespaces. * has no special Broker meaning. Current upstream projects, including new namespace descendants, supply the inventory.","ordering":"Ascending project ID with keyset pagination; no snapshot isolation.","pagination":pagination,"previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."}),
     )];
@@ -228,7 +228,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
             "limits":"Shares the configured GitLab search result, candidate-page, HTTP-attempt and byte limits.",
             "previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."
         }),
-    ));
+    ).listing_of(GIT_REPOSITORY_RESOURCE.id().clone()));
     for category in CATEGORIES {
         let engines = search.enabled_engines(category);
         if engines.is_empty() {

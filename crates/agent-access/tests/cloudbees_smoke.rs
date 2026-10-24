@@ -853,26 +853,45 @@ async fn cli_resource_discovery_reports_job_inputs_and_namespace_coverage() {
     .await;
     let broker_url = broker.public_url();
     let listed = cli(&broker_url)
-        .args(["resources", "list", "--service", "cloudbees_ci"])
+        .args(["resource-access", "describe", "--service", "cloudbees_ci"])
         .output()
         .unwrap();
-    assert_success("resources list", &listed);
+    assert_success("resource-access describe", &listed);
+    let description = serde_json::from_slice::<Value>(&listed.stdout).unwrap();
     assert_eq!(
-        serde_json::from_slice::<Value>(&listed.stdout).unwrap(),
+        description["registeredResources"],
         json!({
-            "service": "cloudbees_ci",
-            "resources": [{
+            "source": "broker_configuration",
+            "items": [{
                 "id": "payments-job", "type": "cloudbees_ci_job", "value": "team-ci/payments/build-api",
                 "inputs": {"controller": "team-ci", "job": JOB}
             }],
-            "coverage": [{
-                "type": "cloudbees_ci_job",
-                "selector": {"kind": "namespace", "value": "team-ci/payments"},
-                "inputs": {"controller": "team-ci"},
-                "restricted": false
-            }],
             "nextCursor": null
         })
+    );
+    assert_eq!(description["service"], "cloudbees_ci");
+    assert_eq!(description["coverageSemantics"], "single_target");
+    let job_access = description["access"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["action"] == "job.view")
+        .unwrap();
+    assert_eq!(job_access["scope"], "resource");
+    assert_eq!(job_access["resourceType"], "cloudbees_ci_job");
+    assert!(
+        job_access["coverage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|coverage| {
+                coverage
+                    == &json!({
+                        "selector": {"kind": "namespace", "value": "team-ci/payments"},
+                        "inputs": {"controller": "team-ci"},
+                        "restricted": false
+                    })
+            })
     );
     // An unregistered job inside the covered folder is usable as named.
     let actions = cli(&broker_url)

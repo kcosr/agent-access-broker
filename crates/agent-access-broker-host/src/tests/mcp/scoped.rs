@@ -143,7 +143,7 @@ async fn scoped_http_names_helpers_calls_and_aggregate_limits_share_one_boundary
     );
     assert!(structured(&detail).get("scopedMcpName").is_none());
     for (index, helper) in [
-        "resources_list",
+        "resource_access_describe",
         "actions_list",
         "actions_describe",
         "services_describe",

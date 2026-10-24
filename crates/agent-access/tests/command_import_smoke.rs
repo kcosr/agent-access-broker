@@ -2,7 +2,7 @@
 //! through the shipped CLI and a real broker: approval, `describe` discovery and
 //! acceptance, credentials, invocation in both authorization modes with write
 //! receipts, error and receipt mapping and contract violations, mixed-mode
-//! command-checked grants against discovery, attribute removal without a
+//! command-checked grants and independent live listing against discovery, attribute removal without a
 //! reload, personal verification and the HTTP MCP listing. The command runs
 //! under Python 3; a missing interpreter fails the test.
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
@@ -564,8 +564,15 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
     assert_eq!(changes[0]["change"], "added");
     assert_eq!(changes[0]["editable"], true);
     let tools = manifest["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 6);
     assert!(tools.iter().all(|tool| tool["unsupportedReason"].is_null()));
+    assert_eq!(
+        tools
+            .iter()
+            .find(|tool| tool["definition"]["action"] == "project.list")
+            .unwrap()["definition"]["annotations"]["command"]["listingOf"],
+        "project"
+    );
     let accepted = accept_all(&admin, files, &discovered);
     assert_eq!(accepted["result"]["commandVersion"], "1.4.0");
     let (version, revision) = versions(&accepted);
@@ -836,6 +843,80 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
             "{value}"
         );
     }
+    // Read and search grants do not confer listing permission. The helper
+    // stays local, and listing receives only its own independent WEB grant.
+    let describe = || {
+        run(
+            &agent,
+            &[
+                "resource-access",
+                "describe",
+                "--service",
+                "ticketing",
+                "--action",
+                "issue.view",
+            ],
+        )
+    };
+    let without_listing = describe();
+    assert!(
+        without_listing.get("liveListings").is_none(),
+        "{without_listing}"
+    );
+    let denied_listing = run_failing(
+        &agent,
+        &["invoke", "ticketing.project.list", "--input-json", "{}"],
+    );
+    assert_eq!(
+        denied_listing["reasonCode"], "service_action_denied",
+        "{denied_listing}"
+    );
+    assert!(!spawned(
+        files,
+        denied_listing["brokerRequestId"].as_str().unwrap()
+    ));
+    grant(
+        "ticketing-listing",
+        &["project.list"],
+        "service",
+        &["web"],
+        &[],
+    );
+    let description = describe();
+    assert_eq!(
+        description["liveListings"],
+        json!([{
+            "service": "ticketing", "action": "project.list", "resourceType": "ticketing_project"
+        }])
+    );
+    let listing_access = run(
+        &agent,
+        &[
+            "resource-access",
+            "describe",
+            "--service",
+            "ticketing",
+            "--action",
+            "project.list",
+        ],
+    );
+    assert_eq!(listing_access["access"][0]["enforcement"], "command");
+    assert_eq!(
+        listing_access["access"][0]["coverage"],
+        json!([
+            {"selector": {"kind": "exact", "value": "WEB"}, "restricted": false}
+        ])
+    );
+    let projects = invoke(&agent, "project.list", json!({}));
+    assert_eq!(
+        projects["result"]["upstreamCommand"],
+        json!({
+            "items": [{"key": "WEB", "name": "Web", "via": "service"}],
+            "count": 1, "access": {"accounts": {"service": "svc-tickets"}}
+        })
+    );
+    assert_no_secret(&projects.to_string(), "the live listing");
+    assert!(!offered(&base, &seeded.agent, "issue.view", "WEB").await);
     let closed = invoke(&agent, "issue.close", json!({"key": "WEB-12"}));
     assert_eq!(
         closed["result"]["upstreamCommand"]["access"],
@@ -1000,6 +1081,21 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
             "{value}"
         );
     }
+    let narrowed_access = run(
+        &restricted_config,
+        &[
+            "resource-access",
+            "describe",
+            "--service",
+            "ticketing",
+            "--action",
+            "issue.search",
+        ],
+    );
+    assert!(
+        narrowed_access.get("liveListings").is_none(),
+        "{narrowed_access}"
+    );
 
     assert_eq!(
         mcp_tool_names(&base, &seeded.agent).await,
@@ -1008,6 +1104,7 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
             "ticketing_issue_create",
             "ticketing_issue_search",
             "ticketing_issue_view",
+            "ticketing_project_list",
             "ticketing_whoami"
         ]
     );
@@ -1079,7 +1176,8 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
         [
             "ticketing_issue_create",
             "ticketing_issue_search",
-            "ticketing_issue_view"
+            "ticketing_issue_view",
+            "ticketing_project_list"
         ]
     );
     let audit = std::fs::read_to_string(files.join("audit.jsonl")).unwrap();

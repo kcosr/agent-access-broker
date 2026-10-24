@@ -22,7 +22,7 @@ impl McpView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperKind {
     ServicesList,
-    ResourcesList,
+    ResourceAccessDescribe,
     ActionsList,
     ActionsDescribe,
     ServicesDescribe,
@@ -32,7 +32,7 @@ impl HelperKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ServicesList => "services_list",
-            Self::ResourcesList => "resources_list",
+            Self::ResourceAccessDescribe => "resource_access_describe",
             Self::ActionsList => "actions_list",
             Self::ActionsDescribe => "actions_describe",
             Self::ServicesDescribe => "services_describe",
@@ -41,7 +41,7 @@ impl HelperKind {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "services_list" => Some(Self::ServicesList),
-            "resources_list" => Some(Self::ResourcesList),
+            "resource_access_describe" => Some(Self::ResourceAccessDescribe),
             "actions_list" => Some(Self::ActionsList),
             "actions_describe" => Some(Self::ActionsDescribe),
             "services_describe" => Some(Self::ServicesDescribe),
@@ -832,7 +832,10 @@ mod tests {
         for (name, code) in [
             (None, ScopedMcpIssueCode::MissingName),
             (Some("invalid/name"), ScopedMcpIssueCode::InvalidName),
-            (Some("resources_list"), ScopedMcpIssueCode::ReservedName),
+            (
+                Some("resource_access_describe"),
+                ScopedMcpIssueCode::ReservedName,
+            ),
         ] {
             let mut descriptor = descriptor();
             descriptor.actions[0].scoped_mcp_name_source = ScopedMcpNameSource::Imported {

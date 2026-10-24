@@ -76,7 +76,7 @@ only; back up the database and keys to recover endpoints.
 ## Action and clients
 
 ```bash
-agent-access resources list --service teams
+agent-access resource-access describe --service teams
 agent-access actions describe --service teams notification.send
 agent-access teams notification send release-alerts \
   --title 'Release completed' --text 'Version 2.3 is available.'

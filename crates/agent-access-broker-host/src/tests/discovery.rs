@@ -258,9 +258,19 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
     }
     let broker = TestBroker::start_config(&config).await;
     let app = broker.app();
+    let capabilities = response_json(
+        governed_get(
+            app.clone(),
+            "/v1/services/cloudbees_ci",
+            "ci-capabilities",
+            &[],
+        )
+        .await,
+    )
+    .await;
     let response = governed_get(
         app,
-        "/v1/services/cloudbees_ci/resources",
+        "/v1/services/cloudbees_ci/resource-access",
         "ci-coverage",
         &[],
     )
@@ -273,17 +283,34 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
         body,
         json!({
             "service": "cloudbees_ci",
-            "resources": [{
-                "id": "ci-build-api", "type": "cloudbees_ci_job", "value": "team-ci/payments/build-api",
-                "inputs": {"controller": "team-ci", "job": "payments/build-api"}
+            "executionContext": "default",
+            "availability": capabilities["availability"],
+            "coverageSemantics": "single_target",
+            "access": [{
+                "action": "build.view", "scope": "resource", "resourceType": "cloudbees_ci_job",
+                "enforcement": "request",
+                "coverage": [{
+                    "selector": {"kind": "namespace", "value": "team-ci"},
+                    "inputs": {"controller": "team-ci"},
+                    "restricted": false
+                }]
+            }, {
+                "action": "job.view", "scope": "resource", "resourceType": "cloudbees_ci_job",
+                "enforcement": "request",
+                "coverage": [{
+                    "selector": {"kind": "exact", "value": "team-ci/payments/build-api"},
+                    "inputs": {"controller": "team-ci", "job": "payments/build-api"},
+                    "restricted": false
+                }]
             }],
-            "coverage": [{
-                "type": "cloudbees_ci_job",
-                "selector": {"kind": "namespace", "value": "team-ci"},
-                "inputs": {"controller": "team-ci"},
-                "restricted": false
-            }],
-            "nextCursor": null
+            "registeredResources": {
+                "source": "broker_configuration",
+                "items": [{
+                    "id": "ci-build-api", "type": "cloudbees_ci_job", "value": "team-ci/payments/build-api",
+                    "inputs": {"controller": "team-ci", "job": "payments/build-api"}
+                }],
+                "nextCursor": null
+            }
         })
     );
 }
@@ -292,9 +319,27 @@ async fn cloudbees_ci_discovery_reports_job_inputs_and_reachable_controllers() {
 async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
     let broker = TestBroker::start_config(&fake_config("")).await;
     let app = broker.app();
-    let resources = governed_get(
+    let capabilities = response_json(
+        governed_get(
+            app.clone(),
+            "/v1/services/fake",
+            "discovery-capabilities",
+            &[],
+        )
+        .await,
+    )
+    .await;
+    let retired = governed_get(
         app.clone(),
         "/v1/services/fake/resources",
+        "discovery-retired-route",
+        &[],
+    )
+    .await;
+    assert_eq!(retired.status(), StatusCode::NOT_FOUND);
+    let resources = governed_get(
+        app.clone(),
+        "/v1/services/fake/resource-access",
         "discovery-resources",
         &[],
     )
@@ -303,7 +348,13 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
     assert_eq!(
         response_json(resources).await,
         json!({
-            "service":"fake", "resources":[{"id":"project-test", "type":"fake_project", "value":"TEST"}], "nextCursor":null
+            "service":"fake", "executionContext":"default", "availability":capabilities["availability"],
+            "coverageSemantics":"single_target",
+            "access":[{"action":"echo", "scope":"resource", "resourceType":"fake_project",
+                "enforcement":"request",
+                "coverage":[{"selector":{"kind":"exact","value":"TEST"},"restricted":false}]}],
+            "registeredResources":{"source":"broker_configuration",
+                "items":[{"id":"project-test", "type":"fake_project", "value":"TEST"}], "nextCursor":null}
         })
     );
     for (query, actions) in [
@@ -325,13 +376,15 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
         assert_eq!(value.get("resource").is_some(), query.contains("resource="));
     }
     for path in [
-        "/v1/services/fake/resources?limit=0",
-        "/v1/services/fake/resources?limit=101",
-        "/v1/services/fake/resources?limit=bogus",
-        "/v1/services/fake/resources?prefix=",
-        "/v1/services/fake/resources?cursor=invalid",
-        "/v1/services/fake/resources?unknown=x",
-        "/v1/services/fake/resources?prefix=T&prefix=T",
+        "/v1/services/fake/resource-access?limit=0",
+        "/v1/services/fake/resource-access?limit=101",
+        "/v1/services/fake/resource-access?limit=bogus",
+        "/v1/services/fake/resource-access?prefix=",
+        "/v1/services/fake/resource-access?cursor=invalid",
+        "/v1/services/fake/resource-access?unknown=x",
+        "/v1/services/fake/resource-access?prefix=T&prefix=T",
+        "/v1/services/fake/resource-access?action=",
+        "/v1/services/fake/resource-access?action=echo&action=echo",
         "/v1/services/fake/actions?resource=bad/path",
         "/v1/services/fake/actions?resource=",
         "/v1/services/fake/actions?prefix=",
@@ -351,7 +404,12 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
     .await;
     assert_eq!(catalog_response.status(), StatusCode::OK);
     let catalog = response_json(catalog_response).await;
-    for operation in ["resources", "actions"] {
+    assert!(!catalog_has_route(
+        &catalog,
+        "GET",
+        "/v1/services/{service}/resources"
+    ));
+    for operation in ["resource-access", "actions"] {
         let route = format!("/v1/services/{{service}}/{operation}");
         assert!(catalog_has_route(&catalog, "GET", &route));
     }
@@ -364,9 +422,15 @@ async fn discovery_routes_filter_resources_actions_and_publish_schemas() {
     .await;
     assert_eq!(openapi_response.status(), StatusCode::OK);
     let openapi = response_json(openapi_response).await;
+    assert!(
+        openapi["paths"]
+            .get("/v1/services/{service}/resources")
+            .is_none()
+    );
     assert_eq!(
-        openapi["paths"]["/v1/services/{service}/resources"]["get"]["responses"]["200"]["content"]
-            ["application/json"]["schema"]["properties"]["nextCursor"]["type"],
+        openapi["paths"]["/v1/services/{service}/resource-access"]["get"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["properties"]["registeredResources"]["properties"]["nextCursor"]
+            ["type"],
         json!(["string", "null"])
     );
 }
@@ -377,9 +441,9 @@ async fn discovery_resource_type_must_name_a_type_the_service_uses() {
     let app = broker.app();
     for (path, key, expected) in [
         (
-            "/v1/services/fake/resources?resourceType=fake_project",
-            "resources",
-            json!([{"id":"project-test", "type":"fake_project", "value":"TEST"}]),
+            "/v1/services/fake/resource-access?resourceType=fake_project",
+            "registeredResources",
+            json!({"source":"broker_configuration","items":[{"id":"project-test", "type":"fake_project", "value":"TEST"}],"nextCursor":null}),
         ),
         (
             "/v1/services/fake/actions?resource=TEST&resourceType=fake_project",
@@ -393,7 +457,23 @@ async fn discovery_resource_type_must_name_a_type_the_service_uses() {
     }
     for (path, message) in [
         (
-            "/v1/services/fake/resources?resourceType=jira_project",
+            "/v1/services/fake/resource-access?action=missing",
+            "action is not available",
+        ),
+        (
+            "/v1/services/fake/resource-access?action=missing&resourceType=jira_project",
+            "action is not available",
+        ),
+        (
+            "/v1/services/fake/resource-access?action=echo&resourceType=jira_project",
+            "action does not use this resourceType",
+        ),
+        (
+            "/v1/services/fake/resource-access?action=bad%2Faction",
+            "action name is invalid",
+        ),
+        (
+            "/v1/services/fake/resource-access?resourceType=jira_project",
             "resourceType is not used by this service",
         ),
         (
@@ -402,11 +482,11 @@ async fn discovery_resource_type_must_name_a_type_the_service_uses() {
         ),
         (
             // Well-formed but unregistered types are equally unused.
-            "/v1/services/fake/resources?resourceType=jira_issue",
+            "/v1/services/fake/resource-access?resourceType=jira_issue",
             "resourceType is not used by this service",
         ),
         (
-            "/v1/services/fake/resources?resourceType=Fake-Project",
+            "/v1/services/fake/resource-access?resourceType=Fake-Project",
             "resourceType is invalid",
         ),
         (
@@ -431,8 +511,8 @@ async fn discovery_visibility_precedes_all_query_semantics() {
     let app = broker.app();
     for service in ["fake", "missing"] {
         for tail in [
-            "resources?limit=invalid&unknown=x",
-            "resources?cursor=invalid",
+            "resource-access?limit=invalid&unknown=x",
+            "resource-access?cursor=invalid",
             "actions?resource=bad/path",
             "actions?prefix=",
         ] {
@@ -459,14 +539,14 @@ async fn discovery_agent_caveats_filter_resources_without_catalog_gating() {
     let fixture = spec_agent_fixture(&["fake", "gitlab_git"], true).await;
     let resources = spec_get(
         fixture.app.clone(),
-        "/v1/services/fake/resources",
+        "/v1/services/fake/resource-access",
         "discovery-token-resources",
         Some(&fixture.agent_token),
     )
     .await;
     assert_eq!(resources.status(), StatusCode::OK);
     assert_eq!(
-        response_json(resources).await["resources"][0]["value"],
+        response_json(resources).await["registeredResources"]["items"][0]["value"],
         "TEST"
     );
     // Gateway remains discoverable even though it has no native invoke tools.
@@ -497,7 +577,7 @@ async fn discovery_agent_caveats_filter_resources_without_catalog_gating() {
 async fn discovery_http_context_and_admission_match_existing_service_discovery() {
     let broker = TestBroker::start_config(&context_aware_fake_config("")).await;
     let app = broker.app();
-    for suffix in ["resources", "actions?resource=TEST"] {
+    for suffix in ["resource-access", "actions?resource=TEST"] {
         let route = format!("/v1/services/fake/{suffix}");
         let missing = governed_get(app.clone(), &route, "discovery-context-missing", &[]).await;
         assert_eq!(missing.status(), StatusCode::FORBIDDEN);
@@ -538,7 +618,7 @@ async fn discovery_http_context_and_admission_match_existing_service_discovery()
     let app = broker.app();
     let hidden = governed_get(
         app.clone(),
-        "/v1/services/missing/resources?limit=bad",
+        "/v1/services/missing/resource-access?limit=bad",
         "discovery-rate-first",
         &[],
     )
@@ -589,14 +669,14 @@ async fn discovery_non_invoke_token_retains_service_visibility() {
     assert_eq!(response_json(actions).await["actions"], json!(["echo"]));
     let resources = spec_get(
         fixture.app,
-        "/v1/services/fake/resources",
+        "/v1/services/fake/resource-access",
         "discovery-manage-resources",
         Some(&fixture.agent_token),
     )
     .await;
     assert_eq!(resources.status(), StatusCode::OK);
     assert_eq!(
-        response_json(resources).await["resources"][0]["value"],
+        response_json(resources).await["registeredResources"]["items"][0]["value"],
         "TEST"
     );
 }

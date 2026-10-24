@@ -660,13 +660,23 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
         let catalog = runtime
             .service_discovery(&identity, &context(), SERVICE)
             .unwrap()
-            .resources(&ResourceListQuery::default())
+            .resource_access(&ResourceAccessQuery::default())
             .unwrap();
-        assert_eq!(catalog.coverage.len(), 1);
-        assert_eq!(catalog.coverage[0].selector, namespace("engineering"));
-        assert_eq!(catalog.coverage[0].restricted, !restore_secret);
+        assert_eq!(
+            catalog.access[0].coverage().unwrap().len(),
+            if restore_secret { 1 } else { 2 }
+        );
+        assert_eq!(
+            catalog.access[0].coverage().unwrap()[0].selector,
+            namespace("engineering")
+        );
+        assert_eq!(
+            catalog.access[0].coverage().unwrap()[0].restricted,
+            !restore_secret
+        );
         let visible_ids = catalog
-            .resources
+            .registered_resources
+            .items
             .iter()
             .map(|resource| resource.id.as_str())
             .collect::<BTreeSet<_>>();

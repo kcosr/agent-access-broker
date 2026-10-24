@@ -9,7 +9,7 @@ use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     BrokerResponse, ErrorBody, ExecutionContext, GovernedIdentityFailureContext,
     GovernedOperationContext, IdentityContext, IdentitySummary, InvokeRequest, OperationContext,
-    ResourceListQuery, ResponseEnvelope, SourceContext, new_broker_request_id,
+    ResourceAccessQuery, ResponseEnvelope, SourceContext, new_broker_request_id,
     upload_spool_file_prefix,
 };
 use agent_access_provider::{
@@ -479,7 +479,7 @@ pub(crate) async fn service(
 
 /// Query parsing is deliberately deferred until after service visibility. Axum
 /// typed query extractors would disclose validation details to hidden callers.
-pub(crate) async fn service_resources(
+pub(crate) async fn service_resource_access(
     State(state): State<AppState>,
     Path(service): Path<String>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -505,7 +505,7 @@ async fn service_discovery_response(
     remote_addr: SocketAddr,
     query: Option<String>,
     headers: HeaderMap,
-    resources: bool,
+    resource_access: bool,
 ) -> axum::response::Response {
     let request_id = match request_id_from_headers(&headers, service.clone(), String::new()) {
         Ok(request_id) => request_id,
@@ -563,7 +563,7 @@ async fn service_discovery_response(
             ))
             .into_response();
         };
-        let fields = match discovery_query_fields(query.as_deref(), resources) {
+        let fields = match discovery_query_fields(query.as_deref(), resource_access) {
             Ok(fields) => fields,
             Err(message) => return invalid(message),
         };
@@ -575,7 +575,7 @@ async fn service_discovery_response(
             Ok(resource_type) => resource_type,
             Err(_) => return invalid("resourceType is invalid"),
         };
-        let result = if resources {
+        let result = if resource_access {
             let limit = match fields
                 .get("limit")
                 .map(|value| value.parse::<usize>())
@@ -585,7 +585,8 @@ async fn service_discovery_response(
                 Err(_) => return invalid("limit must be an integer between 1 and 100"),
             };
             discovery
-                .resources(&ResourceListQuery {
+                .resource_access(&ResourceAccessQuery {
+                    action: fields.get("action").cloned(),
                     resource_type,
                     prefix: fields.get("prefix").cloned(),
                     limit,
@@ -622,10 +623,10 @@ async fn discovery_blocking(
 
 fn discovery_query_fields(
     query: Option<&str>,
-    resources: bool,
+    resource_access: bool,
 ) -> Result<BTreeMap<String, String>, &'static str> {
-    let allowed: &[&str] = if resources {
-        &["resourceType", "prefix", "limit", "cursor"]
+    let allowed: &[&str] = if resource_access {
+        &["action", "resourceType", "prefix", "limit", "cursor"]
     } else {
         &["resource", "resourceType", "prefix"]
     };

@@ -220,10 +220,11 @@ test("administrator imports the reference command, grants it, and agents invoke 
     const row = (action: string) => dialog.locator(".pt-catalog-review-item").filter({ has: page.getByRole("checkbox", { name: `Accept ${action}`, exact: true }) });
     await expect(row("issue.view")).toContainText("Resources checked by: Broker · Project, from project");
     await expect(row("issue.search")).toContainText("Resources checked by: Command · Projects");
+    await expect(row("project.list")).toContainText("Live listing: Projects. Requires reviewed read-only classification");
     await expect(row("issue.close")).toContainText("Resources checked by: Command · Projects");
     await expect(row("whoami")).toContainText("Resources checked by: Command · no resource type");
-    for (const action of ["issue.view", "issue.search", "whoami"]) await dialog.getByLabel(`Effects for ${action}`, { exact: true }).selectOption("read");
-    for (const action of ["issue.view", "issue.search", "issue.create", "issue.close", "whoami"]) await dialog.getByRole("checkbox", { name: `Accept ${action}`, exact: true }).check();
+    for (const action of ["issue.view", "issue.search", "project.list", "whoami"]) await dialog.getByLabel(`Effects for ${action}`, { exact: true }).selectOption("read");
+    for (const action of ["issue.view", "issue.search", "project.list", "issue.create", "issue.close", "whoami"]) await dialog.getByRole("checkbox", { name: `Accept ${action}`, exact: true }).check();
     await page.screenshot({ path: testInfo.outputPath("command-preview.png") });
     await dialog.getByRole("button", { name: "Accept selected actions", exact: true }).click();
     await expect(dialog).not.toBeVisible();
@@ -260,6 +261,7 @@ test("administrator imports the reference command, grants it, and agents invoke 
     });
   await grant("ticketing-service", ["issue.view", "issue.create"], "service", ["ops"]);
   await grant("ticketing-personal", ["issue.search", "issue.close"], "per_user", ["ops", "web"]);
+  await grant("ticketing-listing", ["project.list"], "service", ["web"]);
   await grant("ticketing-whoami", ["whoami"], "per_user", []);
 
   await test.step("the grant editor shows who checks each action's resources", async () => {
@@ -329,7 +331,9 @@ test("administrator imports the reference command, grants it, and agents invoke 
   });
 
   await test.step("MCP lists the granted command actions", async () => {
-    expect(await mcpToolNames(token)).toEqual(["ticketing_issue_close", "ticketing_issue_create", "ticketing_issue_search", "ticketing_issue_view", "ticketing_whoami"]);
+    const listing = await invokeOk(token, "project.list", {});
+    expect(listing.result.upstreamCommand).toEqual({ items: [{ key: "WEB", name: "Web", via: "service" }], count: 1, access: { accounts: { service: "svc-tickets" } } });
+    expect(await mcpToolNames(token)).toEqual(["ticketing_issue_close", "ticketing_issue_create", "ticketing_issue_search", "ticketing_issue_view", "ticketing_project_list", "ticketing_whoami"]);
   });
 
   await test.step("the Actions tab and audit show the command's actions and calls", async () => {

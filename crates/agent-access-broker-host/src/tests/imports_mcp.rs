@@ -585,7 +585,7 @@ async fn scoped_mcp_admin_warnings_do_not_block_aggregate_and_follow_publication
     fn versions(value: &Value) -> Value {
         json!({"expectedVersion":value["service"]["version"],"expectedCatalogRevision":value["catalogRevision"]})
     }
-    let tools: Vec<_> = ["read_item", "update_item", "bad/name", "resources_list"].into_iter().map(|name| {
+    let tools: Vec<_> = ["read_item", "update_item", "bad/name", "resource_access_describe"].into_iter().map(|name| {
         json!({"name":name,"description":"Synthetic action","inputSchema":action(true).input_schema,"outputSchema":action(true).output_schema})
     }).collect();
     *fixture.upstream.discovery_tools.lock().unwrap() = Some(tools.clone());
@@ -634,7 +634,7 @@ async fn scoped_mcp_admin_warnings_do_not_block_aggregate_and_follow_publication
         {"source":{"toolName":"read_item"},"action":"inspect","readOnly":true},
         {"source":{"toolName":"update_item"},"action":"update","readOnly":false},
         {"source":{"toolName":"bad/name"},"action":"bad.name","readOnly":true},
-        {"source":{"toolName":"resources_list"},"action":"reserved","readOnly":true},
+        {"source":{"toolName":"resource_access_describe"},"action":"reserved","readOnly":true},
     ]);
     let accepted = management(&fixture.app, &admin, Method::POST, "/accept", Some(accept)).await;
     assert_eq!(accepted["scopedMcp"]["ready"], false);

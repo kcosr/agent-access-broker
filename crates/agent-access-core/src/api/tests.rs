@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn explicit_resource_listing_metadata_flows_to_catalog_openapi_and_send() {
+    let descriptor = ActionDescriptor::new("inventory", "List projects", json!({"type":"object"}))
+        .read_only()
+        .scope("project")
+        .native_search(agent_access_provider::NativeSearchEnforcement::ResultFiltered)
+        .listing_of(agent_access_provider::ResourceType::new("fake_project").unwrap());
+    let action = api_action_spec("example", &descriptor).unwrap();
+    assert_eq!(
+        serde_json::to_value(descriptor.capabilities()).unwrap()["listingOf"],
+        "fake_project"
+    );
+    let mut catalog = empty_catalog(json!({}));
+    catalog.services.push(ApiServiceSpec {
+        availability: None,
+        scoped_mcp_ready: true,
+        service: "example".into(),
+        display_name: "Example".into(),
+        surface: "invoke".into(),
+        scope_types: vec![],
+        resource_scopes: Default::default(),
+        actions: vec![action],
+    });
+    assert_eq!(
+        serde_json::to_value(&catalog).unwrap()["services"][0]["actions"][0]["listingOf"],
+        "fake_project"
+    );
+    let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "session");
+    assert_eq!(
+        openapi["paths"]["/v1/invoke/example/inventory"]["post"]["x-agent-access-listing-of"],
+        "fake_project"
+    );
+    assert_eq!(
+        send_schema_from_catalog(&catalog)["oneOf"][0]["x-agent-access-listing-of"],
+        "fake_project"
+    );
+    catalog.services[0].actions[0].listing_of = None;
+    let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "session");
+    assert!(
+        openapi["paths"]["/v1/invoke/example/inventory"]["post"]
+            .get("x-agent-access-listing-of")
+            .is_none()
+    );
+    assert!(
+        send_schema_from_catalog(&catalog)["oneOf"][0]
+            .get("x-agent-access-listing-of")
+            .is_none()
+    );
+}
+
+#[test]
 fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
     let documentation =
         json!({"language":"example", "fields":["status"], "examples":["status = Open"]});
@@ -688,6 +738,7 @@ fn generated_send_schema_uses_required_version() {
 #[test]
 fn invoke_formats_project_into_openapi_and_send_schema() {
     let action = ApiActionSpec {
+        listing_of: None,
         scoped_mcp_name: None,
         documentation: None,
         read_only: false,
@@ -755,6 +806,7 @@ fn invoke_formats_project_into_openapi_and_send_schema() {
 #[test]
 fn non_advertising_actions_accept_only_explicit_default_response_formats() {
     let base = ApiActionSpec {
+        listing_of: None,
         scoped_mcp_name: None,
         documentation: None,
         read_only: false,
@@ -845,6 +897,7 @@ fn assert_default_invoke_formats(schema: &Value) {
 #[test]
 fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_actions() {
     let action = ApiActionSpec {
+        listing_of: None,
         scoped_mcp_name: None,
         documentation: None,
         read_only: false,
@@ -942,6 +995,7 @@ fn generated_specs_describe_multipart_uploads() {
         scope_types: vec!["space".to_string()],
         resource_scopes: BTreeMap::new(),
         actions: vec![ApiActionSpec {
+            listing_of: None,
             scoped_mcp_name: None,
             documentation: None,
             read_only: false,
@@ -1042,6 +1096,7 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
         scope_types: vec!["file".to_string()],
         resource_scopes: BTreeMap::new(),
         actions: vec![ApiActionSpec {
+            listing_of: None,
             scoped_mcp_name: None,
             documentation: None,
             read_only: false,
@@ -1091,6 +1146,7 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
         scope_types: vec!["file".to_string()],
         resource_scopes: BTreeMap::new(),
         actions: vec![ApiActionSpec {
+            listing_of: None,
             scoped_mcp_name: None,
             documentation: None,
             read_only: false,
@@ -2192,18 +2248,29 @@ fn service_manager_routes_have_catalog_openapi_and_send_parity() {
 #[test]
 fn discovery_routes_project_queries_and_typed_responses() {
     let routes = http_route_specs(&crate::tests::test_resource_types());
-    for (kind, names) in [
+    assert!(
+        !routes
+            .iter()
+            .any(|route| route.route == "/v1/services/{service}/resources")
+    );
+    for (kind, operation, names) in [
         (
-            "resources",
-            vec!["resourceType", "prefix", "limit", "cursor"],
+            "resource-access",
+            "resource_access.describe",
+            vec!["action", "resourceType", "prefix", "limit", "cursor"],
         ),
-        ("actions", vec!["resource", "resourceType", "prefix"]),
+        (
+            "actions",
+            "actions.list",
+            vec!["resource", "resourceType", "prefix"],
+        ),
     ] {
         let route = routes
             .iter()
             .find(|route| route.route == format!("/v1/services/{{service}}/{kind}"))
             .unwrap();
         assert_eq!(route.access, RouteAccess::Authenticated);
+        assert_eq!(route.operation, operation);
         assert_eq!(
             route
                 .query_params
@@ -2216,16 +2283,48 @@ fn discovery_routes_project_queries_and_typed_responses() {
         assert_eq!(route.path_params[0].name, "service");
         let schema = route_response_schema(route, &["fake_project".to_string()]);
         let validator = jsonschema::validator_for(&schema).unwrap();
-        if kind == "resources" {
-            assert!(!validator.is_valid(&json!({"service":"fake", "resources":[{"id":"project-test", "type":"jira_project", "value":"TEST"}], "nextCursor":null})));
-        }
-        let response = if kind == "resources" {
-            json!({"service":"fake", "resources":[{"id":"project-test", "type":"fake_project", "value":"TEST"}], "nextCursor":null})
+        let response = if kind == "resource-access" {
+            json!({
+                "service":"fake", "executionContext":"default",
+                "availability":{"state":"available","requirements":[],"message":"Locally available"},
+                "coverageSemantics":"single_target",
+                "access":[
+                    {"action":"echo","scope":"resource","resourceType":"fake_project","enforcement":"request","coverage":[
+                        {"selector":{"kind":"all"},"restricted":true},
+                        {"selector":{"kind":"exact","value":"TEST"},"restricted":false}
+                    ]},
+                    {"action":"ping","scope":"unscoped"}
+                ],
+                "registeredResources":{"source":"broker_configuration", "items":[
+                    {"id":"project-test", "type":"fake_project", "value":"TEST"}
+                ], "nextCursor":null},
+                "liveListings":[{"service":"fake","action":"projects","resourceType":"fake_project"}]
+            })
         } else {
             json!({"service":"fake", "resource":"TEST", "actions":["echo"]})
         };
         assert!(validator.is_valid(&response));
         assert!(!validator.is_valid(&json!([])));
+        if kind == "resource-access" {
+            for pointer in [
+                "/access/0/resourceType",
+                "/registeredResources/items/0/type",
+                "/liveListings/0/resourceType",
+            ] {
+                let mut invalid = response.clone();
+                *invalid.pointer_mut(pointer).unwrap() = json!("jira_project");
+                assert!(!validator.is_valid(&invalid), "{pointer}");
+            }
+            let mut invalid = response.clone();
+            invalid["access"][1]["coverage"] = json!([]);
+            assert!(!validator.is_valid(&invalid));
+            invalid = response.clone();
+            invalid["access"][0]["coverage"][0]["excluded"] = json!(["PRIVATE"]);
+            assert!(!validator.is_valid(&invalid));
+            assert!(
+                !validator.is_valid(&json!({"service":"fake","resources":[],"nextCursor":null}))
+            );
+        }
     }
 }
 

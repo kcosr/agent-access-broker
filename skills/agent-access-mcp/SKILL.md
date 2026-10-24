@@ -91,7 +91,7 @@ not a mandatory sequence before each call. They take **flat JSON arguments**:
 | `services_list` | Optional `prefix` | Find canonical service IDs and action names. |
 | `actions_list` | Required `service`; optional `prefix`, `resource`, `resourceType` | Find action IDs, optionally checking policy for one resource value. |
 | `actions_describe` | Required `service`, `action` | Get one action's schema, extended `documentation`, and executable `mcpTool` when available. |
-| `resources_list` | Required `service`; optional `resourceType`, `prefix`, `limit`, `cursor` | List registered resources with their action `inputs`, plus your broad `coverage`. |
+| `resource_access_describe` | Required `service`; optional `action`, `resourceType`, `prefix`, `limit`, `cursor` | Describe access by action/type, registered references, and explicit live-listing hints. |
 | `services_describe` | Required `service` | Read the service's complete capabilities when a broader view is needed. |
 
 Call `services_list` with `{}` when the service is unknown. Omit unused optional
@@ -141,15 +141,54 @@ so refresh discovery and review name-based approval rules when tools change.
 
 ## Resources, searches, and pagination
 
-`resources_list` reads broker registrations and your own policy, not live
-upstream inventory. Its first page has two parts:
+`resource_access_describe` describes local access by action and type. Pass
+`service`; optionally select one canonical `action` or filter `resourceType`.
+Without a type filter it describes every type and unscoped action. The response
+separates three concepts:
 
-- `resources`: registered values you can use. When an entry has `inputs`, pass
-  those fields to actions as-is instead of splitting `value` yourself.
-- `coverage` (omitted when empty): namespace or all access, such as
-  `{"selector":{"kind":"namespace","value":"team-ci"},"inputs":{"controller":"team-ci"},"restricted":false}`.
-  Resources inside are not listed. `restricted: true` means some are withheld.
-  An empty `resources` list with `coverage` means broad access, not no access.
+- `access`: `{action,scope:"resource",resourceType,enforcement,coverage:[...]}` entries have
+  `exact`, `namespace`, or `all` selectors, optional action `inputs`, and
+  `restricted: true` when some values inside are withheld. Unscoped actions use
+  `{action,scope:"unscoped"}`; they do not claim all-resource access.
+- `registeredResources`: `source: "broker_configuration"`, `items`, and
+  `nextCursor`. References are configured values, not a live inventory or a
+  complete enumeration of access. Empty items do not mean no access. Pass a
+  reference's `inputs` as-is when present instead of splitting `value`.
+- Optional `liveListings`: `{service,action,resourceType}` hints for explicitly
+  declared and available enumeration actions. Describe and invoke that action
+  with its own schema. Its grant and credential coverage is independent of other
+  actions; its results do not establish another action's complete inventory.
+  Several hints can name the same type, always in the described service.
+
+The access summary is unpaginated; reference `limit` does not bound its size.
+Narrow by action or resource type first. If one action/type still exceeds the
+limit, check known locators with `actions_list` using `service` and `resource`,
+or request `GET /v1/services/{service}/resource-access` using an HTTP client
+that accepts the response size. An oversized-response error does not mean no access.
+
+Each hinted listing has its own coverage and `enforcement` entry in `access`.
+When filtering by another action, describe the listing action itself to inspect
+its entry. Combining listings does not establish another action's complete
+inventory.
+
+The response includes `executionContext` and service-wide `availability`, using
+the service list's credential readiness and remediation fields to explain empty
+access from missing credentials. Scoped `enforcement` is `request` for Broker
+checks of resolved targets, `results` for native query/result containment, or
+`command` for grants handed to a command that must enforce them and filter its
+own results. Unscoped entries omit `enforcement`. Restricted broad coverage
+retains useful exact/narrower granted entries. Unknown and unavailable exact
+action filters both fail with `action is not available`; invalid syntax fails
+with `action name is invalid`. An action/type filter combination that does not
+match the action's resource binding is rejected.
+
+`coverageSemantics: "single_target"` means the summary does not authorize a
+multi-target request. A compound-only action can have empty singleton coverage.
+Discovery uses current local policy and usable credentials without verifying
+backend access, fetching inventory, or refreshing OAuth. The contract applies to
+native, imported, and command-backed services. MCP and OpenAPI imports currently
+report unscoped actions and omit listing hints. Never infer a listing from an
+action's name.
 
 Finding a specific upstream object depends on the provider:
 
@@ -158,7 +197,7 @@ Finding a specific upstream object depends on the provider:
 - If the provider has a search action, use it within your access. Jira and
   Confluence use `search`; GitLab has repository discovery and native content
   search as described below, plus single-project structured-list searches.
-- For live containers, use the separately granted Jira/GitLab `project.list`,
+- For live resources, use the separately granted Jira/GitLab `project.list`,
   Confluence `space.list`, or CloudBees CI `job.list`. CloudBees needs a configured
   controller from `coverage` or the user; do not guess aliases or probe variants.
 
@@ -171,9 +210,14 @@ such as an issue key or page ID; follow their schemas. A listed
 action or resource does not establish upstream existence or permission for every
 target in a compound request; invocation rechecks access.
 
-For `resources_list`, pass returned `nextCursor` as `cursor` while retaining the
-same service, resource type, prefix, and limit. Pages default to 50 entries and
-allow at most 100. If a cursor becomes invalid, restart listing without it.
+For `resource_access_describe`, pass `registeredResources.nextCursor` as `cursor`
+while retaining service, action, resource type, prefix, and limit. Only registered
+references are paginated and filtered by `prefix`; every page repeats all access
+and listing hints. Pages default to 50 references and allow at most 100. If a
+cursor becomes invalid, restart without it. If the full response exceeds the MCP
+message limit, narrow `action` or `resourceType`; reducing `limit` only bounds
+registered references.
+
 Provider pagination is action-specific: follow that action's documented cursor
 or page fields, preserve required query settings, and stop when continuation
 ends or the user's requested scope is met. Never invent cursors or substitute
@@ -201,7 +245,7 @@ unchanged `maxResults` through `more` and empty `scan_budget` pages until
 `exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
 by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
-page and reject changed authority. Local resource discovery is unchanged.
+page and reject changed authority. Local resource-access discovery describes policy and registered references.
 
 ## Jira issue links
 
@@ -225,7 +269,7 @@ projects. It accepts only pagination and is independently grantable from
 Call the discovered `project.list` tool with `{"inputs":{"maxResults":20}}`;
 continue with the same page size and the returned `nextPageToken` as `pageToken`.
 Use `project.search` to filter authorized GitLab projects live, including
-namespace-granted projects not individually registered in `resources_list`.
+namespace-granted projects without individual Broker resource registrations.
 Omit `search` to browse, or supply a 1–512-byte trimmed query matching names, paths,
 or descriptions. Optional `includeNamespaces` defaults true; `archived` is an
 optional Boolean. Call the discovered tool with, for example:

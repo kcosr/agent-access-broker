@@ -15,6 +15,10 @@ use the same endpoint without trusted assertions. Local stdio uses the CLI's RES
 transport; it can use `--no-token` behind fingerprint-aware ingress, but does not
 implement the username-header MCP transport.
 
+Upgrade the Broker and CLI together. The current resource-access discovery
+contract has no older helper-name, route, or response-shape aliases; refresh MCP
+tool discovery after upgrading.
+
 `agent-access mcp serve` is an MCP server for a local agent application and an
 HTTP client of the existing broker. The application launches it as a subprocess
 and exchanges MCP messages over stdin/stdout. No broker-side MCP endpoint or
@@ -31,18 +35,19 @@ gateway execution. Discovery helpers can describe that separate surface.
 Jira `project.list` lists live authorized projects with only `maxResults` and
 `pageToken`. It has independent action permission and supports whole-result
 Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
-`exhausted`; issue search and local `resources_list` retain their own contracts.
+`exhausted`; issue search has its own contract. Local
+`resource_access_describe` reports policy access and registered references.
 
 The separately grantable `confluence.space.list` action accepts `inputs` with
 only `maxResults` and optional `pageToken`. Results use canonical space grants,
 not URL aliases. Continue `more` and `scan_budget` pages even when empty.
-Local resource-discovery helpers keep their existing behavior. See
+Local resource-access discovery describes policy and registered references. See
 [space listing](providers-confluence.md#live-space-listing).
 
 GitLab `project.list` lists live authorized repositories, including archived
 projects, and accepts only `maxResults` and `pageToken`. It is independently
 grantable from `project.search`, which adds optional project filters;
-`resources_list` continues to describe Broker registrations. The six native
+`resource_access_describe` describes policy access and Broker registrations. The six native
 `search.*` actions search content across that authority or one explicit project,
 subject to operator-configured engine/scope choices. `issue.search` and
 `merge_request.search` retain their single-project structured-list contract.
@@ -518,26 +523,65 @@ idempotent helpers.
 | Tool | Arguments | Result |
 |---|---|---|
 | `services_list` | Optional `prefix` | `{services:[{service,displayName,surface,actions:[names]}]}` |
-| `resources_list` | Required `service`; optional `resourceType`, `prefix`, `limit`, `cursor` | `{service,resources:[{id,type,value,displayName?,inputs?}],coverage?:[{type,selector,inputs?,restricted}],nextCursor}` |
+| `resource_access_describe` | Required `service`; optional `action`, `resourceType`, `prefix`, `limit`, `cursor` | `{service,executionContext,availability,coverageSemantics:"single_target",access:[...],registeredResources:{source:"broker_configuration",items:[...],nextCursor},liveListings?:[{service,action,resourceType}]}` |
 | `actions_list` | Required `service`; optional `resource`, `resourceType`, `prefix` | `{service,resource?,actions:[names]}` |
 | `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool` |
 | `services_describe` | Required `service` | Complete service capabilities and action schemas |
 
-Start with `services_list`, optionally list resources, then use `actions_list`
-with one resource value to avoid repeating all actions for every resource.
-Resources are registered, enabled, context-eligible exact entries with some
-policy access. A resource's `inputs`, when present, are the action input values
-that address it; pass them as-is instead of splitting `value`. The first page's
-`coverage` lists the caller's namespace or all access, such as each CloudBees CI
-controller alias an `all` grant reaches, with `restricted: true` when some
-resources inside are withheld. An empty `resources` list with `coverage` means
-broad access, not no access. Coverage never enumerates resources, and no helper
-queries upstream inventory. See [caller discovery](resources.md#caller-discovery).
-Resource pages default to 50, maximum 100; repeat the same service, resource
-type, prefix, and limit with `nextCursor`; continuation pages omit `coverage`. A service that authorizes several resource
-types needs `resourceType` for resource listing and resource-qualified action
-checks. A changed policy, identity, context, or resource list invalidates
-the cursor. No helper automatically aggregates pages.
+Start with `services_list` when the service is unknown. Use
+`resource_access_describe` to see effective local access by action and resource
+type, registered references, and explicit live-listing hints. An optional `action`
+is an exact canonical name. Omitting `resourceType` describes all types and
+unscoped actions; no type filter is required for a service with several types.
+`executionContext` identifies the admitted context. `availability` uses the
+service list's readiness and remediation shape, explaining empty access from
+missing credentials. Unknown and unavailable action filters both return
+`action is not available`; invalid syntax returns `action name is invalid`.
+An action/type filter combination that does not match the action's resource
+binding is rejected.
+
+The response's `access` entries are either
+`{action,scope:"resource",resourceType,enforcement,coverage:[{selector,inputs?,restricted}]}`
+or `{action,scope:"unscoped"}`. Scoped `enforcement` is `request` for Broker
+request checks, `results` for native query/result containment, or `command` for
+grants passed to a command that must check targets and filter results itself.
+Unscoped actions omit this field. Selectors are `exact`, `namespace`, or `all`;
+`restricted: true` means some values inside are withheld; useful exact/narrower
+grants remain listed beneath restricted coverage. `coverageSemantics` is
+`single_target`: the summary does not authorize combinations of targets, and
+compound-only actions may have empty singleton coverage. It reflects current
+local policy and usable credentials without verifying backend access or refreshing
+OAuth. No discovery helper queries upstream inventory.
+
+`registeredResources` has `source: "broker_configuration"`, `items`, and
+`nextCursor`. These are enabled, context-eligible exact registered references;
+empty items do not establish no access. Use a reference's `inputs` as-is when
+present. Optional `liveListings` gives `{service,action,resourceType}` for
+explicitly declared and available enumeration actions. Multiple hints can name
+the same type, always within the described service. Each listing has its own
+coverage and enforcement entry. With an `action` filter, describe the listing
+action itself to inspect that entry. Each has independent grants and credentials;
+even combining their results does not establish another action's complete
+inventory. See [caller discovery](resources.md#caller-discovery).
+
+Only registered references are paginated or filtered by `prefix`. Pages default
+to 50 references, maximum 100; repeat service, action, resource type, prefix, and
+limit with `registeredResources.nextCursor`. Every page repeats the full access
+summary and hints. Changed policy, identity, context, credential availability or
+resource metadata invalidates the cursor. No helper aggregates pages.
+A cursor belongs to the Broker runtime that issued it and becomes invalid after
+reload or restart. Multi-instance deployments need session affinity so every
+page reaches the issuing instance; otherwise restart without the cursor.
+
+The access summary is complete and unpaginated on every page. The reference
+`limit` does not bound the whole response. Action and resource-type filters can
+reduce its size, but even a single action is not guaranteed to fit. MCP and CLI
+transport size limits fail closed rather than return partial access.
+See [caller discovery](resources.md#caller-discovery) for oversized-response alternatives.
+
+
+`actions_list` needs `resourceType` for resource-qualified checks when the service
+authorizes several resource types.
 
 `actions_list` accepts canonical project/space keys or repository paths, not
 broker resource IDs. A broad grant can permit an unregistered locator. This is
@@ -563,7 +607,7 @@ failed fetches never produce stale or partial success.
 
 Known helper calls with invalid arguments return tool errors. Broker failures
 preserve the structured broker envelope. Unknown tool names and invalid
-`tools/list` cursors remain protocol errors; a `resources_list` cursor is a tool
+`tools/list` cursors remain protocol errors; a `resource_access_describe` cursor is a tool
 argument and its rejection is a tool error. The session survives these errors.
 
 ## Tool arguments
@@ -654,8 +698,9 @@ replacement, the reported local error indicates that the file was replaced.
 CloudBees CI `job.list` takes `controller`, optional `folder`, `maxResults`, and
 `pageToken`, and returns a filtered JSON page of live jobs and containers. Continue
 `more` and `scan_budget` even when empty; `upstream_window` means terminal
-incomplete coverage. Other CloudBees CI actions take `controller` and `job` (from `resources_list`
-`inputs` or `coverage`) or a pasted Jenkins job or build `url`, and build-level
+incomplete coverage. Other CloudBees CI actions take `controller` and `job`
+(from `resource_access_describe` registered-reference or coverage `inputs`),
+or a pasted Jenkins job or build `url`, and build-level
 actions accept `buildSelector` permalinks such as `lastFailedBuild`; see
 [locating jobs and builds](providers-cloudbees-ci.md#locating-jobs-and-builds).
 CloudBees CI `build.log.read` is a JSON tool on both transports. It supports

@@ -37,6 +37,9 @@ pub(crate) fn command_annotations(declaration: &ActionDeclaration) -> Value {
             ),
         );
     }
+    if let Some(listing_of) = &declaration.listing_of {
+        command.insert("listingOf".into(), json!(listing_of));
+    }
     json!({"command": command})
 }
 
@@ -307,13 +310,17 @@ impl CompiledAction {
             .ok_or("command action annotations must hold only annotations.command")?;
         if command
             .keys()
-            .any(|key| key != "resources" && key != "credentialModes")
+            .any(|key| key != "resources" && key != "credentialModes" && key != "listingOf")
         {
             return Err("annotations.command has unsupported fields".into());
         }
         let resources = command
             .get("resources")
             .map(|resources| resource_declaration(resources, &definition.input_schema))
+            .transpose()?;
+        let listing_of = command
+            .get("listingOf")
+            .map(|value| crate::manifest::listing_type(value, resources.as_ref()))
             .transpose()?;
         let credential_modes = command
             .get("credentialModes")
@@ -351,6 +358,7 @@ impl CompiledAction {
                     inputs: declaration.inputs,
                 }),
                 credential_modes,
+                listing_of,
             },
         })
     }
@@ -521,6 +529,7 @@ mod tests {
                         inputs: vec!["/project".into()],
                     }),
                     credential_modes: both.clone(),
+                    listing_of: None,
                 },
                 ImportedActionAuthority {
                     resources: Some(ImportedActionResources {
@@ -528,6 +537,7 @@ mod tests {
                         inputs: Vec::new(),
                     }),
                     credential_modes: both,
+                    listing_of: None,
                 },
             ]
         );

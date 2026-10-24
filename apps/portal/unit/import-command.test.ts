@@ -10,6 +10,7 @@ import {
   chosenResourceTypeIds,
   commandBindings,
   commandCredentialText,
+  commandListingType,
   commandName,
   commandNotices,
   commandResourceCheck,
@@ -183,6 +184,37 @@ describe("grant editor", () => {
 });
 
 describe("command import preview", () => {
+  test("explicit live listing is reviewable and requires the administrator's read-only classification", () => {
+    const data = structuredClone(commandDiscovered());
+    const tool = data.preview!.manifest.tools.find((tool) => tool.definition.action === "issue.search")!;
+    tool.definition.action = "project.list";
+    tool.definition.source = { name: "project.list" };
+    tool.definition.annotations = { command: { resources: { type: "project" }, listingOf: "project" } };
+    expect(commandListingType(tool.definition)).toBe("project");
+    expect(commandListingType(SEARCH)).toBeNull();
+    const html = renderReview(data);
+    expect(html).toContain("Live listing: <b>Projects</b>");
+    expect(html).toContain("Requires reviewed read-only classification");
+    expect(html).toContain("permission to list grants no other action access");
+    const rows = importReviewRows(data);
+    const row = rows.find((row) => row.action === "project.list")!;
+    row.selected = true;
+    expect(row.readOnly).toBe(false);
+    expect(importSelectionError(data, rows)).toContain("Classify live listing action project.list as reviewed read-only");
+    row.readOnly = true;
+    expect(importSelectionError(data, rows)).toBeNull();
+    expect(selectedImportActions(rows)).toContainEqual({ source: { name: "project.list" }, action: "project.list", readOnly: true });
+  });
+
+  test("changing an accepted listing declaration requires a new review", () => {
+    const data = structuredClone(commandAccepted());
+    data.preview = structuredClone(commandDiscovered().preview);
+    const tool = data.preview!.manifest.tools.find((tool) => tool.definition.action === "issue.search")!;
+    tool.definition.annotations = { command: { resources: { type: "project" }, listingOf: "project" } };
+    const row = importReviewRows(data).find((row) => row.action === "issue.search")!;
+    expect(row).toMatchObject({ change: "Changed", selected: false, readOnly: false });
+  });
+
   test("discovery shows the version, credential, verification and editable proposed type IDs", () => {
     const data = commandDiscovered();
     const html = renderReview(data);

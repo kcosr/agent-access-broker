@@ -4,6 +4,9 @@ The `openapi_http` adapter turns reviewed operations from an OpenAPI document in
 ordinary broker actions. It uses the same imported-service administration, grants,
 execution contexts, credential selection, limits, audit, CLI and MCP interfaces as
 MCP imports. It does not infer business resources or resource scopes.
+The shared [resource-access helper](resources.md#caller-discovery) reports
+available OpenAPI actions as `scope: "unscoped"` and provides no live-listing
+hints. An operation name or response schema does not declare resource enumeration.
 
 ## Setup
 

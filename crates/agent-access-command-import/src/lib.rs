@@ -111,7 +111,13 @@ impl ImportedAdapter for CommandAdapter {
         &["/result/upstreamCommand"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String> {
-        CompiledAction::new(action).map(|_| ())
+        let compiled = CompiledAction::new(action)?;
+        if compiled.authority.listing_of.is_some() && !action.read_only {
+            return Err(
+                "listingOf requires the action to be classified as reviewed read-only".into(),
+            );
+        }
+        Ok(())
     }
     fn action_authority(
         &self,

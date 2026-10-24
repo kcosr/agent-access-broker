@@ -354,7 +354,7 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
     let f = fixture().await;
     let resource_list = success(run(
         &f.agent_config,
-        &["resources", "list", "--service", "teams"],
+        &["resource-access", "describe", "--service", "teams"],
     ));
     assert!(resource_list.to_string().contains("release-alerts"));
     let action = success(run(

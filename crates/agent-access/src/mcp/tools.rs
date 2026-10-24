@@ -1218,7 +1218,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/v1/services/second/resources"))
+            .and(path("/v1/services/second/resource-access"))
             .respond_with(ResponseTemplate::new(500))
             .expect(0)
             .mount(&server)
@@ -1242,7 +1242,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &view,
-            "resources_list",
+            "resource_access_describe",
             json!({"service":"second","outputPath":output})
                 .as_object()
                 .unwrap()

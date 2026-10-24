@@ -64,6 +64,9 @@ pub struct ActionCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<Value>,
     pub required_scope_types: Vec<String>,
+    /// Explicit live enumeration, with authority independent of other actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_of: Option<ResourceType>,
     pub credential_modes: Vec<String>,
     #[serde(default)]
     pub lookup_required: bool,

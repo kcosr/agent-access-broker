@@ -152,7 +152,7 @@ def check_manifest(test, manifest):
     for action in manifest["actions"]:
         test.assertLessEqual(len(json.dumps(action).encode()), 256 * 1024)
         test.assertLessEqual(set(action), {"name", "description", "inputSchema", "outputSchema",
-                                           "readOnly", "credentialModes", "resources"})
+                                           "readOnly", "credentialModes", "resources", "listingOf"})
         test.assertNotIn(action["name"], names)
         names.add(action["name"])
         test.assertLessEqual(len(action["description"].encode()), 16 * 1024)
@@ -175,6 +175,10 @@ def check_manifest(test, manifest):
                     prop = schema["properties"][name]
                     test.assertTrue(prop["type"] == "string" or (
                         prop["type"] == "array" and prop["items"]["type"] == "string"))
+        if "listingOf" in action:
+            test.assertTrue(action["readOnly"])
+            test.assertEqual(action["listingOf"], action["resources"]["type"])
+            test.assertNotIn("inputs", action["resources"])
     return {action["name"]: action for action in manifest["actions"]}, types
 
 
@@ -184,9 +188,12 @@ class ManifestTests(unittest.TestCase):
         actions, types = check_manifest(self, manifest)
         self.assertEqual(manifest["credential"], {"kind": "username_token", "modes": ["service", "per_user"]})
         self.assertTrue(manifest["verify"])
-        self.assertEqual(sorted(actions), ["issue.close", "issue.create", "issue.search", "issue.view", "whoami"])
+        self.assertEqual(sorted(actions), ["issue.close", "issue.create", "issue.search", "issue.view", "project.list", "whoami"])
         self.assertEqual(actions["issue.view"]["resources"], {"type": "project", "inputs": ["/project"]})
         self.assertEqual(actions["issue.search"]["resources"], {"type": "project"})
+        self.assertEqual(actions["project.list"]["resources"], {"type": "project"})
+        self.assertEqual({name: action["listingOf"] for name, action in actions.items() if "listingOf" in action},
+                         {"project.list": "project"})
         self.assertEqual(actions["issue.close"]["resources"], {"type": "project"})
         self.assertFalse(actions["issue.close"]["readOnly"])
         self.assertNotIn("resources", actions["whoami"])
@@ -310,6 +317,42 @@ class InvokeTests(unittest.TestCase):
 
         result = self.invoke(command("issue.search", {"query": 'text ~ "status page" AND project = WEB'}))["result"]
         self.assertEqual([i["key"] for i in result["issues"]], ["WEB-12"])
+
+    def test_project_listing_filters_its_grants_and_uses_the_covering_credential(self):
+        response = self.invoke(command("project.list", {}))
+        self.assertTrue(response["ok"])
+        self.assertNotIn("receipt", response)
+        result = response["result"]
+        self.assertEqual(result["items"], [{"key": "OPS", "name": "Operations", "via": "user"},
+                                           {"key": "WEB", "name": "Web", "via": "user"}])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["access"], {"accounts": {"user": "avery"}})
+        self.assertNotIn("SEC", json.dumps(result))
+
+        grants = [{"credential": "user", "resources": "any", "except": ["SEC", "WEB"]},
+                  {"credential": "service", "resources": [{"value": "SEC"}]}]
+        result = self.invoke(command("project.list", {}, grants))["result"]
+        self.assertEqual([(item["key"], item["via"]) for item in result["items"]],
+                         [("OPS", "user"), ("SEC", "service")])
+        self.assertEqual(result["access"], {"accounts": {"user": "avery", "service": "svc-tickets"}})
+        exact = [{"credential": "service", "resources": [{"value": "WEB"}]}]
+        result = self.invoke(command("project.list", {}, exact, {"service": CREDENTIALS["service"]}))["result"]
+        self.assertEqual(result["items"], [{"key": "WEB", "name": "Web", "via": "service"}])
+        self.assertEqual(result["count"], 1)
+        empty = [{"credential": "service", "resources": [{"value": "NEW"}]}]
+        self.assertEqual(self.invoke(command("project.list", {}, empty))["result"]["items"], [])
+
+    def test_project_listing_rejects_inputs_and_credentials_without_fallback(self):
+        for inputs in ({"query": "OPS"}, {"project": "SEC"}, [], None):
+            self.assertError(self.invoke(command("project.list", inputs)), "input_invalid")
+        self.assertError(self.invoke(broker("project.list", {})), "input_invalid")
+        expired = dict(CREDENTIALS, user=dict(CREDENTIALS["user"], token="expired-1"))
+        self.assertError(self.invoke(command("project.list", {}, credentials=expired)), "upstream_unauthorized")
+        anonymous = self.invoke(command("project.list", {}, [{"resources": "any", "except": ["SEC"]}],
+                                        credentials=None), "no_credential")["result"]
+        self.assertEqual(anonymous, {"items": [{"key": "OPS", "name": "Operations"},
+                                                {"key": "WEB", "name": "Web"}],
+                                     "count": 2, "access": {"account": "anonymous"}})
 
     def test_search_refuses_projects_outside_the_grants(self):
         self.assertError(self.invoke(command("issue.search", {"query": "project = SEC"})), "resource_forbidden")

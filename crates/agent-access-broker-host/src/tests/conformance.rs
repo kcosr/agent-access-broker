@@ -84,7 +84,7 @@ allowed_execution_contexts = ["default"]
 [[policy.grants]]
 subjects = ["user:conformance-user"]
 service = "conformance"
-actions = ["item.view", "item.download", "item.upload"]
+actions = ["item.view", "item.download", "item.upload", "item.list"]
 resources = {{ resource_ids = ["shelf-one"] }}
 credential_mode = "service"
 
@@ -369,6 +369,16 @@ fn conformance_backend_configures_through_its_registration_alone() {
 async fn conformance_actions_reach_every_discovery_surface() {
     let fixture = conformance().await;
 
+    let capabilities = fixture.get("/v1/services/conformance").await;
+    assert_eq!(
+        capabilities["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["action"] == "item.list")
+            .unwrap()["listingOf"],
+        "conformance_item"
+    );
     let catalog = fixture.get("/v1/spec/catalog").await;
     for (id, supports_exclusions) in [("conformance_item", true), ("conformance_endpoint", false)] {
         let resource_type = catalog["resourceTypes"]
@@ -405,6 +415,8 @@ async fn conformance_actions_reach_every_discovery_surface() {
     assert_eq!(action("item.download")["io"]["type"], "raw_download");
     assert_eq!(action("item.upload")["io"]["type"], "multipart_upload");
     assert_eq!(action("item.upload")["io"]["plan"]["maxFiles"], 1);
+    assert_eq!(action("item.list")["listingOf"], "conformance_item");
+    assert!(action("item.view").get("listingOf").is_none());
 
     // OpenAPI projects each invocation shape: JSON with presentation
     // options, a raw stream with its metadata header, and multipart upload.
@@ -412,6 +424,11 @@ async fn conformance_actions_reach_every_discovery_surface() {
     let operation =
         |action: &str| openapi["paths"][format!("/v1/invoke/conformance/{action}")]["post"].clone();
     let view = operation("item.view");
+    assert_eq!(
+        operation("item.list")["x-agent-access-listing-of"],
+        "conformance_item"
+    );
+    assert!(view.get("x-agent-access-listing-of").is_none());
     let view_request = &view["requestBody"]["content"]["application/json"]["schema"];
     assert_eq!(
         view_request["properties"]["inputs"]["required"],
@@ -452,6 +469,15 @@ async fn conformance_actions_reach_every_discovery_surface() {
     // The send schema accepts each shape's request and rejects its
     // malformed variants.
     let send_schema = fixture.get("/v1/spec/send-schema.json").await;
+    assert_eq!(
+        send_schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|variant| variant.get("x-agent-access-listing-of"))
+            .collect::<Vec<_>>(),
+        vec![&json!("conformance_item")]
+    );
     let send = jsonschema::validator_for(&send_schema).unwrap();
     let request = |action: &str, extra: Value| {
         let mut request = json!({
@@ -468,6 +494,8 @@ async fn conformance_actions_reach_every_discovery_surface() {
     let upload_file = json!({"files": [{"role": "attachment", "path": "notes.txt"}]});
     let stream = json!({"responseMode": "stream", "output": {"type": "stdout"}});
     for (valid, request) in [
+        (true, request("item.list", json!({"inputs": {}}))),
+        (false, request("item.list", json!({}))),
         (
             true,
             request("item.view", json!({"responseFormat": "markdown"})),
@@ -505,12 +533,68 @@ async fn conformance_actions_reach_every_discovery_surface() {
         .await;
     assert_eq!(
         actions["actions"],
-        json!(["item.download", "item.upload", "item.view"])
+        json!(["item.download", "item.list", "item.upload", "item.view"])
     );
     let outside = fixture
         .get("/v1/services/conformance/actions?resource=shelf-two%2Fitem-one")
         .await;
     assert_eq!(outside["actions"], json!([]));
+}
+
+#[tokio::test]
+async fn conformance_live_listing_uses_only_its_own_authority_and_filters_before_release() {
+    let fixture = conformance().await;
+    let access = fixture
+        .get("/v1/services/conformance/resource-access?action=item.list")
+        .await;
+    assert_eq!(access["executionContext"], "default");
+    assert_eq!(access["availability"]["state"], "available");
+    assert_eq!(
+        access["liveListings"],
+        json!([{
+            "service": "conformance", "action": "item.list", "resourceType": "conformance_item"
+        }])
+    );
+    assert_eq!(access["access"][0]["enforcement"], "results");
+    assert_eq!(access["registeredResources"]["items"], json!([]));
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+
+    Mock::given(method("GET"))
+        .and(path("/items"))
+        .and(header_is(
+            "authorization",
+            format!("Bearer {UPSTREAM_TOKEN}").as_str(),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": [
+            "shelf-one/second", "shelf-two/private", "shelf-one/first", "shelf-one/first"
+        ]})))
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let response = fixture
+        .invoke("item.list", json!({"inputs": {}}), None)
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["result"]["items"],
+        json!([
+            {"path": "shelf-one/first"}, {"path": "shelf-one/second"}
+        ])
+    );
+    assert!(!body.to_string().contains("shelf-two"));
+    let response = fixture
+        .invoke(
+            "item.list",
+            json!({"inputs": {"item": "shelf-two/private"}}),
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let invalid = response_json(response).await;
+    assert_eq!(invalid["decision"], "deny", "{invalid}");
+    assert_eq!(invalid["reasonCode"], "input_invalid", "{invalid}");
+    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -811,39 +895,59 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         .call(
             &session,
             3,
-            "resources_list",
+            "resource_access_describe",
             json!({"service": "conformance"}),
         )
         .await;
     let resources = mcp::structured(&resources).clone();
-    // Registered items carry the inputs that address them. Coverage reports
-    // the reachable configured shelf, restricted by the download grant's
-    // exclusions, without naming the withheld shelf.
+    // Each action retains its own scope: downloads have exclusions while views
+    // cover the whole shelf. Registered items carry their addressing inputs.
     assert_eq!(
-        resources,
+        resources["registeredResources"],
         json!({
-            "service": "conformance",
-            "resources": [
+            "source": "broker_configuration",
+            "items": [
                 {"id": "item-one", "type": "conformance_item", "value": "shelf-one/item-one",
                     "inputs": {"item": "shelf-one/item-one"}},
                 {"id": "withheld-item", "type": "conformance_item", "value": "shelf-one/withheld",
                     "inputs": {"item": "shelf-one/withheld"}}
             ],
-            "coverage": [{
-                "type": "conformance_item",
-                "selector": {"kind": "namespace", "value": "shelf-one"},
-                "restricted": true
-            }],
             "nextCursor": null
         })
     );
+    assert_eq!(resources["coverageSemantics"], "single_target");
+    assert!(
+        resources.get("liveListings").is_none(),
+        "an unrelated read grant does not grant live enumeration"
+    );
+    let access = resources["access"].as_array().unwrap();
+    assert_eq!(access.len(), 2);
+    for (action, restricted) in [("item.download", true), ("item.view", false)] {
+        let entry = access
+            .iter()
+            .find(|entry| entry["action"] == action)
+            .unwrap();
+        assert_eq!(entry["scope"], "resource");
+        assert_eq!(entry["resourceType"], "conformance_item");
+        assert_eq!(entry["enforcement"], "request");
+        assert!(
+            entry["coverage"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|coverage| {
+                    coverage["selector"] == json!({"kind":"namespace","value":"shelf-one"})
+                        && coverage["restricted"] == restricted
+                })
+        );
+    }
     // HTTP and service-scoped MCP discovery return the same document.
     let http = fixture
         .app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/services/conformance/resources")
+                .uri("/v1/services/conformance/resource-access")
                 .extension(ConnectInfo(
                     "127.0.0.1:45000".parse::<SocketAddr>().unwrap(),
                 ))
@@ -862,11 +966,60 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         "/mcp/conformance",
         &scoped,
         2,
-        "resources_list",
+        "resource_access_describe",
         json!({"service": "conformance"}),
     )
     .await;
     assert_eq!(mcp::structured(&scoped_resources), &resources);
+    let downloads = fixture
+        .call(
+            &session,
+            20,
+            "resource_access_describe",
+            json!({"service":"conformance", "action":"item.download"}),
+        )
+        .await;
+    let downloads = mcp::structured(&downloads);
+    assert_eq!(downloads["access"].as_array().unwrap().len(), 1);
+    assert_eq!(downloads["access"][0]["action"], "item.download");
+    assert_eq!(
+        downloads["registeredResources"]["items"],
+        json!([{"id":"item-one","type":"conformance_item","value":"shelf-one/item-one",
+            "inputs":{"item":"shelf-one/item-one"}}])
+    );
+    let filtered = mcp::scoped::call(
+        &fixture,
+        "/mcp/conformance",
+        &scoped,
+        21,
+        "resource_access_describe",
+        json!({"service":"conformance", "action":"item.download", "prefix":"shelf-one/withheld"}),
+    )
+    .await;
+    assert_eq!(mcp::structured(&filtered)["access"], downloads["access"]);
+    assert_eq!(
+        mcp::structured(&filtered)["registeredResources"]["items"],
+        json!([])
+    );
+    let http_filtered = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/services/conformance/resource-access?action=item.download&prefix=shelf-one%2Fwithheld")
+                .extension(ConnectInfo("127.0.0.1:45000".parse::<SocketAddr>().unwrap()))
+                .header(REQUEST_ID_HEADER, "conformance-resource-access-filter")
+                .header(AUTHORIZATION, format!("Bearer {}", mcp::TOKEN_A))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(http_filtered.status(), StatusCode::OK);
+    assert_eq!(
+        &response_json(http_filtered).await,
+        mcp::structured(&filtered)
+    );
     let called = fixture
         .call(
             &session,
@@ -937,6 +1090,15 @@ fn conformance_portal_fixture_matches_the_broker() {
         .unwrap(),
     });
     let rendered = format!("{}\n", serde_json::to_string_pretty(&fixture).unwrap());
+    assert_eq!(
+        fixture["service"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["action"] == "item.list")
+            .unwrap()["listingOf"],
+        "conformance_item"
+    );
     if std::env::var_os("UPDATE_PORTAL_FIXTURES").is_some() {
         std::fs::write(PORTAL_FIXTURE, &rendered).unwrap();
     }

@@ -188,6 +188,284 @@ fn clock_manifest() -> Value {
     })
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn command_live_listing_is_reviewed_persisted_and_advertised_only_with_its_own_authority() {
+    let mut manifest = json!({
+        "format": "agent-access-command/1", "version": "1.0.0",
+        "resourceTypes": [{"id": "project", "label": "Project", "pluralLabel": "Projects",
+            "example": "OPS", "pattern": "[A-Z]+", "maxLength": 32}],
+        "actions": [
+            {"name": "projects.enumerate", "description": "Enumerate projects.", "readOnly": true,
+                "inputSchema": {"type": "object", "additionalProperties": false},
+                "resources": {"type": "project"}, "listingOf": "project"},
+            {"name": "issue.view", "description": "View an issue.", "readOnly": true,
+                "inputSchema": {"type": "object", "required": ["project"],
+                    "properties": {"project": {"type": "string"}}, "additionalProperties": false},
+                "resources": {"type": "project", "inputs": ["/project"]}}
+        ]
+    });
+    let fixture = CommandFixture::new("tickets", &manifest);
+    let admin = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let (status, created) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports",
+        Some(definition("tickets", "tickets", &[])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let (status, discovered) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports/tickets/discover",
+        Some(versions(&created["result"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{discovered}");
+    let discovered = &discovered["result"];
+    let tools = discovered["preview"]["manifest"]["tools"]
+        .as_array()
+        .unwrap();
+    let listing = tools
+        .iter()
+        .find(|tool| tool["definition"]["action"] == "projects.enumerate")
+        .unwrap();
+    assert!(listing["unsupportedReason"].is_null(), "{listing}");
+    assert_eq!(
+        listing["definition"]["annotations"]["command"]["listingOf"],
+        "project"
+    );
+    assert_eq!(
+        listing["definition"]["readOnly"], false,
+        "source hints do not classify effects"
+    );
+    let mut accept = versions(discovered);
+    accept["manifestHash"] = discovered["preview"]["manifestHash"].clone();
+    accept["resourceTypeIds"] = json!({"project": "inventory_project"});
+    accept["selections"] = json!([
+        {"source": {"name": "projects.enumerate"}, "action": "projects.enumerate", "readOnly": false},
+        {"source": {"name": "issue.view"}, "action": "issue.view", "readOnly": true}
+    ]);
+    let (status, rejected) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports/tickets/accept",
+        Some(accept.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert!(
+        rejected.to_string().contains("reviewed read-only"),
+        "{rejected}"
+    );
+    accept["selections"][0]["readOnly"] = json!(true);
+    let (status, accepted) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports/tickets/accept",
+        Some(accept),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_published_accept_result(&accepted["result"]);
+    assert_eq!(
+        accepted["result"]["service"]["acceptedMetadata"]["resourceTypes"][0]["brokerType"],
+        "inventory_project"
+    );
+    let mut enable = versions(&accepted["result"]);
+    enable["status"] = json!("enabled");
+    let (status, enabled) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports/tickets/status",
+        Some(enable),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+
+    let resource_type = agent_access_provider::ResourceType::new("inventory_project").unwrap();
+    broker
+        .runtime()
+        .create_managed_resource(agent_access_core::CreateResourceRequest {
+            id: Some("all-projects".into()),
+            display_name: None,
+            resource_type,
+            selector: agent_access_provider::ResourceSelector::All,
+            allowed_execution_contexts: vec!["default".into()],
+            enabled: true,
+            attributes: Default::default(),
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    let grant = |id: &str, action: &str| ManagedPolicyGrantCreateRequest {
+        grant_id: Some(id.into()),
+        subjects: vec!["user:alice".into()],
+        execution_contexts: vec!["default".into()],
+        service: "tickets".into(),
+        actions: vec![action.into()],
+        resources: ResourceSelection {
+            resource_ids: vec!["all-projects".into()],
+            resource_group_ids: vec![],
+        },
+        credential_mode: "service".into(),
+        priority: None,
+        status: None,
+        description: None,
+        created_by: "admin".into(),
+    };
+    broker
+        .runtime()
+        .create_managed_policy_grant(grant("inspect", "issue.view"))
+        .unwrap();
+    let agent = fixture.issue(
+        "alice",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+    );
+    let path = "/v1/services/tickets/resource-access?action=issue.view";
+    let (status, without_listing) = request(&app, &agent, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{without_listing}");
+    assert!(
+        without_listing.get("liveListings").is_none(),
+        "{without_listing}"
+    );
+    assert_eq!(
+        without_listing["access"][0]["resourceType"],
+        "inventory_project"
+    );
+    assert_eq!(without_listing["executionContext"], "default");
+    assert_eq!(without_listing["availability"]["state"], "available");
+    assert_eq!(without_listing["access"][0]["enforcement"], "request");
+    broker
+        .runtime()
+        .create_managed_policy_grant(grant("enumerate", "projects.enumerate"))
+        .unwrap();
+    let (status, with_listing) = request(&app, &agent, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{with_listing}");
+    let expected = json!([{"service": "tickets", "action": "projects.enumerate", "resourceType": "inventory_project"}]);
+    assert_eq!(with_listing["liveListings"], expected);
+    let (status, listing_access) = request(
+        &app,
+        &agent,
+        Method::GET,
+        "/v1/services/tickets/resource-access?action=projects.enumerate",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listing_access}");
+    assert_eq!(listing_access["access"][0]["enforcement"], "command");
+    let restricted = fixture.issue(
+        "alice",
+        BrokerTokenClass::AgentInvoke,
+        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"],
+            "serviceRestrictions": {"tickets": {"actions": ["issue.view"]}}}),
+    );
+    let (status, restricted) = request(&app, &restricted, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{restricted}");
+    assert!(restricted.get("liveListings").is_none(), "{restricted}");
+    assert_eq!(
+        fixture.runs(),
+        ["describe"],
+        "local access discovery never executes the command"
+    );
+    drop(app);
+    broker.stop().await;
+
+    // Accepted annotations and the chosen Broker type ID survive startup and
+    // reload without rediscovering or running the approved command.
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let record = broker
+        .runtime()
+        .imported_catalog()
+        .service("tickets")
+        .unwrap()
+        .clone();
+    let listing = record
+        .actions
+        .iter()
+        .find(|action| action.definition.action == "projects.enumerate")
+        .unwrap();
+    assert_eq!(
+        listing.definition.annotations["command"]["listingOf"],
+        "project"
+    );
+    assert!(listing.definition.read_only);
+    assert_eq!(
+        record.accepted_metadata.unwrap().resource_types[0].broker_type,
+        "inventory_project"
+    );
+    broker.reload_config(&fixture.config).await;
+    let (status, reloaded) = request(&app, &agent, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{reloaded}");
+    assert_eq!(reloaded["liveListings"], expected);
+    assert_eq!(fixture.runs(), ["describe"]);
+
+    // Removing only the explicit listing annotation changes behavior. The
+    // accepted identity and grant remain, but the action is quarantined and
+    // its link disappears until a fresh review accepts the declaration.
+    manifest["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("listingOf");
+    fixture.write_manifest(&manifest);
+    let (status, current) =
+        request(&app, &admin, Method::GET, "/v1/admin/imports/tickets", None).await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    let (status, refreshed) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports/tickets/discover",
+        Some(versions(&current["result"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{refreshed}");
+    let refreshed = &refreshed["result"];
+    let listing = refreshed["service"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["definition"]["action"] == "projects.enumerate")
+        .unwrap();
+    assert_eq!(listing["status"], "quarantined");
+    assert_eq!(
+        refreshed["affectedGrantsByAction"]["projects.enumerate"],
+        json!(["enumerate"])
+    );
+    let (status, quarantined) = request(&app, &agent, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{quarantined}");
+    assert!(quarantined.get("liveListings").is_none(), "{quarantined}");
+    let mut accept = versions(refreshed);
+    accept["manifestHash"] = refreshed["preview"]["manifestHash"].clone();
+    accept["confirmAffectedGrants"] = json!(true);
+    accept["selections"] = json!([{"source": {"name": "projects.enumerate"},
+        "action": "projects.enumerate", "readOnly": true}]);
+    let (status, accepted) = request(
+        &app,
+        &admin,
+        Method::POST,
+        "/v1/admin/imports/tickets/accept",
+        Some(accept),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    let (status, undeclared) = request(&app, &agent, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{undeclared}");
+    assert!(undeclared.get("liveListings").is_none(), "{undeclared}");
+    assert_eq!(fixture.runs(), ["describe", "describe"]);
+    drop(app);
+    broker.stop().await;
+}
+
 /// Discovers, accepts every supported tool as a read and returns the result.
 pub(super) async fn discover_and_accept(
     app: &Router,

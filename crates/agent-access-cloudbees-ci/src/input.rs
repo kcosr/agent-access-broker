@@ -315,12 +315,12 @@ impl CloudbeesCiProvider {
         } else if controller.contains('.') || controller.contains(':') {
             (
                 "controller_not_alias",
-                "controller must be a configured alias, not a host name; use the controller from resources_list inputs or coverage, or pass the job url",
+                "controller must be a configured alias, not a host name; use the controller from resource_access_describe registeredResources.items or access coverage inputs, or pass the job url",
             )
         } else {
             (
                 "controller_not_configured",
-                "controller is not a configured CloudBees CI controller alias; use the controller from resources_list inputs or coverage, or pass the job url",
+                "controller is not a configured CloudBees CI controller alias; use the controller from resource_access_describe registeredResources.items or access coverage inputs, or pass the job url",
             )
         };
         Err(input_error(category, Some("controller"), message))
@@ -778,7 +778,7 @@ pub(crate) fn schema(action: &str) -> Value {
 pub(crate) fn documentation(action: &str) -> Value {
     let shape = shape(action).expect("declared action");
     let mut documentation = json!({
-        "locator": "Pass url, or controller and job. resources_list shows controller and job as a resource's inputs, or the controller for a namespace or all grant under coverage; otherwise split a cloudbees_ci_job value at its first \"/\": team-ci/payments/build-api is controller team-ci, job payments/build-api. Do not guess aliases.",
+        "locator": "Pass url, or controller and job. resource_access_describe shows controller and job in registeredResources.items[].inputs, or the controller for a namespace or all grant in access[].coverage[].inputs; otherwise split a cloudbees_ci_job value at its first \"/\": team-ci/payments/build-api is controller team-ci, job payments/build-api. Check access for the action you intend to use. Do not guess aliases.",
         "job": "job is the Jenkins full name: item names from the URL path joined by \"/\", not display names. Folders and multibranch projects hold jobs; address a job inside them, such as folder/job or project/branch. A multibranch branch feature/foo is item feature%2Ffoo; pass it literally. A namespace grant covers jobs below a folder, not the folder item.",
         "url": "A classic Jenkins job or build URL under a configured controller's base_url or web_base_url, such as https://ci.example.com/team-ci/job/payments/job/build-api/42/console. view/<name> segments are skipped and each job name is percent-decoded once. Later path segments, query, and fragment are ignored. Blue Ocean, queue item, and non-controller URLs are rejected. The URL is never fetched; the derived controller and job are authorized like explicit inputs.",
         "errors": "Input mistakes return input_invalid with result.inputCategory and result.field naming the problem. A folder or multibranch project where a job is needed returns inputCategory job_is_container."
@@ -1207,7 +1207,7 @@ mod tests {
                 "build.view",
                 base(json!({"controller":"team"})),
                 ("controller_not_configured", Some("controller")),
-                "resources_list",
+                "resource_access_describe",
             ),
             (
                 "build.view",

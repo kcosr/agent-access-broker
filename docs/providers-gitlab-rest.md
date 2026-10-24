@@ -147,8 +147,7 @@ separately. Egress, TLS, limits and credential sources are in the
 ## Repository discovery and content search
 
 `project.list` lists authorized GitLab projects live, including
-projects covered by namespace grants that are not individually registered in
-`resources_list`. It accepts only pagination and includes archived and unarchived
+projects covered by namespace grants without individual Broker registrations. It accepts only pagination and includes archived and unarchived
 projects. `project.search` offers optional text and archive filters. The six
 `search.*` actions use native full-text search across
 the authorized repository set or an explicitly selected project. `issue.search`

@@ -74,6 +74,8 @@ pub(crate) struct ActionDeclaration {
     /// empty for a command without a credential.
     pub credential_modes: Vec<ImportedCredentialMode>,
     pub resources: Option<ResourceDeclaration>,
+    /// Source type ID this action explicitly enumerates live.
+    pub listing_of: Option<String>,
 }
 
 /// `resources`: the declared type and, for a Broker-enforced action, the
@@ -448,6 +450,7 @@ fn action(
             "readOnly",
             "credentialModes",
             "resources",
+            "listingOf",
         ],
         "the action",
     )?;
@@ -498,13 +501,36 @@ fn action(
         .get("resources")
         .map(|value| resources(value, &input_schema, resource_types))
         .transpose()?;
+    let listing_of = object
+        .get("listingOf")
+        .map(|value| listing_type(value, resources.as_ref()))
+        .transpose()?;
     Ok(ActionDeclaration {
         description,
         input_schema,
         output_schema,
         credential_modes,
         resources,
+        listing_of,
     })
+}
+
+/// Listing is a collection over the same type whose authority the command
+/// receives. Resource input pointers instead describe ordinary scoped calls.
+pub(crate) fn listing_type(
+    value: &Value,
+    resources: Option<&ResourceDeclaration>,
+) -> Result<String, String> {
+    let listing = value
+        .as_str()
+        .filter(|listing| !listing.is_empty())
+        .ok_or("listingOf must name the action's command-enforced resource type")?;
+    if resources
+        .is_none_or(|resources| resources.resource_type != listing || !resources.inputs.is_empty())
+    {
+        return Err("listingOf requires resources of the same type without input pointers".into());
+    }
+    Ok(listing.to_owned())
 }
 
 fn resources(
@@ -639,6 +665,61 @@ pub(crate) mod tests {
 
     fn parse_value(value: &Value) -> Result<Manifest, String> {
         parse(&serde_json::to_vec(value).unwrap())
+    }
+
+    #[test]
+    fn listing_declarations_require_the_same_command_enforced_resource_type() {
+        let mut value = sample();
+        value["actions"][1]["name"] = json!("project.list");
+        value["actions"][1]["listingOf"] = json!("project");
+        let parsed = parse_value(&value).unwrap();
+        assert_eq!(
+            parsed.actions[1]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .listing_of
+                .as_deref(),
+            Some("project")
+        );
+        assert!(
+            parsed.actions[0]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .listing_of
+                .is_none()
+        );
+        for invalid in [json!("other"), json!(""), json!(true), Value::Null] {
+            value["actions"][1]["listingOf"] = invalid;
+            assert!(
+                parse_value(&value).unwrap().actions[1]
+                    .declaration
+                    .as_ref()
+                    .unwrap_err()
+                    .contains("listingOf")
+            );
+        }
+        value["actions"][0]["listingOf"] = json!("project");
+        assert!(
+            parse_value(&value).unwrap().actions[0]
+                .declaration
+                .as_ref()
+                .unwrap_err()
+                .contains("without input pointers")
+        );
+        value["actions"][1]["listingOf"] = json!("project");
+        value["actions"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("resources");
+        assert!(
+            parse_value(&value).unwrap().actions[1]
+                .declaration
+                .as_ref()
+                .unwrap_err()
+                .contains("same type")
+        );
     }
 
     #[test]

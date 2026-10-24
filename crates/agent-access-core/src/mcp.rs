@@ -229,7 +229,7 @@ fn omit_required_path(schema: &mut Value, parts: &[String]) {
 
 const NAMES: [&str; 5] = [
     "services_list",
-    "resources_list",
+    "resource_access_describe",
     "actions_list",
     "actions_describe",
     "services_describe",
@@ -254,14 +254,14 @@ pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
             json!([]),
         ),
         (
-            "resources_list",
-            "List registered concrete resources for one visible service, without action arrays. A resource's inputs are the action input values that address it; pass them as-is. The first page's coverage lists your broader namespace or all access, whose resources are not enumerated: an empty resources list with coverage means broad access, not no access. restricted:true means some resources inside are withheld. Check a known resource value with actions_list. A service that authorizes several resource types needs resourceType (a registered resource type ID from the service's resourceScopes). Pages are not automatically aggregated; repeat identical service, resourceType, prefix, and limit values with nextCursor. The default limit is 50 (maximum 100).",
-            json!({"service":service,"resourceType":string,"prefix":string,"limit":{"type":"integer","minimum":1,"maximum":100,"default":50},"cursor":string}),
+            "resource_access_describe",
+            "Describe local single-target access by action and resource type for one visible service. Filter by exact action or resourceType. Coverage includes exact, namespace, and all selectors; restricted:true means some targets are withheld without identifying them. Unscoped actions have scope:unscoped. registeredResources contains configured references, not upstream inventory; inputs address each reference. Optional liveListings names separately authorized enumeration actions. This does not prove upstream access or authorize a complete multi-resource request. Coverage repeats on every page. prefix, limit, and cursor page only registeredResources.items; repeat identical filters with registeredResources.nextCursor. Default limit 50, maximum 100.",
+            json!({"service":service,"action":string,"resourceType":string,"prefix":string,"limit":{"type":"integer","minimum":1,"maximum":100,"default":50},"cursor":string}),
             json!(["service"]),
         ),
         (
             "actions_list",
-            "List canonical action names for one visible service, optionally filtered to a concrete resource value (project key, space key, or repository path, not a broker resource ID). With a resource on a service that authorizes several resource types, also pass resourceType. A resource filter checks single-target policy and local credentials; invocation still checks upstream access and the complete multi-resource request. Broad grants shown as resources_list coverage can permit values absent from its resources. Use actions_describe for a selected action's schema.",
+            "List canonical action names for one visible service, optionally filtered to a concrete resource value (project key, space key, or repository path, not a broker resource ID). With a resource on a service that authorizes several resource types, also pass resourceType. A resource filter checks single-target policy and local credentials; invocation still checks upstream access and the complete multi-resource request. Coverage shown by resource_access_describe can permit values absent from its registeredResources.items. Use actions_describe for a selected action's schema.",
             json!({"service":service,"resource":string,"resourceType":string,"prefix":string}),
             json!(["service"]),
         ),
@@ -613,6 +613,8 @@ mod tests {
     fn helper_contracts_are_shared_with_transport_specific_execution_guidance() {
         let http = helper_definitions(ProjectionMode::Http);
         let local = helper_definitions(ProjectionMode::Stdio);
+        assert!(!is_helper("resources_list"));
+        assert!(!http.iter().any(|helper| helper["name"] == "resources_list"));
         for (http, local) in http.iter().zip(&local) {
             assert_eq!(http["name"], local["name"]);
             let mut local_schema = local["inputSchema"].clone();
@@ -645,13 +647,14 @@ mod tests {
             json!({"service":"gitlab","limit":101}),
             json!({"service":"gitlab","limit":1.5}),
             json!({"service":"gitlab","cursor":""}),
+            json!({"service":"gitlab","action":""}),
             json!({"service":"gitlab","unexpected":true}),
             json!({"service":""}),
             json!({}),
         ] {
             assert!(
                 validate_helper_arguments(
-                    "resources_list",
+                    "resource_access_describe",
                     invalid.as_object().unwrap(),
                     ProjectionMode::Http
                 )
@@ -660,8 +663,10 @@ mod tests {
         }
         assert!(
             validate_helper_arguments(
-                "resources_list",
-                json!({"service":"gitlab","limit":100}).as_object().unwrap(),
+                "resource_access_describe",
+                json!({"service":"gitlab","action":"project.view","limit":100})
+                    .as_object()
+                    .unwrap(),
                 ProjectionMode::Http
             )
             .is_ok()

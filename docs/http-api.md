@@ -279,7 +279,7 @@ Health and discovery:
 | `GET` | `/v1/capabilities` | Capability bundle (identity summary plus visible services) |
 | `GET` | `/v1/services` | Visible services |
 | `GET` | `/v1/services/{service}` | One service's visible capabilities |
-| `GET` | `/v1/services/{service}/resources` | Paginated registered concrete resources with some caller policy access, plus the caller's broad coverage |
+| `GET` | `/v1/services/{service}/resource-access` | Effective local access per action/type, paginated registered references, and explicit live-listing hints |
 | `GET` | `/v1/services/{service}/actions` | Action names, optionally filtered to one concrete resource |
 
 `GET /v1/me` returns the identity summary (`principal`, `groups`,
@@ -2368,38 +2368,68 @@ inventories remain independent. Refresh discovery after resolving a requirement.
 
 ### Resource and action discovery
 
-`GET /v1/services/{service}/resources` accepts optional `resourceType`,
-`prefix`, `limit` (default 50, range 1–100), and opaque `cursor` query
-parameters. It returns:
+`GET /v1/services/{service}/resource-access` accepts optional `action`
+(an exact canonical action name), `resourceType`, `prefix`, `limit` (default 50,
+range 1–100), and opaque `cursor`. The JSON send operation is
+`resource_access.describe`. Without `resourceType`, all action-bound types and
+unscoped actions are described. The response separates policy access from
+registered references. `executionContext` identifies the admitted context;
+`availability` uses the service list's credential-readiness and remediation shape,
+so missing credentials are explained when `access` is empty:
 
 ```json
-{"service":"jira","resources":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}
+{"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
 ```
 
-Rows are registered, enabled, context-eligible exact entries with at least one
-effective single-target policy allowance. Optional display names are configured
-metadata. Optional `inputs` are the action inputs that address the value, for
-types that define them. Local credential checks filter effective allowances; no
-upstream inventory request occurs. Sort
-order is `(type,value,id)`; literal case-sensitive prefixes match resource
-values before pagination. Continue with identical service, resource type,
-prefix, and limit. Cursors bind caller/context, policy/config generations, effective credential-filtered clauses and
-row content; stale or mismatched cursors fail.
+A scoped `access` entry has `action`, `scope: "resource"`, `resourceType`,
+`enforcement`, and `coverage`. `enforcement` is `request` for Broker checks of
+resolved request targets, `results` for native query/result containment, or
+`command` for grants handed to the approved command, which must check and filter
+its own results. Unscoped entries omit `enforcement`. Coverage entries carry `selector` (`exact`, `namespace`, or `all`),
+optional `inputs`, and `restricted`. Exact and namespace selectors carry `value`.
+`restricted: true` means some values inside the selector are withheld; denied
+identities are never named. Restricted broad entries retain useful exact/narrower
+granted entries; containment removes an entry only under unrestricted coverage.
+Unscoped entries are `{action,scope:"unscoped"}`.
+MCP and OpenAPI imports currently use this form. Local credential checks filter
+all access; discovery does not contact the backend or refresh OAuth. This is a
+single-target summary, not full-request authorization. A compound-only action
+can have empty singleton coverage while a complete request is permitted. Native
+search/list actions choose credentials for the collection as a whole, which can
+produce different coverage from ordinary reads that select grants per resource.
 
-The first page also carries `coverage` when the caller holds namespace or all
-access to the type, for example:
+`registeredResources.items` contains registered, enabled, context-eligible exact
+references covered by a selected action. Optional `displayName` is configured
+metadata, and optional `inputs` addresses the value. No private attributes are
+returned. Sort order is `(type,value,id)`; `prefix` is a literal case-sensitive
+filter on these values only. An empty collection does not establish no access.
+The collection's `source` is always `broker_configuration`, not live inventory.
 
-```json
-{"service":"cloudbees_ci","resources":[{"id":"ci-build-api","type":"cloudbees_ci_job","value":"team-ci/payments/build-api","inputs":{"controller":"team-ci","job":"payments/build-api"}}],"coverage":[{"type":"cloudbees_ci_job","selector":{"kind":"namespace","value":"team-ci"},"inputs":{"controller":"team-ci"},"restricted":false}],"nextCursor":null}
-```
+Optional `liveListings` contains `{service,action,resourceType}` hints for
+explicitly declared, currently available enumeration actions. Several actions can
+list the same type; every hint's `service` is the described service. Each listing has
+its own coverage and enforcement entry. With an `action` filter, describe the
+listing action itself to inspect that entry. Neither one listing nor their union
+establishes another action's complete inventory. See
+[caller discovery](resources.md#caller-discovery) for
+coverage, provider-root expansion, and listing declarations.
 
-Each entry has `type`, `selector` (`namespace` with `value`, or `all`), optional
-`inputs`, and `restricted`. An empty `resources` array with coverage means broad
-access, not no access. Coverage is computed from the same effective clauses,
-never enumerates resources, and never names excluded values or unreachable
-roots. Continuation pages and empty results omit it. See
-[caller discovery](resources.md#caller-discovery) for root expansion,
-containment, `restricted`, and prefix rules.
+Only registered references are paginated. Repeat identical service, action,
+resource type, prefix, and limit with `registeredResources.nextCursor`. Each page
+repeats the complete `access` and optional `liveListings`; `prefix` does not
+filter either. Cursors bind caller/context, policy/config generations,
+credential-filtered clauses, filters, and row content; stale or mismatched
+cursors fail.
+A cursor belongs to the Broker runtime that issued it and becomes invalid after
+reload or restart. Multi-instance deployments need session affinity so every
+page reaches the issuing instance; otherwise restart without the cursor.
+
+The access summary is complete and unpaginated on every page. The reference
+`limit` does not bound the whole response. Action and resource-type filters can
+reduce its size, but even a single action is not guaranteed to fit. MCP and CLI
+transport size limits fail closed rather than return partial access.
+See [caller discovery](resources.md#caller-discovery) for oversized-response alternatives.
+
 
 `GET /v1/services/{service}/actions` accepts optional `resource`,
 `resourceType`, and `prefix`; `resourceType` requires `resource`.
@@ -2419,11 +2449,14 @@ still validates credentials, upstream access, and all request targets together.
 These routes use existing service visibility, identity/context resolution, and
 admission. Hidden and missing services both return 403 `service_action_denied` before query
 semantics are interpreted. For visible services invalid filters/cursors return
-400 `input_invalid`. No-resource-scope services return empty resource pages and
-reject resource action filters. A service that advertises several resource
-types requires `resourceType` for resource listing and resource-qualified action
-queries; a qualified action query returns only actions bound to that type. A
-`resourceType` the service does not use is rejected. Service/action detail and
+400 `input_invalid`. For the exact `action` filter, unknown and unavailable names
+uniformly return `action is not available`; invalid syntax returns
+`action name is invalid`. No-resource-scope services report unscoped access and
+empty registered references, and reject resource action filters. A service that advertises several
+resource types requires `resourceType` only for resource-qualified action queries;
+a qualified action query returns only actions bound to that type. A `resourceType`
+the service does not use is rejected, as is an `action`/`resourceType` combination
+whose action is not bound to that type. Service/action detail and
 unqualified action listing remain available.
 
 The original service capability endpoints retain their full response shapes;

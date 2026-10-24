@@ -30,6 +30,7 @@ pub(crate) fn descriptor(config: &ConfluenceListingConfig) -> ActionDescriptor {
         }
     }))
     .native_search(NativeSearchEnforcement::ResultFiltered)
+    .listing_of(CONFLUENCE_SPACE_RESOURCE.id().clone())
     .sensitive_output("/result/items")
     .sensitive_output("/result/nextPageToken")
     .documentation(json!({
