@@ -446,6 +446,7 @@ async fn real_admission_sets_the_proof_without_expanding_source_authority() {
             let response = runtime
                 .invoke(
                     GovernedOperationContext {
+                        admission: None,
                         operation: OperationContext {
                             agent_request_id: "universal-reach-agent".into(),
                             broker_request_id: "universal-reach-broker".into(),

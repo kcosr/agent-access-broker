@@ -72,6 +72,7 @@ pub(crate) mod conformance_import;
 mod credential_connections;
 mod credential_token_types;
 mod discovery;
+mod discovery_limits;
 mod domain_reasons;
 mod gitlab_moved_projects;
 mod gitlab_uploads;
@@ -95,6 +96,7 @@ mod membership_renewal;
 mod microsoft_oidc;
 mod oauth;
 mod principal_access;
+mod rate_wait;
 mod resource_management;
 mod security_snapshot;
 mod service_limits;
@@ -1925,6 +1927,7 @@ async fn gateway_counts_only_pack_posts_and_rejects_with_retry_after_plain_text(
         config.limits.invocations.services.insert(
             "gitlab_git".to_string(),
             agent_access_core::InvocationLimitConfig {
+                max_wait: None,
                 requests: 1,
                 window: "1m".to_string(),
             },
@@ -1971,6 +1974,12 @@ async fn gateway_counts_only_pack_posts_and_rejects_with_retry_after_plain_text(
         second.headers()[REASON_CODE_HEADER],
         ReasonCode::RateLimited.as_str()
     );
+    assert!(
+        second.headers()[CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain")
+    );
     let retry_after: u64 = second.headers()[RETRY_AFTER]
         .to_str()
         .unwrap()
@@ -1985,15 +1994,36 @@ async fn gateway_counts_only_pack_posts_and_rejects_with_retry_after_plain_text(
     )
     .unwrap();
     assert!(
-        body.starts_with(&format!(
-            "Rate limit reached for service \"gitlab_git\": 1 request per 1m. Retry after {retry_after}s (at "
+        body.starts_with(
+            "Rate limit reached for service \"gitlab_git\": 1 request per 1m. This request was not queued or executed. "
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains("Configured maximum wait: 0s; limiting bound: configured rate-wait budget"),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "0 requests for this principal and service are already queued and remain pending."
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            "The next unreserved admission is estimated in {retry_after}s."
         )),
         "{body}"
     );
     assert!(
-        body.ends_with("Z). The request was not executed.\n"),
+        body.contains("Do not resubmit requests that are already pending."),
         "{body}"
     );
+    let retry_time = body
+        .split_once(&format!("Retry after {retry_after}s (at "))
+        .and_then(|(_, timestamp)| timestamp.strip_suffix(").\n"))
+        .expect("plain-text refusal ends with the matching retry delay and timestamp");
+    chrono::DateTime::parse_from_rfc3339(retry_time).expect("retry time is RFC 3339");
     // Discovery stays available while pack transfers are limited.
     let discovery = gateway_get(
         fixture.app.clone(),
@@ -2015,6 +2045,9 @@ async fn gateway_counts_only_pack_posts_and_rejects_with_retry_after_plain_text(
     assert_eq!(limited["principal"], "gateway-user");
     assert_eq!(limited["decision"], "error");
     assert_eq!(limited["reasonCode"], ReasonCode::RateLimited.as_str());
+    let waited_milliseconds = limited["providerAudit"]["rateLimit"]["waitedMilliseconds"]
+        .as_u64()
+        .expect("rate-limit audit records elapsed admission time");
     assert_eq!(
         limited["providerAudit"]["rateLimit"],
         json!({
@@ -2022,7 +2055,12 @@ async fn gateway_counts_only_pack_posts_and_rejects_with_retry_after_plain_text(
             "service": "gitlab_git",
             "limit": 1,
             "windowSeconds": 60,
-            "retryAfterSeconds": retry_after
+            "retryAfterSeconds": retry_after,
+            "maxWaitSeconds": 0,
+            "queuedRequests": 0,
+            "deadlineKind": "rate_wait",
+            "waitedMilliseconds": waited_milliseconds,
+            "remainingWaitMilliseconds": 0
         })
     );
     assert!(limited.get("matchedGrant").is_none());
@@ -2037,6 +2075,7 @@ async fn gateway_charges_protocol_v2_ls_refs_posts_like_any_pack_post() {
         config.limits.invocations.services.insert(
             "gitlab_git".to_string(),
             agent_access_core::InvocationLimitConfig {
+                max_wait: None,
                 requests: 1,
                 window: "1m".to_string(),
             },
@@ -2424,6 +2463,7 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
     let mut prepared = runtime
         .prepare_gateway_operation(
             agent_access_core::GovernedOperationContext {
+                admission: None,
                 operation: agent_access_core::OperationContext {
                     agent_request_id: "gateway-stream-complete".to_string(),
                     broker_request_id: "gateway-stream-broker".to_string(),
@@ -2567,6 +2607,7 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
     let mut prepared = runtime
         .prepare_gateway_operation(
             agent_access_core::GovernedOperationContext {
+                admission: None,
                 operation: agent_access_core::OperationContext {
                     agent_request_id: "gateway-stream-cancel".to_string(),
                     broker_request_id: "gateway-stream-cancel-broker".to_string(),
@@ -12418,6 +12459,7 @@ impl BrowserRateFixture {
 fn one_invocation_per_minute() -> agent_access_core::InvocationLimitsConfig {
     agent_access_core::InvocationLimitsConfig {
         default: Some(agent_access_core::InvocationLimitConfig {
+            max_wait: None,
             requests: 1,
             window: "1m".to_string(),
         }),

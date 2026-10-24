@@ -123,6 +123,7 @@ impl Provider for StateProvider {
 
 fn operation() -> GovernedOperationContext {
     GovernedOperationContext {
+        admission: None,
         operation: OperationContext {
             agent_request_id: "agent-provider-state".to_string(),
             broker_request_id: "broker-provider-state".to_string(),

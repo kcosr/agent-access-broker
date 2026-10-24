@@ -890,10 +890,15 @@ fn limits_value(limits: &LimitsConfig) -> Value {
         principal_overrides,
     } = invocations;
     let limit = |limit: &InvocationLimitConfig| {
-        let InvocationLimitConfig { requests, window } = limit;
+        let InvocationLimitConfig {
+            requests,
+            window,
+            max_wait,
+        } = limit;
         Fields::default()
             .int("requests", *requests)
             .put("window", window.as_str())
+            .opt("max_wait", max_wait.as_deref())
             .value()
     };
     Fields::default()

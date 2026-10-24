@@ -2325,6 +2325,77 @@ responses for `GET /v1/me` (identity summary and `serviceLimits`),
 `GET /v1/services/{service}`, and the service resource/action lists are raw
 JSON. Only their errors use the envelope.
 
+### Live service limits
+
+`GET /v1/services/{service}`, `agent-access services describe SERVICE`, and the
+existing `services_describe` helper in HTTP and local stdio MCP add `limits` for
+an authenticated caller. Visibility, context, token restrictions and credential
+usability are checked first. Anonymous detail omits `limits`. The detail also
+includes `scopedMcpReady`, the current service-scoped MCP readiness from the same
+runtime, so scoped clients can validate that view through detail alone. For example:
+
+```json
+{
+  "limits": {
+    "scope": "principal_service",
+    "stateScope": "broker_process",
+    "instanceId": "06df372d-7b7f-4ab9-a460-cc6751d783d6",
+    "observedAt": "2026-10-24T12:00:00Z",
+    "invocations": {
+      "requests": 2,
+      "windowSeconds": 10,
+      "maxWaitSeconds": 10,
+      "countedRequests": 2,
+      "queuedRequests": 2,
+      "availableImmediately": 0,
+      "nextAdmissionAfterSeconds": 20,
+      "nextAdmissionAt": "2026-10-24T12:00:20Z"
+    },
+    "capacity": {
+      "maxConcurrentRequests": 100,
+      "maxConcurrentRequestsPerPrincipal": 10,
+      "principalInFlightRequests": 4
+    }
+  }
+}
+```
+
+The allowance is shared across the principal's tokens and transports.
+`countedRequests` is conservative rolling history and can exceed a newly lowered
+limit until old admissions expire. `queuedRequests` counts uncharged pending
+requests. `availableImmediately` is unreserved capacity after FIFO precedence;
+`nextAdmissionAfterSeconds` and `nextAdmissionAt` forecast one additional request
+at the tail, including accepted waiters. Zero means rate admission is possible
+now. These values neither reserve capacity nor promise authorization, concurrency,
+execution or delivery. There is no single window reset time.
+
+`maxWaitSeconds` is configured policy; a request's remaining transport/operation
+budget may be shorter. Compare it with client/proxy timeouts and allow useful
+execution time. Discovery is optional guidance, not a required preflight on every
+invocation. `capacity` reports shared request caps and this principal's
+occupancy across services, including waiters; its separate sample is approximate.
+It excludes other principals' usage and does not summarize separate MCP
+response/control or command-worker pools. `instanceId` is an opaque process
+limiter identifier retained across reloads and changed at restart. No aggregate
+service-wide or distributed quota is implied.
+
+HTTP detail responses use `Cache-Control: no-store`. Observations can become
+stale immediately; repeated describe calls do not charge quota, reorder the queue,
+change history, contact an upstream, refresh OAuth or record credential use.
+Service lists, action catalogs and `/v1/me.serviceLimits` retain their static
+shapes. There is no separate status endpoint or new MCP helper.
+
+Single-service REST detail has an independent pool using the configured global
+and per-principal request caps with separate counters, so full invocation slots
+do not by themselves block describe. HTTP MCP uses its existing control pool.
+Each pool can still fill and reject discovery. Other REST discovery routes retain
+their existing capacity. REST detail assembly has a deadline of the smaller of
+`request_body_timeout_ms` and 15 seconds from ingress. If current settings cannot
+be resolved, the deadline expires or the runtime is replaced, it fails with the
+existing HTTP 503 discovery error (`local discovery could not complete`), without
+partial limits or an invocation charge. HTTP MCP retains its existing discovery
+error/deadline contract.
+
 ### Credential availability
 
 Caller service objects in `/v1/services`, service detail, `/v1/capabilities`,
@@ -2960,8 +3031,16 @@ invocation, without adding the MCP deadline to existing HTTP/stdio calls.
 `operation_cancelled` identifies cancellation before dispatch or forced shutdown;
 `operation_timeout` identifies the HTTP MCP overall deadline; `operation_failed`
 identifies an unexpected preparation/provider failure. Interrupted results include
-`executionState` (`not_dispatched` or `unknown`) and `retrySafe: false`. Cancellation
-and timeout after dispatch do not prove that a mutation failed. An audit failure
+`executionState` (`not_dispatched` or `unknown`) and normally `retrySafe: false`.
+Removal proven to precede rate admission is one exception: it returns
+`operation_cancelled` for the original service/action, `executionState:
+"not_dispatched"` and `retrySafe: true`. A hard deadline already elapsed during
+initial admission, before a grant or queue insertion, also carries that proof
+plus `deadlineKind`; it retains the surface's timeout reason and status. See
+[rate limits](#rate-limits). These proofs establish no dispatch for this attempt;
+they do not guarantee unchanged identity, configuration or authorization for a
+later attempt. Cancellation and timeout after dispatch do not prove that a
+mutation failed. An audit failure
 after provider completion remains `audit_unavailable` and includes bounded
 completion evidence with `retrySafe: false`; it never returns execution success
 before the required audit acknowledgement. Inspect operation state and audit
@@ -2995,12 +3074,45 @@ Not counted: discovery (`/v1/services*`, `/v1/capabilities`), runtime specs,
 notifications, session deletion, cancellation) and MCP discovery helper tools,
 self-service and admin management, Git ref discovery (`GET .../info/refs`), and
 authentication routes. Requests later denied by policy still count; a rejected
-request is never recorded. Unknown services fail existing validation without
+request is never added to rate history. Unknown services fail existing validation without
 limiter state.
 
-A rate-limited invocation returns HTTP 429 with `reasonCode = "rate_limited"`
-and a `Retry-After` header in whole seconds. The reserved admission envelope
-proves that the provider was not dispatched (correlation fields abridged):
+When configured `max_wait` is positive, admission may hold the original request
+open in FIFO order before provider work. REST and Git wait before body parsing;
+HTTP MCP has already parsed its protocol message. The queue shares the
+principal/service allowance across tokens and transports and retains existing
+request slots. Only admission charges quota. A queued request is one attempt;
+do not resubmit pending calls. If slots fill, new requests can instead receive
+`concurrency_limited`, including requests for another service.
+
+If a hard deadline has already elapsed before a rate grant or queue insertion,
+the initial admission check retains the surface's timeout outcome. This applies
+whether expiry is noticed before, during or just after the initial rate-settings
+read, including with `max_wait = "0s"`:
+
+| Surface | Broker status | Reason code | `deadlineKind` |
+| --- | --- | --- | --- |
+| REST invoke, including CLI and local stdio MCP | 400 | `body_malformed` | `body` |
+| Git pack POST | 400 | `gateway_request_body_denied` | `body` |
+| HTTP MCP action call | 504 | `operation_timeout` | `operation` |
+
+HTTP MCP delivers this failure through its existing HTTP 200 JSON-RPC tool error,
+with `operation_timeout` in structured content; its underlying Broker status is 504.
+No rate unit is charged. The original service/action's response result and audit
+carry host-owned `executionState: "not_dispatched"`, `retrySafe: true` and the
+`deadlineKind` above; Git preserves its plain-text response and records this
+structured proof in audit. These outcomes have no rate retry forecast. Validate
+the response correlation and complete proof before concluding this attempt did
+not dispatch; a timeout status or reason alone is insufficient. A later attempt
+still needs current identity, configuration and authorization, and is never
+retried automatically.
+
+A rate refusal, an infeasible FIFO turn or a request deadline reached while still
+queued returns HTTP 429 with `reasonCode = "rate_limited"`
+and a `Retry-After` header in whole seconds. A future projected turn that cannot
+fit the remaining deadline remains a rate refusal, even before queue insertion.
+The reserved admission envelope proves that the provider was not dispatched
+(correlation fields abridged):
 
 ```http
 HTTP/1.1 429 Too Many Requests
@@ -3015,9 +3127,9 @@ Content-Type: application/json
   "action": "request.admit",
   "resourceScopes": {},
   "reasonCode": "rate_limited",
-  "reason": "Rate limit reached for service \"jira\": 20 requests per 1m. Retry after 12s (at 2026-09-25T14:03:12Z). The request was not executed.",
+  "reason": "Rate limit reached for service \"jira\": 20 requests per 1m. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z).",
   "error": {
-    "message": "Rate limit reached for service \"jira\": 20 requests per 1m. Retry after 12s (at 2026-09-25T14:03:12Z). The request was not executed."
+    "message": "Rate limit reached for service \"jira\": 20 requests per 1m. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z)."
   }
 }
 ```
@@ -3025,8 +3137,26 @@ Content-Type: application/json
 There is no `result` on these reserved responses. Consumers validate the complete
 [pre-dispatch contract](trusted-callers.md#http-failures-before-provider-dispatch),
 including request correlation, before treating a request as not applied.
-The message includes the affected service, limit and wait. Wait at least the
-`Retry-After` duration before retrying. Limit details remain in audit data.
+The message identifies the service, effective limit/window, configured maximum
+wait, limiting rate/body/operation deadline and remaining budget, queued count,
+and projected next unreserved admission. It says whether this request was never
+queued or was removed, and that it did not execute. Other accepted requests
+remain pending. Counts cover this principal/service across tokens without
+revealing request IDs, actions or inputs.
+
+`Retry-After` and the RFC 3339 retry time forecast an additional request after
+honoring the accepted queue, rounded up to whole seconds. They may change as
+settings and competing arrivals change. Wait at least that duration before
+retrying a rejected request; do not repeat calls that are still pending.
+
+Observed cancellation, owner abandonment, shutdown or runtime publication before
+rate admission removes the request without a charge and returns the original
+service/action's `operation_cancelled` envelope with `executionState:
+"not_dispatched"` and `retrySafe: true`. This only proves that resubmission cannot
+duplicate this attempt's effects. A client timeout alone proves no such outcome:
+unread bodies, proxies and network loss can delay close detection, so the request
+may later be admitted. Reconcile a mutation before retrying. If admission wins
+the cancellation race, its charge remains and existing operation semantics apply.
 
 Other broker errors with a positive `result.retryAfterSeconds` continue to set
 `Retry-After` from that value. Git gateway rejections keep their plain-text body,
@@ -3039,6 +3169,15 @@ The rejected request's audit record carries `decision = "error"`,
 `service`, `limit`, `windowSeconds`, and `retryAfterSeconds`. The
 `request_limited` service event (`limitKind = "invocation_rate"`) carries the
 same fields plus `principal` and `tokenId` when a broker token was used.
+Final audit records carry host-owned `providerAudit.admission` with `waited`,
+`waitedMilliseconds` and `outcome` (`admitted`, `rejected` or `cancelled`). An
+admitted outcome stays `admitted` if later identity, policy or provider work
+fails. Ordinary completion and stream/Git lifecycle service events expose
+`admissionWaited`, `admissionWaitedMilliseconds` and `admissionOutcome`.
+Rate rejections additionally include configured wait, queue projection and the
+limiting deadline/budget in `providerAudit.rateLimit`. Successful waiting produces
+no rate-rejection record. Each request retains its original correlation
+identifiers and terminal outcome ownership even if response delivery disappears.
 
 ### Per-principal overrides
 
@@ -3067,7 +3206,9 @@ accepts exactly `{"requests":N,"windowSeconds":S}`, with `requests` from 1 to
 item (`overridden = true`). `DELETE` accepts no body, removes the override if
 there is one, and returns the effective item that now applies (the service
 limit or default, `overridden = false`); it is idempotent. Changes apply to the
-principal's next counted request without a reload. Overrides apply to users,
+principal's next counted request and reforecast its pending queue without a
+reload or deadline extension. Overrides select only requests/window; the
+service/default `max_wait` applies independently. Overrides apply to users,
 service accounts, and system principals, active or disabled.
 
 These routes use management envelopes and audit. `GET` permits an active human
@@ -3090,8 +3231,10 @@ TOML deployments set `[[limits.invocations.principal_overrides]]` instead.
 Authentication operations, anonymous traffic, and invalid credentials or
 sessions additionally use separate fixed-window abuse-protection budgets that
 also reject with `rate_limited`, without retry guidance.
-`concurrency_limited` means too many requests are in flight; wait for them to
-finish. See [configuration](configuration.md#limits).
+`concurrency_limited` means request capacity is full, including any waiting
+requests. The rejected request was not queued or executed; existing calls remain
+pending. It has no `Retry-After` because completion timing is unknown. Wait for
+capacity without resubmitting pending calls. See [configuration](configuration.md#limits).
 
 ## HTTP status to CLI exit mapping
 

@@ -405,6 +405,7 @@ async fn broker_download_rate_exhaustion_is_refused_without_spawning() {
     let mut contract = contract();
     contract.fixture.config.limits.invocations.default =
         Some(agent_access_core::InvocationLimitConfig {
+            max_wait: None,
             requests: 1,
             window: "1d".into(),
         });

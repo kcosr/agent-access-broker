@@ -34,6 +34,7 @@ fn default_execution_context() -> ExecutionContext {
 
 fn governed(operation: OperationContext) -> GovernedOperationContext {
     GovernedOperationContext {
+        admission: None,
         operation,
         execution_context: default_execution_context(),
     }
@@ -1565,9 +1566,14 @@ fn invoke_completed_event_uses_scope_keys_and_optional_credential_mode() {
     record.resource_scopes =
         BTreeMap::from([("project".to_string(), vec!["SECRET-PROJECT".to_string()])]);
     record.credential_mode = Some(Some("service".to_string()));
+    record.provider_audit = attach_admission_audit(
+        record.provider_audit.take(),
+        Some(InvocationAdmissionAudit::admitted(true, 101)),
+    );
     emit_invoke_completed(&record, 200, 12, Some("draft_position_shape_invalid"));
 
     record.credential_mode = None;
+    record.provider_audit = None;
     emit_invoke_completed(&record, 403, 13, None);
 
     let events = captured.take();
@@ -1578,6 +1584,12 @@ fn invoke_completed_event_uses_scope_keys_and_optional_credential_mode() {
     assert_eq!(string_field(first, "event"), Some("invoke_completed"));
     assert_eq!(string_field(first, "level"), Some("INFO"));
     assert_eq!(string_field(first, "credentialMode"), Some("service"));
+    assert_eq!(first.get("admissionWaited"), Some(&json!(true)));
+    assert_eq!(
+        number_field(first, "admissionWaitedMilliseconds"),
+        Some(101)
+    );
+    assert_eq!(string_field(first, "admissionOutcome"), Some("admitted"));
     assert_eq!(
         string_field(first, "diagnosticCode"),
         Some("draft_position_shape_invalid")
@@ -1607,6 +1619,9 @@ fn invoke_completed_event_uses_scope_keys_and_optional_credential_mode() {
     assert_eq!(string_field(second, "event"), Some("invoke_completed"));
     assert!(!second.contains_key("credentialMode"));
     assert!(!second.contains_key("diagnosticCode"));
+    assert!(!second.contains_key("admissionWaited"));
+    assert!(!second.contains_key("admissionWaitedMilliseconds"));
+    assert!(!second.contains_key("admissionOutcome"));
 }
 
 #[test]
@@ -3033,6 +3048,7 @@ async fn token_execution_context_mismatch_denies_before_upstream_lookup() {
     let response = runtime
         .invoke(
             GovernedOperationContext {
+                admission: None,
                 operation: OperationContext {
                     agent_request_id: "agent-request".to_string(),
                     broker_request_id: "broker-request".to_string(),
@@ -3998,6 +4014,7 @@ async fn provider_invocation_receives_the_authorized_execution_context() {
         let response = runtime
             .invoke(
                 GovernedOperationContext {
+                    admission: None,
                     operation: OperationContext {
                         agent_request_id: "context-test".into(),
                         broker_request_id: "context-test".into(),
@@ -5549,6 +5566,7 @@ async fn identity_failure_for_operation_is_audited() {
     let response = runtime
         .identity_error_response_for_operation(
             GovernedIdentityFailureContext {
+                admission: Some(InvocationAdmissionAudit::admitted(true, 31)),
                 agent_request_id: "agent-request".to_string(),
                 broker_request_id: "broker-request".to_string(),
                 service: "fake".to_string(),
@@ -5571,6 +5589,13 @@ async fn identity_failure_for_operation_is_audited() {
     assert!(audit.contains("\"principal\":\"unknown\""));
     assert!(!audit.contains("principalSubject"));
     assert!(audit.contains("\"executionContext\":\"default\""));
+    let record: Value = serde_json::from_str(audit.trim()).unwrap();
+    assert_eq!(
+        record["providerAudit"]["admission"],
+        json!({
+            "waited":true, "waitedMilliseconds":31, "outcome":"admitted"
+        })
+    );
 }
 
 #[test]
@@ -6283,14 +6308,17 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
 
     let mut prepared = runtime
         .prepare_gateway_operation(
-            governed(OperationContext {
-                agent_request_id: "gateway-agent-request".to_string(),
-                broker_request_id: "gateway-broker-request".to_string(),
-                identity,
-                service: "gitlab_git".to_string(),
-                action: "repo.fetch".to_string(),
-                source: SourceContext::unknown(),
-            }),
+            GovernedOperationContext {
+                admission: Some(InvocationAdmissionAudit::admitted(true, 37)),
+                ..governed(OperationContext {
+                    agent_request_id: "gateway-agent-request".to_string(),
+                    broker_request_id: "gateway-broker-request".to_string(),
+                    identity,
+                    service: "gitlab_git".to_string(),
+                    action: "repo.fetch".to_string(),
+                    source: SourceContext::unknown(),
+                })
+            },
             ResourceScopes::from([
                 ("repository".to_string(), vec!["sip/service".to_string()]),
                 ("namespace".to_string(), vec!["sip".to_string()]),
@@ -6346,6 +6374,14 @@ async fn gateway_operation_preparation_authorizes_policy_and_resolves_credential
         .await
         .unwrap();
     let records = audit_records(&audit_path);
+    for record in &records {
+        assert_eq!(
+            record["providerAudit"]["admission"],
+            json!({
+                "waited":true, "waitedMilliseconds":37, "outcome":"admitted"
+            })
+        );
+    }
     let started = records
         .iter()
         .find(|record| {
@@ -6425,14 +6461,17 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
 
     let mut prepared = runtime
         .prepare_gateway_operation(
-            governed(OperationContext {
-                agent_request_id: "gateway-canceled-request".to_string(),
-                broker_request_id: "gateway-canceled-broker".to_string(),
-                identity,
-                service: "gitlab_git".to_string(),
-                action: "repo.fetch".to_string(),
-                source: SourceContext::unknown(),
-            }),
+            GovernedOperationContext {
+                admission: Some(InvocationAdmissionAudit::admitted(true, 41)),
+                ..governed(OperationContext {
+                    agent_request_id: "gateway-canceled-request".to_string(),
+                    broker_request_id: "gateway-canceled-broker".to_string(),
+                    identity,
+                    service: "gitlab_git".to_string(),
+                    action: "repo.fetch".to_string(),
+                    source: SourceContext::unknown(),
+                })
+            },
             ResourceScopes::from([
                 ("repository".to_string(), vec!["sip/service".to_string()]),
                 ("namespace".to_string(), vec!["sip".to_string()]),
@@ -6475,6 +6514,14 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
         .unwrap();
 
     let records = audit_records(&audit_path);
+    for record in &records {
+        assert_eq!(
+            record["providerAudit"]["admission"],
+            json!({
+                "waited":true, "waitedMilliseconds":41, "outcome":"admitted"
+            })
+        );
+    }
     let request_records = records
         .iter()
         .filter(|record| record["agentRequestId"] == "gateway-canceled-request")
@@ -8993,6 +9040,7 @@ async fn invoke_lookup_trace_in_context(
     runtime
         .invoke(
             GovernedOperationContext {
+                admission: None,
                 operation: OperationContext {
                     agent_request_id: "agent-request".to_string(),
                     broker_request_id: "broker-request".to_string(),

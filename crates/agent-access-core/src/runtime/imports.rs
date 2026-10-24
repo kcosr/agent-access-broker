@@ -10,6 +10,8 @@ mod authentication_tests;
 mod authority;
 #[cfg(test)]
 mod command_tests;
+#[cfg(test)]
+mod invocation_limit_tests;
 mod mcp_names;
 mod retained_grants;
 
@@ -470,11 +472,18 @@ pub(super) fn effective_credentials(config: &mut BrokerConfig, catalog: &Importe
             .imported_modes
             .insert(service.clone(), modes);
         if let Some(limit) = &record.definition.invocation_limit {
+            let max_wait = config
+                .limits
+                .invocations
+                .services
+                .get(service)
+                .and_then(|configured| configured.max_wait.clone());
             config.limits.invocations.services.insert(
                 service.clone(),
                 crate::InvocationLimitConfig {
                     requests: u64::from(limit.requests),
                     window: format!("{}s", limit.window_seconds),
+                    max_wait,
                 },
             );
         }
@@ -754,7 +763,6 @@ impl BrokerRuntime {
             providers.remove(name);
             command_providers.remove(name);
             config.credentials.per_user.remove(name);
-            config.limits.invocations.services.remove(name);
         }
         for record in &catalog.services {
             let name = &record.definition.service;
@@ -805,6 +813,17 @@ impl BrokerRuntime {
             }
             services.insert(name.clone(), Arc::new(definition));
         }
+        let mut invocation_limit_errors = Vec::new();
+        crate::invocation_limits::validate_invocation_limit_service_references(
+            &config,
+            &services,
+            &mut invocation_limit_errors,
+        );
+        if !invocation_limit_errors.is_empty() {
+            return Err(ManagedStoreError::InputInvalid(
+                invocation_limit_errors.join("; "),
+            ));
+        }
         for name in imported_providers.keys() {
             let record = catalog.service(name).ok_or_else(|| {
                 ManagedStoreError::InputInvalid(
@@ -825,6 +844,9 @@ impl BrokerRuntime {
             }
             providers.insert(name, provider.provider());
         }
+        // `config` began as source TOML, so its per-import wait policy and rate
+        // fallback survive every publication. Stored import rates override only
+        // requests/window; removing one reveals the configured fallback again.
         effective_credentials(&mut config, &catalog);
         // The publication's synthesized connections join the configured
         // ones, whose implicit types are resolved again; a catalog that

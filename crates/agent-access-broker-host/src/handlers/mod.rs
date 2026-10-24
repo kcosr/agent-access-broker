@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod common;
 pub(crate) mod data;
+pub(crate) mod discovery_limits;
 pub(crate) mod gateway;
 pub(crate) mod management;
 mod mcp_openapi;

@@ -478,6 +478,9 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         .layer(axum::middleware::from_fn(
             crate::membership_renewal::scope_request_renewal,
         ))
+        .layer(axum::middleware::from_fn(
+            crate::ingress::request_lifetime::scope_request_lifetime,
+        ))
         .layer(RequestTracingLayer::new(ListenerKind::Public, &node_id))
         .with_state(AppState { reloadable: state });
     (router, endpoint)
@@ -496,6 +499,9 @@ pub(crate) fn build_gateway_router(state: Arc<ReloadableState>) -> Router {
         ))
         .layer(axum::middleware::from_fn(
             crate::membership_renewal::scope_request_renewal,
+        ))
+        .layer(axum::middleware::from_fn(
+            crate::ingress::request_lifetime::scope_request_lifetime,
         ))
         .layer(RequestTracingLayer::new(ListenerKind::Gateway, &node_id))
         .with_state(AppState { reloadable: state })

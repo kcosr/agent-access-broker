@@ -1694,14 +1694,24 @@ async fn read_only_fingerprint_fetches_but_push_is_refused_before_the_pack_body(
             json!({"repository": ["sip/service"]}),
             "{denial}"
         );
-        assert_eq!(
-            denial["providerAudit"],
-            json!({"identityAccess": {
-                "readOnly": true,
-                "requestedService": "gitlab_git",
-                "requestedAction": "repo.push"
-            }})
-        );
+        let mut expected_audit = json!({"identityAccess": {
+            "readOnly": true,
+            "requestedService": "gitlab_git",
+            "requestedAction": "repo.push"
+        }});
+        if denial["agentRequestId"] == "git-push" {
+            // Pack POSTs pass rate admission before this access ceiling;
+            // ref discovery does not consume invocation quota.
+            let waited_milliseconds = denial["providerAudit"]["admission"]["waitedMilliseconds"]
+                .as_u64()
+                .expect("pack admission records its elapsed time");
+            expected_audit["admission"] = json!({
+                "waited": false,
+                "waitedMilliseconds": waited_milliseconds,
+                "outcome": "admitted"
+            });
+        }
+        assert_eq!(denial["providerAudit"], expected_audit);
         assert_eq!(denial["identitySource"]["readOnlyAccess"], true);
         assert!(denial.get("matchedGrant").is_none(), "{denial}");
         assert!(denial.get("credentialMode").is_none(), "{denial}");

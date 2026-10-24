@@ -2,6 +2,7 @@
 //! lifecycle, HTTP handlers, management, MCP serving, portal serving, the
 //! generic Git gateway, reload and runtime state. The linking assembly
 //! supplies its composition and identity.
+mod admission;
 mod application;
 mod build_status;
 mod composition;

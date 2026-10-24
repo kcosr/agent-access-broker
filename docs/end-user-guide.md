@@ -445,12 +445,19 @@ report.
 | `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions. Reason `identity access is read-only` means your managed workspace connection allows only reads; ask an administrator if it needs to write |
 | `execution_context_denied` | Use the correct ingress and a token/grant authorized for that context; token selection cannot attest context |
 | `broker_token_paused` | Resume only if the secret remains trusted; otherwise replace and revoke it |
-| `rate_limited` | A Broker limit rejected the request; wait its reported retry interval before trying again |
+| `rate_limited` | This request was refused or removed from the rate queue; wait its reported retry interval and do not repeat other pending calls |
 | `upstream_rate_limited` | The provider/OAuth server throttled it; wait and inspect any mutation outcome first |
 | `mutation_verification_failed` or `applied_unverified` | A write may have applied; inspect the safe result locators before deciding whether to repeat it |
 | Output-file save failure after operation success | Preserve the receipt and recover output if possible; do not replay a mutation to save its response |
 | `encryption_key_missing` / `credential_decrypt_failed` | Ask the operator to repair the key ring or matched backup; replacing a user token will not fix decryption |
 | Microsoft login unavailable or incomplete group claim | Use an existing local login if available and contact the operator; do not repeatedly retry enrollment |
 | Access through a Microsoft group stopped working | Check **Microsoft groups** on **Account** (or `microsoftMembership` in `agent-access auth status`). If it asks for a sign-in, sign in to the portal with Microsoft again; if renewal is blocked, ask your administrator |
+
+`agent-access services describe SERVICE` and MCP `services_describe` show your
+effective rate, configured wait and current process-local queue/capacity estimates.
+A waiting call stays open and uses a request slot; do not submit it again. CLI
+and local stdio MCP use `[service].request_timeout_ms` (default `30000`); allow
+waiting plus execution within any proxy timeout. A timeout may leave the Broker
+request queued or executing, so reconcile a mutation before retrying it.
 
 Exact command contracts and exit codes are in the [CLI reference](cli.md).

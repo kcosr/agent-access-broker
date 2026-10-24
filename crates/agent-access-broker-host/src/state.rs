@@ -52,8 +52,11 @@ pub(crate) struct ReloadableState {
     pub(crate) reload_lock: TokioMutex<()>,
     pub(crate) reload_in_progress: AtomicBool,
     pub(crate) shared_ingress: Arc<IngressGuards>,
+    /// Independent, bounded service-detail control capacity.
+    pub(crate) service_detail_ingress: Arc<IngressGuards>,
     /// Per-(principal, service) invocation windows; history survives reloads.
     pub(crate) shared_invocations: Arc<InvocationLimiter>,
+    pub(crate) admission_owners: Arc<crate::admission::AdmissionRegistry>,
     pub(crate) shared_spool: Arc<UploadSpoolBudgets>,
     pub(crate) operations: Arc<crate::operations::OperationRegistry>,
     pub(crate) body_hard_cap: usize,
@@ -73,6 +76,10 @@ pub(crate) struct ReloadableState {
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
     #[cfg(test)]
     pub(crate) mcp_discovery_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
+    #[cfg(test)]
+    pub(crate) service_detail_limit_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
+    #[cfg(test)]
+    pub(crate) service_detail_context_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
     #[cfg(test)]
     pub(crate) mcp_cleanup_completed: tokio::sync::Notify,
     #[cfg(test)]
@@ -469,6 +476,7 @@ pub(crate) struct ReadinessCache {
     state: Mutex<Option<CachedReadiness>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct RequestPermits {
     pub(crate) _global: IngressPermit,
     pub(crate) _principal: IngressPermit,
@@ -675,7 +683,9 @@ impl ReloadableState {
             reload_lock: TokioMutex::new(()),
             reload_in_progress: AtomicBool::new(false),
             shared_ingress: Arc::new(IngressGuards::new()),
+            service_detail_ingress: Arc::new(IngressGuards::new()),
             shared_invocations: Arc::new(InvocationLimiter::new()),
+            admission_owners: Arc::new(crate::admission::AdmissionRegistry::default()),
             shared_spool: Arc::new(UploadSpoolBudgets::new()),
             operations: Arc::new(crate::operations::OperationRegistry::default()),
             body_hard_cap,
@@ -691,6 +701,10 @@ impl ReloadableState {
             mcp_admission_barrier: Mutex::new(None),
             #[cfg(test)]
             mcp_discovery_barrier: Mutex::new(None),
+            #[cfg(test)]
+            service_detail_limit_barrier: Mutex::new(None),
+            #[cfg(test)]
+            service_detail_context_barrier: Mutex::new(None),
             #[cfg(test)]
             mcp_cleanup_completed: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -810,7 +824,9 @@ impl ReloadableState {
         } else {
             previous.caller_security_epoch
         };
-        self.active.store(next.clone());
+        self.shared_invocations.publish_runtime(|_| {
+            self.active.store(next.clone());
+        });
         next
     }
 

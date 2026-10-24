@@ -58,6 +58,22 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Bounded invocation waiting and live limits.** Optional `max_wait` holds
+  service invocations in FIFO order within existing request capacity; existing
+  service describe interfaces expose caller-specific limits and process-local
+  observations. Principal overrides still change only requests/window. Imported
+  service TOML waits survive catalog edits alongside managed requests/window settings; startup
+  and reload validate their names against the retained catalog. See
+  [invocation limits](docs/configuration.md#service-invocation-limits).
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
+
+- **Configurable CLI and stdio MCP request timeout.** Set
+  `[service].request_timeout_ms` to allow waiting plus execution; the default
+  remains 30000 and download body idle timeout remains 30 seconds. Timeouts can
+  leave a request queued or executing, so reconcile mutations before retrying.
+  See [client timeouts](docs/cli.md#outbound-request-construction-and-timeouts).
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
+
 - **Jira project and search-field discovery.** The read-only `project.view`
   action and `jira project view` command describe an authorized project,
   its searchable fields and optional project metadata. Issue search accepts
@@ -126,6 +142,19 @@ All notable changes to this project are documented in this file.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Changed
+
+- **Admission and service-detail behavior.** Runtime publication cancels requests
+  whose captured runtime is replaced before admission even with `max_wait = "0s"`.
+  The response carries `operation_cancelled` and `executionState: "not_dispatched"`.
+  Single-service REST detail uses separate bounded capacity and an assembly
+  deadline of the smaller of `request_body_timeout_ms` and 15 seconds from ingress;
+  deadline expiry or runtime replacement returns HTTP 503. It sends
+  `Cache-Control: no-store` and includes `scopedMcpReady`. Revised
+  `concurrency_limited` guidance says the rejected request was neither queued nor
+  executed and asks callers to wait for capacity without resubmitting pending
+  calls. See [admission outcomes](docs/http-api.md#rate-limits) and
+  [service detail](docs/http-api.md#live-service-limits).
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
 
 - **Download limits and privacy.** Command downloads validate explicit decoded
   and envelope limits within the command deadline, holding command capacity

@@ -30,6 +30,7 @@ async fn revoked_token_finishes_only_operations_prepared_before_revocation() {
             runtime
                 .begin_invoke(
                     GovernedOperationContext {
+                        admission: None,
                         operation: OperationContext {
                             agent_request_id: format!("prepared-{index}"),
                             broker_request_id: format!("broker-prepared-{index}"),

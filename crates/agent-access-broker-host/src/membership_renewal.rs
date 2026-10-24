@@ -69,8 +69,14 @@ pub(crate) struct RenewalContext {
 }
 
 impl RenewalContext {
-    fn current() -> Arc<Self> {
+    pub(crate) fn current() -> Arc<Self> {
         REQUEST_RENEWAL.try_with(Arc::clone).unwrap_or_default()
+    }
+
+    /// Preserve this request's one-wait budget when admission moves to an
+    /// independently owned task; task locals do not cross `tokio::spawn`.
+    pub(crate) async fn scope<F: std::future::Future>(self: &Arc<Self>, future: F) -> F::Output {
+        REQUEST_RENEWAL.scope(self.clone(), future).await
     }
 
     fn waited(&self) -> bool {
@@ -1108,6 +1114,27 @@ fn audit_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn request_context_keeps_one_renewal_wait_across_spawned_admission() {
+        let context = Arc::new(RenewalContext::default());
+        let deadline = tokio::time::Instant::now() + RENEWAL_WAIT;
+        context.record_wait(deadline);
+        let expected = context.clone();
+        tokio::spawn(async move {
+            context
+                .scope(async {
+                    let current = RenewalContext::current();
+                    assert!(Arc::ptr_eq(&current, &expected));
+                    assert!(current.waited());
+                    current.record_wait(deadline + RENEWAL_WAIT);
+                    assert_eq!(*current.deadline.lock().unwrap(), Some(deadline));
+                })
+                .await;
+        })
+        .await
+        .unwrap();
+    }
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::<Utc>::from_timestamp(1_900_000_000 + seconds, 0).unwrap()

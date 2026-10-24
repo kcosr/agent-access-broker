@@ -140,6 +140,7 @@ async fn spec_document_response(
                 .runtime
                 .context_authorization_error_response(
                     GovernedOperationContext {
+                        admission: None,
                         operation: OperationContext {
                             agent_request_id: context.request_id.clone(),
                             broker_request_id,

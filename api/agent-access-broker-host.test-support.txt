@@ -143,6 +143,7 @@ pub struct agent_access_broker_host::test_support::ShutdownReport
 impl agent_access_broker_host::test_support::ShutdownReport
 pub fn agent_access_broker_host::test_support::ShutdownReport::audit_error(&self) -> core::option::Option<&str>
 pub fn agent_access_broker_host::test_support::ShutdownReport::is_clean(&self) -> bool
+pub fn agent_access_broker_host::test_support::ShutdownReport::unfinished_admissions(&self) -> usize
 pub fn agent_access_broker_host::test_support::ShutdownReport::unfinished_command_processes(&self) -> usize
 pub fn agent_access_broker_host::test_support::ShutdownReport::unfinished_operations(&self) -> usize
 pub fn agent_access_broker_host::test_support::ShutdownReport::was_forced(&self) -> bool
