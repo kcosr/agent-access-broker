@@ -311,8 +311,8 @@ async fn successful_key_updates_refresh_only_that_key_and_failed_updates_keep_op
     assert!(waiter.await.unwrap().is_ok());
     assert_eq!(
         reads.load(Ordering::SeqCst),
-        1,
-        "unrelated and failed writes must retain cached settings"
+        2,
+        "each new admission reads settings, but unrelated and failed writes must not force a capacity-wake read"
     );
     let guard = limiter.begin_update("alice", "jira");
     *rate.lock().unwrap() = limit(2, 10);
@@ -320,7 +320,7 @@ async fn successful_key_updates_refresh_only_that_key_and_failed_updates_keep_op
     let mut next = request(&limiter, limit(2, 10), 0);
     next.resolve_limit = dynamic;
     assert!(limiter.admit(next).await.is_ok());
-    assert_eq!(reads.load(Ordering::SeqCst), 2);
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
     assert_eq!(limiter.state_for_test()[0].2, 2);
 }
 
@@ -591,6 +591,7 @@ async fn cancelled_ticket_keeps_its_non_cancelable_settings_read_owned_until_com
     let release = Arc::new(Notify::new());
     let keepalive = Arc::new(());
     let weak = Arc::downgrade(&keepalive);
+    let reads = Arc::new(AtomicUsize::new(0));
     let blocked: InvocationLimitResolver = {
         let started = started.clone();
         let release = release.clone();
@@ -598,8 +599,12 @@ async fn cancelled_ticket_keeps_its_non_cancelable_settings_read_owned_until_com
             let started = started.clone();
             let release = release.clone();
             let keepalive = keepalive.clone();
+            let reads = reads.clone();
             Box::pin(async move {
                 let _keepalive = keepalive;
+                if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(rate);
+                }
                 started.notify_one();
                 release.notified().await;
                 Ok(rate)
@@ -660,44 +665,79 @@ async fn final_write_fence_cleans_an_observation_abandoned_during_mutation() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn pure_projection_and_scheduler_share_removal_invalidation_rules() {
-    let limiter = Arc::new(InvocationLimiter::new());
-    let rate = limit(2, 10);
-    for _ in 0..2 {
-        limiter.admit(request(&limiter, rate, 10)).await.unwrap();
+async fn late_removals_preserve_valid_due_opportunities_in_projection_and_scheduler() {
+    // Cancel the tail, expire its body deadline, and cancel the head. Each
+    // removal must leave the other ticket's valid 10s opportunity intact.
+    for removal in 0..3 {
+        let clock = crate::ingress::invocation_limits::tests::ManualClock::new();
+        let limiter = Arc::new(InvocationLimiter::with_clock(clock.clone()));
+        let rate = limit(2, 10);
+        for _ in 0..2 {
+            limiter.admit(request(&limiter, rate, 10)).await.unwrap();
+        }
+        let token = CancellationToken::new();
+        let mut first = request(&limiter, rate, 10);
+        if removal == 2 {
+            first.cancellation = Arc::new(Cancellation(token.clone()));
+        }
+        let first = spawn(&limiter, first);
+        queued(&limiter, 1).await;
+        let mut second = request(&limiter, rate, 10);
+        if removal == 0 {
+            second.cancellation = Arc::new(Cancellation(token.clone()));
+        }
+        if removal == 1 {
+            second.hard_deadline = Some(AdmissionDeadline {
+                at: Instant::now() + Duration::from_micros(10_000_250),
+                kind: InvocationDeadlineKind::Body,
+            });
+        }
+        let second = spawn(&limiter, second);
+        queued(&limiter, 2).await;
+        clock.advance(Duration::from_micros(10_000_500));
+        if removal != 1 {
+            token.cancel();
+        }
+        {
+            let mut state = limiter.state.lock().unwrap();
+            let key = ("alice".into(), "jira".into());
+            let now = Instant::now() + Duration::from_micros(10_000_500);
+            let now_ns = 10_000_500_000;
+            let before = project(&state, &key, rate, now, now_ns);
+            assert_eq!(
+                before.queued, 1,
+                "the surviving due opportunity remains valid"
+            );
+            limiter.process(&mut state, &key, rate, 0, now, now_ns);
+            let after = project(&state, &key, rate, now, now_ns);
+            assert_eq!(before.next_ns, after.next_ns);
+            assert_eq!(before.available, after.available);
+            assert!(state.scheduler.queues.is_empty());
+            assert_eq!(
+                state.keys["alice"]["jira"].buckets.back().unwrap().last_ns,
+                now_ns
+            );
+        }
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        if removal == 2 {
+            assert!(matches!(first, Err(InvocationAdmissionError::Cancelled(_))));
+            assert!(second.is_ok());
+        } else {
+            assert!(first.is_ok());
+            if removal == 0 {
+                assert!(matches!(
+                    second,
+                    Err(InvocationAdmissionError::Cancelled(_))
+                ));
+            } else {
+                assert!(matches!(
+                    second,
+                    Err(InvocationAdmissionError::RateLimited(_))
+                ));
+            }
+        }
     }
-    let first = spawn(&limiter, request(&limiter, rate, 10));
-    queued(&limiter, 1).await;
-    let token = CancellationToken::new();
-    let mut waiting = request(&limiter, rate, 10);
-    waiting.cancellation = Arc::new(Cancellation(token.clone()));
-    let second = spawn(&limiter, waiting);
-    queued(&limiter, 2).await;
-    token.cancel();
-    {
-        let mut state = limiter.state.lock().unwrap();
-        let key = ("alice".into(), "jira".into());
-        let now = Instant::now() + Duration::from_micros(10_000_500);
-        let now_ns = 10_000_500_000;
-        let before = project(&state, &key, rate, now, now_ns);
-        assert_eq!(
-            before.queued, 0,
-            "removal invalidates old opportunities before projection walks any position"
-        );
-        limiter.process(&mut state, &key, rate, 0, now, now_ns);
-        let after = project(&state, &key, rate, now, now_ns);
-        assert_eq!(before.next_ns, after.next_ns);
-        assert_eq!(before.available, after.available);
-        assert!(state.scheduler.queues.is_empty());
-    }
-    assert!(matches!(
-        first.await.unwrap(),
-        Err(InvocationAdmissionError::RateLimited(_))
-    ));
-    assert!(matches!(
-        second.await.unwrap(),
-        Err(InvocationAdmissionError::Cancelled(_))
-    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -728,4 +768,308 @@ async fn granted_head_does_not_keep_its_permits_while_the_driver_waits_for_a_suc
     );
     limiter.close();
     assert!(second.await.unwrap().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn new_admission_and_observation_fail_closed_after_a_cached_success() {
+    let limiter = Arc::new(InvocationLimiter::new());
+    let rate = limit(2, 10);
+    limiter.admit(request(&limiter, rate, 0)).await.unwrap();
+    let failure: InvocationLimitResolver = Arc::new(|| {
+        Box::pin(async {
+            Err(ProviderError::error(
+                ReasonCode::ManagedStoreUnavailable,
+                "synthetic settings failure",
+            ))
+        })
+    });
+    let mut next = request(&limiter, rate, 0);
+    next.resolve_limit = failure.clone();
+    assert!(matches!(
+        limiter.admit(next).await,
+        Err(InvocationAdmissionError::Resolution {
+            waited: false,
+            waited_milliseconds: 0,
+            ..
+        })
+    ));
+    assert!(matches!(
+        limiter
+            .observe(0, "alice", "jira", Duration::ZERO, failure)
+            .await,
+        Err(InvocationObservationError::Resolution(_))
+    ));
+    assert_eq!(
+        limiter.state_for_test(),
+        [("alice".into(), "jira".into(), 1)]
+    );
+    let state = limiter.state.lock().unwrap();
+    let settings = &state.scheduler.settings[&("alice".into(), "jira".into())];
+    assert_eq!(settings.cached, Some((0, rate)));
+    assert_eq!(settings.revision, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn fresh_observation_projects_changed_settings_without_publishing_them() {
+    let limiter = Arc::new(InvocationLimiter::new());
+    let original = limit(1, 10);
+    limiter
+        .admit(request(&limiter, original, 10))
+        .await
+        .unwrap();
+    let pending = spawn(&limiter, request(&limiter, original, 10));
+    queued(&limiter, 1).await;
+    let observation = limiter
+        .observe(
+            0,
+            "alice",
+            "jira",
+            Duration::from_secs(10),
+            resolver(limit(2, 20)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(observation.invocations.requests, 2);
+    assert_eq!(observation.invocations.window_seconds, 20);
+    assert_eq!(observation.invocations.counted_requests, 0);
+    assert_eq!(observation.invocations.queued_requests, 1);
+    assert_eq!(observation.invocations.available_immediately, 1);
+    assert_eq!(observation.invocations.next_admission_after_seconds, 0);
+    {
+        let state = limiter.state.lock().unwrap();
+        let key = ("alice".into(), "jira".into());
+        let settings = &state.scheduler.settings[&key];
+        assert_eq!(settings.cached, Some((0, original)));
+        assert_eq!(settings.revision, 0);
+        assert_eq!(state.keys["alice"]["jira"].window_ns, 10 * NANOS_PER_SECOND);
+        assert_eq!(state.keys["alice"]["jira"].total, 1);
+        let queue = &state.scheduler.queues[&key];
+        assert_eq!(queue.limit, original);
+        assert_eq!(queue.entries[0].opportunity_ns, 10 * NANOS_PER_SECOND);
+    }
+    assert!(!pending.is_finished());
+    limiter.close();
+    assert!(pending.await.unwrap().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn newly_observed_rate_change_preserves_existing_fifo_precedence() {
+    let limiter = Arc::new(InvocationLimiter::new());
+    let original = limit(1, 10);
+    limiter
+        .admit(request(&limiter, original, 10))
+        .await
+        .unwrap();
+    let pending = spawn(&limiter, request(&limiter, original, 10));
+    queued(&limiter, 1).await;
+    let changed = limit(2, 10);
+    let Err(InvocationAdmissionError::RateLimited(rejection)) =
+        limiter.admit(request(&limiter, changed, 0)).await
+    else {
+        panic!("the existing FIFO head must receive the newly available slot");
+    };
+    assert_eq!(rejection.limit, changed);
+    assert!(pending.await.unwrap().unwrap().waited);
+    let state = limiter.state.lock().unwrap();
+    assert_eq!(
+        state.scheduler.settings[&("alice".into(), "jira".into())].revision,
+        1
+    );
+    assert_eq!(state.keys["alice"]["jira"].total, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn fresh_admission_rate_change_fences_an_older_concurrent_read() {
+    let limiter = Arc::new(InvocationLimiter::new());
+    let original = limit(2, 60);
+    let changed = limit(3, 10);
+    limiter.admit(request(&limiter, original, 0)).await.unwrap();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let reads = Arc::new(AtomicUsize::new(0));
+    let blocked: InvocationLimitResolver = {
+        let started = started.clone();
+        let release = release.clone();
+        let reads = reads.clone();
+        Arc::new(move || {
+            let started = started.clone();
+            let release = release.clone();
+            let reads = reads.clone();
+            Box::pin(async move {
+                if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(original)
+                } else {
+                    Ok(changed)
+                }
+            })
+        })
+    };
+    let mut old = request(&limiter, original, 0);
+    old.resolve_limit = blocked;
+    let old = spawn(&limiter, old);
+    started.notified().await;
+    limiter.admit(request(&limiter, changed, 0)).await.unwrap();
+    release.notify_one();
+    old.await.unwrap().unwrap();
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        2,
+        "a stale result requires another fresh read"
+    );
+    let state = limiter.state.lock().unwrap();
+    assert_eq!(
+        state.scheduler.settings[&("alice".into(), "jira".into())].revision,
+        1
+    );
+    assert_eq!(state.keys["alice"]["jira"].window_ns, 10 * NANOS_PER_SECOND);
+    assert_eq!(state.keys["alice"]["jira"].total, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn observation_timestamps_always_use_whole_second_utc_z() {
+    let limiter = Arc::new(InvocationLimiter::new());
+    let rate = limit(1, 10);
+    let empty = limiter
+        .observe(0, "alice", "jira", Duration::ZERO, resolver(rate))
+        .await
+        .unwrap();
+    limiter.admit(request(&limiter, rate, 0)).await.unwrap();
+    let full = limiter
+        .observe(0, "alice", "jira", Duration::ZERO, resolver(rate))
+        .await
+        .unwrap();
+    assert_eq!(empty.invocations.next_admission_after_seconds, 0);
+    assert_eq!(full.invocations.next_admission_after_seconds, 10);
+    for value in [
+        &empty.observed_at,
+        &empty.invocations.next_admission_at,
+        &full.observed_at,
+        &full.invocations.next_admission_at,
+    ] {
+        assert_eq!(value.len(), 20, "{value}");
+        assert!(value.ends_with('Z'), "{value}");
+        assert!(DateTime::parse_from_rfc3339(value).is_ok(), "{value}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn initial_write_fence_observes_deadlines_and_cancellation_without_starting_a_later_read() {
+    for deadline_kind in [
+        Some(InvocationDeadlineKind::Body),
+        Some(InvocationDeadlineKind::Operation),
+        None,
+    ] {
+        let limiter = Arc::new(InvocationLimiter::new());
+        let write = limiter.begin_update("alice", "jira");
+        let reads = Arc::new(AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let mut waiting = request(&limiter, limit(1, 10), 20);
+        waiting.cancellation = Arc::new(Cancellation(token.clone()));
+        waiting.hard_deadline = deadline_kind.map(|kind| AdmissionDeadline {
+            at: Instant::now() + Duration::from_secs(1),
+            kind,
+        });
+        waiting.resolve_limit = {
+            let reads = reads.clone();
+            Arc::new(move || {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(limit(1, 10)) })
+            })
+        };
+        let pending = spawn(&limiter, waiting);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        if deadline_kind.is_some() {
+            tokio::time::advance(Duration::from_secs(1)).await;
+        } else {
+            token.cancel();
+        }
+        match (deadline_kind, pending.await.unwrap()) {
+            (Some(expected), Err(InvocationAdmissionError::Deadline(actual))) => {
+                assert_eq!(actual, expected)
+            }
+            (None, Err(InvocationAdmissionError::Cancelled(removal))) => assert_eq!(
+                removal.reason(),
+                AdmissionCancellationReason::ExplicitCancellation
+            ),
+            outcome => panic!("unexpected initial resolution outcome: {outcome:?}"),
+        }
+        assert_eq!(limiter.key_count(), 0);
+        assert!(limiter.state.lock().unwrap().scheduler.queues.is_empty());
+        write.finish(false);
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            0,
+            "an abandoned write-fence waiter cannot start a store read"
+        );
+        assert!(limiter.state.lock().unwrap().scheduler.settings.is_empty());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn initial_read_timeout_returns_while_retaining_original_permits_and_registration() {
+    let limiter = Arc::new(InvocationLimiter::new());
+    let guards = Arc::new(crate::ingress::guards::IngressGuards::new());
+    let permits = crate::state::RequestPermits {
+        _global: guards.try_global_concurrency(1).unwrap(),
+        _principal: guards.try_principal_concurrency("alice", 1).unwrap(),
+    };
+    let registry = Arc::new(crate::admission::AdmissionRegistry::default());
+    let registration = registry.register().unwrap();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut waiting = request(&limiter, limit(1, 10), 20);
+    waiting.hard_deadline = Some(AdmissionDeadline {
+        at: Instant::now() + Duration::from_secs(1),
+        kind: InvocationDeadlineKind::Operation,
+    });
+    waiting.resolve_limit = {
+        let started = started.clone();
+        let release = release.clone();
+        Arc::new(move || {
+            let started = started.clone();
+            let release = release.clone();
+            let permits = permits.clone();
+            let registration = registration.clone();
+            Box::pin(async move {
+                let _permits = permits;
+                let _registration = registration;
+                started.notify_one();
+                release.notified().await;
+                Ok(limit(1, 10))
+            })
+        })
+    };
+    let pending = spawn(&limiter, waiting);
+    started.notified().await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(InvocationAdmissionError::Deadline(
+            InvocationDeadlineKind::Operation
+        ))
+    ));
+    assert!(guards.try_global_concurrency(1).is_err());
+    assert_eq!(guards.principal_in_flight_requests("alice"), 1);
+    assert_eq!(registry.drain(Duration::ZERO).await, 1);
+    assert_eq!(limiter.key_count(), 0);
+    assert!(limiter.state.lock().unwrap().scheduler.queues.is_empty());
+    release.notify_one();
+    for _ in 0..50 {
+        if guards.principal_in_flight_requests("alice") == 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(guards.principal_in_flight_requests("alice"), 0);
+    assert!(guards.try_global_concurrency(1).is_ok());
+    assert_eq!(registry.drain(Duration::ZERO).await, 0);
+    assert_eq!(limiter.key_count(), 0);
+    assert!(limiter.state.lock().unwrap().scheduler.settings.is_empty());
 }

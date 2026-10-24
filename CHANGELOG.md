@@ -61,9 +61,8 @@ All notable changes to this project are documented in this file.
 - **Bounded invocation waiting and live limits.** Optional `max_wait` holds
   service invocations in FIFO order within existing request capacity; existing
   service describe interfaces expose caller-specific limits and process-local
-  observations. Principal overrides still change only requests/window. Runtime
-  publication cancels pending admission without dispatch. Imported service TOML
-  waits survive catalog edits alongside managed requests/window settings; startup
+  observations. Principal overrides still change only requests/window. Imported
+  service TOML waits survive catalog edits alongside managed requests/window settings; startup
   and reload validate their names against the retained catalog. See
   [invocation limits](docs/configuration.md#service-invocation-limits).
 - **Configurable CLI and stdio MCP request timeout.** Set
@@ -140,6 +139,18 @@ All notable changes to this project are documented in this file.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Changed
+
+- **Admission and service-detail behavior.** Runtime publication cancels requests
+  whose captured runtime is replaced before admission even with `max_wait = "0s"`.
+  The response carries `operation_cancelled` and `executionState: "not_dispatched"`.
+  Single-service REST detail uses separate bounded capacity and an assembly
+  deadline of the smaller of `request_body_timeout_ms` and 15 seconds from ingress;
+  deadline expiry or runtime replacement returns HTTP 503. It sends
+  `Cache-Control: no-store` and includes `scopedMcpReady`. Revised
+  `concurrency_limited` guidance says the rejected request was neither queued nor
+  executed and asks callers to wait for capacity without resubmitting pending
+  calls. See [admission outcomes](docs/http-api.md#rate-limits) and
+  [service detail](docs/http-api.md#live-service-limits).
 
 - **Download limits and privacy.** Command downloads validate explicit decoded
   and envelope limits within the command deadline, holding command capacity

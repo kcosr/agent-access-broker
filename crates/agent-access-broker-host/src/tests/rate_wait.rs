@@ -577,3 +577,270 @@ async fn anonymous_detail_omits_live_limits_without_allocating_rate_state() {
     assert_eq!(fixture.provider.scope_resolutions.load(Ordering::SeqCst), 0);
     assert!(fixture.provider.calls.lock().unwrap().is_empty());
 }
+
+async fn git_revocation_during_rate_wait(exhaust_auth_budget: bool) {
+    let fixture = test_gateway_router_with_config(false, &["repo.fetch"], |config| {
+        config.limits.auth_requests_per_source_per_minute = 1;
+        config.limits.request_body_timeout_ms = 10_000;
+        config
+            .limits
+            .invocations
+            .services
+            .insert("gitlab_git".into(), waiting_limit(1, "2s", "5s"));
+    })
+    .await;
+    let basic = format!(
+        "Basic {}",
+        BASE64.encode(format!("agent-access:{}", fixture.agent_token))
+    );
+    let pack = |request_id: &'static str, body: Body| {
+        let app = fixture.app.clone();
+        let basic = basic.clone();
+        async move {
+            gateway_request(GatewayRequestSpec {
+                app,
+                method: Method::POST,
+                uri: "/sip/service.git/git-upload-pack".parse().unwrap(),
+                host: Some("git.example.test"),
+                request_id: Some(request_id),
+                authorization: Some(&basic),
+                headers: &[(
+                    CONTENT_TYPE.as_str(),
+                    "application/x-git-upload-pack-request",
+                )],
+                body,
+            })
+            .await
+        }
+    };
+    let seed = pack("git-revocation-seed", Body::from("0000")).await;
+    assert_eq!(seed.status(), StatusCode::BAD_GATEWAY);
+    drop(seed);
+    let (body, polls) = counted_body("git-revocation-waiting");
+    let waiting = tokio::spawn(pack("git-revocation-waiting", body));
+    let public = fixture._broker.app();
+    tokio::time::timeout(WAIT_BOUND, async {
+        loop {
+            let response = authed_json_request(
+                public.clone(),
+                Method::GET,
+                "/v1/services/gitlab_git",
+                "git-revocation-observe",
+                "Authorization",
+                format!("Bearer {}", fixture.agent_token),
+                None,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            if response_json(response).await["limits"]["invocations"]["queuedRequests"] == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("Git pack request must queue before revocation");
+    let runtime = fixture._broker.runtime();
+    let store = runtime.managed_store().unwrap();
+    let tokens = store
+        .list_broker_tokens_for_principal("gateway-user")
+        .unwrap();
+    assert_eq!(tokens.len(), 1);
+    store
+        .revoke_broker_token(&tokens[0].token_id, "test")
+        .unwrap();
+    if exhaust_auth_budget {
+        let invalid = gateway_get(
+            fixture.app.clone(),
+            "/sip/service.git/info/refs?service=git-upload-pack",
+            "git.example.test",
+            "git-revocation-budget-seed",
+            Some(&basic),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+    }
+    let response = tokio::time::timeout(WAIT_BOUND, waiting)
+        .await
+        .expect("queued Git revalidation must finish")
+        .unwrap();
+    let expected_reason = if exhaust_auth_budget {
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(!response.headers().contains_key(WWW_AUTHENTICATE));
+        "rate_limited"
+    } else {
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[WWW_AUTHENTICATE],
+            r#"Basic realm="Agent Access Broker""#
+        );
+        "gateway_auth_invalid"
+    };
+    assert_eq!(response.headers()[REASON_CODE_HEADER], expected_reason);
+    assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+    assert_eq!(polls.load(Ordering::SeqCst), 0);
+    drop(response);
+    let records = require_audit_request(
+        &fixture.audit_path,
+        "git-revocation-waiting",
+        "gitlab_git",
+        "repo.fetch",
+    );
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record["principal"], "anonymous");
+    assert_eq!(record["reasonCode"], expected_reason);
+    assert_eq!(record["providerAudit"]["admission"]["waited"], true);
+    assert_eq!(record["providerAudit"]["admission"]["outcome"], "admitted");
+    assert!(
+        record["providerAudit"]["admission"]["waitedMilliseconds"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(record.get("matchedGrant").is_none());
+    assert!(record.get("tokenId").is_none());
+
+    // The failed post-grant identity check used the same source budget as an
+    // ordinary Git authentication failure, even though it already paid quota.
+    let next = gateway_get(
+        fixture.app.clone(),
+        "/sip/service.git/info/refs?service=git-upload-pack",
+        "git.example.test",
+        "git-revocation-next-invalid",
+        Some(&basic),
+    )
+    .await;
+    assert_eq!(next.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(next.headers()[REASON_CODE_HEADER], "rate_limited");
+}
+
+#[tokio::test]
+async fn git_token_revoked_while_queued_keeps_identity_failure_contract_and_admission_audit() {
+    git_revocation_during_rate_wait(false).await;
+}
+
+#[tokio::test]
+async fn git_post_grant_auth_budget_rejection_keeps_anonymous_admission_audit() {
+    git_revocation_during_rate_wait(true).await;
+}
+
+async fn disconnected_http1_body_wait(expect_continue: bool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body_budget = Duration::from_secs(3);
+    let fixture = fixture("2s", "5s", |config| {
+        config.limits.request_body_timeout_ms = body_budget.as_millis() as u64;
+    })
+    .await;
+    complete(pending(&fixture.app, "socket-seed", ALICE).0).await;
+    let request_id = if expect_continue {
+        "socket-expect-continue"
+    } else {
+        "socket-unread-body"
+    };
+    let mut client = tokio::net::TcpStream::connect(fixture.broker.running().public_addr())
+        .await
+        .unwrap();
+    let expect = if expect_continue {
+        "Expect: 100-continue\r\n"
+    } else {
+        ""
+    };
+    let headers = format!(
+        "POST /v1/invoke/fake/echo HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {ALICE}\r\n{REQUEST_ID_HEADER}: {request_id}\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n{expect}\r\n"
+    );
+    let began = tokio::time::Instant::now();
+    client.write_all(headers.as_bytes()).await.unwrap();
+    if !expect_continue {
+        // Hyper may buffer this prefix, but the rate waiter must not read it.
+        // The declared body remains incomplete, so no provider can dispatch.
+        client.write_all(b"{\"inputs\":").await.unwrap();
+    }
+    queued(&fixture.app, "Authorization", ALICE, 1).await;
+    assert_eq!(fixture.provider.scope_resolutions.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.provider.calls.lock().unwrap(), ["socket-seed"]);
+    if expect_continue {
+        let mut byte = [0];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), client.read(&mut byte))
+                .await
+                .is_err(),
+            "100 Continue must wait until admission starts reading the body"
+        );
+    }
+    drop(client);
+    let record = tokio::time::timeout_at(
+        began + body_budget + Duration::from_secs(2),
+        terminal_audit(&fixture, request_id),
+    )
+    .await
+    .expect("disconnect detection or the original body deadline must bound request lifetime");
+    let admission = &record["providerAudit"]["admission"];
+    assert_eq!(admission["waited"], true);
+    let after = queued(&fixture.app, "Authorization", ALICE, 0).await;
+    match admission["outcome"].as_str().unwrap() {
+        "cancelled" => {
+            assert_eq!(record["reasonCode"], "operation_cancelled");
+            assert_eq!(record["providerAudit"]["executionState"], "not_dispatched");
+            assert_eq!(
+                fixture.state.shared_invocations.state_for_test(),
+                vec![("alice".into(), "fake".into(), 1)]
+            );
+        }
+        "rejected" => {
+            assert_eq!(record["reasonCode"], "rate_limited");
+            assert_eq!(record["providerAudit"]["rateLimit"]["deadlineKind"], "body");
+            assert_eq!(
+                fixture.state.shared_invocations.state_for_test(),
+                vec![("alice".into(), "fake".into(), 1)]
+            );
+        }
+        "admitted" => {
+            // An unread HTTP/1 body can hide a disconnect until after the
+            // grant. That grant is retained, and the incomplete body fails
+            // before scope resolution or provider execution.
+            assert!(matches!(
+                record["reasonCode"].as_str(),
+                Some("body_malformed" | "operation_cancelled")
+            ));
+            assert_eq!(after["limits"]["invocations"]["countedRequests"], 1);
+        }
+        outcome => panic!("unexpected disconnect admission outcome: {outcome}"),
+    }
+    tokio::time::timeout_at(began + body_budget + Duration::from_secs(2), async {
+        loop {
+            let value = detail(&fixture.app, "Authorization", ALICE).await;
+            if value["limits"]["capacity"]["principalInFlightRequests"] == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the disconnected request must release its permits within the body deadline bound");
+    assert_eq!(fixture.provider.scope_resolutions.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.provider.calls.lock().unwrap(), ["socket-seed"]);
+    assert_eq!(
+        read_audit_records(&fixture.audit_path)
+            .into_iter()
+            .filter(|record| record["agentRequestId"] == request_id)
+            .count(),
+        1
+    );
+    eprintln!(
+        "{request_id}: admission={}, reason={}, elapsed_ms={}",
+        admission["outcome"],
+        record["reasonCode"],
+        began.elapsed().as_millis()
+    );
+}
+
+#[tokio::test]
+async fn http1_disconnect_with_unread_declared_body_has_bounded_admission_lifetime() {
+    disconnected_http1_body_wait(false).await;
+}
+
+#[tokio::test]
+async fn http1_disconnect_with_expect_continue_has_bounded_admission_lifetime() {
+    disconnected_http1_body_wait(true).await;
+}

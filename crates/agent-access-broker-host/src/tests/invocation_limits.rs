@@ -368,7 +368,7 @@ async fn rate_limited_invocation_returns_the_contract_body_header_and_audit() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers()[RETRY_AFTER], "12");
     let value = response_json(response).await;
-    let message = "Rate limit reached for service \"fake\": 2 requests per 1m. Retry after 12s (at 2026-09-25T14:04:00Z). The request was not executed.";
+    let message = "Rate limit reached for service \"fake\": 2 requests per 1m. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:04:00Z).";
     assert_eq!(value["reasonCode"], "rate_limited");
     assert_eq!(value["decision"], "error");
     assert_eq!(value["service"], "broker");
@@ -393,13 +393,25 @@ async fn rate_limited_invocation_returns_the_contract_body_header_and_audit() {
     assert_eq!(record["brokerRequestId"], value["brokerRequestId"]);
     assert_eq!(
         record["providerAudit"],
-        json!({"rateLimit": {
-            "limitScope": "principal",
-            "service": "fake",
-            "limit": 2,
-            "windowSeconds": 60,
-            "retryAfterSeconds": 12
-        }})
+        json!({
+            "rateLimit": {
+                "limitScope": "principal",
+                "service": "fake",
+                "limit": 2,
+                "windowSeconds": 60,
+                "retryAfterSeconds": 12,
+                "maxWaitSeconds": 0,
+                "queuedRequests": 0,
+                "deadlineKind": "rate_wait",
+                "waitedMilliseconds": 0,
+                "remainingWaitMilliseconds": 0
+            },
+            "admission": {
+                "waited": false,
+                "waitedMilliseconds": 0,
+                "outcome": "rejected"
+            }
+        })
     );
     assert!(record.get("matchedGrant").is_none());
     assert!(record.get("credentialMode").is_none());
@@ -501,11 +513,14 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
         .parse::<u64>()
         .unwrap();
     let body = assert_limited(limited, 1).await;
+    let message = body["error"]["message"].as_str().unwrap();
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains(": 1 request per 90s. Retry after ")
+        message.contains(": 1 request per 90s. This request was not queued or executed."),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("Retry after {retry_after}s (at ")),
+        "{message}"
     );
 
     let events = captured.take_events();
@@ -529,6 +544,8 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
     let token_id = record["identitySource"]["tokenId"].as_str().unwrap();
     assert_eq!(string_field(event, "tokenId"), Some(token_id));
     assert_eq!(record["providerAudit"]["rateLimit"]["windowSeconds"], 90);
+    assert_eq!(record["providerAudit"]["admission"]["waited"], false);
+    assert_eq!(record["providerAudit"]["admission"]["outcome"], "rejected");
 }
 
 #[tokio::test]

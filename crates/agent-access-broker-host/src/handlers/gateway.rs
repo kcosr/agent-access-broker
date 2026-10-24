@@ -1,7 +1,6 @@
 use crate::handlers::common::{
     CallerAdmission, PendingIdentity, acquire_caller_guard, acquire_global_concurrency_guard,
-    admit_service_invocation, check_auth_source_rate_guard, envelope_response,
-    response_retry_after_header,
+    admit_service_invocation, emit_request_limited, envelope_response, response_retry_after_header,
 };
 use crate::handlers::data::body_error_exceeds_limit;
 use crate::ingress::body::body_error_timed_out;
@@ -655,24 +654,25 @@ async fn gateway_context(
     .await
     .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
 
-    let failure_context = || GatewayIdentityFailure {
-        agent_request_id: agent_request_id.clone(),
-        broker_request_id: broker_request_id.clone(),
-        source: source.clone(),
+    let failure_context = || GovernedOperationContext {
+        admission: None,
+        operation: OperationContext {
+            agent_request_id: agent_request_id.clone(),
+            broker_request_id: broker_request_id.clone(),
+            identity: IdentityContext::anonymous(),
+            service: classified.service.clone(),
+            action: classified.action.clone(),
+            source: source.clone(),
+        },
         execution_context: execution_context.clone(),
     };
     let (pending, recheck) =
         match gateway_identity(state, &snapshot, headers, matched_gateway, &admission).await {
             Ok(pending) => pending,
             Err(error) => {
-                return Err(gateway_identity_failure(
-                    state,
-                    &snapshot,
-                    classified,
-                    failure_context(),
-                    error,
-                )
-                .await);
+                return Err(Box::new(gateway_runtime_response_with_basic_challenge(
+                    gateway_identity_failure(state, &snapshot, failure_context(), error).await,
+                )));
             }
         };
     // A membership renewal wait holds the caller's capacity.
@@ -692,14 +692,9 @@ async fn gateway_context(
     let identity = match pending.admit(state, &snapshot, headers).await {
         Ok(identity) => identity,
         Err(error) => {
-            return Err(gateway_identity_failure(
-                state,
-                &snapshot,
-                classified,
-                failure_context(),
-                error,
-            )
-            .await);
+            return Err(Box::new(gateway_runtime_response_with_basic_challenge(
+                gateway_identity_failure(state, &snapshot, failure_context(), error).await,
+            )));
         }
     };
 
@@ -708,79 +703,95 @@ async fn gateway_context(
         _global: global_permit,
         _principal: principal_permit,
     };
-    let (identity, source, execution_context, permits, rate_admission) =
-        if classified.git_request_kind.is_pack_post() {
-            let recheck_snapshot = snapshot.clone();
-            let deadline = crate::ingress::request_lifetime::RequestLifetime::current().deadline();
-            let revalidate: crate::admission::AdmissionRevalidation =
-                Box::new(move |context, guard| {
-                    Box::pin(async move {
-                        let recheck = crate::admission::identity_work(guard, recheck);
-                        let result = match deadline {
-                            Some(deadline) => match tokio::time::timeout_at(deadline.at, recheck)
-                                .await
-                            {
-                                Ok(result) if tokio::time::Instant::now() < deadline.at => result
-                                    .unwrap_or_else(|_| {
-                                        Err(gateway_identity_invalid(IdentityFailure::Invalid))
-                                    }),
-                                _ => Err(ProviderError::deny(
-                                    ReasonCode::GatewayRequestBodyDenied,
-                                    "gateway request body read timed out",
-                                )),
-                            },
-                            None => recheck.await.unwrap_or_else(|_| {
-                                Err(gateway_identity_invalid(IdentityFailure::Invalid))
-                            }),
-                        }
-                        .and_then(|identity| {
-                            if identity.principal == context.operation.identity.principal {
-                                Ok(identity)
-                            } else {
-                                Err(gateway_identity_invalid(IdentityFailure::Invalid))
-                            }
-                        });
-                        match result {
-                            Ok(identity) => Ok(identity),
-                            Err(error) => Err(Box::new(
-                                recheck_snapshot
-                                    .runtime
-                                    .governed_operation_error_response(context, error)
-                                    .await,
+    let (identity, source, execution_context, permits, rate_admission) = if classified
+        .git_request_kind
+        .is_pack_post()
+    {
+        let recheck_snapshot = snapshot.clone();
+        let recheck_state = state.clone();
+        let deadline = crate::ingress::request_lifetime::RequestLifetime::current().deadline();
+        let revalidate: crate::admission::AdmissionRevalidation =
+            Box::new(move |context, guard| {
+                Box::pin(async move {
+                    let recheck = crate::admission::identity_work(guard, recheck);
+                    let result = match deadline {
+                        Some(deadline) => match tokio::time::timeout_at(deadline.at, recheck).await
+                        {
+                            Ok(result) if tokio::time::Instant::now() < deadline.at => result
+                                .unwrap_or_else(|_| {
+                                    Err(gateway_identity_invalid(IdentityFailure::Invalid))
+                                }),
+                            _ => Err(ProviderError::deny(
+                                ReasonCode::GatewayRequestBodyDenied,
+                                "gateway request body read timed out",
                             )),
+                        },
+                        None => recheck.await.unwrap_or_else(|_| {
+                            Err(gateway_identity_invalid(IdentityFailure::Invalid))
+                        }),
+                    }
+                    .and_then(|identity| {
+                        if identity.principal == context.operation.identity.principal {
+                            Ok(identity)
+                        } else {
+                            Err(gateway_identity_invalid(IdentityFailure::Invalid))
                         }
-                    })
-                });
-            let (context, permits) = admit_service_invocation(
-                state,
-                &snapshot,
-                GovernedOperationContext {
-                    admission: None,
-                    operation: OperationContext {
-                        agent_request_id: agent_request_id.clone(),
-                        broker_request_id: broker_request_id.clone(),
-                        identity,
-                        service: classified.service.clone(),
-                        action: classified.action.clone(),
-                        source,
-                    },
-                    execution_context,
+                    });
+                    match result {
+                        Ok(identity) => Ok(identity),
+                        Err(error)
+                            if error.reason_code().standard()
+                                != Some(ReasonCode::GatewayRequestBodyDenied) =>
+                        {
+                            Err(Box::new(
+                                gateway_identity_failure(
+                                    &recheck_state,
+                                    &recheck_snapshot,
+                                    context,
+                                    error,
+                                )
+                                .await,
+                            ))
+                        }
+                        Err(error) => Err(Box::new(
+                            recheck_snapshot
+                                .runtime
+                                .governed_operation_error_response(context, error)
+                                .await,
+                        )),
+                    }
+                })
+            });
+        let (context, permits) = admit_service_invocation(
+            state,
+            &snapshot,
+            GovernedOperationContext {
+                admission: None,
+                operation: OperationContext {
+                    agent_request_id: agent_request_id.clone(),
+                    broker_request_id: broker_request_id.clone(),
+                    identity,
+                    service: classified.service.clone(),
+                    action: classified.action.clone(),
+                    source,
                 },
-                permits,
-                revalidate,
-            )
-            .await
-            .map_err(|response| Box::new(gateway_runtime_response(*response)))?;
-            (
-                context.operation.identity,
-                context.operation.source,
-                context.execution_context,
-                permits,
-                context.admission,
-            )
-        } else {
-            (identity, source, execution_context, permits, None)
-        };
+                execution_context,
+            },
+            permits,
+            revalidate,
+        )
+        .await
+        .map_err(|response| Box::new(gateway_runtime_response_with_basic_challenge(*response)))?;
+        (
+            context.operation.identity,
+            context.operation.source,
+            context.execution_context,
+            permits,
+            context.admission,
+        )
+    } else {
+        (identity, source, execution_context, permits, None)
+    };
 
     Ok(GatewayContext {
         snapshot,
@@ -851,60 +862,41 @@ async fn gateway_preclass_auth_rate_response(
     Some(gateway_runtime_response(response))
 }
 
-/// What a Git request's identity failure reports.
-struct GatewayIdentityFailure {
-    agent_request_id: String,
-    broker_request_id: String,
-    source: SourceContext,
-    execution_context: ExecutionContext,
-}
-
 /// A Git request's identity failure: the source's authentication budget is
-/// charged, then the failure is finalized with a Basic challenge.
+/// charged and the failure is audited anonymously. Keep rate admission evidence
+/// when a previously admitted identity failed its post-wait revalidation.
 async fn gateway_identity_failure(
     state: &AppState,
     snapshot: &RuntimeSnapshot,
-    classified: &ClassifiedGatewayRequest,
-    context: GatewayIdentityFailure,
+    mut context: GovernedOperationContext,
     error: ProviderError,
-) -> Box<Response<Body>> {
-    let GatewayIdentityFailure {
-        agent_request_id,
-        broker_request_id,
-        source,
-        execution_context,
-    } = context;
-    if let Err(response) = check_auth_source_rate_guard(
-        state,
-        snapshot,
-        &agent_request_id,
-        classified.service.clone(),
-        classified.action.clone(),
-        &source,
-    )
-    .await
-    {
-        return Box::new(gateway_runtime_response(*response));
+) -> BrokerResponse<serde_json::Value> {
+    context.operation.identity = IdentityContext::anonymous();
+    if let Err(error) = state.reloadable.shared_ingress.check_auth_source_rate(
+        &auth_source_key(&context.operation.source),
+        snapshot
+            .runtime
+            .limits()
+            .auth_requests_per_source_per_minute,
+    ) {
+        emit_request_limited(
+            &error,
+            &context.operation.agent_request_id,
+            &context.operation.broker_request_id,
+            &context.operation.service,
+            &context.operation.action,
+            Some(&context.operation.source),
+            None,
+        );
+        return snapshot
+            .runtime
+            .governed_admission_limit_error_response(context, error.into_provider_error())
+            .await;
     }
-    let response = snapshot
+    snapshot
         .runtime
-        .governed_operation_error_response(
-            GovernedOperationContext {
-                admission: None,
-                operation: OperationContext {
-                    agent_request_id,
-                    broker_request_id,
-                    identity: IdentityContext::anonymous(),
-                    service: classified.service.clone(),
-                    action: classified.action.clone(),
-                    source,
-                },
-                execution_context,
-            },
-            error,
-        )
-        .await;
-    Box::new(gateway_runtime_response_with_basic_challenge(response))
+        .governed_operation_error_response(context, error)
+        .await
 }
 
 fn gateway_identity_invalid(_: IdentityFailure) -> ProviderError {

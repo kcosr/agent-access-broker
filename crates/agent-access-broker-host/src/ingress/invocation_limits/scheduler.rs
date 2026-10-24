@@ -8,6 +8,8 @@ use futures_util::future::BoxFuture;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 type Key = (String, String);
 pub(crate) type InvocationLimitResolver =
@@ -52,6 +54,9 @@ pub(crate) struct InvocationAdmissionGrant {
 pub(crate) enum InvocationAdmissionError {
     RateLimited(InvocationRateLimited),
     Cancelled(AdmissionRemoval),
+    /// The request expired before its effective rate was resolved. No rate
+    /// pair or queue forecast is available for a rate-limited response.
+    Deadline(InvocationDeadlineKind),
     Resolution {
         error: ProviderError,
         waited: bool,
@@ -211,21 +216,28 @@ impl Ticket {
     }
 }
 
-struct Resolved<'a> {
+struct Resolved {
     limit: InvocationLimit,
     revision: u64,
-    lease: SettingsReadLease<'a>,
+    lease: SettingsReadLease,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResolutionPurpose {
+    NewAdmission,
+    Observation,
+    QueueWake,
 }
 
 /// A read retains its identity until commit or cancellation. Cleanup runs for
 /// successful, failed and dropped futures, without allowing revision ABA.
-struct SettingsReadLease<'a> {
-    limiter: &'a InvocationLimiter,
+struct SettingsReadLease {
+    limiter: Arc<InvocationLimiter>,
     key: Key,
     identity: Arc<()>,
 }
 
-impl Drop for SettingsReadLease<'_> {
+impl Drop for SettingsReadLease {
     fn drop(&mut self) {
         let mut state = self.limiter.state.lock().unwrap();
         if !state
@@ -319,12 +331,17 @@ impl InvocationLimiter {
     }
 
     async fn resolve(
-        &self,
+        self: &Arc<Self>,
         epoch: u64,
         key: &Key,
         resolver: &InvocationLimitResolver,
-    ) -> Result<Resolved<'_>, InvocationAdmissionError> {
+        purpose: ResolutionPurpose,
+        stopped: Option<&CancellationToken>,
+    ) -> Result<Resolved, InvocationAdmissionError> {
         loop {
+            if stopped.is_some_and(CancellationToken::is_cancelled) {
+                return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
+            }
             let (identity, revision, changing, cached, notify) = {
                 let mut state = self.state.lock().unwrap();
                 check_epoch(&state.scheduler, epoch)?;
@@ -341,7 +358,7 @@ impl InvocationLimiter {
                 )
             };
             let lease = SettingsReadLease {
-                limiter: self,
+                limiter: self.clone(),
                 key: key.clone(),
                 identity,
             };
@@ -361,18 +378,34 @@ impl InvocationLimiter {
                         .is_some_and(|s| s.changing != 0)
                 };
                 if still_changing {
-                    changed.await;
+                    tokio::select! {
+                        _ = changed => {},
+                        _ = async { match stopped { Some(token) => token.cancelled().await, None => std::future::pending::<()>().await } } => {
+                            return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
+                        }
+                    }
                 }
                 continue;
             }
-            if let Some(limit) = cached {
+            if let Some(limit) = cached
+                && purpose == ResolutionPurpose::QueueWake
+            {
                 return Ok(Resolved {
                     limit,
                     revision,
                     lease,
                 });
             }
+            if stopped.is_some_and(CancellationToken::is_cancelled) {
+                return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
+            }
             let result = resolver().await;
+            // An already-started blocking store read keeps its owner until it
+            // returns, but its abandoned result cannot publish settings or
+            // start a replacement read after a fence changes.
+            if stopped.is_some_and(CancellationToken::is_cancelled) {
+                return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
+            }
             let mut state = self.state.lock().unwrap();
             check_epoch(&state.scheduler, epoch)?;
             let settings = state
@@ -391,12 +424,68 @@ impl InvocationLimiter {
                 waited: false,
                 waited_milliseconds: 0,
             })?;
-            settings.cached = Some((epoch, limit));
+            if purpose != ResolutionPurpose::Observation {
+                // New requests retain the existing fresh-read/fail-closed
+                // contract. A changed pair discovered without a host mutation
+                // notification must also fence older concurrent reads.
+                if settings.cached.is_some_and(|(cached_epoch, cached_limit)| {
+                    cached_epoch == epoch && cached_limit != limit
+                }) {
+                    settings.revision = settings
+                        .revision
+                        .checked_add(1)
+                        .expect("settings revision exhausted");
+                    settings.notify.notify_waiters();
+                }
+                settings.cached = Some((epoch, limit));
+            }
             return Ok(Resolved {
                 limit,
-                revision,
+                revision: settings.revision,
                 lease,
             });
+        }
+    }
+
+    async fn resolve_initial(
+        self: &Arc<Self>,
+        key: &Key,
+        request: &InvocationAdmissionRequest,
+    ) -> Result<Resolved, InvocationAdmissionError> {
+        let stopped = CancellationToken::new();
+        let _stop_on_return = stopped.clone().drop_guard();
+        let limiter = self.clone();
+        let key = key.clone();
+        let epoch = request.epoch;
+        // The host resolver captures this request's original permits and
+        // admission registration. This worker can only resolve settings;
+        // dropping its result can never enqueue or grant an invocation.
+        let resolver = request.resolve_limit.clone();
+        let mut read = tokio::spawn(
+            async move {
+                limiter
+                    .resolve(
+                        epoch,
+                        &key,
+                        &resolver,
+                        ResolutionPurpose::NewAdmission,
+                        Some(&stopped),
+                    )
+                    .await
+            }
+            .instrument(tracing::Span::current()),
+        );
+        tokio::select! {
+            biased;
+            reason = request.cancellation.cancelled() => Err(cancelled(reason)),
+            _ = async { match request.hard_deadline { Some(deadline) => tokio::time::sleep_until(deadline.at).await, None => std::future::pending::<()>().await } } => {
+                Err(InvocationAdmissionError::Deadline(request.hard_deadline.expect("deadline timer enabled").kind))
+            }
+            result = &mut read => result.unwrap_or_else(|_| Err(InvocationAdmissionError::Resolution {
+                error: ProviderError::error(ReasonCode::OperationFailed, "rate settings resolution task failed"),
+                waited: false,
+                waited_milliseconds: 0,
+            })),
         }
     }
 
@@ -409,9 +498,12 @@ impl InvocationLimiter {
             if let Some(reason) = request.cancellation.reason() {
                 return Err(cancelled(reason));
             }
-            let resolved = self
-                .resolve(request.epoch, &key, &request.resolve_limit)
-                .await?;
+            if let Some(deadline) = request.hard_deadline
+                && Instant::now() >= deadline.at
+            {
+                return Err(InvocationAdmissionError::Deadline(deadline.kind));
+            }
+            let resolved = self.resolve_initial(&key, &request).await?;
             let ticket = {
                 let mut state = self.state.lock().unwrap();
                 check_epoch(&state.scheduler, request.epoch)?;
@@ -557,7 +649,13 @@ impl InvocationLimiter {
                 let Some((first, mut hard_deadline)) = pending else {
                     return;
                 };
-                let resolving = self.resolve(first.epoch, &key, &first.resolver);
+                let resolving = self.resolve(
+                    first.epoch,
+                    &key,
+                    &first.resolver,
+                    ResolutionPurpose::QueueWake,
+                    None,
+                );
                 tokio::pin!(resolving);
                 // A managed read may own a noncancelable blocking worker. Keep its
                 // resolver (and request-permit keepalive) until that read returns,
@@ -622,6 +720,7 @@ impl InvocationLimiter {
                                     )
                                 }
                                 InvocationAdmissionError::RateLimited(_) => unreachable!(),
+                                InvocationAdmissionError::Deadline(_) => unreachable!(),
                             };
                             entry.ticket.finish(Err(error));
                         }
@@ -754,8 +853,9 @@ impl InvocationLimiter {
         let Some(mut queue) = state.scheduler.queues.remove(key) else {
             return;
         };
+        let settings_changed = queue.revision != revision || queue.limit != limit;
         queue.limit = limit;
-        if queue.revision != revision {
+        if settings_changed {
             queue.dirty = true;
             queue.revision = revision;
         }
@@ -779,7 +879,9 @@ impl InvocationLimiter {
                 true
             }
         });
-        if queue.dirty {
+        // Removals cannot erase still-valid due opportunities. A settings
+        // change does invalidate them and must be reforecast before any grant.
+        if settings_changed {
             reforecast(state, key, &mut queue, limit, now, now_ns, &mut refused);
         }
         // Preserve every pre-batch opportunity until ALL due FIFO heads have
@@ -792,6 +894,7 @@ impl InvocationLimiter {
         {
             let window = window_copy(state, key, limit, now_ns);
             if window.total >= u64::from(limit.requests()) {
+                queue.dirty = true;
                 break;
             }
             let entry = queue.entries.pop_front().unwrap();
@@ -801,7 +904,7 @@ impl InvocationLimiter {
                     entry.ticket.removal(reason),
                 )));
                 queue.dirty = true;
-                break;
+                continue;
             }
             if entry
                 .ticket
@@ -810,7 +913,7 @@ impl InvocationLimiter {
             {
                 refused.push(entry.ticket);
                 queue.dirty = true;
-                break;
+                continue;
             }
             let actual_ns = duration_ns(self.clock.monotonic());
             record(state, key, limit, actual_ns);
@@ -895,7 +998,7 @@ impl InvocationLimiter {
     }
 
     pub(crate) async fn observe(
-        &self,
+        self: &Arc<Self>,
         epoch: u64,
         principal: &str,
         service: &str,
@@ -904,15 +1007,15 @@ impl InvocationLimiter {
     ) -> Result<InvocationObservation, InvocationObservationError> {
         let key = (principal.to_owned(), service.to_owned());
         loop {
-            let resolved =
-                self.resolve(epoch, &key, &resolver)
-                    .await
-                    .map_err(|error| match error {
-                        InvocationAdmissionError::Resolution { error, .. } => {
-                            InvocationObservationError::Resolution(error)
-                        }
-                        _ => InvocationObservationError::RuntimePublished,
-                    })?;
+            let resolved = self
+                .resolve(epoch, &key, &resolver, ResolutionPurpose::Observation, None)
+                .await
+                .map_err(|error| match error {
+                    InvocationAdmissionError::Resolution { error, .. } => {
+                        InvocationObservationError::Resolution(error)
+                    }
+                    _ => InvocationObservationError::RuntimePublished,
+                })?;
             let state = self.state.lock().unwrap();
             check_epoch(&state.scheduler, epoch)
                 .map_err(|_| InvocationObservationError::RuntimePublished)?;
@@ -929,7 +1032,7 @@ impl InvocationLimiter {
                 .div_ceil(NANOS_PER_SECOND);
             let observation = InvocationObservation {
                 instance_id: self.instance_id.clone(),
-                observed_at: wall.to_rfc3339(),
+                observed_at: format_retry_at(wall),
                 invocations: InvocationObservationValues {
                     requests: resolved.limit.requests(),
                     window_seconds: resolved.limit.window_seconds(),
@@ -939,7 +1042,7 @@ impl InvocationLimiter {
                     available_immediately: projection.available,
                     next_admission_after_seconds: seconds,
                     next_admission_at: if seconds == 0 {
-                        wall.to_rfc3339()
+                        format_retry_at(wall)
                     } else {
                         format_retry_at(retry_at(wall, seconds))
                     },
@@ -1136,19 +1239,12 @@ fn project(
     let mut cursor = now_ns;
     let mut queued = 0;
     if let Some(queue) = state.scheduler.queues.get(key) {
-        let mut invalidated = queue.dirty
+        let settings_changed = queue.limit != limit
             || state
                 .scheduler
                 .settings
                 .get(key)
-                .is_some_and(|settings| settings.revision != queue.revision)
-            || queue.entries.iter().any(|entry| {
-                entry.ticket.cancellation.reason().is_some()
-                    || entry
-                        .ticket
-                        .hard_deadline
-                        .is_some_and(|bound| now >= bound.at)
-            });
+                .is_some_and(|settings| settings.revision != queue.revision);
         for entry in &queue.entries {
             if entry.ticket.cancellation.reason().is_some()
                 || entry
@@ -1156,13 +1252,11 @@ fn project(
                     .hard_deadline
                     .is_some_and(|bound| now >= bound.at)
             {
-                invalidated = true;
                 continue;
             }
             let at_ns = next_capacity(&mut window, limit.requests(), cursor);
-            let valid_due = !invalidated && entry.opportunity_ns <= now_ns && at_ns == now_ns;
+            let valid_due = !settings_changed && entry.opportunity_ns <= now_ns && at_ns == now_ns;
             if !valid_due && !fits(&entry.ticket, instant_for(now, now_ns, at_ns), now) {
-                invalidated = true;
                 continue;
             }
             window.expire(at_ns);

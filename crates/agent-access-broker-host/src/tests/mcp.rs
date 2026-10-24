@@ -787,10 +787,19 @@ async fn mcp_tool_calls_are_counted_once_and_protocol_messages_are_not_counted()
     let message = envelope["error"]["message"].as_str().unwrap();
     assert!(
         message.starts_with(
-            "Rate limit reached for service \"fake\": 2 requests per 1m. Retry after "
+            "Rate limit reached for service \"fake\": 2 requests per 1m. This request was not queued or executed. "
         ),
         "{message}"
     );
+    assert!(
+        message.contains("Configured maximum wait: 0s;"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Do not resubmit requests that are already pending."),
+        "{message}"
+    );
+    assert!(message.contains("Retry after "), "{message}");
     assert_eq!(limited["result"]["content"][0]["text"], message);
     assert_eq!(envelope["service"], "broker");
     assert_eq!(envelope["action"], "request.admit");

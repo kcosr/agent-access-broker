@@ -211,6 +211,7 @@ pub(crate) async fn admit(
     let resolver_principal = principal.clone();
     let resolver_service = service.clone();
     let resolver_permits = permits.clone();
+    let resolver_registration = registration.clone();
     let request = InvocationAdmissionRequest {
         epoch,
         principal,
@@ -226,8 +227,10 @@ pub(crate) async fn admit(
             let principal = resolver_principal.clone();
             let service = resolver_service.clone();
             let permits = resolver_permits.clone();
+            let registration = resolver_registration.clone();
             Box::pin(async move {
                 let _permits = permits;
+                let _registration = registration;
                 snapshot
                     .runtime
                     .effective_invocation_limit(&principal, &service)
@@ -312,6 +315,28 @@ pub(crate) async fn admit(
                                 )
                                 .await
                         }
+                        InvocationAdmissionError::Deadline(kind) => {
+                            context.admission = Some(
+                                agent_access_core::InvocationAdmissionAudit::rejected(false, 0),
+                            );
+                            let mut response = owner_snapshot
+                                .runtime
+                                .governed_operation_error_response(
+                                    context,
+                                    unresolved_deadline_error(kind),
+                                )
+                                .await;
+                            // Preserve an audit-failure response. Body timeouts
+                            // otherwise keep the transport's existing 408.
+                            if kind == agent_access_core::InvocationDeadlineKind::Body
+                                && response.status
+                                    == agent_access_provider::ReasonCode::BodyMalformed
+                                        .http_status()
+                            {
+                                response.status = axum::http::StatusCode::REQUEST_TIMEOUT.as_u16();
+                            }
+                            response
+                        }
                         InvocationAdmissionError::Resolution {
                             error,
                             waited,
@@ -351,6 +376,25 @@ pub(crate) async fn admit(
         Ok(Err(response)) => Err(response),
         Err(_) => Err(Box::new(supervisor_failure(&failed_context))),
     }
+}
+
+fn unresolved_deadline_error(
+    kind: agent_access_core::InvocationDeadlineKind,
+) -> agent_access_provider::ProviderError {
+    use agent_access_provider::{ProviderError, ReasonCode};
+    let error = if kind == agent_access_core::InvocationDeadlineKind::Body {
+        ProviderError::deny(
+            ReasonCode::BodyMalformed,
+            "request body receive deadline exceeded",
+        )
+    } else {
+        ProviderError::error(
+            ReasonCode::OperationTimeout,
+            "operation deadline exceeded before rate settings resolved",
+        )
+    };
+    let evidence = serde_json::json!({"executionState":"not_dispatched", "retrySafe":true, "deadlineKind":kind});
+    error.with_result(evidence.clone()).with_audit(evidence)
 }
 
 fn supervisor_failure(context: &GovernedOperationContext) -> BrokerResponse<Value> {
