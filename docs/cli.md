@@ -1933,7 +1933,21 @@ See [the full workflow](gitlab-bot-provisioning.md).
 
 ## CloudBees CI
 
-`cloudbees-ci` typed commands locate a job by `CONTROLLER JOB` positionals or
+`cloudbees-ci job list CONTROLLER` enumerates one JSON page of current jobs and
+containers within effective grants. Optional `--folder` selects a canonical root;
+`--max-results` bounds the page. Pass `--page-token` from `nextPageToken` with
+unchanged inputs for both `more` and `scan_budget`, including empty pages.
+`exhausted` ends the observed stream; `upstream_window` means terminal incomplete
+coverage. This read-only command requires its own `job.list` grant, never expands
+job inspection/build access, and has no Markdown format. See
+[live job listing](providers-cloudbees-ci.md#live-job-listing).
+
+```sh
+agent-access cloudbees-ci job list team-ci --folder payments --max-results 50
+agent-access cloudbees-ci job list team-ci --folder payments --max-results 50 --page-token TOKEN
+```
+
+Other `cloudbees-ci` typed commands locate a job by `CONTROLLER JOB` positionals or
 by `--job-url URL`. `CONTROLLER` is a configured controller alias, the first
 segment of a `cloudbees_ci_job` resource value; `JOB` is the Jenkins full name
 below it, such as `payments/build-api`. Take both from `resources list` row or

@@ -45,8 +45,10 @@ so the connection needs no `token_profiles` list.
 
 CloudBees actions do not perform pre-authorization metadata lookup and do not
 require a `credentials.lookup.cloudbees_ci` credential. The Broker resolves the
-controller/job scope from the action inputs, authorizes it, and uses the selected
-service or per-user credential for execution.
+controller/job scope from the inputs for actions other than `job.list` and authorizes
+it before execution. `job.list` uses normalized search authority to authorize each
+released item and to prove descendant reachability before fetching a container.
+Both use the selected service or per-user credential for execution.
 
 The global [`network.outbound_tls`](configuration.md#networkoutbound_tls) policy
 applies to both controller API requests and artifact downloads, including
@@ -56,7 +58,7 @@ retaining public system roots.
 
 ## Resource permissions
 
-Each action resolves a single `job` scope of resource type
+Actions other than `job.list` resolve a single `job` scope of resource type
 `cloudbees_ci_job`. The value is `controller-alias/full/job/name`; for
 example, `team-ci/payments/build-api`. Input fields remain separate:
 `{"controller":"team-ci","job":"payments/build-api"}`.
@@ -72,7 +74,7 @@ Namespace matching is strictly below the selected path on complete
 slash-separated segments. Thus `namespace team-ci/payments` covers
 `team-ci/payments/build-api`, but does not cover the folder item
 `team-ci/payments` itself. It has no glob syntax. Broad selectors include
-future jobs. The broker does not inventory CI.
+future jobs. Separately granted `job.list` enumerates the live upstream inventory.
 
 Resource discovery (`resources_list`) shows the action inputs for each
 selector, so callers need not split resource values themselves:
@@ -96,7 +98,7 @@ broker service-name grammar (`^[a-z][a-z0-9_-]{0,62}$`).
 
 ## Locating jobs and builds
 
-Every action takes exactly one locator: `url`, or `controller` and `job`.
+Actions other than `job.list` take exactly one locator: `url`, or `controller` and `job`.
 `controller` is the first segment of a `cloudbees_ci_job` resource value and
 `job` is the rest; `job` never repeats the alias. Folders and multibranch
 projects contain jobs: address a job inside them, such as `payments/build-api`
@@ -140,15 +142,74 @@ records both. Log cursors bind to the numeric build: continue a
 `build.log.read` page with the returned `buildNumber`. A `cursor` with
 `buildSelector` or a permalink URL is rejected.
 
+## Live job listing
+
+`job.list` recursively lists current jobs and containers below a configured
+`controller`, optionally starting at a canonical `folder` path. The starting
+container itself is excluded. It requires its own read-only grant and supports
+service or personal Basic API tokens. Listing grants no job inspection or build
+permission; registered resources and the local `resources_list` helper keep their
+existing meaning.
+
+```sh
+agent-access cloudbees-ci job list team-ci --folder payments --max-results 50
+agent-access cloudbees-ci job list team-ci --folder payments --max-results 50 --page-token TOKEN
+```
+
+The JSON result contains `items`, released `count`, `maxResults`, `scanStatus`,
+and optional `nextPageToken`. Each item contains `controller`, canonical `job`
+and `resource`, `name`, `displayName`, `kind` (`container` or `job`), and an
+optional verified `webUrl`. Display names are limited to 4096 UTF-8 bytes, with
+`previewTruncated: true` when shortened. Nested children, builds, parameters,
+plugin classes, upstream totals and denied metadata are never returned.
+
+The provider checks complete normalized grants and token restrictions before
+releasing each item. It proves potential descendant authority before fetching
+any selected root or child container. Denied parents can be traversed to reach
+allowed children; excluded unreachable subtrees are skipped. An exact grant on
+a folder alone does not authorize its descendants. Requests use fixed Jenkins
+`api/json` tree projections and bounded child ranges; URLs are rebuilt from the
+configured controller, never followed from upstream metadata. Container identity
+comes from the exported child collection, including empty folders and multibranch
+projects, rather than guessed plugin class names.
+
+Traversal is depth first and returns one page per call. Continue both `more`
+and `scan_budget` by passing `nextPageToken` with identical inputs, including
+`maxResults`, even if `items` is empty. Neither status promises another authorized
+item. `exhausted` ends the credential's observed stream, without snapshot
+semantics; concurrent renames or edits can change later pages. `upstream_window`
+is terminal **incomplete coverage**, with no token: traversal reached 64 levels
+below the selected root, the 8192-byte stack bound, or Jenkins' signed 32-bit
+range limit. A full final child page may require an empty read to prove exhaustion.
+
+Confidential fixed-length tokens preserve the original 15-minute deadline and
+bind the caller, context, credential mode/method, configuration, normalized
+boundary, and inputs. They contain only traversal components and offsets;
+necessary denied ancestor paths remain encrypted. A configured stable signing
+key permits restart continuation. Every page is authorized again. Result-size
+limits can stop a page before consuming its next item; resume visits that item.
+An individual item too large to fit fails rather than being dropped.
+
+`providers.cloudbees_ci.listing` defaults to `max_results = 50` (range 1–100),
+`max_candidate_pages = 32`, `max_upstream_requests = 64`, and
+`max_scan_bytes = 16777216`. Work limits must be positive. All response bodies,
+including errors, count toward the byte budget; listing makes single attempts
+without hidden retries. Folder 403, 404, timeout, or malformed responses fail
+without disclosing the folder path. The host result limit
+`limits.max_upstream_response_bytes` must be at least 11491 bytes for the maximum
+token and result envelope. Each upstream JSON body remains capped at the smaller
+of that limit and 1 MiB. This action is JSON-only on CLI, invoke, and MCP.
+
 ## Actions
 
-Every action takes `url` or `controller` and `job` as described above. In the
+Actions other than `job.list` take `url` or `controller` and `job` as described above. In the
 table, *build* means one of `buildNumber` (a positive integer up to
 4294967295), `buildSelector`, or a build URL. Queue IDs are positive signed
 64-bit integers. Additional inputs are:
 
 | Action | Additional inputs | Result |
 | --- | --- | --- |
+| `job.list` | `controller`, optional `folder`, `maxResults` (1–configured maximum), `pageToken`; no job locator | One filtered page of live jobs and containers with explicit scan status. |
 | `job.view` | none | Job kind, details, buildability, and parameter names/types; never child inventory or parameter defaults. |
 | `build.list` | `maxResults` (1–50, default 20) | Recent build numbers, results, timing, and validated web URLs when available. |
 | `build.view` | build | One build's `number`/`buildNumber`, state, timing, and validated web URL when available. |
@@ -173,7 +234,7 @@ build views omit parameter values and causes. A folder or multibranch parent
 can be viewed with an exact grant, but its children are not disclosed. Queue
 reads require the returned queue ID and task `fullName` to match the requested
 ID and authorized job. A missing or mismatched queue item returns the same
-`scope_unresolved` error. No job inventory or search action is available.
+`scope_unresolved` error. Live inventory uses the separate `job.list` action.
 An artifact list above 1000 entries fails rather than silently truncating.
 Downloads from such a build also fail because complete list membership cannot
 be verified.
@@ -230,8 +291,8 @@ serves them. Only `build.trigger` requires `buildable:true`.
 
 ### Errors
 
-Input mistakes are rejected before authorization with `input_invalid`.
-`result.inputCategory` names the problem and `result.field`, when present,
+For actions other than `job.list`, input mistakes are rejected before authorization
+with `input_invalid`. `result.inputCategory` names the problem and `result.field`, when present,
 names the input:
 
 | `inputCategory` | Meaning |
@@ -251,11 +312,23 @@ names the input:
 `job_is_container` is detected by the `build.list` and selector reads, and for
 a numeric build read that the controller answers with 404 by one further
 `api/json?tree=fullName,_class,builds[number]{0,0}` read of the authorized
-job. Other upstream 404s keep `resource_not_found`; when `job` begins with
+job. Other upstream 404s on those actions keep `resource_not_found`; when `job` begins with
 `<controller>/`, the message adds that `job` must not repeat the alias, and when
 it has the `job/a/job/b` shape of a Jenkins URL path, the message suggests the
 full name `a/b` or the `url` input. That shape is not rejected up front because
 a folder can be named `job`.
+
+`job.list` returns uncategorized `input_invalid` for malformed inputs, unknown
+controllers, and invalid, expired, or changed-context continuation tokens. It does
+not supply `inputCategory` or `field`; correct the inputs or restart without the
+token. Upstream 404 and other unexpected statuses, including redirects and 5xx,
+return a generic `upstream_failed` without revealing a denied container's path or
+existence. Error bodies use the same byte caps; reaching a cap preserves the HTTP
+error classification, including a 429's bounded `Retry-After` wait. Successful
+listing pages or final results exceeding byte limits return
+`upstream_protocol_failed` with a byte-limit message and a hint to restart with a
+smaller `maxResults`. Malformed
+listing JSON, identities, and page shapes return `upstream_protocol_failed`.
 
 The provider rejects redirects for JSON reads or build triggers. Artifact
 downloads can follow up to three explicitly allowlisted redirects, with
@@ -266,8 +339,8 @@ upstream 401/403 to
 sends one (see [http-api.md](http-api.md#reason-code-table)); request and
 response-body timeouts
 return `upstream_timeout`, while other connection failures return
-`upstream_connection_failed`. Redirects on JSON actions,
-malformed JSON, unexpected content types, and oversized JSON responses are
+`upstream_connection_failed`. For actions other than `job.list`, redirects on JSON
+actions, malformed JSON, unexpected content types, and oversized JSON responses are
 `upstream_protocol_failed`, except the detailed-test preview overflow described
 above. Job identity mismatches fail as `scope_unresolved`.
 

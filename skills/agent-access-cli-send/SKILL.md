@@ -1013,13 +1013,30 @@ unaffected.
 
 ## CloudBees CI
 
+`job.list` input and continuation errors return uncategorized `input_invalid`;
+correct the inputs or restart without the token.
+
+`job.list` is a separately granted read-only live listing action. It takes a
+configured `controller`, optional canonical `folder`, `maxResults`, and
+`pageToken`; it does not need a registered job or a job URL. It recursively
+returns authorized containers and jobs, including unregistered current items,
+without granting inspection or build access. Continue `more` and `scan_budget`
+using `nextPageToken` and identical inputs, even on empty pages. `exhausted` ends
+the observed stream; `upstream_window` is terminal incomplete coverage. Tokens
+expire 15 minutes after first issuance. Results are JSON-only. Use returned
+`controller` and `job` values for later separately authorized actions.
+
+```json
+{"version":"agent-access.send.v1","kind":"invoke","service":"cloudbees_ci","action":"job.list","inputs":{"controller":"team-ci","folder":"payments","maxResults":50}}
+```
+
 Additional JSON reads are `build.pipeline.view`, `build.pipeline.node.view`,
 `build.pipeline.node.log.read`, `build.pending-inputs.list`, and
 `build.tests.details`. They take a job locator and build as below; node
 reads also take `nodeId` as a positive integer string, and test details accept
 `maxResults` (1–100). Pipeline reads require the Pipeline REST API plugin.
 
-Locate a job with `controller` and `job` or with `url`. Take `controller` and
+For actions other than `job.list`, locate a job with `controller` and `job` or with `url`. Take `controller` and
 `job` from a `resources list` entry's `inputs`; a `coverage` entry's `inputs`
 gives the `controller` for a job name the user supplies. `job` is the Jenkins
 full name below the alias, never its display name, the alias again, or `job/`
@@ -1030,7 +1047,7 @@ it without fetching it. Build-level actions take exactly one of `buildNumber`,
 `lastSuccessfulBuild`, `lastStableBuild`, `lastUnstableBuild`,
 `lastUnsuccessfulBuild`), or a build URL; use `lastFailedBuild` for "the latest
 failure" instead of listing builds. Results report the resolved `buildNumber`,
-and a log `cursor` continues with that number. `input_invalid` results name the
+and a log `cursor` continues with that number. For actions other than `job.list`, `input_invalid` results name the
 field in `result.field` and the mistake in `result.inputCategory`;
 `job_is_container` means a folder or multibranch project, so address a job or
 branch inside it.

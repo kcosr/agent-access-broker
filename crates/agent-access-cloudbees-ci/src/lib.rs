@@ -25,7 +25,9 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 mod input;
+mod listing;
 mod logs;
+pub use listing::CloudbeesCiListingConfig;
 mod reads;
 
 use input::{JobInput, input_error};
@@ -39,6 +41,7 @@ struct Controller {
     web_base: Url,
     client: UpstreamClient,
     download_client: UpstreamClient,
+    listing_client: UpstreamClient,
 }
 
 pub struct CloudbeesCiProvider {
@@ -50,6 +53,10 @@ pub struct CloudbeesCiProvider {
     log_scan_limit: u64,
     log_signer: agent_access_provider::ContinuationSigner,
     log_fingerprint: String,
+    listing: CloudbeesCiListingConfig,
+    listing_signer: agent_access_provider::ContinuationSigner,
+    listing_fingerprint: String,
+    result_limit: u64,
 }
 
 struct Reply {
@@ -71,13 +78,15 @@ impl CloudbeesCiProvider {
         Self::new(config, limits, &host)
     }
 
-    /// One request client and one download client per controller.
+    /// Request, single-attempt listing, and download clients per controller.
     pub(crate) fn new(
         config: CloudbeesCiProviderConfig,
         limits: ProviderLimits,
         clients: &dyn agent_access_provider::host::UpstreamClientFactory,
     ) -> Result<Self, ProviderBuildError> {
         let log_fingerprint = logs::fingerprint(&config, &limits);
+        let listing_fingerprint = listing::fingerprint(&config, &limits);
+        let listing = config.listing.clone();
         let log_scan_limit = config.max_log_scan_bytes;
         let mut controllers = BTreeMap::new();
         for (alias, controller) in config.controllers {
@@ -104,6 +113,7 @@ impl CloudbeesCiProvider {
                 )
             };
             let download_client = client(ClientProfile::Stream)?;
+            let listing_client = client(ClientProfile::SingleAttempt)?;
             let client = client(ClientProfile::Request)?;
             controllers.insert(
                 alias,
@@ -112,6 +122,7 @@ impl CloudbeesCiProvider {
                     web_base,
                     client,
                     download_client,
+                    listing_client,
                 },
             );
         }
@@ -120,6 +131,10 @@ impl CloudbeesCiProvider {
             log_scan_limit,
             log_signer: agent_access_provider::ContinuationSigner::new(None),
             log_fingerprint,
+            listing,
+            listing_fingerprint,
+            listing_signer: agent_access_provider::ContinuationSigner::new(None),
+            result_limit: limits.max_upstream_response_bytes,
             response_limit: limits.max_upstream_response_bytes.min(JSON_LIMIT),
             download_limit: limits.max_download_bytes,
             download_idle_timeout: Duration::from_millis(limits.streaming_idle_timeout_ms),
@@ -570,12 +585,12 @@ pub static CLOUDBEES_CI_JOB_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescr
 .with_action_inputs(input::job_action_inputs);
 
 /// CloudBees CI jobs across configured controllers.
-pub fn cloudbees_ci_descriptor(_config: &CloudbeesCiProviderConfig) -> ServiceDescriptor {
-    cloudbees_ci_service_descriptor()
+pub fn cloudbees_ci_descriptor(config: &CloudbeesCiProviderConfig) -> ServiceDescriptor {
+    cloudbees_ci_service_descriptor(&config.listing)
 }
 
 // The action set does not vary with configuration.
-fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
+fn cloudbees_ci_service_descriptor(config: &CloudbeesCiListingConfig) -> ServiceDescriptor {
     let mut actions = Vec::new();
     for (name, description) in [
         ("job.view", "View a CloudBees CI job"),
@@ -616,6 +631,7 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
         });
     }
     actions.extend(reads::descriptors());
+    actions.push(listing::descriptor(config));
     ServiceDescriptor::new("cloudbees_ci", "CloudBees CI")
         .with_resource_scopes(BTreeMap::from([(
             "job".into(),
@@ -634,6 +650,10 @@ fn cloudbees_ci_service_descriptor() -> ServiceDescriptor {
 
 impl CloudbeesCiProvider {
     fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
+        if action == "job.list" {
+            listing::parse_inputs(self, inputs)?;
+            return Ok(ResourceScopes::new());
+        }
         let input = self.parse(action, inputs)?;
         Ok(BTreeMap::from([(
             "job".into(),
@@ -667,6 +687,9 @@ impl Provider for CloudbeesCiProvider {
                 None,
                 "CloudBees CI actions take no file parts",
             ));
+        }
+        if request.action() == "job.list" {
+            return self.invoke_job_list(request).await;
         }
         let mut input = self.parse(request.action(), request.inputs())?;
         let controller = self
@@ -1267,6 +1290,8 @@ fn rate_limited(headers: &reqwest::header::HeaderMap) -> ProviderError {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudbeesCiProviderConfig {
+    #[serde(default)]
+    pub listing: CloudbeesCiListingConfig,
     #[serde(default = "logs::default_scan_limit")]
     pub max_log_scan_bytes: u64,
     pub controllers: BTreeMap<String, CloudbeesCiControllerConfig>,
@@ -1313,6 +1338,7 @@ impl BackendConfig for CloudbeesCiProviderConfig {
     }
 
     fn validate(&self, context: &ValidationContext<'_>, errors: &mut Vec<String>) {
+        self.listing.validate(context.limits, errors);
         if self.max_log_scan_bytes == 0
             || self.max_log_scan_bytes > context.limits.max_upstream_response_bytes
         {
@@ -1394,6 +1420,8 @@ impl BackendConfig for CloudbeesCiProviderConfig {
             CloudbeesCiProvider::new(self.clone(), host.limits().clone(), host.clients())?;
         provider.log_signer =
             agent_access_provider::ContinuationSigner::new(host.stable_signing_key().cloned());
+        provider.listing_signer =
+            agent_access_provider::ContinuationSigner::new(host.stable_signing_key().cloned());
         Ok(Arc::new(provider))
     }
 }
@@ -1449,6 +1477,7 @@ mod tests {
     pub(super) fn provider(server: &MockServer) -> CloudbeesCiProvider {
         CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
+                listing: Default::default(),
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
                     "team-ci".into(),
@@ -1473,6 +1502,7 @@ mod tests {
             web_base_url: None,
         };
         CloudbeesCiProviderConfig {
+            listing: Default::default(),
             max_log_scan_bytes: logs::default_scan_limit(),
             controllers: BTreeMap::from([
                 ("alpha".into(), controller("https://alpha.example/ci/")),
@@ -1504,6 +1534,11 @@ mod tests {
                     ClientProfile::Stream
                 ),
                 (
+                    alpha.clone(),
+                    "https://alpha.example/ci/".into(),
+                    ClientProfile::SingleAttempt
+                ),
+                (
                     alpha,
                     "https://alpha.example/ci/".into(),
                     ClientProfile::Request
@@ -1512,6 +1547,11 @@ mod tests {
                     beta.clone(),
                     "https://beta.example/".into(),
                     ClientProfile::Stream
+                ),
+                (
+                    beta.clone(),
+                    "https://beta.example/".into(),
+                    ClientProfile::SingleAttempt
                 ),
                 (beta, "https://beta.example/".into(), ClientProfile::Request),
             ]
@@ -1651,6 +1691,7 @@ mod tests {
     #[test]
     fn descriptor_declares_job_actions_download_io_and_basic_credentials() {
         let config = CloudbeesCiProviderConfig {
+            listing: Default::default(),
             max_log_scan_bytes: logs::default_scan_limit(),
             controllers: BTreeMap::from([(
                 "team-ci".into(),
@@ -1687,6 +1728,7 @@ mod tests {
                 "build.pending-inputs.list",
                 "build.tests.details",
                 "build.tests.download",
+                "job.list",
             ]
         );
         for action in &descriptor.actions {
@@ -1735,6 +1777,7 @@ mod tests {
         let limits = ProviderLimits::default().with_request_timeout_ms(5_000);
         let provider = CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
+                listing: Default::default(),
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
                     "team-ci".into(),
@@ -2455,6 +2498,7 @@ mod tests {
     fn provider_with_limits(origin: &str, limits: ProviderLimits) -> CloudbeesCiProvider {
         CloudbeesCiProvider::for_tests(
             CloudbeesCiProviderConfig {
+                listing: Default::default(),
                 max_log_scan_bytes: logs::default_scan_limit(),
                 controllers: BTreeMap::from([(
                     "team-ci".into(),
@@ -2988,10 +3032,16 @@ mod tests {
 
     #[test]
     fn every_action_documents_locators_and_builds() {
-        let descriptor = cloudbees_ci_service_descriptor();
+        let descriptor = cloudbees_ci_service_descriptor(&Default::default());
         descriptor.validate().unwrap();
         for action in &descriptor.actions {
             let documentation = action.documentation.as_ref().unwrap();
+            if action.action == "job.list" {
+                assert!(documentation["listing"].is_string());
+                assert_eq!(action.input_schema["required"], json!(["controller"]));
+                assert!(action.input_schema["properties"].get("job").is_none());
+                continue;
+            }
             for key in ["locator", "job", "url", "build", "errors"] {
                 assert!(documentation[key].is_string(), "{} {key}", action.action);
             }

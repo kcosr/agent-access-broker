@@ -37,10 +37,12 @@ const processGone = (pid) => {
   } catch (error) {
     return error.code === "ESRCH";
   }
+  if (process.platform !== "linux") return false;
   try {
-    return /^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
-  } catch {
-    return false;
+    return /^\d+ \(.*\) [ZX]/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch (error) {
+    // A task reaped between kill(pid, 0) and the stat read is gone.
+    return error.code === "ENOENT" || error.code === "ESRCH";
   }
 };
 const posixOnly = { skip: process.platform === "win32" ? "process groups and POSIX signals" : false };

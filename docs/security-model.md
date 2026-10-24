@@ -204,13 +204,16 @@ can restore a specific exception. Namespace selectors match descendants only.
 Jira issue search and Confluence page/blog search declare `UpstreamConstrained`
 enforcement: they derive strict exact-only boundaries, inject them into canonical
 JQL/CQL queries before upstream pagination, and validate every returned result.
-Jira `project.list`, Confluence `space.list`, and GitLab repository discovery and
-full-text searches declare `ResultFiltered`: policy authorizes bounded candidate
+Jira `project.list`, Confluence `space.list`, CloudBees CI `job.list`, and GitLab
+repository discovery and full-text searches declare `ResultFiltered`: policy authorizes bounded candidate
 retrieval with the selected execution credential, then the trusted provider
 checks current canonical resource identity against the complete boundary before
 projecting any output. Candidates outside the Broker boundary
 can enter that provider and must be discarded before responses, presentation,
-audit, object IDs, traces, or continuations. Ordinary project-scoped GitLab
+audit, object IDs, or traces. CloudBees traversal may retain only necessary
+denied ancestor components inside its fixed-length encrypted continuation; no
+candidate metadata enters that token. Other candidate metadata is discarded
+before continuations. Ordinary project-scoped GitLab
 `issue.search` and `merge_request.search` retain project lookup and authorization
 before execution. Search grants authorize only their own categories and do not
 implicitly permit object reads.
@@ -719,6 +722,8 @@ Agent Access Broker applies these controls in the request path:
   pages. A 60-second future-deadline allowance handles clock differences without
   accepting an expired token or renewing its expiry. The complete normalized
   repository boundary and any explicit confirmed project identity are bound.
+  CloudBees job-list tokens encrypt an 8192-byte padded traversal stack, including
+  necessary denied ancestor components, and bind the static credential method.
   GitLab, Jira and Confluence tokens also bind the credential method and, for
   OAuth, the connection and generation, so reconnection or a method change
   invalidates them while routine access refresh does not. Binding values never

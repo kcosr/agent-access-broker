@@ -293,7 +293,9 @@ mutation, repository, and CI commands.
 The CloudBees CI smoke is included in `cargo test`; it runs an isolated
 broker against a stubbed controller and drives typed and JSON-send downloads,
 stdio MCP output, bounded reads, build triggers, redirect rejection,
-and audit checks through the real `agent-access` binary.
+and audit checks through the real `agent-access` binary. Its `job_list` module
+uses the production provider for service/personal listing, exclusions, bounded
+continuations, CLI/send/HTTP and both MCP transports.
 
 The command import smoke (`command_import_smoke.rs`) is included in `cargo
 test`; it imports the reference command through the real `agent-access`
@@ -429,7 +431,8 @@ binary and needs `python3`, whose absence fails it.
   whenever `cloud_id` is set, and their route fingerprint (tenant host and
   cloud ID); and the credential binding of their continuations and draft
   handles, whose classic, bearer and OAuth encodings are durable.
-- `crates/agent-access-cloudbees-ci`: the CloudBees CI backend.
+- `crates/agent-access-cloudbees-ci`: the CloudBees CI backend; `listing` owns
+  bounded recursive live inventory and confidential traversal continuations.
 - `crates/agent-access-gmail`: Gmail actions, bounded mail projection and the Google OAuth dialect.
 - `crates/agent-access-mcp-upstream`: generic imported MCP HTTP discovery and
   single-attempt execution over the host transport with the pinned SDK. Its

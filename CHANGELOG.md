@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **CloudBees CI response-limit minimum.** Configurations with a CloudBees
+  provider must set `limits.max_upstream_response_bytes` to at least 11491
+  before upgrading, even if `job.list` is not granted. Smaller limits now fail
+  configuration validation and startup. See [CloudBees configuration](docs/configuration.md#providerscloudbees_ci).
+  ([#60](https://github.com/kcosr/agent-access-broker/pull/60))
+
 - **Resource type metadata API additions require consumer updates.**
   `ImportedResourceTypeDeclaration`, exposed through the host's `test-support`
   API, gains the public `supports_exclusions` field. Downstream struct literals
@@ -32,6 +38,15 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Live CloudBees CI job listing.** Separately grantable, read-only `job.list`
+  and `cloudbees-ci job list` recursively enumerate authorized jobs and folders.
+  Bounded scans preserve exclusions, confidential continuation, and explicit
+  incomplete coverage. New [`providers.cloudbees_ci.listing` configuration](docs/configuration.md#providerscloudbees_ci)
+  controls work budgets; the host result limit must be at least 11491 bytes.
+  The action is JSON-only and eligible for read-only trusted-identity paths
+  when separately granted. See [job listing](docs/providers-cloudbees-ci.md#live-job-listing).
+  ([#60](https://github.com/kcosr/agent-access-broker/pull/60))
 
 - **Live Confluence space listing.** The separately grantable, read-only
   `space.list` action and `confluence space list` command enumerate current

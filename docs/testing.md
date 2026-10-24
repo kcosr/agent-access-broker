@@ -506,6 +506,15 @@ the portal was not written for; its grant catalog comes from
 `test_support::portal_service_catalog`. After changing the conformance backend
 or the policy catalog shape, regenerate the fixture with
 `UPDATE_PORTAL_FIXTURES=1 cargo test -p agent-access-broker-host conformance_portal_fixture`.
+CloudBees `job.list` tests cover bounded depth-first traversal, denied parents and
+independent allows, exclusions, empty and multibranch containers, byte/depth/range
+limits, exact continuation offsets, stable-key restart, original expiry, and
+context/credential/input bindings. The real Broker/CLI smoke exercises service
+and personal Basic credentials through typed CLI, invoke/send, HTTP and both MCP
+transports, with metadata/audit filtering and no credential fallback. A managed
+Broker-token fixture checks action and resource ceilings against the production
+provider; it does not exercise CloudBees OAuth. No external tenant is required.
+
 CloudBees CI coverage includes deterministic provider, policy/config,
 managed-store migration, typed CLI parser/lowering, and an in-process Broker
 smoke with a stubbed controller and the real CLI. The smoke drives artifact,

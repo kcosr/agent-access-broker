@@ -158,9 +158,9 @@ Finding a specific upstream object depends on the provider:
 - If the provider has a search action, use it within your access. Jira and
   Confluence use `search`; GitLab has repository discovery and native content
   search as described below, plus single-project structured-list searches.
-- Otherwise, such as CloudBees CI, there is no inventory search: build the
-  locator from `inputs`/`coverage` and the name the user gave, or ask the user
-  for the job name or URL. Do not guess aliases or probe many variants.
+- For live containers, use the separately granted Jira/GitLab `project.list`,
+  Confluence `space.list`, or CloudBees CI `job.list`. CloudBees needs a configured
+  controller from `coverage` or the user; do not guess aliases or probe variants.
 
 Resource entries have distinct `id`, `type`, and `value` fields. For a
 resource-qualified `actions_list` call use the entry's **`value`**, such as a Jira
@@ -315,7 +315,27 @@ by GitLab.
 
 ## CloudBees CI jobs and builds
 
-CloudBees CI actions locate a job with `controller` and `job`, or with `url`:
+`job.list` input and continuation errors return uncategorized `input_invalid`;
+correct the inputs or restart without the token.
+
+`job.list` is a separately granted read-only live listing action. It takes a
+configured `controller`, optional canonical `folder`, `maxResults`, and
+`pageToken`; it does not need a registered job or a job URL. It recursively
+returns authorized containers and jobs, including unregistered current items,
+without granting inspection or build access. Continue `more` and `scan_budget`
+using `nextPageToken` and identical inputs, even on empty pages. `exhausted` ends
+the observed stream; `upstream_window` is terminal incomplete coverage. Tokens
+expire 15 minutes after first issuance. Results are JSON-only. Use returned
+`controller` and `job` values for later separately authorized actions.
+
+Call the tool whose canonical metadata is service `cloudbees_ci`, action
+`job.list`, with arguments:
+
+```json
+{"inputs":{"controller":"team-ci","folder":"payments","maxResults":50}}
+```
+
+Other CloudBees CI actions locate a job with `controller` and `job`, or with `url`:
 
 - `controller` is a configured alias, the first segment of a `cloudbees_ci_job`
   value; `job` is the Jenkins full name below it (`payments/build-api`), never
@@ -332,7 +352,8 @@ CloudBees CI actions locate a job with `controller` and `job`, or with `url`:
   permalinks include `lastBuild`, `lastSuccessfulBuild`, and
   `lastCompletedBuild`. Results report the resolved `buildNumber`; continue a
   log `cursor` with that number, not the selector.
-- `input_invalid` results carry `result.inputCategory` and `result.field`; fix
+- For actions other than `job.list`, `input_invalid` results carry
+  `result.inputCategory` and `result.field`; fix
   that field as the message says. `job_is_container` means the job is a folder
   or multibranch project: address a job or branch inside it.
 - Do not repeat a `build.trigger` whose result reports `retrySafe: false`;

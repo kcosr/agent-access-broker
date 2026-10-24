@@ -735,6 +735,13 @@ credential_mode = "service"
 # allowed_upstream_hosts = ["https://ci.example.com/team-ci/**"]
 # max_log_scan_bytes = 16777216 # default 16 MiB; must be <= limits.max_upstream_response_bytes
 #
+# [providers.cloudbees_ci.listing]
+# max_results = 50 # default; 1..100
+# max_candidate_pages = 32 # default; positive
+# max_upstream_requests = 64 # default; positive
+# max_scan_bytes = 16777216 # default 16 MiB; positive
+# Listing requires limits.max_upstream_response_bytes >= 11491.
+#
 # [providers.cloudbees_ci.controllers.team-ci]
 # base_url = "https://ci.example.com/team-ci/"
 # web_base_url = "https://ci-public.example.com/team-ci/" # optional public Jenkins root; no requests sent here
