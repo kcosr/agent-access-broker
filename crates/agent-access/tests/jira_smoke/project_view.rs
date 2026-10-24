@@ -6,8 +6,7 @@ use wiremock::{
     matchers::{method, path},
 };
 
-#[path = "../common/list_mcp.rs"]
-mod list_mcp;
+use super::list_mcp;
 
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const API: &str = "/ex/jira/11111111-2222-4333-8444-555555555555/rest/api/3";

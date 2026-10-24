@@ -1,3 +1,5 @@
+#[path = "common/list_mcp.rs"]
+mod list_mcp;
 #[path = "jira_smoke/project_list.rs"]
 mod project_listing;
 #[path = "jira_smoke/project_view.rs"]
