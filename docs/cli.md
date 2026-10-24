@@ -46,13 +46,28 @@ invocation preserves the declared sensitive-output handling.
 ```bash
 agent-access jira issue view PROJ-123 --output issue.json
 agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --output-format markdown --output issue.md
+agent-access invoke jira.attachment.download --input-json '{"issue":"PROJ-123","attachmentId":"10055"}' --output report.pdf
 agent-access spec catalog --output-format json --output catalog.json
 agent-access services list --output services.json
 ```
 
-Typed actions and `invoke` save the same successful representation they would print:
-a JSON envelope or extracted Markdown.
-JSON `send` saves the full broker envelope, including when Markdown is nested in
+Typed JSON actions and `invoke` save the same successful representation they
+would print: a JSON envelope or extracted Markdown. Generic `invoke --output`
+also saves every catalog-declared raw download, including native and imported
+command downloads. It fetches the current caller catalog once for planning,
+selects the action's declared I/O, reserves the destination, and negotiates raw
+bytes with the Broker. Missing actions or failed discovery prevent invocation.
+Explicit unsupported Markdown/content conversion options fail locally; ambient
+format defaults do not alter raw bytes.
+
+Downloads require `--output`; relative paths are allowed. `--output -` verifies
+the complete download in a temporary file before emitting only raw bytes on
+stdout, without a JSON receipt. Without `--output`, generic invoke keeps its
+ordinary JSON request and the Broker rejects a download before execution.
+A stale catalog never causes fallback execution or automatic retry: refresh
+discovery before making a separate invocation.
+
+For JSON responses, `send` saves the full broker envelope, including when Markdown is nested in
 `result`. Generic file output changes neither the selected action nor its bounds,
 pagination, or resource/action authorization. For example, saving `build.log.read`
 saves one bounded JSON chunk; `build.log.download` still retrieves the full
@@ -63,7 +78,7 @@ A successful file write prints a small JSON receipt, not the saved content:
 and is `succeeded` only for confirmed success. `output` also contains
 `path`, `size` (actual bytes written), `sha256`, `contentType`, and `sensitive`.
 Invoke receipts retain correlation/status identifiers. The `sensitive` flag
-reflects catalog-declared sensitive outputs; it does not scan content. Dedicated
+reflects catalog-declared sensitive outputs; it does not scan content. All raw
 downloads retain their broker metadata and add the same
 `output` receipt. Stdout destinations emit only the normal payload, unless a
 `send` request explicitly selects a separate metadata destination.
@@ -78,8 +93,8 @@ and retain normal error output/exit behavior. A reported directory-sync failure
 after replacement means the destination has already changed. This is local
 client output handling; no filesystem path is added to the broker request.
 
-Provider response file output supports JSON and multipart-upload actions from
-the fresh catalog. `readOnly` classifies upstream effects and does not gate file
+Provider response file output supports JSON, multipart-upload and raw-download
+actions from the fresh catalog. `readOnly` classifies upstream effects and does not gate file
 output. It also limits a [read-only identity path](managed-identity.md#read-only-paths)
 to actions classified as reads. Discovery failure prevents dispatch when catalog
 validation is required.
@@ -93,9 +108,12 @@ Do not repeat the operation to retry saving: a local output failure does not und
 an upstream change. Remote errors or uncertain execution are not reported as
 confirmed success. A failed separate metadata-file write uses
 `metadataOutput.status: "failed"` and preserves any
-successful output receipt, including a completed stdout write. Dedicated raw
-downloads check their destinations before transfer and retain their existing
-transfer-failure handling. `destinationReplaced`
+successful output receipt, including a completed stdout write. Raw
+downloads check their destinations before transfer. Body or integrity errors
+preserve a validated explicit mutation receipt; headers alone do not establish
+that a streaming read completed. After all bytes have been verified, a local
+commit or sync error can report known operation success with failed output.
+`destinationReplaced`
 records whether the failed destination was already replaced before a
 directory-sync error.
 
@@ -116,7 +134,7 @@ These flags are parsed globally. Command-specific restrictions are noted below:
 
 | Flag | Type | Meaning |
 | --- | --- | --- |
-| `--output <PATH>` | path | Save a supported action result locally; `-` preserves stdout. Dedicated downloads require this option. Rejected on unsupported commands. |
+| `--output <PATH>` | path | Save a supported action result locally; `-` uses stdout. Downloads, including generic invoke downloads, require this option. Rejected on unsupported commands. |
 | `--config <PATH>` | path | Path to the CLI config file (see config precedence below). |
 | `--url <URL>` | string | Broker base URL. |
 | `--token-value <STRING>` | string | Identity token, supplied literally. Rejected by management commands, `auth token` commands, and `auth git-credential` (see below). |

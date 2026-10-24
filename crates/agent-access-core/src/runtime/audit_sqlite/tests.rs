@@ -1332,10 +1332,11 @@ async fn a_full_database_fails_closed_and_recovers_without_a_restart() {
     let provider = Arc::new(CountingProvider::default());
     let runtime = BrokerRuntime::with_providers(config, vec![Arc::clone(&provider)]).unwrap();
     let invoke = |id: &str| {
-        runtime.invoke_owned_json(
+        runtime.invoke_owned(
             supervised_context(id),
             supervised_request(),
             InvocationControl::default(),
+            false,
         )
     };
     assert_eq!(invoke("full-warm").await.status, 200);

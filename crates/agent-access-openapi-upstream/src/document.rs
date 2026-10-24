@@ -188,6 +188,7 @@ impl Document {
             output_schema: None,
             annotations,
             read_only: false,
+            download: false,
         };
         ImportedDiscoveredTool {
             definition,

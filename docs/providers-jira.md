@@ -263,8 +263,9 @@ curl -fsS \
   "$BROKER_URL/v1/invoke/jira/issue.view"
 ```
 
-For multipart uploads and raw attachment downloads, prefer `agent-access send`
-when using the CLI because it constructs upload metadata and stream outputs.
+For multipart uploads, use `agent-access send` to construct upload metadata.
+For raw attachment downloads, use `agent-access invoke --output`, a typed download
+command, or a `send` output sink.
 Direct HTTP multipart and raw-download negotiation are specified in
 [http-api.md](http-api.md).
 

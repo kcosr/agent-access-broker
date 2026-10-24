@@ -19,6 +19,7 @@
 //! process under a supervisor that holds a permit from the command's budget
 //! until the process group is killed and reaped (`process.rs`,
 //! `supervisor.rs`, `run.rs`). Commands run on Unix only.
+mod download;
 mod manifest;
 mod mapping;
 mod response;
@@ -151,8 +152,16 @@ impl ImportedAdapter for CommandAdapter {
         })?;
         let mut compiled = BTreeMap::new();
         for action in actions {
+            if action.download && command.max_download_bytes.is_none() {
+                return Err(ProviderBuildError::invalid(
+                    "command downloads require max_download_bytes",
+                ));
+            }
             let value = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
-            if compiled.insert(action.action.clone(), value).is_some() {
+            if compiled
+                .insert(action.action.clone(), Arc::new(value))
+                .is_some()
+            {
                 return Err(ProviderBuildError::invalid("duplicate imported action"));
             }
         }
@@ -263,14 +272,19 @@ impl ImportedAdapter for CommandAdapter {
         })?;
         mapping::check_credential(definition, &manifest, import.accepted_metadata)
             .map_err(AdapterDiscoveryError::Configuration)?;
-        mapping::discovery(definition, &name, &manifest, import.accepted_metadata).map_err(
-            |reason| {
-                AdapterDiscoveryError::Failed(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    reason,
-                ))
-            },
+        mapping::discovery(
+            definition,
+            &name,
+            &manifest,
+            import.accepted_metadata,
+            command.max_download_bytes.is_some(),
         )
+        .map_err(|reason| {
+            AdapterDiscoveryError::Failed(ProviderError::error(
+                ReasonCode::UpstreamProtocolFailed,
+                reason,
+            ))
+        })
     }
 }
 
@@ -279,13 +293,13 @@ impl ImportedAdapter for CommandAdapter {
 /// approved command; core never calls [`Provider::invoke`] on it.
 struct CommandImportProvider {
     service: String,
-    actions: BTreeMap<String, CompiledAction>,
+    actions: BTreeMap<String, Arc<CompiledAction>>,
     command: CommandImportConfig,
     metadata: ImportedServiceMetadata,
 }
 
 impl CommandImportProvider {
-    fn action(&self, action: &str) -> Result<&CompiledAction, ProviderError> {
+    fn action(&self, action: &str) -> Result<&Arc<CompiledAction>, ProviderError> {
         self.actions.get(action).ok_or_else(|| {
             ProviderError::deny(ReasonCode::InputInvalid, "unknown command import action")
         })
@@ -315,6 +329,59 @@ impl CommandImportProvider {
                 violation,
                 read_only,
             )),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn download_response(
+        &self,
+        action: Arc<CompiledAction>,
+        read_only: bool,
+        mut completed: run::Completed,
+        facts: &CommandProcessFacts,
+        secrets: CommandSecrets,
+        cap: usize,
+        deadline: tokio::time::Instant,
+        lease: agent_access_core::imports::CommandBudgetLease,
+    ) -> Result<ProviderResult, ProviderError> {
+        let stdout = std::mem::take(&mut completed.stdout);
+        let service = self.service.clone();
+        let result = download::run_worker(lease, deadline, move |control| {
+            let result = download::invoke(
+                &service, &action, read_only, &stdout, &secrets, cap, control,
+            );
+            // Encoded bytes and supplied secrets never accompany the result
+            // or its delivery stream out of the blocking worker.
+            drop(stdout);
+            drop(secrets);
+            result
+        })
+        .await;
+        match result {
+            Ok(outcome) => {
+                facts.record_contract_kept();
+                outcome
+            }
+            Err(download::Error::Violation(violation)) => Err(self.violation(
+                &completed,
+                facts,
+                CommandOperation::Invoke,
+                violation,
+                read_only,
+            )),
+            Err(error) => {
+                let failure = match error {
+                    download::Error::Stopped => RunFailure::TimedOut,
+                    _ => RunFailure::Unobserved,
+                };
+                completed.log_violation(
+                    &self.service,
+                    &self.command,
+                    CommandOperation::Invoke,
+                    failure.category(),
+                );
+                Err(failure.invocation_error(read_only))
+            }
         }
     }
 
@@ -424,6 +491,30 @@ impl CommandProvider for CommandImportProvider {
             facts,
             secrets,
         } = invocation.into_run();
+        let download_limits = if action.download {
+            let cap = self
+                .command
+                .max_download_bytes
+                .and_then(|cap| usize::try_from(cap).ok());
+            let output = self
+                .command
+                .download_output_bytes()
+                .and_then(|cap| usize::try_from(cap).ok());
+            Some(cap.zip(output).ok_or_else(|| {
+                not_started(
+                    ProviderError::error(
+                        ReasonCode::OperationFailed,
+                        "command downloads require valid max_download_bytes",
+                    ),
+                    read_only,
+                )
+            })?)
+        } else {
+            None
+        };
+        // This retains the same counted unit, but cannot register another
+        // process. Capture it before the supervisor takes the unique permit.
+        let lease = download_limits.map(|_| permit.retain_budget());
         let completed = run::execute(run::Run {
             service: &self.service,
             command: &self.command,
@@ -431,13 +522,29 @@ impl CommandProvider for CommandImportProvider {
             permit,
             request: Some(request),
             deadline,
-            max_output_bytes: run::output_limit(&self.command),
+            max_output_bytes: download_limits
+                .map_or_else(|| run::output_limit(&self.command), |(_, output)| output),
             environment,
             facts: facts.clone(),
         })
         .await
         .map_err(|failure| failure.invocation_error(read_only))?;
-        self.invoke_response(action, read_only, completed, &facts, &secrets)
+        match download_limits {
+            Some((cap, _)) => {
+                self.download_response(
+                    action.clone(),
+                    read_only,
+                    completed,
+                    &facts,
+                    secrets,
+                    cap,
+                    deadline,
+                    lease.expect("download retained its budget"),
+                )
+                .await
+            }
+            None => self.invoke_response(action, read_only, completed, &facts, &secrets),
+        }
     }
 
     async fn verify_command(

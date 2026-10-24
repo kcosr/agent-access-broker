@@ -68,7 +68,11 @@ disabled_services = []
 # path = "/opt/agent-commands/ticketing/bin/ticketing-command"
 # timeout = "30s"            # default 30s, max 10m
 # max_output_bytes = 1048576 # default 1 MiB
+# max_download_bytes = 8388608 # optional; no default; enables 8 MiB file downloads
+# Requires limits.max_download_bytes >= 8388608 and
+# limits.max_upstream_response_bytes >= 11201196 (base64 envelope included).
 # max_concurrent = 4         # default 4
+# Counts processes plus download response workers; delivery holds request capacity.
 # working_dir = "/"          # default "/"
 # network = "inherit"        # default; or "none"
 # log_stderr = false         # default

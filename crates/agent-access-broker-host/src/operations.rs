@@ -1,6 +1,6 @@
 //! Supervised invocation ownership, independent of HTTP/SDK response waiters.
 use crate::handlers::data::AdmittedInvocation;
-use crate::state::AppState;
+use crate::state::{AppState, RequestPermits};
 use agent_access_core::{
     BrokerResponse, ErrorBody, InvocationControl, InvokeRequest, ResponseEnvelope,
 };
@@ -102,11 +102,12 @@ pub(crate) async fn invoke(
     admitted: AdmittedInvocation,
     request: InvokeRequest,
     control: InvocationControl,
-) -> BrokerResponse<Value> {
+    require_stream: bool,
+) -> (BrokerResponse<Value>, Option<RequestPermits>) {
     let context = admitted.context.clone();
     let failed = || supervisor_failure(&context);
     let Some(registration) = state.reloadable.operations.register(control.clone()) else {
-        return admitted
+        let response = admitted
             .snapshot
             .runtime
             .governed_operation_error_response(
@@ -117,6 +118,7 @@ pub(crate) async fn invoke(
                 ),
             )
             .await;
+        return (response, Some(admitted.permits));
     };
     let (send, receive) = oneshot::channel();
     // Registration is installed before spawning: shutdown cannot overlook a task
@@ -124,15 +126,18 @@ pub(crate) async fn invoke(
     tokio::spawn(
         async move {
             let _registration = registration;
-            let _permits = admitted.permits;
-            let invocation =
-                admitted
-                    .snapshot
-                    .runtime
-                    .invoke_owned_json(admitted.context, request, control);
+            let permits = admitted.permits;
+            let invocation = admitted.snapshot.runtime.invoke_owned(
+                admitted.context,
+                request,
+                control,
+                require_stream,
+            );
             match AssertUnwindSafe(invocation).catch_unwind().await {
                 Ok(response) => {
-                    let _ = send.send(response);
+                    // Delivery takes over admission. If the waiter is gone, this
+                    // drops both the stream (recording cancellation) and its permits.
+                    let _ = send.send((response, permits));
                 }
                 Err(_) => {
                     // Provider/preparation panics are finalized inside core. This is
@@ -146,7 +151,10 @@ pub(crate) async fn invoke(
         }
         .instrument(tracing::Span::current()),
     );
-    receive.await.unwrap_or_else(|_| failed())
+    match receive.await {
+        Ok((response, permits)) => (response, Some(permits)),
+        Err(_) => (failed(), None),
+    }
 }
 
 fn supervisor_failure(
@@ -176,6 +184,8 @@ fn supervisor_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
     #[tokio::test]
     async fn shutdown_tracks_owners_after_response_waiter_is_gone() {
         let registry = Arc::new(OperationRegistry::default());
@@ -194,10 +204,26 @@ mod tests {
     struct PausedProvider {
         invoked: tokio::sync::Semaphore,
         complete: tokio::sync::Semaphore,
+        raw: bool,
+        stream_dropped: Arc<AtomicBool>,
+        stream_polled: Arc<AtomicBool>,
     }
     impl agent_access_provider::test_support::DescribedProvider for PausedProvider {
         fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
-            agent_access_fake::fake_descriptor()
+            let mut descriptor = agent_access_fake::fake_descriptor();
+            if self.raw {
+                for action in &mut descriptor.actions {
+                    action.io = agent_access_provider::raw_download_io();
+                }
+            }
+            descriptor
+        }
+    }
+
+    struct StreamDrop(Arc<AtomicBool>);
+    impl Drop for StreamDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
         }
     }
 
@@ -221,10 +247,37 @@ mod tests {
         {
             self.invoked.add_permits(1);
             self.complete.acquire().await.unwrap().forget();
+            if self.raw {
+                let dropped = StreamDrop(Arc::clone(&self.stream_dropped));
+                let polled = Arc::clone(&self.stream_polled);
+                return Ok(
+                    agent_access_provider::ProviderResult::new(json!({"size":3})).with_stream(
+                        agent_access_provider::ProviderResultStream::from_stream(
+                            "application/octet-stream",
+                            futures_util::stream::once(async move {
+                                let _dropped = dropped;
+                                polled.store(true, Ordering::SeqCst);
+                                Ok(bytes::Bytes::from_static(b"raw"))
+                            }),
+                        ),
+                    ),
+                );
+            }
             agent_access_fake::FakeProvider.invoke(request).await
         }
     }
     async fn fixture() -> (
+        AppState,
+        AdmittedInvocation,
+        Arc<PausedProvider>,
+        tempfile::TempDir,
+    ) {
+        fixture_with_raw(false).await
+    }
+
+    async fn fixture_with_raw(
+        raw: bool,
+    ) -> (
         AppState,
         AdmittedInvocation,
         Arc<PausedProvider>,
@@ -278,9 +331,21 @@ upload_spool_dir={spool:?}
             dir.path().join("audit.jsonl").display().to_string(),
         ));
         config.limits.max_concurrent_requests = 1;
+        assert_eq!(
+            config
+                .audit
+                .as_ref()
+                .unwrap()
+                .effective_terminal_queue_capacity(&config.limits),
+            1,
+            "owned operations and their streams share one terminal audit slot"
+        );
         let provider = Arc::new(PausedProvider {
             invoked: tokio::sync::Semaphore::new(0),
             complete: tokio::sync::Semaphore::new(0),
+            raw,
+            stream_dropped: Arc::new(AtomicBool::new(false)),
+            stream_polled: Arc::new(AtomicBool::new(false)),
         });
         let runtime =
             agent_access_core::BrokerRuntime::with_providers(config, vec![provider.clone()])
@@ -360,8 +425,10 @@ upload_spool_dir={spool:?}
                 admitted,
                 request(),
                 InvocationControl::default(),
+                false,
             )
             .await
+            .0
         });
         wait_for_provider_start(&provider, &mut waiter).await;
         waiter.abort();
@@ -401,8 +468,10 @@ upload_spool_dir={spool:?}
                 admitted,
                 request(),
                 InvocationControl::default(),
+                false,
             )
             .await
+            .0
         });
         wait_for_provider_start(&provider, &mut waiter).await;
         assert_eq!(
@@ -437,5 +506,205 @@ upload_spool_dir={spool:?}
                 ["executionState"],
             "unknown"
         );
+    }
+
+    #[tokio::test]
+    async fn raw_delivery_reuses_owned_terminal_audit_capacity() {
+        let (state, admitted, provider, dir) = fixture_with_raw(true).await;
+        let control = InvocationControl::default();
+        provider.complete.add_permits(1);
+        let (mut response, permits) = tokio::time::timeout(
+            Duration::from_secs(10),
+            invoke(&state, admitted, request(), control.clone(), true),
+        )
+        .await
+        .expect("owned raw invocation completes with one terminal audit slot");
+        assert_eq!(response.status, 200, "{:?}", response.envelope);
+        assert!(control.dispatched());
+        assert!(control.completed());
+        assert!(permits.is_some());
+        assert!(
+            state
+                .reloadable
+                .shared_ingress
+                .try_global_concurrency(1)
+                .is_err(),
+            "delivery keeps the invocation's admission permit"
+        );
+        let response_stream = response.stream.take().expect("raw response has a stream");
+        let agent_access_provider::ProviderResultStreamSource::Stream(source) =
+            response_stream.source
+        else {
+            panic!("raw response must preserve streaming delivery");
+        };
+        let mut stream = source.lock().unwrap().take().unwrap();
+        let body = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut body = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            body
+        })
+        .await
+        .expect("delivery finishes with one terminal audit slot");
+        assert_eq!(body, b"raw");
+        assert!(provider.stream_polled.load(Ordering::SeqCst));
+        assert!(provider.stream_dropped.load(Ordering::SeqCst));
+        drop(stream);
+        drop(permits);
+        assert!(
+            state
+                .reloadable
+                .shared_ingress
+                .try_global_concurrency(1)
+                .is_ok()
+        );
+        state
+            .reloadable
+            .shutdown_audit(Duration::from_secs(2))
+            .await
+            .unwrap();
+        let records = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+        let records: Vec<Value> = records
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["providerAudit"]["streamPhase"], "started");
+        assert_eq!(records[1]["providerAudit"]["streamPhase"], "completed");
+        assert_eq!(records[1]["providerAudit"]["streamBytes"], 3);
+        assert_eq!(records[0]["brokerRequestId"], records[1]["brokerRequestId"]);
+    }
+
+    #[tokio::test]
+    async fn disconnected_raw_waiter_completes_owned_execution_and_cancels_undelivered_stream() {
+        let (state, admitted, provider, dir) = fixture_with_raw(true).await;
+        let control = InvocationControl::default();
+        let owner_control = control.clone();
+        let owner_state = state.clone();
+        let mut waiter = tokio::spawn(async move {
+            invoke(&owner_state, admitted, request(), owner_control, true)
+                .await
+                .0
+        });
+        wait_for_provider_start(&provider, &mut waiter).await;
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(control.dispatched());
+        assert!(!control.completed());
+        assert!(
+            state
+                .reloadable
+                .shared_ingress
+                .try_global_concurrency(1)
+                .is_err()
+        );
+        assert_eq!(
+            state
+                .reloadable
+                .operations
+                .inner
+                .lock()
+                .unwrap()
+                .controls
+                .len(),
+            1
+        );
+
+        provider.complete.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(2), state.reloadable.operations.empty())
+            .await
+            .unwrap();
+        assert!(
+            control.completed(),
+            "provider completion survives waiter loss"
+        );
+        assert!(provider.stream_dropped.load(Ordering::SeqCst));
+        assert!(
+            !provider.stream_polled.load(Ordering::SeqCst),
+            "the owner must not drain an undelivered stream"
+        );
+        assert!(
+            state
+                .reloadable
+                .shared_ingress
+                .try_global_concurrency(1)
+                .is_ok()
+        );
+        state
+            .reloadable
+            .shutdown_audit(Duration::from_secs(2))
+            .await
+            .unwrap();
+        let records = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+        let records: Vec<Value> = records
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["providerAudit"]["streamPhase"], "started");
+        assert_eq!(records[1]["providerAudit"]["streamPhase"], "canceled");
+        assert_eq!(records[1]["providerAudit"]["streamBytes"], 0);
+        assert_eq!(records[0]["brokerRequestId"], records[1]["brokerRequestId"]);
+    }
+
+    #[tokio::test]
+    async fn forced_shutdown_tracks_disconnected_raw_owner_and_finalizes_unknown() {
+        let (state, admitted, provider, dir) = fixture_with_raw(true).await;
+        let control = InvocationControl::default();
+        let owner_control = control.clone();
+        let owner_state = state.clone();
+        let mut waiter = tokio::spawn(async move {
+            invoke(&owner_state, admitted, request(), owner_control, true)
+                .await
+                .0
+        });
+        wait_for_provider_start(&provider, &mut waiter).await;
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(
+            state
+                .reloadable
+                .shared_ingress
+                .try_global_concurrency(1)
+                .is_err()
+        );
+
+        assert_eq!(
+            state
+                .reloadable
+                .shutdown_operations(Duration::from_secs(2))
+                .await,
+            0
+        );
+        assert!(control.dispatched());
+        assert!(
+            !control.completed(),
+            "shutdown must not invent provider completion"
+        );
+        assert!(!provider.stream_dropped.load(Ordering::SeqCst));
+        assert!(!provider.stream_polled.load(Ordering::SeqCst));
+        assert!(
+            state
+                .reloadable
+                .shared_ingress
+                .try_global_concurrency(1)
+                .is_ok()
+        );
+        state
+            .reloadable
+            .shutdown_audit(Duration::from_secs(2))
+            .await
+            .unwrap();
+        let records = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+        let records: Vec<Value> = records
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["decision"], "error");
+        assert_eq!(records[0]["reasonCode"], "operation_cancelled");
+        assert_eq!(records[0]["providerAudit"]["executionState"], "unknown");
+        assert!(records[0]["providerAudit"].get("streamPhase").is_none());
     }
 }

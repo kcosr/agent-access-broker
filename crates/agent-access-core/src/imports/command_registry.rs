@@ -334,24 +334,51 @@ impl Drop for PendingPermit<'_> {
     }
 }
 
-/// One unit of a command's budget. Dropping it returns the unit and grants
-/// the next waiter.
+/// One unit of a command's budget. Only this move-only permit can register a
+/// process. The unit returns after the permit and any response-worker leases
+/// have been dropped.
 pub struct CommandPermit {
+    unit: Arc<CommandBudgetUnit>,
+}
+
+struct CommandBudgetUnit {
     registry: CommandRegistry,
     command: String,
+}
+
+impl Drop for CommandBudgetUnit {
+    fn drop(&mut self) {
+        self.registry.state().release(&self.command);
+    }
+}
+
+/// Keeps a response worker in the shared command budget without registering a
+/// live process or permitting another process to start. Delivery must not retain it.
+pub struct CommandBudgetLease {
+    _unit: Arc<CommandBudgetUnit>,
 }
 
 impl CommandPermit {
     fn new(registry: CommandRegistry, command: &str) -> Self {
         Self {
-            registry,
-            command: command.to_owned(),
+            unit: Arc::new(CommandBudgetUnit {
+                registry,
+                command: command.to_owned(),
+            }),
         }
     }
 
     /// The command whose budget this permit belongs to.
     pub fn command(&self) -> &str {
-        &self.command
+        &self.unit.command
+    }
+
+    /// Retain this unit while processing captured output after the process has
+    /// exited. The lease cannot register a process and does not affect process drain.
+    pub fn retain_budget(&self) -> CommandBudgetLease {
+        CommandBudgetLease {
+            _unit: Arc::clone(&self.unit),
+        }
     }
 
     /// Registers the supervisor that will own this permit's process, before
@@ -362,7 +389,7 @@ impl CommandPermit {
         control: Arc<dyn CommandProcessControl>,
     ) -> Result<LiveCommandProcess, CommandRegistryClosed> {
         let id = {
-            let mut state = self.registry.state();
+            let mut state = self.unit.registry.state();
             if state.closed {
                 drop(state);
                 drop(self);
@@ -372,7 +399,7 @@ impl CommandPermit {
             state.supervisors.insert(
                 id,
                 LiveSupervisor {
-                    command: self.command.clone(),
+                    command: self.unit.command.clone(),
                     control,
                 },
             );
@@ -385,25 +412,19 @@ impl CommandPermit {
     }
 }
 
-impl Drop for CommandPermit {
-    fn drop(&mut self) {
-        self.registry.state().release(&self.command);
-    }
-}
-
 impl fmt::Debug for CommandPermit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandPermit")
-            .field("command", &self.command)
+            .field("command", &self.command())
             .finish()
     }
 }
 
 /// A registered supervisor and the permit it owns. The supervisor drops it
 /// only after its process group has been killed and reaped and every I/O
-/// branch has finished: the permit returns to the budget first, then the
-/// supervisor leaves the registry.
+/// branch has finished: its permit drops first, then the supervisor leaves the
+/// registry. A response worker can still retain the budget unit afterward.
 pub struct LiveCommandProcess {
     permit: Option<CommandPermit>,
     id: u64,
@@ -412,9 +433,7 @@ pub struct LiveCommandProcess {
 impl LiveCommandProcess {
     /// The command whose budget this process draws from.
     pub fn command(&self) -> &str {
-        self.permit
-            .as_ref()
-            .map_or("", |permit| permit.command.as_str())
+        self.permit.as_ref().map_or("", CommandPermit::command)
     }
 }
 
@@ -423,7 +442,7 @@ impl Drop for LiveCommandProcess {
         let Some(permit) = self.permit.take() else {
             return;
         };
-        let registry = permit.registry.clone();
+        let registry = permit.unit.registry.clone();
         drop(permit);
         registry.state().supervisors.remove(&self.id);
         registry.inner.supervisors_changed.notify_waiters();
@@ -513,6 +532,41 @@ mod tests {
         let _inventory = permit(&registry, "inventory", 1).await;
         assert_eq!(registry.in_use("ticketing"), 1);
         assert_eq!(registry.in_use("inventory"), 1);
+    }
+
+    #[tokio::test]
+    async fn response_worker_retains_budget_after_process_reaping() {
+        let registry = CommandRegistry::new();
+        let process_permit = permit(&registry, "ticketing", 1).await;
+        let worker = process_permit.retain_budget();
+        let (control, _killed) = FakeSupervisor::new();
+        let live = process_permit.register(control).unwrap();
+        let mut next = Box::pin(registry.acquire("ticketing", 1, far()));
+        assert!(next.as_mut().now_or_never().is_none());
+        drop(live);
+        assert_eq!(registry.live_processes(), 0);
+        assert_eq!(registry.in_use("ticketing"), 1);
+        assert!(next.as_mut().now_or_never().is_none());
+        drop(worker);
+        let next = next.await.unwrap();
+        assert_eq!(registry.in_use("ticketing"), 1);
+        drop(next);
+        assert_eq!(registry.in_use("ticketing"), 0);
+    }
+
+    #[tokio::test]
+    async fn retained_response_workers_are_not_live_processes_during_shutdown() {
+        let registry = CommandRegistry::new();
+        let process_permit = permit(&registry, "ticketing", 1).await;
+        let first = process_permit.retain_budget();
+        let second = process_permit.retain_budget();
+        drop(process_permit);
+        assert_eq!(registry.close_and_drain(Duration::ZERO).await, 0);
+        assert_eq!(registry.in_use("ticketing"), 1);
+        drop(first);
+        assert_eq!(registry.in_use("ticketing"), 1);
+        drop(second);
+        assert_eq!(registry.in_use("ticketing"), 0);
     }
 
     #[tokio::test(start_paused = true)]

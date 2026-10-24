@@ -40,6 +40,7 @@ async fn malformed_read_output_preserves_destination_and_exits_five() {
         Mock::given(method("GET"))
             .and(path("/v1/spec/catalog"))
             .respond_with(ResponseTemplate::new(200).set_body_json(catalog_body))
+            .expect(1)
             .mount(&broker)
             .await;
         Mock::given(method("POST"))

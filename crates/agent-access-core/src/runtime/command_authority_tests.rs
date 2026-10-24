@@ -258,6 +258,7 @@ fn project_resources(config: &mut BrokerConfig) {
 fn action(name: &str, command: Value) -> ImportedActionRecord {
     ImportedActionRecord {
         definition: ImportedActionDefinition {
+            download: false,
             action: name.into(),
             source: json!({"name": name}),
             label: None,
@@ -417,6 +418,7 @@ fn import_config() -> BrokerConfig {
     config.command_imports.insert(
         SERVICE.into(),
         CommandImportConfig {
+            max_download_bytes: None,
             path: "/usr/bin/true".into(),
             timeout: "10s".into(),
             max_output_bytes: 1024,

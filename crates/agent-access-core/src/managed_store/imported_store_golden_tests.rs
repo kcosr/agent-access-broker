@@ -176,6 +176,7 @@ fn golden_actions() -> Vec<ImportedActionWrite> {
     vec![
         ImportedActionWrite {
             definition: ImportedActionDefinition {
+                download: false,
                 action: "item.get".into(),
                 source: json!({"operationId":"get_item"}),
                 label: Some("Read item".into()),
@@ -191,6 +192,7 @@ fn golden_actions() -> Vec<ImportedActionWrite> {
         },
         ImportedActionWrite {
             definition: ImportedActionDefinition {
+                download: false,
                 action: "item.update".into(),
                 source: json!({"method":"PUT","path":"/items/{id}"}),
                 label: None,

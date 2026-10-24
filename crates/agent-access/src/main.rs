@@ -4760,7 +4760,7 @@ async fn main() -> Result<()> {
         && let Some(failure) = error.downcast_ref::<output::LocalOutputFailure>()
     {
         eprintln!("{}", serde_json::to_string_pretty(&failure.details)?);
-        std::process::exit(1);
+        std::process::exit(failure.exit_code);
     }
     result
 }
@@ -11042,27 +11042,21 @@ async fn run_send_download(
         SendOutput::File { path } => path.clone(),
         SendOutput::Stdout => PathBuf::from("-"),
     };
-    let (status, mut metadata) = match send_download_parts(
+    let (status, metadata) = send_download_parts(
         ctx,
         &service,
         &action,
         inputs,
         &output_path,
         prepared.body.take().map(output::ResponseOutput::into_file),
+        sensitive_outputs,
     )
     .await
-    {
-        Ok(response) => response,
-        Err(DownloadResponseError::Remote(error)) => {
-            return Err(DeferredCliError::remote(error).into());
-        }
-        Err(DownloadResponseError::Local(error)) => return Err(error),
-    };
+    .map_err(DownloadResponseError::into_error)?;
     if status >= 400 {
         drop(prepared);
         print_value_and_exit(status, metadata);
     }
-    metadata["output"]["sensitive"] = serde_json::json!(!sensitive_outputs.is_empty());
     match output {
         SendOutput::Stdout => {
             write_send_metadata(metadata_output, &metadata, prepared.metadata.take())?;
@@ -15639,13 +15633,9 @@ async fn run_attachment_download(
     inputs: serde_json::Value,
     output: &Path,
 ) -> Result<()> {
-    let (status, metadata) = match send_download_value(ctx, service_action, inputs, output).await {
-        Ok(response) => response,
-        Err(DownloadResponseError::Remote(error)) => {
-            return Err(DeferredCliError::remote(error).into());
-        }
-        Err(DownloadResponseError::Local(error)) => return Err(error),
-    };
+    let (status, metadata) = send_download_value(ctx, service_action, inputs, output)
+        .await
+        .map_err(DownloadResponseError::into_error)?;
     if status < 400 && output == Path::new("-") {
         std::process::exit(cli_exit_code_for_http_status(status));
     }
@@ -15934,6 +15924,7 @@ fn resolve_response_options(
 struct InvokeResponseOptions {
     options: ResponseOptions,
     rendered_body_owners: Vec<String>,
+    action_spec: Option<ApiActionSpec>,
 }
 
 async fn resolve_generic_invoke_options(
@@ -15949,16 +15940,24 @@ async fn resolve_generic_invoke_options(
     let effective_output = explicit_output
         .map(ResponseFormat::from)
         .unwrap_or(ctx.settings.output_format);
-    if !generic_invoke_needs_catalog(effective_read, effective_output) {
+    if ctx.output.is_none() && !generic_invoke_needs_catalog(effective_read, effective_output) {
         return Ok(InvokeResponseOptions::default());
     }
 
     let catalog = fetch_runtime_catalog(ctx).await.unwrap_or_else(|error| {
-        eprintln!("{error:#}");
-        std::process::exit(5);
+        exit_malformed_broker_response(format!("invalid runtime catalog: {error:#}"))
     });
     let service_action = format!("{service}.{action}");
-    let action_spec = catalog_action(&catalog, service, action).ok();
+    let action_spec = if ctx.output.is_some() {
+        Some(catalog_action(&catalog, service, action)?)
+    } else {
+        catalog_action(&catalog, service, action).ok()
+    };
+    if ctx.output.is_none()
+        && action_spec.is_some_and(|spec| matches!(spec.io, ActionIo::RawDownload { .. }))
+    {
+        anyhow::bail!("download requires --output PATH (or --output - for stdout)");
+    }
     let options = resolve_generic_response_options_from_action(
         ctx.settings,
         action_spec,
@@ -15977,6 +15976,7 @@ async fn resolve_generic_invoke_options(
     Ok(InvokeResponseOptions {
         options,
         rendered_body_owners,
+        action_spec: action_spec.cloned(),
     })
 }
 
@@ -15998,8 +15998,9 @@ fn resolve_generic_response_options_from_action(
         // defaults and let the Broker make the authoritative action decision.
         return Ok(ResponseOptions::default());
     };
-    let supports_read_content = !action_spec.read_content_formats.is_empty();
-    let supports_markdown_output = !action_spec.response_formats.is_empty();
+    let raw_download = matches!(action_spec.io, ActionIo::RawDownload { .. });
+    let supports_read_content = !raw_download && !action_spec.read_content_formats.is_empty();
+    let supports_markdown_output = !raw_download && !action_spec.response_formats.is_empty();
     resolve_response_options(
         settings,
         explicit_read,
@@ -16060,7 +16061,7 @@ async fn send_download_value(
 ) -> DownloadResponseResult<(u16, serde_json::Value)> {
     let (service, action) =
         require_cli_input(split_service_action(service_action).map_err(anyhow::Error::msg));
-    send_download_parts(ctx, &service, &action, inputs, output, None).await
+    send_download_parts(ctx, &service, &action, inputs, output, None, &[]).await
 }
 
 async fn run_invoke_parts(
@@ -16089,11 +16090,43 @@ async fn run_invoke_parts_with_options(
     let InvokeResponseOptions {
         options,
         rendered_body_owners,
+        action_spec,
     } = response_options;
-    let reserved = if ctx.output.is_some() {
-        let spec = output_action_spec(ctx, service, action)
+    let reserved = if let Some(output) = ctx.output {
+        let spec = match action_spec {
+            Some(spec) => spec,
+            None => {
+                let catalog = fetch_runtime_catalog(ctx)
+                    .await
+                    .map_err(DeferredCliError::remote)?;
+                catalog_action(&catalog, service, action)
+                    .map_err(DeferredCliError::input)?
+                    .clone()
+            }
+        };
+        if !spec.supports_io() || !spec.supports_file_output() {
+            return Err(DeferredCliError::input(
+                "this client does not support the action's input and output kind",
+            )
+            .into());
+        }
+        if matches!(spec.io, ActionIo::RawDownload { .. }) {
+            let (status, metadata) = send_download_parts(
+                ctx,
+                service,
+                action,
+                inputs,
+                output,
+                None,
+                &spec.sensitive_output_pointers,
+            )
             .await
-            .unwrap_or_else(|error| exit_cli_input_error(error));
+            .map_err(DownloadResponseError::into_error)?;
+            if status < 400 && output == Path::new("-") {
+                std::process::exit(cli_exit_code_for_http_status(status));
+            }
+            print_value_and_exit(status, metadata);
+        }
         output::ResponseOutput::prepare(ctx.output, &spec.sensitive_output_pointers)
             .map_err(DeferredCliError::input)?
     } else {
@@ -16163,14 +16196,11 @@ async fn send_download_parts(
     inputs: serde_json::Value,
     output: &Path,
     reserved: Option<output::AtomicOutput>,
+    sensitive_outputs: &[String],
 ) -> DownloadResponseResult<(u16, serde_json::Value)> {
-    let reserved = match reserved {
-        Some(reserved) => Some(reserved),
-        None => output::ResponseOutput::prepare(Some(output), &[])
-            .map_err(DeferredCliError::input)
-            .map_err(|error| DownloadResponseError::Local(error.into()))?
-            .map(output::ResponseOutput::into_file),
-    };
+    let reserved = DownloadOutput::prepare(output, reserved)
+        .map_err(DeferredCliError::input)
+        .map_err(|error| DownloadResponseError::Local(error.into()))?;
     let resolved = ctx.settings;
     let path = format!("/v1/invoke/{service}/{action}");
     let endpoint = endpoint(&resolved.url, &path)
@@ -16194,7 +16224,14 @@ async fn send_download_parts(
     .map_err(DownloadResponseError::Remote)?
     .context("broker request failed")
     .map_err(DownloadResponseError::Remote)?;
-    download_response_value(response, output, reserved).await
+    download_response_value(
+        response,
+        output,
+        reserved,
+        sensitive_outputs,
+        RESULT_METADATA_HEADER,
+    )
+    .await
 }
 
 fn http_client(settings: &ResolvedCliSettings) -> Result<reqwest::Client> {
@@ -16502,7 +16539,9 @@ async fn response_value(
 async fn download_response_value(
     mut response: reqwest::Response,
     output: &Path,
-    reserved: Option<output::AtomicOutput>,
+    reserved: DownloadOutput,
+    sensitive_outputs: &[String],
+    metadata_header: &str,
 ) -> DownloadResponseResult<(u16, serde_json::Value)> {
     reject_broker_redirect(&response).map_err(DownloadResponseError::Remote)?;
     let status = response.status().as_u16();
@@ -16514,7 +16553,7 @@ async fn download_response_value(
     }
     let metadata_header = response
         .headers()
-        .get(RESULT_METADATA_HEADER)
+        .get(metadata_header)
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
     let metadata = parse_download_metadata_header(metadata_header.as_deref()).map_err(|error| {
@@ -16536,9 +16575,25 @@ async fn download_response_value(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_owned();
-    let summary = write_download_body(&mut response, output, &metadata, reserved).await?;
-    let saved = output::FileOutput::new(output, summary.size, summary.sha256, &content_type, false);
-    Ok((status, output::receipt(&metadata, &saved, true, &[])))
+    let summary = write_download_body(
+        &mut response,
+        output,
+        &metadata,
+        reserved,
+        sensitive_outputs,
+    )
+    .await?;
+    let saved = output::FileOutput::new(
+        output,
+        summary.size,
+        summary.sha256,
+        &content_type,
+        !sensitive_outputs.is_empty(),
+    );
+    Ok((
+        status,
+        output::receipt(&metadata, &saved, true, sensitive_outputs),
+    ))
 }
 
 type DownloadResponseResult<T> = std::result::Result<T, DownloadResponseError>;
@@ -16547,6 +16602,51 @@ type DownloadResponseResult<T> = std::result::Result<T, DownloadResponseError>;
 enum DownloadResponseError {
     Remote(anyhow::Error),
     Local(anyhow::Error),
+}
+
+impl DownloadResponseError {
+    fn into_error(self) -> anyhow::Error {
+        match self {
+            Self::Remote(error) if !error.is::<output::LocalOutputFailure>() => {
+                DeferredCliError::remote(error).into()
+            }
+            Self::Remote(error) | Self::Local(error) => error,
+        }
+    }
+
+    fn with_outcome(
+        self,
+        metadata: &serde_json::Value,
+        path: &Path,
+        sensitive_outputs: &[String],
+        verified: bool,
+    ) -> Self {
+        if !verified && !output::has_mutation_outcome(metadata) {
+            return self;
+        }
+        match self {
+            Self::Remote(error) => Self::Remote(
+                output::LocalOutputFailure::download(
+                    metadata,
+                    path,
+                    error,
+                    sensitive_outputs,
+                    true,
+                )
+                .into(),
+            ),
+            Self::Local(error) => Self::Local(
+                output::LocalOutputFailure::download(
+                    metadata,
+                    path,
+                    error,
+                    sensitive_outputs,
+                    false,
+                )
+                .into(),
+            ),
+        }
+    }
 }
 
 impl std::fmt::Display for DownloadResponseError {
@@ -16569,49 +16669,82 @@ struct DownloadWriteSummary {
     sha256: String,
 }
 
+/// Reserve all local resources before dispatch, including the verified stdout spool.
+enum DownloadOutput {
+    File(output::AtomicOutput),
+    Stdout(tempfile::NamedTempFile),
+}
+
+impl DownloadOutput {
+    fn prepare(path: &Path, reserved: Option<output::AtomicOutput>) -> Result<Self> {
+        if path == Path::new("-") {
+            return Ok(Self::Stdout(
+                tempfile::NamedTempFile::new()
+                    .context("failed to create temporary download file for stdout")?,
+            ));
+        }
+        Ok(Self::File(match reserved {
+            Some(file) => file,
+            None => output::AtomicOutput::new(path)?,
+        }))
+    }
+
+    fn finish(self) -> Result<()> {
+        match self {
+            Self::File(file) => file.commit(),
+            Self::Stdout(mut file) => {
+                file.as_file_mut()
+                    .seek(SeekFrom::Start(0))
+                    .context("failed to read temporary download file for stdout")?;
+                let mut stdout = std::io::stdout().lock();
+                std::io::copy(file.as_file_mut(), &mut stdout)
+                    .context("failed to write download bytes to stdout")?;
+                stdout
+                    .flush()
+                    .context("failed to flush download bytes to stdout")
+            }
+        }
+    }
+}
+
+impl Write for DownloadOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::File(file) => file.write(bytes),
+            Self::Stdout(file) => file.write(bytes),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::File(file) => file.flush(),
+            Self::Stdout(file) => file.flush(),
+        }
+    }
+}
+
 async fn write_download_body(
     response: &mut reqwest::Response,
     output: &Path,
     metadata: &serde_json::Value,
-    reserved: Option<output::AtomicOutput>,
+    mut reserved: DownloadOutput,
+    sensitive_outputs: &[String],
+) -> DownloadResponseResult<DownloadWriteSummary> {
+    let summary = receive_download_body(response, metadata, &mut reserved)
+        .await
+        .map_err(|error| error.with_outcome(metadata, output, sensitive_outputs, false))?;
+    reserved.finish().map_err(|error| {
+        DownloadResponseError::Local(error).with_outcome(metadata, output, sensitive_outputs, true)
+    })?;
+    Ok(summary)
+}
+
+async fn receive_download_body(
+    response: &mut reqwest::Response,
+    metadata: &serde_json::Value,
+    output: &mut impl Write,
 ) -> DownloadResponseResult<DownloadWriteSummary> {
     let expectations = download_expectations(metadata).map_err(DownloadResponseError::Remote)?;
-    if output == Path::new("-") {
-        let mut file = tempfile::NamedTempFile::new()
-            .context("failed to create temporary download file for stdout")
-            .map_err(DownloadResponseError::Local)?;
-        let mut digest = Sha256::new();
-        let mut size = 0_u64;
-        while let Some(chunk) = next_download_chunk(response)
-            .await
-            .map_err(DownloadResponseError::Remote)?
-        {
-            size = next_download_size(size, chunk.len(), expectations.size)
-                .map_err(DownloadResponseError::Remote)?;
-            digest.update(&chunk);
-            file.write_all(&chunk)
-                .context("failed to write temporary download file for stdout")
-                .map_err(DownloadResponseError::Local)?;
-        }
-        let summary = DownloadWriteSummary {
-            size,
-            sha256: finalize_sha256(digest),
-        };
-        verify_download_summary(&summary, &expectations).map_err(DownloadResponseError::Remote)?;
-        file.as_file_mut()
-            .seek(SeekFrom::Start(0))
-            .context("failed to read temporary download file for stdout")
-            .map_err(DownloadResponseError::Local)?;
-        let mut stdout = std::io::stdout();
-        std::io::copy(file.as_file_mut(), &mut stdout)
-            .context("failed to write attachment bytes to stdout")
-            .map_err(DownloadResponseError::Local)?;
-        return Ok(summary);
-    }
-    let mut file = match reserved {
-        Some(reserved) => reserved,
-        None => output::AtomicOutput::new(output).map_err(DownloadResponseError::Local)?,
-    };
     let mut digest = Sha256::new();
     let mut size = 0_u64;
     while let Some(chunk) = next_download_chunk(response)
@@ -16621,8 +16754,9 @@ async fn write_download_body(
         size = next_download_size(size, chunk.len(), expectations.size)
             .map_err(DownloadResponseError::Remote)?;
         digest.update(&chunk);
-        file.write_all(&chunk)
-            .with_context(|| format!("failed to write {}", output.display()))
+        output
+            .write_all(&chunk)
+            .context("failed to write download output")
             .map_err(DownloadResponseError::Local)?;
     }
     let summary = DownloadWriteSummary {
@@ -16630,7 +16764,6 @@ async fn write_download_body(
         sha256: finalize_sha256(digest),
     };
     verify_download_summary(&summary, &expectations).map_err(DownloadResponseError::Remote)?;
-    file.commit().map_err(DownloadResponseError::Local)?;
     Ok(summary)
 }
 
@@ -16714,6 +16847,9 @@ fn finalize_sha256(digest: Sha256) -> String {
 
 fn parse_download_metadata_header(header: Option<&str>) -> Result<serde_json::Value, String> {
     let header = header.ok_or_else(|| "download metadata is missing".to_string())?;
+    if header.len() > 16_384 {
+        return Err("download metadata exceeds the header limit".into());
+    }
     let metadata_bytes = BASE64
         .decode(header)
         .map_err(|error| format!("download metadata is invalid: {error}"))?;
@@ -21264,6 +21400,56 @@ upload_spool_dir = "upload-spool"
     }
 
     #[test]
+    fn generic_download_ignores_ambient_formats_and_rejects_explicit_conversion() {
+        let settings =
+            response_test_settings(ReadContentFormat::Markdown, ResponseFormat::Markdown);
+        let mut action = response_test_action(&["markdown"], &["markdown"]);
+        action.io = agent_access_provider::raw_download_io();
+        assert_eq!(
+            resolve_generic_response_options_from_action(
+                &settings,
+                Some(&action),
+                None,
+                None,
+                "reports.download",
+            )
+            .unwrap(),
+            ResponseOptions::default()
+        );
+        for (read, output) in [
+            (Some(ReadContentFormatArg::Markdown), None),
+            (Some(ReadContentFormatArg::Text), None),
+            (None, Some(OutputFormatArg::Markdown)),
+        ] {
+            assert!(
+                resolve_generic_response_options_from_action(
+                    &settings,
+                    Some(&action),
+                    read,
+                    output,
+                    "reports.download",
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_invoke_default_options_do_not_contact_the_catalog() {
+        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        settings.url = "http://127.0.0.1:0".into();
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let plan = resolve_generic_invoke_options(&ctx, "reports", "download", None, None)
+            .await
+            .unwrap();
+        assert!(plan.action_spec.is_none());
+        assert_eq!(plan.options, ResponseOptions::default());
+    }
+
+    #[test]
     fn config_default_presence_uses_toml_semantics() {
         let section = std::env::temp_dir().join(format!(
             "agent-access-cli-defaults-section-{}.toml",
@@ -24119,6 +24305,174 @@ upload_spool_dir = "upload-spool"
                 .unwrap_err()
                 .starts_with("download metadata is not JSON")
         );
+        assert_eq!(
+            parse_download_metadata_header(Some(&"A".repeat(16_385))).unwrap_err(),
+            "download metadata exceeds the header limit"
+        );
+    }
+
+    fn download_test_metadata(mutation: bool) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "agentRequestId":"agent", "brokerRequestId":"broker", "decision":"allow",
+            "result": {"size":3, "sha256":format!("{:x}", Sha256::digest(b"abc")),
+                "contentType":"application/octet-stream", "upstreamCommand":{"warnings":["bounded warning"]}}
+        });
+        if mutation {
+            value["result"]["mutationStatus"] = serde_json::json!("applied_unverified");
+            value["result"]["retrySafe"] = serde_json::json!(false);
+            value["result"]["safeLocators"] = serde_json::json!({"secret":"private-locator"});
+        }
+        value
+    }
+
+    async fn download_test_response(
+        metadata: &serde_json::Value,
+        wire_body: &str,
+    ) -> reqwest::Response {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let header = BASE64.encode(serde_json::to_vec(metadata).unwrap());
+        let wire_body = wire_body.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 8192];
+            let mut received = 0;
+            while !request[..received]
+                .windows(4)
+                .any(|bytes| bytes == b"\r\n\r\n")
+            {
+                assert!(
+                    received < request.len(),
+                    "HTTP request headers exceed fixture limit"
+                );
+                let count = stream.read(&mut request[received..]).unwrap();
+                assert_ne!(count, 0, "HTTP request ended before the header terminator");
+                received += count;
+            }
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n{RESULT_METADATA_HEADER}: {header}\r\nTransfer-Encoding: chunked\r\n\r\n{wire_body}").unwrap();
+        });
+        let response = reqwest::Client::new()
+            .get(format!("http://{address}/download"))
+            .send()
+            .await
+            .unwrap();
+        server.join().unwrap();
+        response
+    }
+
+    #[tokio::test]
+    async fn download_failures_keep_explicit_mutation_outcomes_without_payload_or_sensitive_locators()
+     {
+        for body in [
+            "3\r\nabc\r\nZ\r\n",
+            "2\r\nab\r\n0\r\n\r\n",
+            "3\r\nxyz\r\n0\r\n\r\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("download");
+            fs::write(&path, b"original").unwrap();
+            let metadata = download_test_metadata(true);
+            let response = download_test_response(&metadata, body).await;
+            let error = download_response_value(
+                response,
+                &path,
+                DownloadOutput::prepare(&path, None).unwrap(),
+                &[
+                    "/result/upstreamCommand".into(),
+                    "/result/safeLocators/secret".into(),
+                ],
+                RESULT_METADATA_HEADER,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, DownloadResponseError::Remote(_)));
+            let error = error.into_error();
+            let failure = error.downcast_ref::<output::LocalOutputFailure>().unwrap();
+            assert_eq!(failure.exit_code, 5);
+            assert_eq!(failure.details["operationStatus"], "applied_unverified");
+            assert_eq!(failure.details["retrySafe"], false);
+            assert_eq!(failure.details["output"]["destinationReplaced"], false);
+            assert!(!failure.to_string().contains("private-locator"));
+            assert!(!failure.to_string().contains("bounded warning"));
+            assert_eq!(fs::read(&path).unwrap(), b"original");
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn verified_download_reports_commit_failure_as_local_with_known_read_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("download");
+        let reserved = DownloadOutput::prepare(&path, None).unwrap();
+        // Force replacement to fail after reservation and completed verification.
+        fs::create_dir(&path).unwrap();
+        let response =
+            download_test_response(&download_test_metadata(false), "3\r\nabc\r\n0\r\n\r\n").await;
+        let error = download_response_value(response, &path, reserved, &[], RESULT_METADATA_HEADER)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, DownloadResponseError::Local(_)));
+        let error = error.into_error();
+        let failure = error.downcast_ref::<output::LocalOutputFailure>().unwrap();
+        assert_eq!(failure.exit_code, 1);
+        assert_eq!(failure.details["operationStatus"], "succeeded");
+        assert_eq!(failure.details["output"]["destinationReplaced"], false);
+        assert!(path.is_dir());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn shared_download_receipt_retains_bounded_metadata_and_sensitivity_after_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("download");
+        let metadata = download_test_metadata(true);
+        let response = download_test_response(&metadata, "3\r\nabc\r\n0\r\n\r\n").await;
+        let (_, receipt) = download_response_value(
+            response,
+            &path,
+            DownloadOutput::prepare(&path, None).unwrap(),
+            &["/result/upstreamCommand".into()],
+            RESULT_METADATA_HEADER,
+        )
+        .await
+        .unwrap();
+        assert_eq!(receipt["operationStatus"], "applied_unverified");
+        assert_eq!(
+            receipt["result"]["upstreamCommand"]["warnings"][0],
+            "bounded warning"
+        );
+        assert_eq!(receipt["output"]["size"], 3);
+        assert_eq!(receipt["output"]["sensitive"], true);
+        assert_eq!(receipt["output"]["sha256"], metadata["result"]["sha256"]);
+        assert_eq!(receipt["output"]["contentType"], "application/octet-stream");
+        assert_eq!(fs::read(&path).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn early_download_failures_do_not_invent_read_completion_or_accept_invalid_receipts() {
+        let metadata = download_test_metadata(false);
+        for status in [None, Some("unrecognized"), Some("applied_unverified")] {
+            let mut metadata = metadata.clone();
+            if let Some(status) = status {
+                metadata["result"]["mutationStatus"] = serde_json::json!(status);
+            }
+            // No valid explicit receipt: missing retrySafe must not become evidence.
+            let error = DownloadResponseError::Local(anyhow::anyhow!("disk full"))
+                .with_outcome(&metadata, Path::new("download"), &[], false)
+                .into_error();
+            assert!(!error.is::<output::LocalOutputFailure>());
+        }
+        let error = DownloadResponseError::Local(anyhow::anyhow!("disk full"))
+            .with_outcome(
+                &download_test_metadata(true),
+                Path::new("download"),
+                &[],
+                false,
+            )
+            .into_error();
+        let failure = error.downcast_ref::<output::LocalOutputFailure>().unwrap();
+        assert_eq!(failure.exit_code, 1);
+        assert_eq!(failure.details["operationStatus"], "applied_unverified");
     }
 
     #[test]
@@ -24172,14 +24526,22 @@ upload_spool_dir = "upload-spool"
             .send()
             .await
             .unwrap();
-        let error = download_response_value(response, &output, None)
-            .await
-            .unwrap_err();
+        let error = download_response_value(
+            response,
+            &output,
+            DownloadOutput::prepare(&output, None).unwrap(),
+            &[],
+            RESULT_METADATA_HEADER,
+        )
+        .await
+        .unwrap_err();
 
         assert!(
             format!("{error:#}").contains("failed to read broker download bytes")
                 || format!("{error:#}").contains("error decoding response body")
         );
+        assert!(matches!(error, DownloadResponseError::Remote(_)));
+        assert!(!error.into_error().is::<output::LocalOutputFailure>());
         assert_eq!(fs::read(&output).unwrap(), b"original");
         server.join().unwrap();
         fs::remove_file(&output).unwrap();
@@ -24217,11 +24579,19 @@ upload_spool_dir = "upload-spool"
             .send()
             .await
             .unwrap();
-        let error = download_response_value(response, &output, None)
-            .await
-            .unwrap_err();
+        let error = download_response_value(
+            response,
+            &output,
+            DownloadOutput::prepare(&output, None).unwrap(),
+            &[],
+            RESULT_METADATA_HEADER,
+        )
+        .await
+        .unwrap_err();
 
         assert!(format!("{error:#}").contains("download size mismatch"));
+        assert!(matches!(error, DownloadResponseError::Remote(_)));
+        assert!(!error.into_error().is::<output::LocalOutputFailure>());
         assert_eq!(fs::read(&output).unwrap(), b"original");
         server.join().unwrap();
         fs::remove_file(&output).unwrap();

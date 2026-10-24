@@ -570,6 +570,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
                 {row.action || "Unsupported action"} · {row.change}
               </b>
               <OperationDetails definition={row.tool.definition} />
+              <p className="pt-prose wb-small">Output: {row.tool.definition.download ? "File download" : "JSON"}</p>
               {command && row.change !== "Unsupported" ? <ResourcesCheckedBy definition={row.tool.definition} types={types} caveatId={caveatId} /> : null}
               {row.reason ? <p className="pt-prose wb-small">{row.reason}</p> : null}
               <ScopedMcpWarningText warning={row.scopedMcpWarning} />
@@ -646,6 +647,7 @@ function ReviewRow({
         />
       </div>
       <OperationDetails definition={row.tool.definition} />
+      <p className="pt-prose wb-small">Output: {row.tool.definition.download ? "File download" : "JSON"}</p>
       {command ? <ResourcesCheckedBy definition={row.tool.definition} types={command.types} caveatId={command.caveatId} /> : null}
       <LongText text={row.tool.definition.description} subject={source} />
       {row.reason ? <p className="pt-prose wb-small">{row.reason}</p> : null}
@@ -676,6 +678,7 @@ function ReviewRow({
           {JSON.stringify(
             {
               source: row.tool.definition.source,
+              download: row.tool.definition.download === true,
               inputSchema: row.tool.definition.inputSchema,
               outputSchema: row.tool.definition.outputSchema,
               annotations: row.tool.definition.annotations

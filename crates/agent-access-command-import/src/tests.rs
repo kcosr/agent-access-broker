@@ -16,6 +16,7 @@ fn command(fixture: &str) -> CommandImportConfig {
         path: format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR")),
         timeout: "10s".into(),
         max_output_bytes: 1024 * 1024,
+        max_download_bytes: None,
         max_concurrent: 4,
         working_dir: "/".into(),
         network: Default::default(),
@@ -104,6 +105,7 @@ fn live_listing_survives_preview_and_persistence_but_requires_reviewed_read_only
         "ticketing",
         &manifest,
         None,
+        false,
     )
     .unwrap();
     let tool = &preview.tools[1];
@@ -439,6 +441,33 @@ async fn built_providers_need_the_approved_command_and_accepted_metadata() {
     assert!(build(ImportedAdapterContext::new(Some(&metadata), None)).is_err());
     assert!(build(ImportedAdapterContext::new(None, Some(&command))).is_err());
 
+    let mut downloads = actions.clone();
+    downloads[0].download = true;
+    assert!(
+        CommandAdapter
+            .build(
+                &service,
+                &downloads,
+                None,
+                &ImportedAdapterContext::new(Some(&metadata), Some(&command)),
+                &host.context()
+            )
+            .is_err()
+    );
+    let mut opted_in = command.clone();
+    opted_in.max_download_bytes = Some(1024);
+    assert!(
+        CommandAdapter
+            .build(
+                &service,
+                &downloads,
+                None,
+                &ImportedAdapterContext::new(Some(&metadata), Some(&opted_in)),
+                &host.context()
+            )
+            .is_ok()
+    );
+
     let scope = agent_access_provider::test_support::ScopeRequestFixture::new(
         "ticketing",
         "issue.view",
@@ -656,6 +685,147 @@ async fn a_missing_binary_fails_before_dispatch_without_applying_anything() {
     assert!(!format!("{error:?}").contains("missing.sh"));
     assert_eq!(registry.in_use("ticketing"), 0);
     assert_eq!(registry.live_processes(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clean_exit_before_response_deadline_expiry_keeps_unknown_write_and_null_verdict() {
+    let mut command = command("download.sh");
+    command.max_download_bytes = Some(1024);
+    let (_, _, metadata, mut actions) = command_hook(&command).await;
+    let mut definition = actions.remove(1);
+    definition.download = true;
+    definition.output_schema = None;
+    let action = Arc::new(CompiledAction::new(&definition).unwrap());
+    let provider = CommandImportProvider {
+        service: "ticketing".into(),
+        actions: BTreeMap::from([(definition.action, action.clone())]),
+        command,
+        metadata,
+    };
+    let registry = CommandRegistry::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let permit = registry.acquire("ticketing", 1, deadline).await.unwrap();
+    let lease = permit.retain_budget();
+    let facts = CommandProcessFacts::new();
+    let completed = run::execute(run::Run {
+        service: &provider.service,
+        command: &provider.command,
+        operation: CommandOperation::Invoke,
+        permit,
+        request: Some(request()),
+        deadline,
+        max_output_bytes: usize::try_from(provider.command.download_output_bytes().unwrap())
+            .unwrap(),
+        environment: Vec::new(),
+        facts: facts.clone(),
+    })
+    .await
+    .unwrap_or_else(|failure| panic!("fixture failed: {failure:?}"));
+    assert!(tokio::time::Instant::now() < deadline);
+    assert_eq!(facts.snapshot().exit_code, Some(0));
+    assert_eq!(facts.snapshot().contract_violation, None);
+    assert_eq!(registry.live_processes(), 0);
+    assert_eq!(registry.in_use("ticketing"), 1);
+    // The process has exited. Move the original clock past its deadline
+    // before response processing, without relying on wall-clock sleeps.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::time::resume();
+    let error = provider
+        .download_response(
+            action,
+            false,
+            completed,
+            &facts,
+            CommandSecrets::new(),
+            1024,
+            deadline,
+            lease,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+    assert_eq!(error.result.unwrap()["mutationStatus"], "unknown");
+    assert_eq!(facts.snapshot().contract_violation, None);
+    let next = registry
+        .acquire(
+            "ticketing",
+            1,
+            tokio::time::Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    drop(next);
+    assert_eq!(registry.in_use("ticketing"), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn download_hook_uses_its_own_stdout_cap_and_releases_budget_before_delivery() {
+    let mut command = command("download.sh");
+    command.max_output_bytes = 1;
+    command.max_download_bytes = Some(4);
+    let (_, _, metadata, mut actions) = command_hook(&command).await;
+    actions[1].download = true;
+    actions[1].output_schema = None;
+    let host = TestHost::default();
+    let service = definition(&[ImportedCredentialMode::Service]);
+    let built = CommandAdapter
+        .build(
+            &service,
+            &actions,
+            None,
+            &ImportedAdapterContext::new(Some(&metadata), Some(&command)),
+            &host.context(),
+        )
+        .unwrap();
+    let hook = built.command().unwrap();
+    let registry = CommandRegistry::new();
+    let facts = CommandProcessFacts::new();
+    let result = hook
+        .invoke_command(
+            CommandInvocation::new(
+                actions[1].action.clone(),
+                false,
+                request(),
+                tokio::time::Instant::now() + Duration::from_secs(30),
+                permit(&registry).await,
+            )
+            .with_facts(facts.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.result["size"], 4);
+    assert_eq!(
+        result.result["sha256"],
+        "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8"
+    );
+    assert_eq!(result.result["mutationStatus"], "applied_unverified");
+    assert!(result.stream.is_some());
+    assert_eq!(facts.snapshot().contract_violation, Some(false));
+    assert_eq!(registry.in_use("ticketing"), 0);
+    assert_eq!(registry.live_processes(), 0);
+
+    let facts = CommandProcessFacts::new();
+    let error = hook
+        .invoke_command(
+            CommandInvocation::new(
+                actions[0].action.clone(),
+                true,
+                request(),
+                tokio::time::Instant::now() + Duration::from_secs(30),
+                permit(&registry).await,
+            )
+            .with_facts(facts.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::OperationFailed);
+    assert_eq!(facts.snapshot().contract_violation, Some(true));
+    // Retaining the validated file does not occupy a process/worker slot.
+    assert!(result.stream.is_some());
+    assert_eq!(registry.in_use("ticketing"), 0);
 }
 
 #[cfg(unix)]

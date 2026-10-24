@@ -629,3 +629,20 @@ fn the_openapi_selection_declares_no_oauth_companion() {
     assert!(registry.import_authentication("openapi_http").is_none());
     assert_eq!(registry.oauth_dialect_ids().count(), 0);
 }
+
+#[test]
+fn accepted_download_semantics_are_rejected_by_openapi() {
+    let service = definition(
+        "https://api.example.test",
+        "https://api.example.test/openapi.json",
+    );
+    let mut definition = action(&service);
+    definition.download = true;
+    assert!(
+        OpenApiAdapter
+            .validate_action(&definition)
+            .unwrap_err()
+            .contains("download")
+    );
+    assert!(CompiledAction::new(&definition).is_err());
+}

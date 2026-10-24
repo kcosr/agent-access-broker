@@ -262,11 +262,12 @@ upload_spool_dir={spool:?}
             execution_context: ExecutionContext::new("default").unwrap(),
         };
         let response = runtime
-            .invoke_owned_json(
+            .invoke_owned(
                 context,
                 serde_json::from_value(json!({"inputs":{"project":"TEST","message":"hello"}}))
                     .unwrap(),
                 control.clone(),
+                false,
             )
             .await;
         assert!(control.dispatched());

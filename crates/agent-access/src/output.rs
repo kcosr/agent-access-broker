@@ -147,10 +147,11 @@ impl std::fmt::Display for DestinationReplaced {
 
 impl std::error::Error for DestinationReplaced {}
 
-/// Records a known successful operation without retaining its response payload.
+/// Records a known operation outcome without retaining its response payload.
 #[derive(Debug)]
 pub(crate) struct LocalOutputFailure {
     pub(crate) details: Value,
+    pub(crate) exit_code: i32,
 }
 
 impl LocalOutputFailure {
@@ -185,6 +186,21 @@ impl LocalOutputFailure {
         Self::new(fields, path, error, true)
     }
 
+    /// A download can fail remotely after its mutation was acknowledged.
+    pub(crate) fn download(
+        envelope: &Value,
+        path: &Path,
+        error: anyhow::Error,
+        sensitive_outputs: &[String],
+        remote: bool,
+    ) -> Self {
+        let mut failure = Self::response(envelope, path, error, sensitive_outputs);
+        if remote {
+            failure.exit_code = 5;
+        }
+        failure
+    }
+
     fn new(
         mut details: Map<String, Value>,
         path: &Path,
@@ -217,8 +233,24 @@ impl LocalOutputFailure {
         }));
         Self {
             details: Value::Object(details),
+            exit_code: 1,
         }
     }
+}
+
+/// Headers alone cannot establish that a streaming read completed. Only a
+/// recognized explicit mutation outcome can survive an incomplete download.
+pub(crate) fn has_mutation_outcome(envelope: &Value) -> bool {
+    let status = envelope
+        .pointer("/result/mutationStatus")
+        .and_then(Value::as_str);
+    matches!(
+        status,
+        Some("applied" | "applied_verified" | "applied_unverified" | "not_applied" | "unknown")
+    ) && envelope
+        .pointer("/result/retrySafe")
+        .and_then(Value::as_bool)
+        == Some(status == Some("not_applied"))
 }
 
 impl std::fmt::Display for LocalOutputFailure {

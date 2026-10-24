@@ -246,6 +246,9 @@ pub(super) fn descriptor(
             action.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
                 name: adapter.and_then(|adapter| adapter.scoped_mcp_name(definition).ok()),
             };
+            if definition.download {
+                action = action.raw_download();
+            }
             action.read_only = definition.read_only;
             action.sensitive_output_pointers = sensitive_output_pointers.clone();
             action

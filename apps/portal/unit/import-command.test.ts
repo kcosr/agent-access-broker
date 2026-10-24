@@ -470,3 +470,16 @@ describe("resource type exclusion capability review", () => {
     expect(restricted).not.toContain('href="/ui/admin/catalog');
   });
 });
+
+
+test("command review discloses download output independently of effect classification", () => {
+  const data = commandDiscovered();
+  const tool = data.preview!.manifest.tools[0];
+  tool.definition = { ...tool.definition, download: true };
+  const html = renderReview(data);
+  expect(html).toContain("Output: File download");
+  expect(html).toContain("Output: JSON");
+  expect(html).toContain("&quot;download&quot;: true");
+  expect(html).toContain("Write-capable / unconfirmed");
+  expect(importReviewRows(data)[0].readOnly).toBe(false);
+});

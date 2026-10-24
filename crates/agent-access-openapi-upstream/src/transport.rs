@@ -21,6 +21,9 @@ pub(crate) struct CompiledAction {
 }
 impl CompiledAction {
     pub fn new(definition: &ImportedActionDefinition) -> Result<Self, String> {
+        if definition.download {
+            return Err("OpenAPI imports do not support download actions".into());
+        }
         if serde_json::to_vec(definition)
             .map_err(|_| "invalid action")?
             .len()

@@ -2374,6 +2374,20 @@ terminal audit record is `failed` with `decision = error`, the reason, and the
 delivered byte count and digest. The CLI and stdio MCP report such a download as
 failed and leave an existing destination unchanged.
 
+Accepted command actions with `download: true` use the same raw transport after
+the adapter validates a complete base64 JSON response and decodes it in memory.
+An explicit per-command `max_download_bytes` enables this capability and bounds
+decoded bytes; the derived envelope cap must also fit the global upstream limit.
+The shared command budget spans the process and response worker within the
+original deadline, then releases before delivery. Independently owned command
+invocations retain shutdown visibility if their HTTP waiter disconnects.
+Global/principal request permits remain held through the response body and each
+yielded byte owner, bounding retained files even if a chunk outlives the body.
+The common host path caps the complete encoded metadata header at 16,384 bytes,
+returns JSON on refusal and cancels the unused stream. These transport rules also
+apply to native downloads. See [command download bounds](command-imports.md#download-bounds)
+and [HTTP negotiation](http-api.md#raw-download-negotiation).
+
 All numeric limits must be non-zero; invocation limits accept 1 to 1,000,000
 requests and windows from `1s` to `1d`.
 

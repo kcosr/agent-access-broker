@@ -757,6 +757,7 @@ pub struct agent_access_core::imports::definition::ImportedActionDefinition
 pub agent_access_core::imports::definition::ImportedActionDefinition::action: alloc::string::String
 pub agent_access_core::imports::definition::ImportedActionDefinition::annotations: serde_json::value::Value
 pub agent_access_core::imports::definition::ImportedActionDefinition::description: alloc::string::String
+pub agent_access_core::imports::definition::ImportedActionDefinition::download: bool
 pub agent_access_core::imports::definition::ImportedActionDefinition::input_schema: serde_json::value::Value
 pub agent_access_core::imports::definition::ImportedActionDefinition::label: core::option::Option<alloc::string::String>
 pub agent_access_core::imports::definition::ImportedActionDefinition::output_schema: core::option::Option<serde_json::value::Value>

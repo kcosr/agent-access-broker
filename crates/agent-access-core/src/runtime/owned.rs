@@ -1,4 +1,4 @@
-//! Owned JSON invocation phases. Preparation never finalizes; finalization is
+//! Owned invocation phases. Preparation never finalizes; finalization is
 //! deliberately outside cancellation/deadline selection so an audit cannot be
 //! abandoned or repeated after its write has been queued.
 use super::*;
@@ -97,11 +97,12 @@ fn interrupted_error(
 impl BrokerRuntime {
     /// Run within a supervisor that owns this future independently of HTTP/SDK
     /// response delivery. Caller cancellation must use `control`, never drop it.
-    pub async fn invoke_owned_json(
+    pub async fn invoke_owned(
         &self,
         context: GovernedOperationContext,
         request: InvokeRequest,
         control: InvocationControl,
+        require_stream: bool,
     ) -> BrokerResponse<Value> {
         let fallback = FinalizeContext {
             search_authorization: None,
@@ -173,7 +174,7 @@ impl BrokerRuntime {
                     let execution =
                         AssertUnwindSafe(agent_access_provider::host::with_provider_finalization(
                             finalization.clone(),
-                            self.execute_prepared_invoke(prepared, body_parts, false),
+                            self.execute_prepared_invoke(prepared, body_parts, require_stream),
                         ))
                         .catch_unwind();
                     tokio::pin!(execution);
@@ -428,7 +429,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -455,7 +456,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -486,7 +487,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -510,7 +511,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -536,7 +537,7 @@ mod tests {
                 let control = control.clone();
                 tokio::spawn(async move {
                     runtime
-                        .invoke_owned_json(context(), request(), control)
+                        .invoke_owned(context(), request(), control, false)
                         .await
                 })
             };
@@ -585,7 +586,7 @@ mod tests {
                 let control = control.clone();
                 tokio::spawn(async move {
                     runtime
-                        .invoke_owned_json(context(), request(), control)
+                        .invoke_owned(context(), request(), control, false)
                         .await
                 })
             };
@@ -628,7 +629,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -663,7 +664,7 @@ mod tests {
         let (runtime, dir) = fixture(provider.clone());
         runtime.local_state_readiness().await.unwrap();
         let response = runtime
-            .invoke_owned_json(context(), request(), InvocationControl::default())
+            .invoke_owned(context(), request(), InvocationControl::default(), false)
             .await;
         assert!(
             response.envelope.result.is_some(),
@@ -686,7 +687,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         let response = runtime
-            .invoke_owned_json(context(), request(), InvocationControl::default())
+            .invoke_owned(context(), request(), InvocationControl::default(), false)
             .await;
         assert_eq!(response.status, 503);
         assert_eq!(response.envelope.service, "broker");
@@ -707,7 +708,7 @@ mod tests {
         let (runtime, dir) = fixture(provider.clone());
         let operation = tokio::spawn(async move {
             runtime
-                .invoke_owned_json(context(), request(), InvocationControl::default())
+                .invoke_owned(context(), request(), InvocationControl::default(), false)
                 .await
         });
         entered(&provider.invoked).await;

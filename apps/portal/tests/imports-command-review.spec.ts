@@ -454,3 +454,46 @@ test("a transactional exclusion blocker identifies group memberships to remove",
   await expect(alert.getByRole("link", { name: "ops", exact: true })).toHaveAttribute("href", "/ui/admin/catalog/resources?item=ops");
   expect(api.errors).toEqual([]);
 });
+
+
+for (const [before, after] of [[false, true], [true, false]] as const) {
+  test(`download output changes from ${before} to ${after} require approval with grant confirmation`, async ({ page }) => {
+    const data = commandRefreshed();
+    const prior = data.service.actions[0];
+    const next = data.preview!.manifest.tools[0];
+    data.service.actions = [{ ...prior, status: "quarantined", definition: { ...prior.definition, download: before } }];
+    data.preview!.manifest.tools = [{ ...next, definition: { ...next.definition, download: after } }];
+    data.resourceTypeChanges = [];
+    data.affectedGrants = ["grant-download"];
+    data.affectedGrantsByAction = { "issue.view": ["grant-download"] };
+    const accepted = commandAccepted();
+    accepted.service.actions = [{ ...prior, definition: { ...prior.definition, download: after } }];
+    const api = await mockCommandImportApi(page, data);
+    api.acceptances.push({ result: accepted });
+    await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+    await page.getByRole("button", { name: "Review preview", exact: true }).click();
+    const dialog = review(page);
+    const row = actionRow(page, "issue.view");
+    await expect(row).toContainText("Changed");
+    await expect(row).toContainText(`Output: ${after ? "File download" : "JSON"}`);
+    await expect(row.getByRole("checkbox", { name: "Accept issue.view", exact: true })).not.toBeChecked();
+    await expect(row.getByLabel("Effects for issue.view", { exact: true })).toHaveValue("write");
+    await row.getByText("Schemas and source", { exact: true }).click();
+    await expect(row.locator("pre")).toContainText(`"download": ${after}`);
+    await row.getByRole("checkbox", { name: "Accept issue.view", exact: true }).check();
+    await row.getByLabel("Effects for issue.view", { exact: true }).selectOption("read");
+    const accept = dialog.getByRole("button", { name: "Accept selected actions", exact: true });
+    await expect(dialog).toContainText("grant-download");
+    await expect(accept).toBeDisabled();
+    await dialog.getByRole("checkbox", { name: "I reviewed the affected grants and approve these action changes.", exact: true }).check();
+    await accept.click();
+    await expect(dialog).toHaveCount(0);
+    expect(api.accepted[0]).toMatchObject({
+      selections: [{ source: { name: "issue.view" }, action: "issue.view", readOnly: true }],
+      confirmAffectedGrants: true
+    });
+    // The server reconstructs the output contract from the persisted preview.
+    expect(JSON.stringify(api.accepted[0])).not.toContain("download");
+    expect(api.errors).toEqual([]);
+  });
+}

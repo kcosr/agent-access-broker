@@ -153,6 +153,9 @@ pub struct ImportedActionDefinition {
     /// Reviewed classification; never inferred from a source tool name.
     #[serde(default)]
     pub read_only: bool,
+    /// File-download output semantics, independent of the reviewed effect class.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub download: bool,
 }
 
 /// The prefix of a command import's endpoint, `command:<name>`.
@@ -795,6 +798,25 @@ mod tests {
             json!({"kind":"stdin"})
         );
     }
+    #[test]
+    fn download_semantics_round_trip_without_changing_ordinary_action_bytes() {
+        let original = r#"{"action":"report.read","source":{"name":"report.read"},"description":"Read report","inputSchema":{"type":"object"},"annotations":{},"readOnly":false}"#;
+        let mut action: ImportedActionDefinition = serde_json::from_str(original).unwrap();
+        assert!(!action.download);
+        assert_eq!(serde_json::to_string(&action).unwrap(), original);
+        action.download = true;
+        let encoded = serde_json::to_string(&action).unwrap();
+        assert_eq!(
+            encoded,
+            format!("{},\"download\":true}}", &original[..original.len() - 1])
+        );
+        let loaded: ImportedActionDefinition = serde_json::from_str(&encoded).unwrap();
+        assert!(loaded.download);
+        loaded.validate("reports").unwrap();
+        action.download = false;
+        assert_eq!(serde_json::to_string(&action).unwrap(), original);
+    }
+
     #[test]
     fn schema_compilation_stays_local_and_honors_explicit_dialects() {
         validate_import_schema(&json!({"type":"object","$defs":{"query":{"type":"string"}},"properties":{"query":{"$ref":"#/$defs/query"}}})).unwrap();

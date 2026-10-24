@@ -200,6 +200,7 @@ pub(crate) fn discovery(
     command: &str,
     manifest: &Manifest,
     accepted: Option<&ImportedServiceMetadata>,
+    download_enabled: bool,
 ) -> Result<ImportedDiscovery, String> {
     let bound = definition
         .execution_bindings
@@ -213,7 +214,8 @@ pub(crate) fn discovery(
             let (definition, unsupported_reason) = match &action.declaration {
                 Ok(declaration) => {
                     let definition = action_definition(&action.name, declaration);
-                    let reason = supported(&definition, declaration, &bound).err();
+                    let reason =
+                        supported(&definition, declaration, &bound, download_enabled).err();
                     (definition, reason)
                 }
                 Err(reason) => (
@@ -226,6 +228,7 @@ pub(crate) fn discovery(
                         output_schema: None,
                         annotations: json!({"command": {}}),
                         read_only: false,
+                        download: false,
                     },
                     Some(reason.clone()),
                 ),
@@ -267,6 +270,7 @@ fn action_definition(name: &str, declaration: &ActionDeclaration) -> ImportedAct
         annotations: command_annotations(declaration),
         // The administrator classifies; `readOnly` is only a hint.
         read_only: false,
+        download: declaration.download,
     }
 }
 
@@ -274,7 +278,11 @@ fn supported(
     definition: &ImportedActionDefinition,
     declaration: &ActionDeclaration,
     bound: &[ImportedCredentialMode],
+    download_enabled: bool,
 ) -> Result<(), String> {
+    if definition.download && !download_enabled {
+        return Err("download actions require command_imports max_download_bytes".into());
+    }
     if !bound.is_empty()
         && !declaration
             .credential_modes
@@ -289,6 +297,7 @@ fn supported(
 /// An accepted action as this adapter executes it: its compiled schemas and
 /// its resource and credential declaration.
 pub(crate) struct CompiledAction {
+    pub download: bool,
     pub read_only: bool,
     pub input: BoundedImportSchema,
     /// Results of `ok: true` responses must validate against it.
@@ -322,6 +331,9 @@ impl CompiledAction {
             .get("listingOf")
             .map(|value| crate::manifest::listing_type(value, resources.as_ref()))
             .transpose()?;
+        if definition.download && listing_of.is_some() {
+            return Err("download actions cannot declare listingOf".into());
+        }
         let credential_modes = command
             .get("credentialModes")
             .map(|modes| {
@@ -350,6 +362,7 @@ impl CompiledAction {
             .transpose()?;
         Ok(Self {
             read_only: definition.read_only,
+            download: definition.download,
             input,
             output,
             authority: ImportedActionAuthority {
@@ -447,17 +460,43 @@ mod tests {
     }
 
     #[test]
+    fn download_discovery_requires_operator_capability_and_preserves_the_semantic() {
+        let service = definition(&[ImportedCredentialMode::Service]);
+        let mut value = crate::manifest::tests::sample();
+        value["actions"][1]["download"] = json!(true);
+        let manifest = parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let denied = discovery(&service, "ticketing", &manifest, None, false).unwrap();
+        assert!(denied.tools[0].unsupported_reason.is_none());
+        assert_eq!(
+            denied.tools[1].unsupported_reason.as_deref(),
+            Some("download actions require command_imports max_download_bytes")
+        );
+        assert!(denied.tools[1].definition.download);
+        let allowed = discovery(&service, "ticketing", &manifest, None, true).unwrap();
+        assert!(allowed.tools[1].unsupported_reason.is_none());
+        let mut accepted = allowed.tools[1].definition.clone();
+        let compiled = CompiledAction::new(&accepted).unwrap();
+        assert!(compiled.download);
+        assert!(!compiled.read_only);
+        accepted.annotations["command"]["listingOf"] = json!("project");
+        assert_eq!(
+            CompiledAction::new(&accepted).err().as_deref(),
+            Some("download actions cannot declare listingOf")
+        );
+    }
+
+    #[test]
     fn metadata_carries_exclusion_capability_without_changing_action_authority() {
         let definition = definition(&[
             ImportedCredentialMode::Service,
             ImportedCredentialMode::PerUser,
         ]);
         let mut manifest = sample();
-        let before = discovery(&definition, "ticketing", &manifest, None).unwrap();
+        let before = discovery(&definition, "ticketing", &manifest, None, false).unwrap();
         let accepted = before.service_metadata.as_ref().unwrap();
         assert!(accepted.resource_types[0].supports_exclusions);
         manifest.resource_types[0].supports_exclusions = false;
-        let after = discovery(&definition, "ticketing", &manifest, Some(accepted)).unwrap();
+        let after = discovery(&definition, "ticketing", &manifest, Some(accepted), false).unwrap();
         assert!(!after.service_metadata.as_ref().unwrap().resource_types[0].supports_exclusions);
         assert_eq!(
             serde_json::to_value(&before.tools).unwrap(),
@@ -479,7 +518,7 @@ mod tests {
         ]);
         let manifest = sample();
         check_credential(&definition, &manifest, None).unwrap();
-        let discovery = discovery(&definition, "ticketing", &manifest, None).unwrap();
+        let discovery = discovery(&definition, "ticketing", &manifest, None, false).unwrap();
         assert_eq!(discovery.protocol_version, "agent-access-command/1");
         assert_eq!(discovery.metadata["command"], "ticketing");
         assert_eq!(discovery.metadata["commandVersion"], "1.4.0");
@@ -546,10 +585,11 @@ mod tests {
         // An accepted type keeps its Broker type ID across refreshes.
         let mut accepted = metadata.clone();
         accepted.resource_types[0].broker_type = "tickets".into();
-        let refreshed = super::discovery(&definition, "ticketing", &manifest, Some(&accepted))
-            .unwrap()
-            .service_metadata
-            .unwrap();
+        let refreshed =
+            super::discovery(&definition, "ticketing", &manifest, Some(&accepted), false)
+                .unwrap()
+                .service_metadata
+                .unwrap();
         assert_eq!(refreshed.resource_types[0].broker_type, "tickets");
     }
 
@@ -786,6 +826,7 @@ mod tests {
             "ticketing",
             &manifest,
             None,
+            false,
         )
         .unwrap();
         assert!(
@@ -817,6 +858,7 @@ mod tests {
             "ticketing",
             &manifest,
             None,
+            false,
         )
         .unwrap();
         let accepted = discovery.tools[0].definition.clone();

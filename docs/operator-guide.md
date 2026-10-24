@@ -564,7 +564,13 @@ concurrency slot released, then drains audit; processes still unreaped are logge
 process group is not killed. Command runs that fail log `command_import_failed`
 with the failure category and exit status or signal; set the command's
 `log_stderr` only while debugging, because the Broker cannot redact secrets a
-command prints. The broker also gives Tokio blocking tasks up to
+command prints. Command download validation, decoding and hashing retain a
+command budget unit after its process has been reaped, within the original
+command deadline. A retained file is not an unfinished process. Once validated,
+delivery releases the command budget and retains global/principal request
+capacity instead, including any outstanding byte chunks. Size both worker and
+delivery memory using the [command download bounds](command-imports.md#download-bounds).
+The broker also gives Tokio blocking tasks up to
 another `--shutdown-timeout-ms` after the in-runtime drain completes. For systemd, set
 `TimeoutStopSec` to at least `2 * --shutdown-timeout-ms` plus a small scheduler
 and process-exit margin so the broker can finish both bounded phases.
@@ -1359,6 +1365,30 @@ requires restoring the backup taken before the upgrade, with matching binaries,
 configuration and keys. This metadata change needs no database migration; the
 durable JSON contract still affects rollback. Existing imports whose capability
 remains at the default `true` keep their previous serialized form.
+
+Command downloads require an explicit `max_download_bytes` per approved command;
+the setting has no default. Set it and compatible global download/upstream
+response ceilings before accepting a `download: true` action. JSON-only commands
+need no change. Removing the cap makes an import with enabled accepted downloads
+unavailable on load/reload until the cap is restored or those actions are disabled
+or quarantined. A process can exit before its timeout and still fail
+`upstream_timeout` if validation/decode/hash crosses that deadline.
+
+Accepted `download: true` definitions need no table migration. A Broker predating
+the flag fails the entire containing service load as `invalid_data`, including
+its other actions. Before rollback, remove those definitions through supported
+administration on the newer Broker or restore a compatible database backup with
+matching configuration and keys. Disabling a download alone does not remove its
+stored definition. Existing ordinary JSON definitions retain their previous
+serialized form.
+
+Every raw download, including native downloads, has a 16,384-byte encoded
+metadata-header cap. A refusal returns JSON `operation_failed` and leaves a
+started/canceled transfer audit pair. Inspect the static
+`raw_download_metadata_refused` warning for request IDs, service/action, category,
+cap and encoded length or a labeled lower bound; it records no metadata contents.
+Sensitive binary downloads carry `Cache-Control: no-store`. See
+[raw download negotiation](http-api.md#raw-download-negotiation).
 
 Databases predating `014_resource_policy_baseline` cannot be upgraded in place.
 They are rejected without modification even with `auto_migrate = true`. Create a

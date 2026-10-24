@@ -610,7 +610,14 @@ it treats as secret out of them.
   members.
 
 A successful response's `result` is returned as `result.upstreamCommand`,
-marked sensitive like other imported payloads. Command error codes map to
+marked sensitive like other imported payloads. With an accepted `download: true`
+declaration and an explicit operator `max_download_bytes`, success instead sends
+one file with this bounded command metadata alongside root filename, content
+type, computed size and SHA-256. The output schema still validates only the
+command metadata. JSON/download transitions and output-schema changes require
+review after quarantine; accepted IDs and grants survive. MCP and OpenAPI import
+adapters do not support this download flag. See [command downloads](command-imports.md#download-responses).
+Command error codes map to
 Broker reasons with the command's message: `input_invalid`,
 `resource_not_found`, `resource_forbidden` (`service_action_denied`),
 `conflict` (`version_conflict`), `upstream_unauthorized`, `upstream_forbidden`,

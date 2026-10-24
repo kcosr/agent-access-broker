@@ -29,7 +29,8 @@ function behavioralAnnotations(value: unknown): unknown {
   return { ...annotations, toolAnnotations: Object.fromEntries(Object.entries(tool).filter(([key]) => key !== "title")) };
 }
 function behaviorChanged(old: ImportActionRecord["definition"], next: ImportActionRecord["definition"]): boolean {
-  return importSourceKey(old.inputSchema) !== importSourceKey(next.inputSchema)
+  return (old.download === true) !== (next.download === true)
+    || importSourceKey(old.inputSchema) !== importSourceKey(next.inputSchema)
     || importSourceKey(old.outputSchema) !== importSourceKey(next.outputSchema)
     || importSourceKey(behavioralAnnotations(old.annotations)) !== importSourceKey(behavioralAnnotations(next.annotations));
 }

@@ -416,6 +416,7 @@ fn command_import_value(command: &CommandImportConfig) -> Value {
         path,
         timeout,
         max_output_bytes,
+        max_download_bytes,
         max_concurrent,
         working_dir,
         network,
@@ -426,6 +427,7 @@ fn command_import_value(command: &CommandImportConfig) -> Value {
         .put("path", path.as_str())
         .put("timeout", timeout.as_str())
         .int("max_output_bytes", *max_output_bytes)
+        .opt_int("max_download_bytes", *max_download_bytes)
         .int("max_concurrent", *max_concurrent)
         .put("working_dir", working_dir.as_str())
         .put("network", network.as_str())

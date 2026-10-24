@@ -2583,6 +2583,7 @@ allowed_kinds = ["command"]          # add "mcp_http" etc. if used
 path = "/opt/agent-commands/ticketing/bin/ticketing-command"
 timeout = "30s"                      # default 30s, max 10m
 max_output_bytes = 1048576           # default 1 MiB
+max_download_bytes = 8388608         # optional; no default; enables 8 MiB files
 max_concurrent = 4                   # default 4
 working_dir = "/var/lib/agent-commands/ticketing"   # optional, default "/"
 network = "inherit"                  # default; or "none"
@@ -2597,13 +2598,22 @@ LANG = "C.UTF-8"
 | --- | --- |
 | `<name>` | `^[a-z][a-z0-9_-]{0,62}$` |
 | `path` | Absolute executable path. A missing or non-executable file only warns, so binaries can be replaced without stopping the Broker |
-| `timeout` | `s`, `m` or `h` syntax, 1 second to 10 minutes; covers the wait for a concurrency slot. `describe` runs within the lesser of this and the 60-second discovery deadline |
-| `max_output_bytes` | 1 to `limits.max_upstream_response_bytes`; `describe` output is bounded by the 16 MiB manifest limit instead |
-| `max_concurrent` | 1 to `limits.max_concurrent_requests`; shared by every import of this command and by its `describe`, `invoke` and `verify` runs, across reloads. A reload that lowers it holds new runs until usage falls below the new value |
+| `timeout` | `s`, `m` or `h` syntax, 1 second to 10 minutes; covers the concurrency wait, process execution and download validation/decode/hash. `describe` runs within the lesser of this and the 60-second discovery deadline |
+| `max_output_bytes` | 1 to `limits.max_upstream_response_bytes` for JSON actions and `verify`; `describe` uses the 16 MiB manifest limit |
+| `max_download_bytes` | Optional positive decoded file cap D, with no default. When present, D must not exceed `limits.max_download_bytes`, and derived stdout cap `4 * ceil(D / 3) + 16384` must not exceed `limits.max_upstream_response_bytes`; checked arithmetic and platform conversions must fit. Omission disables download capability |
+| `max_concurrent` | 1 to `limits.max_concurrent_requests`; concurrent processes plus download response workers, shared by every import and `describe`, `invoke` and `verify` run across reloads. A lower limit holds new runs until usage falls below it; validated file delivery uses request capacity instead |
 | `working_dir` | Absolute path |
 | `network` | `inherit` passes the Broker's egress proxy route, its `NO_PROXY` entries, and the `[network.outbound_tls]` trust mode with the configured `ca_certificate` path, never certificates; `none` passes nothing. Neither restricts what the command can reach |
 | `log_stderr` | Opt-in for including up to 4 KiB of escaped stderr in failure logs. The Broker cannot redact secrets a command prints, so validation warns while it is on |
 | `env` | The process environment besides the network variables, at most 64 entries; keys match `^[A-Za-z_][A-Za-z0-9_]*$`, values have no NUL and at most 4 KiB. Not for secrets |
+
+The sample download setting requires a global upstream response cap of at least
+11,201,196 bytes. Limits are rejected rather than clamped or raised. With no
+download setting, existing JSON-only configurations need no larger ceiling.
+An enabled accepted download without its operator cap makes the import
+unavailable on load/reload. Restore the cap or disable/quarantine the action.
+See [download bounds](command-imports.md#download-bounds) for metadata caps and
+aggregate worker/delivery memory sizing.
 
 Every process starts with an empty environment plus `env`. With `network =
 "inherit"`, `env` must not set `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`,

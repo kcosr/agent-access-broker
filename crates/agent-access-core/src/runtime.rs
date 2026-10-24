@@ -6481,8 +6481,21 @@ impl BrokerRuntime {
         let stream_needs_terminal_audit = stream
             .as_ref()
             .is_some_and(ProviderResultStream::is_streaming);
+        let (append_mode, reserved_terminal) = match append_mode {
+            // The owner reserved terminal capacity before dispatch. Hand that
+            // reservation to delivery and append the started record normally;
+            // a stream must not wait for a second terminal slot.
+            AuditAppendMode::OwnedTerminal(permit) if stream_needs_terminal_audit => {
+                (AuditAppendMode::Normal, Some(permit))
+            }
+            append_mode => (append_mode, None),
+        };
         if stream_needs_terminal_audit {
-            match self.audit.reserve_terminal().await {
+            let reservation = match reserved_terminal {
+                Some(permit) => Ok(permit),
+                None => self.audit.reserve_terminal().await,
+            };
+            match reservation {
                 Ok(permit) => {
                     terminal_permit = Some(permit);
                     audit_record.provider_audit =

@@ -67,6 +67,7 @@ pub(crate) struct ManifestAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ActionDeclaration {
+    pub download: bool,
     pub description: String,
     pub input_schema: Value,
     pub output_schema: Option<Value>,
@@ -448,6 +449,7 @@ fn action(
             "inputSchema",
             "outputSchema",
             "readOnly",
+            "download",
             "credentialModes",
             "resources",
             "listingOf",
@@ -468,6 +470,14 @@ fn action(
         .is_some_and(|value| !value.is_boolean())
     {
         return Err("readOnly must be a boolean".into());
+    }
+    let download = match object.get("download") {
+        None => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => return Err("download must be true when present".into()),
+    };
+    if download && object.contains_key("listingOf") {
+        return Err("download actions cannot declare listingOf".into());
     }
     let input_schema = object
         .get("inputSchema")
@@ -506,6 +516,7 @@ fn action(
         .map(|value| listing_type(value, resources.as_ref()))
         .transpose()?;
     Ok(ActionDeclaration {
+        download,
         description,
         input_schema,
         output_schema,
@@ -665,6 +676,64 @@ pub(crate) mod tests {
 
     fn parse_value(value: &Value) -> Result<Manifest, String> {
         parse(&serde_json::to_vec(value).unwrap())
+    }
+
+    #[test]
+    fn download_is_true_only_and_cannot_be_a_live_listing() {
+        let mut value = sample();
+        assert!(
+            !parse_value(&value).unwrap().actions[1]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .download
+        );
+        value["actions"][1]["download"] = json!(true);
+        assert!(
+            parse_value(&value).unwrap().actions[1]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .download
+        );
+        for invalid in [
+            json!(false),
+            Value::Null,
+            json!("true"),
+            json!(1),
+            json!({}),
+            json!([]),
+        ] {
+            value["actions"][1]["download"] = invalid;
+            assert_eq!(
+                parse_value(&value).unwrap().actions[1]
+                    .declaration
+                    .as_ref()
+                    .unwrap_err(),
+                "download must be true when present"
+            );
+        }
+        value["actions"][1]["download"] = json!(true);
+        value["actions"][1]["listingOf"] = json!("project");
+        assert_eq!(
+            parse_value(&value).unwrap().actions[1]
+                .declaration
+                .as_ref()
+                .unwrap_err(),
+            "download actions cannot declare listingOf"
+        );
+        value["actions"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("listingOf");
+        value["actions"][1]["responseEncoding"] = json!("base64");
+        assert!(
+            parse_value(&value).unwrap().actions[1]
+                .declaration
+                .as_ref()
+                .unwrap_err()
+                .contains("unsupported field")
+        );
     }
 
     #[test]

@@ -85,6 +85,7 @@ mod tests {
             output_schema: None,
             annotations: json!({"command": {"resources": resources}}),
             read_only: true,
+            download: false,
         })
         .unwrap()
     }

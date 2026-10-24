@@ -411,6 +411,7 @@ fn accepted_resource_type_declarations_build_registry_descriptors() {
 #[test]
 fn command_actions_name_their_declared_resource_type() {
     let mut action = ImportedActionDefinition {
+        download: false,
         action: "issue_view".into(),
         source: json!({"name": "issue.view"}),
         label: None,

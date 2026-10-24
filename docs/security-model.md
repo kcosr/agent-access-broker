@@ -1273,3 +1273,22 @@ these fields. This catches accidental echoes; it does not make an untrusted
 command safe, since a command can encode or exfiltrate what it receives in
 other ways. Stderr is not logged unless the operator enables
 `log_stderr` for a command, which can expose secrets the command prints.
+
+Downloads require operator opt-in through a positive per-command
+`max_download_bytes` and a reviewed `download: true` declaration. The Broker
+validates the bounded base64 envelope, metadata, byte count and digest before
+delivery; it does not inspect file contents or prove a command's resource
+filtering or semantic completeness. Command filenames and content types receive
+the same supplied-credential/proxy-secret checks as messages and locators.
+Commands must keep secrets and file contents out of metadata: the sensitive
+marker does not redact download receipts, which deliberately expose bounded
+metadata, including warnings. Binary responses marked sensitive use
+`Cache-Control: no-store`.
+
+The Broker never puts the encoded payload, file contents, metadata warnings or
+local paths into audit or generated diagnostics. Local paths remain on the
+machine running the CLI/stdio adapter, and command filenames cannot choose those
+paths. The shared raw-response header cap bounds transport metadata for native
+downloads too. Command budgets cover processes and response workers; request
+permits bound retained decoded files through delivery. See
+[download bounds](command-imports.md#download-bounds).

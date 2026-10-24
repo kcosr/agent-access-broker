@@ -261,7 +261,7 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
                 "/team-ci/job/payments/job/build-api/42/{endpoint}"
             )))
             .respond_with(ResponseTemplate::new(200).set_body_raw(bytes.clone(), content_type))
-            .expect(4)
+            .expect(5)
             .mount(&controller)
             .await;
     }
@@ -272,7 +272,7 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
         .and(query_param("tree", "suites{0,0}"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"suites":[]})))
         .with_priority(1)
-        .expect(4)
+        .expect(5)
         .mount(&controller)
         .await;
     let temp = private_tempdir();
@@ -312,6 +312,28 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
         assert_eq!(std::fs::read(&output).unwrap(), bytes.as_bytes());
         let metadata: Value = serde_json::from_slice(&result.stdout).unwrap();
         assert!(metadata["result"].get("text").is_none());
+        assert_eq!(metadata["output"]["size"], bytes.len() as u64);
+        assert_eq!(metadata["output"]["path"], output.to_str().unwrap());
+
+        // Generic invoke plans native downloads from the same caller catalog
+        // as imported commands and preserves the provider's file bytes.
+        let output = temp.path().join(format!("{command}.invoke"));
+        let result = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+            .arg("--config")
+            .arg(&config_path)
+            .args([
+                "invoke",
+                &format!("cloudbees_ci.{action}"),
+                "--input-json",
+                &inputs.to_string(),
+                "--output",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert_success("generic invoke native download", &result);
+        assert_eq!(std::fs::read(&output).unwrap(), bytes.as_bytes());
+        let metadata: Value = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(metadata["output"]["size"], bytes.len() as u64);
         assert_eq!(metadata["output"]["path"], output.to_str().unwrap());
 

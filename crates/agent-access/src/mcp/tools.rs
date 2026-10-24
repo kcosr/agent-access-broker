@@ -221,8 +221,14 @@ pub(super) async fn call_tool(
                 .as_deref()
                 .context("download requires outputPath")?;
             require_absolute(output)?;
+            let reserved = crate::DownloadOutput::prepare(
+                output,
+                reserved
+                    .take()
+                    .map(crate::output::ResponseOutput::into_file),
+            )?;
             let client = mcp_http_client(settings, true)?;
-            let mut response = tokio::time::timeout(
+            let response = tokio::time::timeout(
                 crate::CLI_REQUEST_TIMEOUT,
                 crate::request_builder(client.post(endpoint), settings)
                     .header("Accept", "application/octet-stream")
@@ -232,51 +238,18 @@ pub(super) async fn call_tool(
             .await
             .map_err(|_| anyhow::anyhow!("broker download request timed out"))?
             .map_err(|_| anyhow::anyhow!("broker download request failed"))?;
-            let status = response.status().as_u16();
-            if status >= 400 {
+            if response.status().as_u16() >= 400 {
                 decode_json(response, crate::ResponseShape::Envelope).await?
             } else {
-                let value = crate::parse_download_metadata_header(
-                    response
-                        .headers()
-                        .get(metadata_header)
-                        .and_then(|v| v.to_str().ok()),
-                )
-                .map_err(|_| anyhow::anyhow!("invalid broker download metadata"))?;
-                if !crate::response_shape_valid(status, crate::ResponseShape::Envelope, &value) {
-                    bail!("invalid broker download envelope");
-                }
-                if value.get("decision").and_then(Value::as_str) != Some("allow") {
-                    bail!("broker download metadata does not authorize a download");
-                }
-                let content_type = value
-                    .pointer("/result/contentType")
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        response
-                            .headers()
-                            .get(reqwest::header::CONTENT_TYPE)
-                            .and_then(|value| value.to_str().ok())
-                    })
-                    .unwrap_or("application/octet-stream")
-                    .to_owned();
-                let written = crate::write_download_body(&mut response, output, &value, reserved.take().map(crate::output::ResponseOutput::into_file)).await.map_err(|_| anyhow::anyhow!("download failed; destination was not replaced unless final directory synchronization failed"))?;
-                let output = crate::output::FileOutput::new(
+                crate::download_response_value(
+                    response,
                     output,
-                    written.size,
-                    written.sha256,
-                    &content_type,
-                    !action.sensitive_output_pointers.is_empty(),
-                );
-                (
-                    status,
-                    crate::output::receipt(
-                        &value,
-                        &output,
-                        true,
-                        &action.sensitive_output_pointers,
-                    ),
+                    reserved,
+                    &action.sensitive_output_pointers,
+                    metadata_header,
                 )
+                .await
+                .map_err(crate::DownloadResponseError::into_error)?
             }
         }
         _ => bail!("this client does not support the action's input and output kind"),
@@ -368,12 +341,11 @@ fn response_options(
             )),
         })
         .transpose()?;
-    let options = crate::resolve_response_options(
+    let options = crate::resolve_generic_response_options_from_action(
         settings,
+        Some(action),
         explicit_read,
         explicit_output,
-        !action.read_content_formats.is_empty(),
-        !action.response_formats.is_empty(),
         &action.action,
     )
     .map_err(|error| {
@@ -1946,6 +1918,62 @@ mod tests {
         assert_eq!(output["size"], 3);
         assert_eq!(output["sha256"], metadata["result"]["sha256"]);
         assert_eq!(std::fs::read(destination).unwrap(), b"abc");
+    }
+
+    #[tokio::test]
+    async fn failed_mutating_download_keeps_the_receipt_for_the_mcp_error_result() {
+        use base64::Engine;
+        let server = MockServer::start().await;
+        let mut action = action();
+        action.read_only = false;
+        action.io = agent_access_provider::raw_download_io();
+        action.sensitive_output_pointers = vec!["/result/safeLocators".into()];
+        serve_catalog(&server, action).await;
+        let metadata = allow(json!({
+            "size":3, "sha256":"0".repeat(64),
+            "mutationStatus":"applied_unverified", "retrySafe":false,
+            "safeLocators":{"secret":"private-locator"}
+        }));
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(
+                        agent_access_provider::RESULT_METADATA_HEADER,
+                        base64::engine::general_purpose::STANDARD
+                            .encode(serde_json::to_vec(&metadata).unwrap()),
+                    )
+                    .set_body_bytes(b"abc".to_vec()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("result");
+        std::fs::write(&destination, b"original").unwrap();
+        let error = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            &tool_name("jira-team", "issue.view"),
+            json!({"inputs":{}, "outputPath":destination})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .await
+        .unwrap_err();
+        let failure = error
+            .downcast_ref::<crate::output::LocalOutputFailure>()
+            .unwrap();
+        let result = envelope_result(200, failure.details.clone(), true).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["operationStatus"],
+            "applied_unverified"
+        );
+        assert_eq!(result["structuredContent"]["retrySafe"], false);
+        assert!(!result.to_string().contains("private-locator"));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        server.verify().await;
     }
 
     #[test]

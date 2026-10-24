@@ -27,6 +27,7 @@ fn record(service: &str, names: &[&str]) -> ImportedServiceRecord {
             .iter()
             .map(|name| ImportedActionRecord {
                 definition: ImportedActionDefinition {
+                    download: false,
                     action: (*name).into(),
                     source: json!({"toolName":name}),
                     label: None,
