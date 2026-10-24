@@ -1876,7 +1876,11 @@ impl PreparedGatewayOperation {
 
 enum AuditAppendMode {
     Normal,
-    OwnedTerminal(TerminalAuditPermit),
+    Required(RequiredAuditPermit),
+    Owned {
+        terminal: TerminalAuditPermit,
+        started: Option<RequiredAuditPermit>,
+    },
     GatewayTerminal(GatewayTerminalAuditGuard),
 }
 
@@ -6482,12 +6486,15 @@ impl BrokerRuntime {
             .as_ref()
             .is_some_and(ProviderResultStream::is_streaming);
         let (append_mode, reserved_terminal) = match append_mode {
-            // The owner reserved terminal capacity before dispatch. Hand that
-            // reservation to delivery and append the started record normally;
-            // a stream must not wait for a second terminal slot.
-            AuditAppendMode::OwnedTerminal(permit) if stream_needs_terminal_audit => {
-                (AuditAppendMode::Normal, Some(permit))
-            }
+            // Required-stream owners reserve both records before dispatch.
+            // Delivery retains terminal capacity while its started record uses
+            // the ordinary capacity reserved after preparation.
+            // An optional stream from an unrestricted invocation has no started
+            // reservation and uses the ordinary required-append path.
+            AuditAppendMode::Owned { terminal, started } if stream_needs_terminal_audit => (
+                started.map_or(AuditAppendMode::Normal, AuditAppendMode::Required),
+                Some(terminal),
+            ),
             append_mode => (append_mode, None),
         };
         if stream_needs_terminal_audit {
@@ -6522,10 +6529,16 @@ impl BrokerRuntime {
         }
 
         match append_mode {
-            AuditAppendMode::Normal | AuditAppendMode::OwnedTerminal(_) => {
+            AuditAppendMode::Normal
+            | AuditAppendMode::Required(_)
+            | AuditAppendMode::Owned { .. } => {
                 let appended = match append_mode {
-                    AuditAppendMode::OwnedTerminal(permit) => {
+                    AuditAppendMode::Required(permit) => {
                         permit.append_required(audit_record.clone()).await
+                    }
+                    AuditAppendMode::Owned { terminal, started } => {
+                        drop(started);
+                        terminal.append_required(audit_record.clone()).await
                     }
                     _ => self.audit.append_required(audit_record.clone()).await,
                 };
@@ -8933,6 +8946,16 @@ impl AuditSink {
         writer.reserve_terminal().await
     }
 
+    async fn reserve_required(&self) -> Result<RequiredAuditPermit, RuntimeError> {
+        let Some(writer) = &self.writer else {
+            return Ok(RequiredAuditPermit::Noop);
+        };
+        Ok(RequiredAuditPermit::Writer {
+            writer: Arc::clone(writer),
+            permit: writer.reserve_normal_capacity().await?,
+        })
+    }
+
     async fn shutdown_and_drain(&self, timeout: Duration) -> Result<(), RuntimeError> {
         let Some(writer) = &self.writer else {
             return Ok(());
@@ -9752,6 +9775,23 @@ impl AuditWriterHealth {
             std::io::ErrorKind::Other,
             format!("audit writer has unrecovered failures: {classes}"),
         ))
+    }
+}
+
+enum RequiredAuditPermit {
+    Noop,
+    Writer {
+        writer: Arc<AuditWriterHandle>,
+        permit: OwnedSemaphorePermit,
+    },
+}
+
+impl RequiredAuditPermit {
+    async fn append_required(self, record: AuditRecord) -> Result<(), RuntimeError> {
+        match self {
+            Self::Noop => Ok(()),
+            Self::Writer { writer, permit } => writer.append_with_permit(record, permit).await,
+        }
     }
 }
 

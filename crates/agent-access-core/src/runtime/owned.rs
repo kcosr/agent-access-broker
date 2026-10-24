@@ -97,6 +97,7 @@ fn interrupted_error(
 impl BrokerRuntime {
     /// Run within a supervisor that owns this future independently of HTTP/SDK
     /// response delivery. Caller cancellation must use `control`, never drop it.
+    /// With `require_stream = false`, providers may return JSON or a stream.
     pub async fn invoke_owned(
         &self,
         context: GovernedOperationContext,
@@ -150,6 +151,33 @@ impl BrokerRuntime {
                 Ok(result) => result,
                 Err(_) => Err(Box::new(PreparationFailure::new(fallback, Err(interrupted_error((ReasonCode::OperationFailed, "operation failed during preparation"), false))))),
             }
+        };
+        // Preparation may itself probe or append audit (for example, identity
+        // renewal). Reserve the stream's started record only after that work,
+        // but before the provider can make any changes.
+        let mut started_permit = None;
+        let prepared = match prepared {
+            Ok(prepared) if require_stream => {
+                let reservation = tokio::select! {
+                    biased;
+                    message = control.interrupted(true) => Err(interrupted_error(message, false)),
+                    result = self.audit.reserve_required() => result.map_err(|_| {
+                        ProviderError::error(ReasonCode::AuditUnavailable, "audit sink unavailable")
+                            .with_audit(json!({"executionState":"not_dispatched", "retrySafe":false}))
+                    }),
+                };
+                match reservation {
+                    Ok(permit) => {
+                        started_permit = Some(permit);
+                        Ok(prepared)
+                    }
+                    Err(error) => Err(Box::new(PreparationFailure::new(
+                        prepared.finalize_context,
+                        Err(error),
+                    ))),
+                }
+            }
+            prepared => prepared,
         };
         let (finalize_context, result) = match prepared {
             Err(failure) => (failure.context, failure.result),
@@ -215,8 +243,8 @@ impl BrokerRuntime {
                 }
             }
         };
-        // No cancellation select around finalization: the reserved terminal append
-        // is acknowledged before success and cannot race a second outcome record.
+        // No cancellation select around finalization: the reserved required
+        // append is acknowledged before success and cannot race another outcome.
         let applied_unverified = result.as_ref().err().is_some_and(|error| {
             error.reason_code() == ReasonCode::MutationVerificationFailed
                 && error
@@ -230,7 +258,10 @@ impl BrokerRuntime {
             .finalize_with_append_mode(
                 finalize_context,
                 result,
-                AuditAppendMode::OwnedTerminal(permit),
+                AuditAppendMode::Owned {
+                    terminal: permit,
+                    started: started_permit,
+                },
             )
             .await;
         if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
@@ -264,6 +295,7 @@ impl BrokerRuntime {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use futures_util::StreamExt;
     use std::sync::atomic::AtomicUsize;
     use tempfile::TempDir;
     use tokio::sync::Semaphore;
@@ -283,6 +315,8 @@ mod tests {
         complete: Semaphore,
         calls: AtomicUsize,
         panic_invoke: bool,
+        raw_write: bool,
+        preparation_audit: Mutex<Option<AuditSink>>,
         finalization: Option<FinalizationMode>,
         cleanup_started: Semaphore,
         cleanup_polls: AtomicUsize,
@@ -297,6 +331,8 @@ mod tests {
                 complete: Semaphore::new(0),
                 calls: AtomicUsize::new(0),
                 panic_invoke,
+                raw_write: false,
+                preparation_audit: Mutex::new(None),
                 finalization: None,
                 cleanup_started: Semaphore::new(0),
                 cleanup_polls: AtomicUsize::new(0),
@@ -310,10 +346,23 @@ mod tests {
             provider.complete.add_permits(1);
             provider
         }
+
+        fn raw_write(pause_lookup: bool) -> Arc<Self> {
+            let mut provider = Self::new(pause_lookup, false);
+            Arc::get_mut(&mut provider).unwrap().raw_write = true;
+            provider
+        }
     }
     impl agent_access_provider::test_support::DescribedProvider for ControlledProvider {
         fn descriptor(&self) -> ServiceDescriptor {
-            agent_access_fake::fake_descriptor()
+            let mut descriptor = agent_access_fake::fake_descriptor();
+            if self.raw_write {
+                for action in &mut descriptor.actions {
+                    action.read_only = false;
+                    action.io = raw_download_io();
+                }
+            }
+            descriptor
         }
     }
 
@@ -325,6 +374,10 @@ mod tests {
         ) -> Result<ScopeResolution, ProviderError> {
             self.lookup_started.add_permits(1);
             self.lookup_continue.acquire().await.unwrap().forget();
+            let preparation_audit = self.preparation_audit.lock().unwrap().clone();
+            if let Some(audit) = preparation_audit {
+                audit.check_writable().await.unwrap();
+            }
             agent_access_fake::FakeProvider
                 .echo_scopes(request.action(), request.inputs())
                 .map(ScopeResolution::resources)
@@ -337,7 +390,19 @@ mod tests {
             self.invoked.add_permits(1);
             assert!(!self.panic_invoke, "controlled provider panic");
             self.complete.acquire().await.unwrap().forget();
-            let outcome = if matches!(self.finalization, Some(FinalizationMode::Failure)) {
+            let outcome = if self.raw_write {
+                Ok(ProviderResult::new(json!({
+                    "size": 3,
+                    "mutationStatus": "applied_unverified",
+                    "retrySafe": false,
+                    "safeLocators": {"fileId": "file-17"},
+                }))
+                .with_audit(json!({"operation":"raw-write"}))
+                .with_stream(ProviderResultStream::from_stream(
+                    "application/octet-stream",
+                    futures_util::stream::iter([Ok(Bytes::from_static(b"raw"))]),
+                )))
+            } else if matches!(self.finalization, Some(FinalizationMode::Failure)) {
                 Err(
                     ProviderError::error(ReasonCode::UpstreamFailed, "known provider failure")
                         .with_result(json!({"knownOutcome":true}))
@@ -372,6 +437,13 @@ mod tests {
         }
     }
     fn fixture(provider: Arc<ControlledProvider>) -> (BrokerRuntime, TempDir) {
+        fixture_with_audit_capacity(provider, None)
+    }
+
+    fn fixture_with_audit_capacity(
+        provider: Arc<ControlledProvider>,
+        capacity: Option<u32>,
+    ) -> (BrokerRuntime, TempDir) {
         let dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         {
@@ -383,6 +455,11 @@ mod tests {
             crate::AuditStoreType::Jsonl,
             dir.path().join("audit.jsonl").display().to_string(),
         ));
+        if let Some(capacity) = capacity {
+            let audit = config.audit.as_mut().unwrap();
+            audit.queue_capacity = capacity;
+            audit.terminal_queue_capacity = Some(capacity);
+        }
         config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
         (
             BrokerRuntime::with_providers(config, vec![provider]).unwrap(),
@@ -726,5 +803,140 @@ mod tests {
         assert_eq!(result["executionState"], "completed");
         assert_eq!(result["retrySafe"], false);
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn raw_write_reserves_started_audit_after_preparation_before_dispatch() {
+        let provider = ControlledProvider::raw_write(false);
+        let (runtime, dir) = fixture_with_audit_capacity(provider.clone(), Some(1));
+        // A preparation probe needs the only ordinary slot. Reserving that slot
+        // before preparation would deadlock or fail this otherwise valid call.
+        *provider.preparation_audit.lock().unwrap() = Some(runtime.audit.clone());
+        let control = InvocationControl::default();
+        let operation = {
+            let runtime = runtime.clone();
+            let control = control.clone();
+            tokio::spawn(async move {
+                runtime
+                    .invoke_owned(context(), request(), control, true)
+                    .await
+            })
+        };
+        entered(&provider.invoked).await;
+        let writer = runtime.audit.writer.as_ref().unwrap();
+        assert_eq!(writer.normal_capacity.available_permits(), 0);
+        assert_eq!(writer.terminal_capacity.available_permits(), 0);
+        // Competing ordinary audit work cannot take the started-record slot.
+        // Keep its reservation after handoff to also exercise terminal delivery
+        // while ordinary capacity remains exhausted.
+        let mut pressure = Box::pin(writer.normal_capacity.clone().acquire_owned());
+        assert!(pressure.as_mut().now_or_never().is_none());
+        provider.complete.add_permits(1);
+        let mut response = tokio::time::timeout(Duration::from_secs(10), operation)
+            .await
+            .unwrap()
+            .unwrap();
+        let pressure = tokio::time::timeout(Duration::from_secs(2), pressure)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status, 200, "{:?}", response.envelope);
+        assert!(control.dispatched());
+        assert!(control.completed());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        let result = response.envelope.result.as_ref().unwrap();
+        assert_eq!(result["mutationStatus"], "applied_unverified");
+        assert_eq!(result["retrySafe"], false);
+        assert_eq!(result["safeLocators"], json!({"fileId":"file-17"}));
+        let ProviderResultStreamSource::Stream(source) = response.stream.take().unwrap().source
+        else {
+            panic!("raw write must preserve its response stream");
+        };
+        let mut stream = source.lock().unwrap().take().unwrap();
+        let body = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut body = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            body
+        })
+        .await
+        .unwrap();
+        assert_eq!(body, b"raw");
+        assert_eq!(writer.normal_capacity.available_permits(), 0);
+        runtime
+            .shutdown_audit(Duration::from_secs(2))
+            .await
+            .unwrap();
+        let records = crate::test_support::read_audit_records(
+            crate::AuditStoreType::Jsonl,
+            &dir.path().join("audit.jsonl"),
+        );
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["providerAudit"]["streamPhase"], "started");
+        assert_eq!(records[1]["providerAudit"]["streamPhase"], "completed");
+        assert_eq!(records[1]["providerAudit"]["streamBytes"], 3);
+        assert_eq!(records[0]["brokerRequestId"], records[1]["brokerRequestId"]);
+        drop(pressure);
+    }
+
+    #[tokio::test]
+    async fn raw_write_audit_capacity_failure_after_preparation_prevents_dispatch() {
+        let provider = ControlledProvider::raw_write(true);
+        let (runtime, dir) = fixture_with_audit_capacity(provider.clone(), Some(1));
+        let control = InvocationControl::default();
+        let operation = {
+            let runtime = runtime.clone();
+            let control = control.clone();
+            tokio::spawn(async move {
+                runtime
+                    .invoke_owned(context(), request(), control, true)
+                    .await
+            })
+        };
+        entered(&provider.lookup_started).await;
+        let writer = runtime.audit.writer.as_ref().unwrap();
+        // Initial audit admission has succeeded. Exhaust capacity while the
+        // provider's preparation is paused to exercise the dispatch reservation.
+        let pressure = writer
+            .normal_capacity
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        provider.complete.add_permits(1);
+        provider.lookup_continue.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(10), operation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!control.dispatched());
+        assert!(!control.completed());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(response.status, 503);
+        assert_eq!(response.envelope.service, "broker");
+        assert_eq!(response.envelope.action, "request.admit");
+        assert_eq!(
+            response.envelope.reason_code,
+            Some(ReasonCode::AuditUnavailable.into())
+        );
+        assert_eq!(
+            response.envelope.reason.as_deref(),
+            Some("audit sink unavailable")
+        );
+        assert_eq!(
+            response.envelope.error.as_ref().unwrap().message,
+            "audit sink unavailable"
+        );
+        let public = serde_json::to_string(&response.envelope).unwrap();
+        assert!(!public.contains(&dir.path().display().to_string()));
+        assert!(!public.contains("audit.jsonl"));
+        assert!(response.envelope.result.is_none());
+        assert!(response.stream.is_none());
+        let record = audit(&dir);
+        assert_eq!(record["reasonCode"], "audit_unavailable");
+        assert_eq!(record["providerAudit"]["executionState"], "not_dispatched");
+        assert_eq!(writer.terminal_capacity.available_permits(), 1);
+        drop(pressure);
     }
 }

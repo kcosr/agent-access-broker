@@ -222,6 +222,330 @@ async fn raw(app: &Router, token: &str, service: &str, id: &str) -> axum::respon
         .unwrap()
 }
 
+async fn json_download_failure(
+    response: axum::response::Response,
+    status: StatusCode,
+    reason: &str,
+) -> Value {
+    assert_eq!(response.status(), status);
+    assert!(
+        response.headers()[CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json")
+    );
+    assert!(!response.headers().contains_key(RESULT_METADATA_HEADER));
+    let body = response_json(response).await;
+    assert_eq!(body["reasonCode"], reason, "{body}");
+    assert!(body["result"].get("filename").is_none());
+    assert!(body["result"].get("download").is_none());
+    assert!(
+        body["result"].get("mutationStatus").is_none(),
+        "a read has no mutation receipt"
+    );
+    body
+}
+
+async fn successful_file(app: &Router, token: &str, id: &str) {
+    let response = raw(app, token, "files", id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        FILE
+    );
+}
+
+#[tokio::test]
+async fn download_command_failures_keep_json_status_retry_and_process_facts() {
+    let contract = contract();
+    let broker = import_broker(&contract.fixture.config).await;
+    let app = broker.app();
+    import(&app, &contract.admin, "files", "tickets", &[]).await;
+    let token = agent(&contract, &broker, "files");
+    for (code, status, reason, retry) in [
+        (
+            "resource_forbidden",
+            StatusCode::FORBIDDEN,
+            "service_action_denied",
+            None,
+        ),
+        (
+            "upstream_rate_limited",
+            StatusCode::TOO_MANY_REQUESTS,
+            "upstream_rate_limited",
+            Some(30),
+        ),
+    ] {
+        let mut error =
+            json!({"ok":false, "error":{"code":code, "message":"Synthetic command refusal."}});
+        if let Some(seconds) = retry {
+            error["error"]["retryAfterSeconds"] = json!(seconds);
+        }
+        contract.respond("invoke", Some(&error.to_string()));
+        let before = contract.started("invoke").len();
+        let response = raw(&app, &token, "files", code).await;
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .map(|value| value.to_str().unwrap()),
+            retry.map(|_| "30")
+        );
+        let body = json_download_failure(response, status, reason).await;
+        assert_eq!(body["reason"], "Synthetic command refusal.");
+        if retry.is_some() {
+            assert_eq!(body["result"]["retryAfterSeconds"], 30);
+            assert_eq!(body["result"]["limitScope"], "upstream");
+        }
+        assert_eq!(
+            contract.started("invoke").len(),
+            before + 1,
+            "one attempted command, no replay"
+        );
+        let records = contract.audited(code);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["providerAudit"]["command"]["spawned"], true);
+        assert_eq!(records[0]["providerAudit"]["command"]["exitCode"], 0);
+        assert_eq!(
+            records[0]["providerAudit"]["command"]["contractViolation"],
+            false
+        );
+        assert!(records[0]["providerAudit"].get("streamPhase").is_none());
+    }
+    contract.respond("invoke", Some(FILE_RESPONSE));
+    std::fs::write(contract.fixture.path("responses/invoke.exit"), "7").unwrap();
+    let before = contract.started("invoke").len();
+    json_download_failure(
+        raw(&app, &token, "files", "download-exit-seven").await,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "operation_failed",
+    )
+    .await;
+    assert_eq!(
+        contract.started("invoke").len(),
+        before + 1,
+        "a nonzero exit must spawn exactly once"
+    );
+    let records = contract.audited("download-exit-seven");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["providerAudit"]["command"]["spawned"], true);
+    assert_eq!(records[0]["providerAudit"]["command"]["exitCode"], 7);
+    assert_eq!(
+        records[0]["providerAudit"]["command"]["contractViolation"],
+        Value::Null
+    );
+    assert!(records[0]["providerAudit"].get("streamPhase").is_none());
+    drop(app);
+    assert!(broker.stop().await.is_clean());
+}
+
+#[tokio::test]
+async fn unavailable_download_credentials_are_refused_without_spawning() {
+    let mut declaration = manifest();
+    declaration["credential"] = json!({"kind":"username_token", "modes":["per_user"]});
+    let mut contract = Contract::new(&declaration);
+    contract.entry("tickets").max_download_bytes = Some(1024);
+    contract.respond("invoke", Some(FILE_RESPONSE));
+    let config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    import(&app, &contract.admin, "tickets", "tickets", &["per_user"]).await;
+    let runtime = broker.runtime();
+    let (token, _) = avery(&runtime, &config, &["tickets"]);
+    runtime
+        .create_managed_policy_grant(grant(
+            "personal-download",
+            "user:avery",
+            "tickets",
+            "time.now",
+            "per_user",
+            0,
+            ResourceSelection::default(),
+        ))
+        .unwrap();
+    let response = raw(&app, &token, "tickets", "download-credential-control").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        FILE
+    );
+    let before = contract.started("invoke").len();
+    runtime
+        .managed_store()
+        .unwrap()
+        .delete_user_credential(
+            "avery",
+            "tickets",
+            "default",
+            agent_access_core::CredentialManagementPurpose::Administrative,
+        )
+        .unwrap();
+    json_download_failure(
+        raw(&app, &token, "tickets", "download-credential-removed").await,
+        StatusCode::FORBIDDEN,
+        "credential_not_provisioned",
+    )
+    .await;
+    assert_eq!(contract.started("invoke").len(), before);
+    let records = contract.audited("download-credential-removed");
+    assert_eq!(records.len(), 1);
+    assert_ne!(records[0]["providerAudit"]["command"]["spawned"], true);
+    drop(app);
+    assert!(broker.stop().await.is_clean());
+}
+
+#[tokio::test]
+async fn broker_download_rate_exhaustion_is_refused_without_spawning() {
+    let mut contract = contract();
+    contract.fixture.config.limits.invocations.default =
+        Some(agent_access_core::InvocationLimitConfig {
+            requests: 1,
+            window: "1d".into(),
+        });
+    let broker = import_broker(&contract.fixture.config).await;
+    let app = broker.app();
+    import(&app, &contract.admin, "files", "tickets", &[]).await;
+    let token = agent(&contract, &broker, "files");
+    successful_file(&app, &token, "download-rate-control").await;
+    let before = contract.started("invoke").len();
+    let response = raw(&app, &token, "files", "download-rate-exhausted").await;
+    assert!(
+        response.headers()[RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > 0
+    );
+    let body = json_download_failure(response, StatusCode::TOO_MANY_REQUESTS, "rate_limited").await;
+    assert_eq!(body["service"], "broker");
+    assert_eq!(body["action"], "request.admit");
+    assert_eq!(contract.started("invoke").len(), before);
+    let records = contract.audited("download-rate-exhausted");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["reasonCode"], "rate_limited");
+    assert_ne!(records[0]["providerAudit"]["command"]["spawned"], true);
+    drop(app);
+    assert!(broker.stop().await.is_clean());
+}
+
+#[tokio::test]
+async fn unavailable_download_audit_is_refused_without_spawning() {
+    let contract = contract();
+    let broker = import_broker(&contract.fixture.config).await;
+    let app = broker.app();
+    import(&app, &contract.admin, "files", "tickets", &[]).await;
+    let token = agent(&contract, &broker, "files");
+    successful_file(&app, &token, "download-audit-control").await;
+    wait_until("successful download terminal audit", || {
+        contract.audited("download-audit-control").len() == 2
+    })
+    .await;
+    let audit = PathBuf::from(&contract.fixture.config.audit.as_ref().unwrap().path);
+    let saved = contract.fixture.path("audit-before-refusal.jsonl");
+    std::fs::rename(&audit, &saved).unwrap();
+    create_private_dir(&audit);
+    let before = contract.started("invoke").len();
+    let response = raw(&app, &token, "files", "download-audit-unavailable").await;
+    // Restore the sink before assertions so teardown can flush normally even
+    // if a response assertion fails.
+    std::fs::remove_dir(&audit).unwrap();
+    std::fs::rename(&saved, &audit).unwrap();
+    json_download_failure(
+        response,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "audit_unavailable",
+    )
+    .await;
+    assert_eq!(contract.started("invoke").len(), before);
+    successful_file(&app, &token, "download-audit-restored").await;
+    assert_eq!(contract.started("invoke").len(), before + 1);
+    drop(app);
+    assert!(broker.stop().await.is_clean());
+}
+
+#[tokio::test]
+async fn malformed_download_default_logs_omit_payload_and_stderr() {
+    assert_malformed_download_logs(false).await;
+}
+
+#[tokio::test]
+async fn malformed_download_stderr_logging_requires_explicit_opt_in() {
+    assert_malformed_download_logs(true).await;
+}
+
+async fn assert_malformed_download_logs(log_stderr: bool) {
+    const PAYLOAD: &str = "private-download-payload-sentinel-8042";
+    const STDERR: &str = "operator-stderr-sentinel-6159";
+    let encoded = BASE64.encode(PAYLOAD);
+    let mut contract = contract();
+    contract.entry("tickets").log_stderr = log_stderr;
+    let script = CONTRACT_COMMAND.replace("umask 077\n", "umask 077\nif [ -e \"$RESPONSES/$1.stderr\" ]; then cat \"$RESPONSES/$1.stderr\" >&2; fi\n");
+    std::fs::write(
+        &contract.fixture.config.command_imports["tickets"].path,
+        script,
+    )
+    .unwrap();
+    std::fs::write(
+        contract.fixture.path("responses/invoke.stderr"),
+        format!("{STDERR}\nnext\tline"),
+    )
+    .unwrap();
+    contract.respond("invoke", Some(&json!({"ok":true, "result":{"warning":PAYLOAD},
+            "download":{"content":format!("{encoded}!"), "filename":"report.bin", "contentType":"application/octet-stream"}}).to_string()));
+    let broker = import_broker(&contract.fixture.config).await;
+    let app = broker.app();
+    import(&app, &contract.admin, "files", "tickets", &[]).await;
+    let token = agent(&contract, &broker, "files");
+    let capture = install_trace_capture().start();
+    let body = json_download_failure(
+        capture
+            .run(raw(&app, &token, "files", "download-malformed-logging"))
+            .await,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "operation_failed",
+    )
+    .await;
+    assert_eq!(contract.started("invoke").len(), 1);
+    let records = contract.audited("download-malformed-logging");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["providerAudit"]["command"]["contractViolation"],
+        true
+    );
+    let events = capture.take_events();
+    let failures = events
+        .iter()
+        .filter(|event| event["event"] == "command_import_failed")
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1, "{events:?}");
+    assert_eq!(failures[0]["request_id"], body["brokerRequestId"]);
+    if log_stderr {
+        assert_eq!(failures[0]["stderr"], format!("{STDERR}\\nnext\tline"));
+    } else {
+        assert!(failures[0].get("stderr").is_none());
+        assert!(!serde_json::to_string(&events).unwrap().contains(STDERR));
+    }
+    for exposed in [
+        body.to_string(),
+        serde_json::to_string(&records).unwrap(),
+        serde_json::to_string(&events).unwrap(),
+    ] {
+        assert!(!exposed.contains(PAYLOAD));
+        assert!(!exposed.contains(&encoded));
+    }
+    assert!(!body.to_string().contains(STDERR));
+    assert!(!contract.audit_text().contains(STDERR));
+    drop(app);
+    assert!(broker.stop().await.is_clean());
+}
+
 #[tokio::test]
 async fn download_projections_agree_and_http_mcp_only_describes_the_action() {
     let contract = contract();
