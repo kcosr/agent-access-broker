@@ -472,15 +472,15 @@ fn collection(items: Vec<Value>, query: Option<&str>) -> Result<Value, ProviderE
 fn preview(value: &mut Value) {
     let mut truncated = false;
     for field in ["name", "description"] {
-        if let Some(Value::String(text)) = value.get_mut(field) {
-            if text.len() > TEXT_LIMIT {
-                let mut end = TEXT_LIMIT;
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                text.truncate(end);
-                truncated = true;
+        if let Some(Value::String(text)) = value.get_mut(field)
+            && text.len() > TEXT_LIMIT
+        {
+            let mut end = TEXT_LIMIT;
+            while !text.is_char_boundary(end) {
+                end -= 1;
             }
+            text.truncate(end);
+            truncated = true;
         }
     }
     if let Some(category) = value.get_mut("statusCategory") {
