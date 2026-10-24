@@ -65,11 +65,14 @@ All notable changes to this project are documented in this file.
   service TOML waits survive catalog edits alongside managed requests/window settings; startup
   and reload validate their names against the retained catalog. See
   [invocation limits](docs/configuration.md#service-invocation-limits).
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
+
 - **Configurable CLI and stdio MCP request timeout.** Set
   `[service].request_timeout_ms` to allow waiting plus execution; the default
   remains 30000 and download body idle timeout remains 30 seconds. Timeouts can
   leave a request queued or executing, so reconcile mutations before retrying.
   See [client timeouts](docs/cli.md#outbound-request-construction-and-timeouts).
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
 
 - **Jira project and search-field discovery.** The read-only `project.view`
   action and `jira project view` command describe an authorized project,
@@ -151,6 +154,7 @@ All notable changes to this project are documented in this file.
   executed and asks callers to wait for capacity without resubmitting pending
   calls. See [admission outcomes](docs/http-api.md#rate-limits) and
   [service detail](docs/http-api.md#live-service-limits).
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
 
 - **Download limits and privacy.** Command downloads validate explicit decoded
   and envelope limits within the command deadline, holding command capacity
