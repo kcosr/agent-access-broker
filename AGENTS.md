@@ -275,7 +275,7 @@ isolated broker and invokes it through the real `agent-access` binary.
 
 The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
 backend as a provider fixture and drives typed `agent-access jira issue
-view/search`, project issue-type discovery and its create workflow, and issue
+view/search`, live project listing, project issue-type discovery and its create workflow, and issue
 comment commands.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
@@ -376,8 +376,8 @@ binary and needs `python3`, whose absence fails it.
   them from `agent_access_provider` directly, not through core.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
-- `crates/agent-access-jira`: the Jira backend (`backend.rs` wire seam and HTTP
-  client, `custom_fields.rs` issue-view custom-field projection and validation,
+- `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
+  `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
   embedded hierarchy and custom fields belong only to `JiraIssueView`; search

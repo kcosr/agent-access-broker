@@ -33,6 +33,15 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Live Jira project listing.** The independently grantable, read-only
+  `project.list` action and `jira project list` command enumerate visible live
+  projects, filter current keys through effective grants, and support bounded
+  scans, confidential continuations, and whole-result Markdown. New
+  `providers.jira.listing` limits bound pages, HTTP attempts, and scanned bytes.
+  It is eligible for separately granted read-only trusted-identity paths.
+  Existing resource discovery and issue search are unchanged.
+  ([#58](https://github.com/kcosr/agent-access-broker/pull/58))
+
 - **Live GitLab project listing.** The separately grantable, read-only
   `project.list` action and `gitlab project list` command list current projects
   within effective repository grants, including namespace descendants and

@@ -1190,6 +1190,7 @@ async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
                     attachments: Default::default(),
                     content: Default::default(),
                     search: Default::default(),
+                    listing: Default::default(),
                     comments: Default::default(),
                     issue_links: Default::default(),
                 });

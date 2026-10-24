@@ -18,6 +18,7 @@ fn jira_configured(mut config: BrokerConfig) -> BrokerConfig {
             attachments: Default::default(),
             content: Default::default(),
             search: Default::default(),
+            listing: Default::default(),
             comments: Default::default(),
             issue_links: Default::default(),
         });

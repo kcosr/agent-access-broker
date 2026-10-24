@@ -216,6 +216,27 @@ async fn products_fixture(atlassian: &MockServer, token_profile: bool) -> OAuthF
 }
 
 impl OAuthFixture {
+    fn grant_collection(&self, service: &str, action: &str, resource: &str) {
+        self.runtime
+            .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
+                grant_id: None,
+                subjects: vec!["user:alice".into()],
+                service: service.into(),
+                actions: vec![action.into()],
+                resources: ResourceSelection {
+                    resource_ids: vec![resource.into()],
+                    resource_group_ids: vec![],
+                },
+                execution_contexts: vec!["default".into()],
+                credential_mode: "per_user".into(),
+                priority: None,
+                status: None,
+                description: None,
+                created_by: "admin".into(),
+            })
+            .unwrap();
+    }
+
     fn grant_product(&self, principal: &str, service: &str, actions: &[&str], resource: &str) {
         self.runtime
             .create_managed_policy_grant(ManagedPolicyGrantCreateRequest {
@@ -545,6 +566,155 @@ async fn a_person_reads_jira_and_a_personal_confluence_space_through_the_gateway
         assert_eq!(record["credentialConnection"], "atlassian", "{record}");
         assert_eq!(record["decision"], "allow", "{record}");
     }
+}
+
+/// Listing uses the admitted person's real connection, refreshes a rejected
+/// access token once, and filters live keys without project-detail lookups.
+#[tokio::test]
+async fn jira_project_listing_uses_oauth_refresh_and_filters_the_live_collection() {
+    let atlassian = MockServer::start().await;
+    let fixture = products_fixture(&atlassian, false).await;
+    fixture.grant_collection("jira", "project.list", "jira-eng");
+    fixture.atlassian_connected(&atlassian, 1, "connect").await;
+    let consented = atlassian.received_requests().await.unwrap().len();
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({"grant_type":"refresh_token", "refresh_token":"atlassian-refresh-1"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(token(2, None)))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&atlassian)
+        .await;
+    let collection = format!("{JIRA_GATEWAY}/project/search");
+    mount_gateway(
+        &atlassian,
+        &collection,
+        1,
+        ResponseTemplate::new(401).set_body_string("PRIVATE_REJECTION"),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(collection.as_str()))
+        .and(header_is("authorization", "Bearer atlassian-access-2"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "2"))
+        .and(query_param("orderBy", "key"))
+        .and(query_param("status", "live"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt":0, "maxResults":2, "isLast":true, "values":[
+                {"id":"10","key":"ENG","name":"Engineering"},
+                {"id":"999","key":"HIDDEN","name":"PRIVATE_PROJECT"}
+            ]
+        })))
+        .mount(&atlassian)
+        .await;
+    let (status, body) = fixture
+        .invoke_product(
+            "jira",
+            "project.list",
+            "jira-project-oauth",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["result"]["count"], 1);
+    assert_eq!(body["result"]["items"][0]["key"], "ENG");
+    assert_eq!(body["result"]["scanStatus"], "exhausted");
+    assert!(!body.to_string().contains("PRIVATE_"));
+    assert_eq!(refreshes(&atlassian, consented).await, 1);
+    assert_eq!(
+        gateway_requests(&atlassian, consented).await,
+        [
+            format!("GET {collection} Bearer atlassian-access-1"),
+            format!("GET {collection} Bearer atlassian-access-2"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn jira_project_listing_honors_token_resource_and_action_ceilings() {
+    let atlassian = MockServer::start().await;
+    let fixture = products_fixture(&atlassian, false).await;
+    fixture
+        .runtime
+        .create_managed_resource(CreateResourceRequest {
+            id: Some("jira-ops".into()),
+            display_name: None,
+            resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+            selector: ResourceSelector::Exact {
+                value: "OPS".into(),
+            },
+            allowed_execution_contexts: vec!["default".into()],
+            enabled: true,
+            attributes: Default::default(),
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    for resource in ["jira-eng", "jira-ops"] {
+        fixture.grant_collection("jira", "project.list", resource);
+    }
+    fixture.atlassian_connected(&atlassian, 1, "connect").await;
+    let collection = format!("{JIRA_GATEWAY}/project/search");
+    mount_gateway(
+        &atlassian,
+        &collection,
+        1,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "startAt":0,"maxResults":2,"isLast":true,"values":[
+                {"id":"10","key":"ENG","name":"Engineering"},
+                {"id":"20","key":"OPS","name":"Operations"}
+            ]
+        })),
+    )
+    .await;
+    let issue = |name: &str, actions: Vec<&str>| {
+        fixture.runtime.managed_store().unwrap().issue_broker_token(
+            fixture.runtime.broker_token_hasher().unwrap(),BrokerTokenIssueRequest {
+                principal_id:"alice".into(),name:name.into(),token_class:BrokerTokenClass::AgentInvoke,
+                scopes:json!({"allowedExecutionContexts":["default"],"allowedServices":["jira"],"serviceRestrictions":{"jira":{"actions":actions,"resources":{"resourceIds":["jira-eng"]}}}}),
+                expires_at:None,created_by:"test".into(),
+            }
+        ).unwrap().token
+    };
+    let narrow = issue("one project", vec!["project.list"]);
+    let search_only = issue("search only", vec!["search"]);
+    let (status, broad) = fixture
+        .invoke_product(
+            "jira",
+            "project.list",
+            "list-broad",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{broad}");
+    assert_eq!(broad["result"]["count"], 2);
+    let (status, narrow) = fixture
+        .invoke_as(
+            &narrow,
+            "jira",
+            "project.list",
+            "list-narrow",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{narrow}");
+    assert_eq!(narrow["result"]["count"], 1);
+    assert_eq!(narrow["result"]["items"][0]["key"], "ENG");
+    assert!(!narrow.to_string().contains("Operations"));
+    let before = atlassian.received_requests().await.unwrap().len();
+    let (status, denied) = fixture
+        .invoke_as(
+            &search_only,
+            "jira",
+            "project.list",
+            "list-token-denied",
+            json!({"maxResults":2}),
+        )
+        .await;
+    assert!(!status.is_success(), "{denied}");
+    assert_eq!(atlassian.received_requests().await.unwrap().len(), before);
 }
 
 /// Another request refreshes while one is in flight with the earlier

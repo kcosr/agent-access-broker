@@ -28,6 +28,11 @@ helpers. It does
 not expose generic `invoke`/`send` tools, broker management operations, or
 gateway execution. Discovery helpers can describe that separate surface.
 
+Jira `project.list` lists live authorized projects with only `maxResults` and
+`pageToken`. It has independent action permission and supports whole-result
+Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
+`exhausted`; issue search and local `resources_list` retain their own contracts.
+
 GitLab `project.list` lists live authorized repositories, including archived
 projects, and accepts only `maxResults` and `pageToken`. It is independently
 grantable from `project.search`, which adds optional project filters;

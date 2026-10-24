@@ -192,6 +192,15 @@ action: a bounded log read remains a chunk. Use dedicated typed downloads or
 
 ## Jira
 
+For live authorized projects, use `agent-access invoke jira.project.list --input-json '{"maxResults":50}'`.
+This separately grantable action accepts only pagination, lists live projects,
+and does not grant issue access. Continue `nextPageToken` as `pageToken` with
+unchanged `maxResults` through `more` and empty `scan_budget` pages until
+`exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
+by configuration at 100. Results contain `items`, `count`, `maxResults`, and
+`scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
+page and reject changed authority. Local resource discovery is unchanged.
+
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
 `components`, `fixVersions`, `affectedVersions`, and `statusCategory`. These
 keys are always present in detailed JSON; null can mean unset, hidden, or not
@@ -276,7 +285,7 @@ Jira embedded normalization is advertised by `issue.view`, `issue.create`,
 `issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
 `comment.update`. Markdown/text companions are added beside the owning issue or
 comment while its ADF remains unchanged. Whole-result Markdown is advertised by
-`issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
+`project.list`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
 `comment.property.list`, `comment.property.get`, `attachment.list`, and
 `verify`. Body-free searches and lists remain body-free; their whole-result
 renderer does not fetch additional bodies. Semantic Markdown emits copyable

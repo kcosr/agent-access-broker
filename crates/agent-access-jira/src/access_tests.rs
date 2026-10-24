@@ -1431,3 +1431,193 @@ async fn oauth_issue_view_discloses_embedded_links_through_the_gateway() {
         ]
     );
 }
+
+#[tokio::test]
+async fn project_listing_counts_oauth_replay_and_shares_one_recovery_across_pages() {
+    for attempts in [1, 2, 8] {
+        let server = MockServer::start().await;
+        let mut provider = provider(&server);
+        provider.config.listing.max_upstream_requests = attempts;
+        let lease = Lease::new(CLOUD_ID);
+        let credential = delegated_credential(lease.clone());
+        let route = format!("{GATEWAY}/project/search");
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .and(header("authorization", "Bearer oauth-1"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("PRIVATE_ERROR"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET")).and(path(&route)).and(header("authorization", "Bearer oauth-2"))
+            .and(query_param("startAt", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"startAt":0,"maxResults":1,"isLast":false,"values":[{"id":"99","key":"HIDDEN"}]})))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path(&route))
+            .and(header("authorization", "Bearer oauth-2"))
+            .and(query_param("startAt", "1"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let request = InvocationBuilder::new("jira", "project.list")
+            .inputs(json!({"maxResults":1}))
+            .credential_mode(CredentialMode::PerUser)
+            .delegated(credential)
+            .search(SearchAuthorization::new(
+                "project",
+                SearchAuthorizationScope::from_selectors(
+                    vec![ResourceSelector::Exact {
+                        value: "ENG".into(),
+                    }],
+                    vec![],
+                ),
+            ))
+            .build();
+        let result = provider.invoke(request).await;
+        if attempts == 2 {
+            let result = result.unwrap();
+            assert_eq!(result.result["scanStatus"], "scan_budget");
+            assert_eq!(result.result["count"], 0);
+        } else {
+            assert_eq!(
+                result.unwrap_err().reason_code(),
+                if attempts == 1 {
+                    ReasonCode::UpstreamProtocolFailed
+                } else {
+                    ReasonCode::CredentialInvalid
+                }
+            );
+        }
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            if attempts == 8 {
+                3
+            } else if attempts == 1 {
+                0
+            } else {
+                attempts as usize
+            }
+        );
+        assert_eq!(
+            lease.recoveries.load(Ordering::SeqCst),
+            usize::from(attempts > 1)
+        );
+        assert_eq!(
+            lease.rejected(),
+            if attempts == 8 {
+                vec!["v1".to_string(), "v2".to_string()]
+            } else if attempts == 1 {
+                vec![]
+            } else {
+                vec!["v1".to_string()]
+            }
+        );
+    }
+}
+
+fn listing_request(credential: &DelegatedCredential, input: Value) -> ProviderInvocation {
+    InvocationBuilder::new("jira", "project.list")
+        .inputs(input)
+        .credential_mode(CredentialMode::PerUser)
+        .delegated(credential.clone())
+        .search(SearchAuthorization::new(
+            "project",
+            SearchAuthorizationScope::from_selectors(
+                vec![
+                    ResourceSelector::Exact {
+                        value: "ENG".into(),
+                    },
+                    ResourceSelector::Exact {
+                        value: "OPS".into(),
+                    },
+                ],
+                vec![],
+            ),
+        ))
+        .build()
+}
+
+#[tokio::test]
+async fn project_listing_reserves_replay_before_the_last_budgeted_page() {
+    let server = MockServer::start().await;
+    let mut p = provider(&server);
+    p.config.listing.max_upstream_requests = 4;
+    p.config.listing.max_candidate_pages = 4;
+    let lease = Lease::new(CLOUD_ID);
+    let credential = delegated_credential(lease.clone());
+    let route = format!("{GATEWAY}/project/search");
+    for offset in 0..3 {
+        Mock::given(path(&route)).and(query_param("startAt",offset.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"startAt":offset,"maxResults":1,"isLast":false,"values":[{"id":format!("{}",90+offset),"key":"HIDDEN"}]})))
+            .mount(&server).await;
+    }
+    Mock::given(path(&route))
+        .and(query_param("startAt", "3"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let result = p
+        .invoke(listing_request(&credential, json!({"maxResults":1})))
+        .await
+        .unwrap();
+    assert_eq!(result.result["scanStatus"], "scan_budget");
+    assert_eq!(result.result["count"], 0);
+    assert!(result.result["nextPageToken"].is_string());
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert!(lease.rejected().is_empty());
+}
+
+#[tokio::test]
+async fn project_listing_fences_a_rejected_version_even_when_its_body_exceeds_budget() {
+    let server = MockServer::start().await;
+    let mut p = provider(&server);
+    p.config.listing.max_scan_bytes = 1;
+    let lease = Lease::new(CLOUD_ID);
+    let credential = delegated_credential(lease.clone());
+    Mock::given(path(format!("{GATEWAY}/project/search")))
+        .respond_with(ResponseTemplate::new(401).set_body_string("PRIVATE_ERROR"))
+        .mount(&server)
+        .await;
+    assert!(
+        p.invoke(listing_request(&credential, json!({})))
+            .await
+            .is_err()
+    );
+    assert_eq!(lease.rejected(), vec!["v1"]);
+    assert_eq!(lease.recoveries.load(Ordering::SeqCst), 0);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn project_listing_continuations_survive_access_refresh_but_not_a_credential_method_change() {
+    let server = MockServer::start().await;
+    let p = provider(&server);
+    let lease = Lease::new(CLOUD_ID);
+    let credential = delegated_credential(lease.clone());
+    let route = format!("{GATEWAY}/project/search");
+    for (offset, version, key) in [(0, 1, "ENG"), (1, 2, "OPS")] {
+        Mock::given(path(&route)).and(query_param("startAt",offset.to_string())).and(header("authorization",format!("Bearer oauth-{version}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"startAt":offset,"maxResults":1,"isLast":false,"values":[{"id":format!("{}",offset+10),"key":key,"name":key}]}))).mount(&server).await;
+    }
+    let first = p
+        .invoke(listing_request(&credential, json!({"maxResults":1})))
+        .await
+        .unwrap();
+    let resumed = listing_request(
+        &credential,
+        json!({"maxResults":1,"pageToken":first.result["nextPageToken"]}),
+    );
+    let static_request = InvocationBuilder::from(resumed.clone())
+        .credential(bearer_credential("static-token"))
+        .build();
+    assert_eq!(
+        p.invoke(static_request).await.unwrap_err().reason_code(),
+        ReasonCode::InputInvalid
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    // A different operation refreshed this same connection; the binding is unchanged.
+    lease.current.store(2, Ordering::SeqCst);
+    let second = p.invoke(resumed).await.unwrap();
+    assert_eq!(second.result["items"][0]["key"], "OPS");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}

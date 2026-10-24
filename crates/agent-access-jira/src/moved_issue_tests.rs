@@ -23,6 +23,16 @@ impl MovingJira {
 
 #[async_trait]
 impl JiraBackend for MovingJira {
+    async fn project_list(
+        &self,
+        _request: JiraProjectListRequest,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "unexpected project listing in this fixture".to_string(),
+        ))
+    }
+
     async fn issue_metadata(
         &self,
         issue_key: &str,

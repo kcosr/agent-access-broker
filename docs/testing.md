@@ -1171,7 +1171,7 @@ responses; they do not validate a live tenant.
 Capability projection tests require `readContentFormats` on exactly
 `issue.view`, `issue.create`, `issue.update`, `comment.view`, `comment.add`,
 `comment.reply`, and `comment.update`. They require `responseFormats` on exactly
-`issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
+`project.list`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
 `comment.property.list`, `comment.property.get`, `attachment.list`, and
 `verify`. Representative child-create, property mutation, attachment mutation,
 and raw-download actions assert absence rather than accepting a compatibility

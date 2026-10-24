@@ -501,6 +501,8 @@ pub struct AtlassianClients {
     pub site_base: Url,
     pub client: UpstreamClient,
     pub stream_client: UpstreamClient,
+    /// Bounded collection operations account for every HTTP attempt themselves.
+    pub single_attempt_client: UpstreamClient,
 }
 
 impl AtlassianClients {
@@ -546,6 +548,7 @@ impl AtlassianClients {
         Ok(Self {
             client: client(ClientProfile::Request)?,
             stream_client: client(ClientProfile::Stream)?,
+            single_attempt_client: client(ClientProfile::SingleAttempt)?,
             api_base,
             site_base,
         })
@@ -1400,7 +1403,20 @@ mod tests {
             format!("https://api.atlassian.com/ex/confluence/{CLOUD_ID}/")
         );
         let built = host.built_clients();
-        assert_eq!(built.len(), 4);
+        assert_eq!(built.len(), 6);
+        for profile in [
+            ClientProfile::Request,
+            ClientProfile::Stream,
+            ClientProfile::SingleAttempt,
+        ] {
+            assert_eq!(
+                built
+                    .iter()
+                    .filter(|client| client.profile == profile)
+                    .count(),
+                2
+            );
+        }
         assert!(built.iter().all(|client| client.provider == "confluence"
             && client.label == "providers.confluence.egress_proxy"));
 
@@ -1418,7 +1434,7 @@ mod tests {
                 )))
                 .is_ok()
         );
-        assert_eq!(host.built_clients().len(), 4);
+        assert_eq!(host.built_clients().len(), 6);
         let routes =
             AtlassianRoutes::new(PRODUCT, &site(None, &allowed), &TestHost::default()).unwrap();
         assert_eq!(

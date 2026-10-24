@@ -902,7 +902,7 @@ Each typed Jira command lowers to a generic `invoke` of the corresponding
 `jira.<action>` (`POST /v1/invoke/jira/<action>`). There are no typed HTTP
 routes; typed commands only build the invoke input for you.
 
-The typed Jira family covers issue view/create/update/search, parented child
+The typed Jira family covers project listing, issue view/create/update/search, parented child
 creation, parent assignment, dependency links, issue comments and comment
 properties, issue attachments, and verification helpers. Issue locators accept
 issue keys and, where documented, tenant browser URLs. Provider-specific
@@ -955,7 +955,7 @@ always preserve the JSON envelope.
 
 For Jira, embedded read formats are supported by `issue view`, `issue create`,
 `issue update`, `issue comment view`, `issue comment add`, `issue comment reply`,
-and `issue comment update`. Whole-result output is supported by `issue-type list`, `issue view`,
+and `issue comment update`. Whole-result output is supported by `project list`, `issue-type list`, `issue view`,
 `issue search`, `issue comment list`, `issue comment view`, `issue comment
 property list`, `issue comment property get`, `issue attachment list`, and
 `issue verify`. Other Jira typed commands reject these flags during argument
@@ -1379,6 +1379,13 @@ agent-access --url http://127.0.0.1:8787 \
 ```
 
 ### Jira (typed)
+
+Use `jira project list` for live projects allowed by the action’s effective
+grants. Optional `--max-results` defaults to the configured limit (50; at most
+100). Pass `--page-token` from `nextPageToken` with the same page size until
+`scanStatus` is `exhausted`, including after empty `scan_budget` pages.
+`--output-format markdown` renders the collection and its pagination state.
+See [live project listing](providers-jira.md#live-project-listing).
 
 Use `jira issue-type list --project PROJ` before creation to discover names,
 descriptions, decimal-string IDs, and subtask markers. Optional `--start-at`

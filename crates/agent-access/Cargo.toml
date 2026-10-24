@@ -40,7 +40,7 @@ agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
 agent-access-confluence = { path = "../agent-access-confluence" }
 agent-access-fake = { path = "../agent-access-fake" }
 agent-access-gitlab = { path = "../agent-access-gitlab" }
-agent-access-jira = { path = "../agent-access-jira" }
+agent-access-jira = { path = "../agent-access-jira", features = ["test-support"] }
 jsonschema.workspace = true
 wiremock.workspace = true
 agent-access-broker = { path = "../agent-access-broker" }

@@ -1765,6 +1765,10 @@ struct TokenResourceReference {
 
 #[derive(Debug, Subcommand)]
 enum JiraCommand {
+    Project {
+        #[command(subcommand)]
+        command: JiraProjectCommand,
+    },
     IssueType {
         #[command(subcommand)]
         command: JiraIssueTypeCommand,
@@ -1772,6 +1776,18 @@ enum JiraCommand {
     Issue {
         #[command(subcommand)]
         command: JiraIssueCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum JiraProjectCommand {
+    List {
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
+        max_results: Option<u32>,
+        #[arg(long)]
+        page_token: Option<String>,
+        #[arg(long, value_enum)]
+        output_format: Option<OutputFormatArg>,
     },
 }
 
@@ -14401,6 +14417,30 @@ fn insert_jira_content_inputs(
 
 async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result<()> {
     match command {
+        JiraCommand::Project {
+            command:
+                JiraProjectCommand::List {
+                    max_results,
+                    page_token,
+                    output_format,
+                },
+        } => {
+            let mut inputs = serde_json::Map::new();
+            if let Some(max_results) = max_results {
+                inputs.insert("maxResults".to_string(), serde_json::json!(max_results));
+            }
+            if let Some(page_token) = page_token {
+                inputs.insert("pageToken".to_string(), serde_json::json!(page_token));
+            }
+            run_typed_invoke_value(
+                ctx,
+                "jira.project.list",
+                inputs.into(),
+                None,
+                *output_format,
+            )
+            .await
+        }
         JiraCommand::IssueType {
             command:
                 JiraIssueTypeCommand::List {
@@ -18857,6 +18897,7 @@ upload_spool_dir = "upload-spool"
         }
 
         let whole_result = [
+            (&["jira", "project", "list"][..], "project.list"),
             (&["jira", "issue-type", "list"][..], "issue_type.list"),
             (&["jira", "issue", "view"][..], "issue.view"),
             (&["jira", "issue", "search"][..], "search"),

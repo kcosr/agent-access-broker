@@ -1899,7 +1899,7 @@ is forwarded upstream.
 
 Jira advertises embedded formats on `issue.view`, `issue.create`,
 `issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
-`comment.update`. Jira whole-result Markdown is advertised on `issue_type.list`, `issue.view`,
+`comment.update`. Jira whole-result Markdown is advertised on `project.list`, `issue_type.list`, `issue.view`,
 `search`, `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`.
 

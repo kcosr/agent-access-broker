@@ -9,6 +9,7 @@ mod custom_fields;
 mod issue_view_context;
 mod jql;
 mod present;
+mod project_list;
 mod search_continuation;
 mod search_diagnostics;
 #[cfg(test)]
@@ -77,6 +78,7 @@ pub struct JiraProvider {
     /// Search continuations, sealed with this instance's generation key.
     search_pages: SearchPages,
     search_configuration: [u8; 32],
+    listing_signer: ContinuationSigner,
     /// The cloud ID of the site's gateway route, which delegated access is
     /// pinned to; `None` when the site has no gateway route (no valid
     /// cloud ID).
@@ -100,6 +102,7 @@ impl JiraProvider {
         let limits = host.limits().clone();
         Self {
             search_pages: SearchPages::new(&limits),
+            listing_signer: ContinuationSigner::new(host.stable_signing_key().cloned()),
             search_configuration: config.site().route_fingerprint(),
             gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
@@ -116,6 +119,7 @@ impl JiraProvider {
     ) -> Self {
         Self {
             search_pages: SearchPages::new(&limits),
+            listing_signer: ContinuationSigner::new(None),
             search_configuration: config.site().route_fingerprint(),
             gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
@@ -817,6 +821,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         )
         .lookup(LookupRequirement::ScopeResolution),
     ];
+    actions.push(project_list::descriptor(&config.listing));
     if !config
         .content
         .comment_formats
@@ -876,6 +881,10 @@ impl JiraProvider {
     /// may be a previous project key, so only Jira's metadata names its project.
     fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
+            "project.list" => {
+                project_list::parse_inputs(inputs, &self.config.listing)?;
+                Ok(BTreeMap::from([("project".to_string(), vec![])]))
+            }
             "issue_type.list" => {
                 let inputs = parse_issue_type_list_inputs(inputs)?;
                 Ok(BTreeMap::from([(
@@ -968,7 +977,9 @@ impl JiraProvider {
                     issue_scopes_from_metadata(&response.value)
                 }
             }
-            "issue_type.list" | "issue.create" | "search" => self.local_scopes(action, inputs),
+            "project.list" | "issue_type.list" | "issue.create" | "search" => {
+                self.local_scopes(action, inputs)
+            }
             _ => Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
                 "Jira action is not supported",
@@ -1041,6 +1052,7 @@ impl Provider for JiraProvider {
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         match request.action() {
+            "project.list" => self.invoke_project_list(request).await,
             "issue_type.list" => self.invoke_issue_type_list(request).await,
             "issue.view" => self.invoke_issue_view(request).await,
             "issue.create" => self.invoke_issue_create(request).await,

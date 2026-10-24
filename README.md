@@ -44,13 +44,18 @@ Native integrations pair action permissions with the following resource controls
 
 | Integration | Supported operations | Resource controls |
 | --- | --- | --- |
-| [Jira](docs/providers-jira.md) | Issues, search, comments, and attachments | Projects |
+| [Jira](docs/providers-jira.md) | Live project listing, issues, search, comments, and attachments | Projects |
 | [Confluence](docs/providers-confluence.md) | Pages, blogs, drafts, comments, and attachments | Spaces, including personal spaces |
 | [GitLab REST](docs/providers-gitlab-rest.md) | Repository discovery, content search, issues, merge requests, CI, uploads, and webhooks | Repositories and namespaces |
 | [CloudBees CI](docs/providers-cloudbees-ci.md) | Builds, Pipelines, logs, artifacts, queues, and triggers | Jobs, folders, and controllers |
 | [Teams Workflows](docs/providers-teams.md) | Notifications | Configured Workflow destinations |
 | [Git HTTP gateway](docs/git-http-gateway.md) | Git fetch and push | Repositories and namespaces |
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
+
+Jira’s separately grantable [`project.list`](docs/providers-jira.md#live-project-listing)
+action lists visible live projects within effective project grants. It needs only
+pagination inputs, supports service and personal credentials including OAuth,
+and returns confidential continuations when more scanning remains.
 
 Jira issue views include [resolution, dates, components, versions and status
 category](docs/providers-jira.md#standard-context), plus [supported custom-field

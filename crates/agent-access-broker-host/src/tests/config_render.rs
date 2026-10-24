@@ -1049,6 +1049,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         attachments,
         content,
         search,
+        listing,
         comments,
         issue_links,
     } = jira;
@@ -1081,6 +1082,15 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
             Fields::default()
                 .put("comment_formats", strings(comment_formats))
                 .int("max_body_bytes", *max_body_bytes)
+                .value(),
+        )
+        .put(
+            "listing",
+            Fields::default()
+                .int("max_results", listing.max_results)
+                .int("max_candidate_pages", listing.max_candidate_pages)
+                .int("max_upstream_requests", listing.max_upstream_requests)
+                .int("max_scan_bytes", listing.max_scan_bytes)
                 .value(),
         )
         .put("search", search_value(search))

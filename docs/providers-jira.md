@@ -180,7 +180,7 @@ Each action needs these Atlassian OAuth scopes:
 
 | Actions | Scopes |
 | --- | --- |
-| `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
+| `project.list`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
 | `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
 
 `read:jira-user` serves only token verification and is not needed. The
@@ -306,12 +306,63 @@ Discovery does not grant write access or guarantee creation succeeds: the
 broker's create actions do not expose arbitrary required custom fields, and
 Jira still validates parent/subtask compatibility and current permissions.
 
+## Live project listing
+
+`project.list` lists visible **live** projects through Jira Cloud’s project
+collection, in project-key order. Archived and deleted projects are excluded.
+The action is independently grantable from issue search and issue reads; an
+all-project grant can return projects absent from the local resource catalog.
+The selected service or personal credential (including Atlassian OAuth) supplies
+upstream visibility. No lookup credential or per-project detail request is used.
+
+```bash
+agent-access jira project list --max-results 50
+agent-access jira project list --max-results 50 --page-token '<nextPageToken>'
+agent-access jira project list --output-format markdown
+agent-access invoke jira.project.list --input-json '{"maxResults":50}'
+```
+
+Only `maxResults` and `pageToken` are accepted. The result contains `items`,
+`count`, `maxResults`, `scanStatus`, and a nonterminal `nextPageToken`.
+Each item contains `id`, current canonical `key`, `name`, optional
+`projectTypeKey`, and a tenant browser `webUrl`. Names exceeding 4096 UTF-8
+bytes become previews with `previewTruncated: true`. Current keys are checked
+against normalized grants, exclusions, execution context and token restrictions
+before metadata is released. Old registered project keys do not authorize a
+renamed live key. `count` is the released item count; no upstream total is exposed.
+
+`more` means a productive page with remaining upstream work; `scan_budget`
+means the work limit stopped scanning at a resumable boundary. Either can lead
+to another empty page: pass `nextPageToken` as `pageToken` with the same page
+size until `exhausted`. A narrow exact grant on a large tenant may need many
+empty continuations. Exhaustion describes the credential’s observed stream,
+not a complete grant inventory or a snapshot: concurrent changes may cause
+omissions or duplicates. Deduplicate by project ID when needed.
+
+Confidential tokens bind caller, action, execution context, credential method,
+route, listing limits, page size and effective scope. They expire 15 minutes
+after the first page; resuming does not extend expiry. A configured Broker
+signing key preserves tokens across restarts; without one they are generation
+scoped. Changed settings or authority require a fresh listing.
+
+`[providers.jira.listing]` defaults to `max_results = 50` (range 1–100),
+`max_candidate_pages = 4`, `max_upstream_requests = 8`, and
+`max_scan_bytes = 16777216` (16 MiB); work limits must be positive. Every HTTP
+attempt, including the invocation’s one shared OAuth replay, and every consumed
+response body counts. Before an OAuth page, an unused replay slot is reserved;
+a first page needs at least two attempts, and later calls stop at a resumable
+boundary when that reservation cannot fit. Per-response and result byte caps also apply. Oversized
+pages fail explicitly; start a fresh listing with a smaller `maxResults`.
+Permission failures, malformed pagination, rate limits and timeouts remain
+errors, never successful exhaustion. Jira’s `nextPage` URL is never followed.
+
 ## Actions and lookup requirements
 
-Twenty-two actions:
+Twenty-three actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
+| `project.list` | `project` | no |
 | `issue_type.list` | `project` | no |
 | `issue.view` | `project` | yes |
 | `issue.create` | `project` | no |
@@ -335,7 +386,7 @@ Twenty-two actions:
 | `attachment.list` | `project` | yes |
 | `verify` | `project` | yes |
 
-`issue_type.list`, `issue.create`, and `search` do not require pre-authorization metadata lookup.
+`project.list`, `issue_type.list`, `issue.create`, and `search` do not require pre-authorization metadata lookup.
 `issue.create` resolves scope from the caller-supplied project after input
 validation; `search` resolves scope from policy rather than from an upstream
 metadata lookup. `issue.child.create` is lookup-backed because the broker must
@@ -440,8 +491,8 @@ traversal without Markdown markers. Conversion is offline, preserves source
 order, never fetches linked content, and never truncates or returns a partial
 rendering.
 
-`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly nine
-retrievals advertise whole-result Markdown: `issue_type.list`, `issue.view`, `search`,
+`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly ten
+retrievals advertise whole-result Markdown: `project.list`, `issue_type.list`, `issue.view`, `search`,
 `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`. Their deterministic
 templates represent every meaningful present field, preserve exact identifiers,

@@ -469,6 +469,16 @@ impl StubJiraBackend {
 
 #[async_trait]
 impl JiraBackend for StubJiraBackend {
+    async fn project_list(
+        &self,
+        _request: JiraProjectListRequest,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "unexpected project listing in this fixture".to_string(),
+        ))
+    }
+
     async fn issue_types(
         &self,
         project: &str,
@@ -7346,7 +7356,7 @@ fn http_backend_routes_basic_and_bearer_credentials_to_matching_api_bases() {
 }
 
 #[test]
-fn build_creates_request_and_stream_clients_for_each_api_base() {
+fn build_creates_request_stream_and_single_attempt_clients_for_each_api_base() {
     let cloud_id = "11111111-1111-1111-1111-111111111111";
     let mut config = jira_config();
     config.cloud_id = Some(cloud_id.to_string());
@@ -7367,9 +7377,11 @@ fn build_creates_request_and_stream_clients_for_each_api_base() {
         built,
         [
             (label.clone(), tenant.clone(), ClientProfile::Request),
-            (label.clone(), tenant, ClientProfile::Stream),
+            (label.clone(), tenant.clone(), ClientProfile::Stream),
+            (label.clone(), tenant, ClientProfile::SingleAttempt),
             (label.clone(), gateway.clone(), ClientProfile::Request),
-            (label, gateway, ClientProfile::Stream),
+            (label.clone(), gateway.clone(), ClientProfile::Stream),
+            (label, gateway, ClientProfile::SingleAttempt),
         ]
     );
 }
@@ -9387,6 +9399,7 @@ fn jira_config_with_search_cap(max_results: u32) -> JiraProviderConfig {
             ..crate::JiraContentConfig::default()
         },
         search: SearchLimitsConfig { max_results },
+        listing: Default::default(),
         comments: crate::JiraCommentsConfig::default(),
         issue_links: crate::JiraIssueLinksConfig::default(),
     }

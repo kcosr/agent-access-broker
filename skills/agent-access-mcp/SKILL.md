@@ -179,6 +179,17 @@ or page fields, preserve required query settings, and stop when continuation
 ends or the user's requested scope is met. Never invent cursors or substitute
 raw offsets. A saved response still represents only the requested page or slice.
 
+## Jira project listing
+
+For live authorized projects, use the exposed Jira `project.list` tool with `{"inputs":{"maxResults":50}}`.
+This separately grantable action accepts only pagination, lists live projects,
+and does not grant issue access. Continue `nextPageToken` as `pageToken` with
+unchanged `maxResults` through `more` and empty `scan_budget` pages until
+`exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
+by configuration at 100. Results contain `items`, `count`, `maxResults`, and
+`scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
+page and reject changed authority. Local resource discovery is unchanged.
+
 ## Jira issue views
 
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
