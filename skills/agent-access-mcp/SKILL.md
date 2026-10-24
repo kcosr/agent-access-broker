@@ -247,8 +247,6 @@ by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
 page and reject changed authority. Local resource-access discovery describes policy and registered references.
 
-## Jira issue links
-
 ## Jira issue views
 
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
