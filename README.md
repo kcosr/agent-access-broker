@@ -57,10 +57,14 @@ action lists visible live projects within effective project grants. It needs onl
 pagination inputs, supports service and personal credentials including OAuth,
 and returns confidential continuations when more scanning remains.
 
-Jira issue views can include [linked issue titles, types and relationships](docs/providers-jira.md#issue-links)
+Jira issue views include [resolution, dates, components, versions and status
+category](docs/providers-jira.md#standard-context), plus [supported custom-field
+values and Jira display names](docs/providers-jira.md#custom-fields), with typed
+JSON and readable Markdown. They can also include [linked issue details](docs/providers-jira.md#issue-links)
+and [the direct parent and subtasks](docs/providers-jira.md#parent-and-subtasks)
 when effective `issue.view` access covers every project in the selected credential
-mode. Project restrictions or gaps in that coverage omit the entire links field;
-absence does not mean an issue has no links.
+mode. Gaps in that coverage withhold all three reference fields. Subtasks are
+not a complete list of epic children or descendants.
 
 GitLab's [live project listing](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
 action, `project.list`, returns authorized repositories, including namespace-granted

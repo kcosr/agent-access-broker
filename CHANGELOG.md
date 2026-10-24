@@ -78,6 +78,16 @@ All notable changes to this project are documented in this file.
   when separately granted. Local resource discovery is unchanged.
   ([#56](https://github.com/kcosr/agent-access-broker/pull/56))
 
+- **Richer Jira issue views.** `issue.view` returns resolution, dates, components,
+  versions, status category, and supported named custom fields, including Labels,
+  in typed JSON and readable Markdown. Custom fields have explicit unsupported
+  or withheld markers and rich-text companions. Callers with effective all-project
+  access in the selected credential mode now also receive embedded parent and
+  subtask metadata under the existing issue-link disclosure rule. The authorized
+  request fetches `*all` with names/schema metadata, excluding comments,
+  attachments, worklogs and, without universal access, issue references.
+  Existing response limits apply. See [issue views](docs/providers-jira.md#issueview).
+  ([#57](https://github.com/kcosr/agent-access-broker/pull/57), [#61](https://github.com/kcosr/agent-access-broker/pull/61))
 - **Resource types can opt out of group exclusions.** Command manifests can
   set `supportsExclusions: false`, and SDK descriptors offer
   `with_supports_exclusions(false)`. The portal hides unsupported exclusion
