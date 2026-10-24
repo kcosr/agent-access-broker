@@ -456,6 +456,8 @@ mod tests {
             dir.path().join("audit.jsonl").display().to_string(),
         ));
         if let Some(capacity) = capacity {
+            config.limits.max_concurrent_requests = capacity;
+            config.limits.max_concurrent_requests_per_principal = capacity;
             let audit = config.audit.as_mut().unwrap();
             audit.queue_capacity = capacity;
             audit.terminal_queue_capacity = Some(capacity);
