@@ -4,13 +4,13 @@ use super::*;
 #[test]
 fn custom_field_operators_render_canonical_jql_and_preserve_quoted_text() {
     for (input, expected) in [
-        ("CF[12345] = 'release'", "cf[12345] = release"),
+        ("CF[12345] = 'release'", "cf[12345] = \"release\""),
         ("cf[12345] != Done", "cf[12345] != Done"),
         ("cf[12345] < 10", "cf[12345] < 10"),
         ("cf[12345] <= 10.5", "cf[12345] <= 10.5"),
         ("cf[12345] > 10", "cf[12345] > 10"),
-        ("cf[12345] >= '2026-10-01'", "cf[12345] >= 2026-10-01"),
-        ("cf[12345] in ('red', blue)", "cf[12345] IN (red, blue)"),
+        ("cf[12345] >= '2026-10-01'", "cf[12345] >= \"2026-10-01\""),
+        ("cf[12345] in ('red', blue)", "cf[12345] IN (\"red\", blue)"),
         (
             "cf[12345] not in ('first value', second)",
             "cf[12345] NOT IN (\"first value\", second)",
@@ -31,6 +31,23 @@ fn custom_field_operators_render_canonical_jql_and_preserve_quoted_text() {
         projects("cf[12345] = OTHER-1 AND project = PROJ"),
         set(["PROJ"])
     );
+    // Jira reserves more words than Broker's structural keyword set. Preserve
+    // the caller's quotes for every custom-field string, including list values.
+    for value in ["No", "True", "False", "Default", "user", "date"] {
+        for operator in ["=", "!=", "<", "<=", ">", ">=", "~"] {
+            let input = format!("cf[12345] {operator} '{value}'");
+            let expected = format!("cf[12345] {operator} \"{value}\"");
+            assert_eq!(canonical_jql(&input), expected);
+            assert_eq!(canonical_jql(&expected), expected);
+        }
+        for operator in ["IN", "NOT IN"] {
+            let input = format!("cf[12345] {operator} ('{value}', other)");
+            let expected = format!("cf[12345] {operator} (\"{value}\", other)");
+            assert_eq!(canonical_jql(&input), expected);
+            assert_eq!(canonical_jql(&expected), expected);
+        }
+    }
+    assert_eq!(canonical_jql("status = 'Done'"), "status = Done");
 }
 
 #[test]
@@ -303,6 +320,36 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
             .message
             .contains("effective Jira project scope changed")
     );
+
+    let quoted = provider
+        .invoke(invoke(
+            "CF[12345] = 'No' AND cf[12346] IN ('True', 'False', 'Default')",
+            None,
+        ))
+        .await
+        .unwrap();
+    let quoted_token = quoted.result["nextPageToken"].as_str().unwrap();
+    provider
+        .invoke(invoke(
+            "cf[12345] = \"No\" AND cf[12346] IN (\"True\", \"False\", \"Default\")",
+            Some(quoted_token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.last_search.lock().unwrap().as_ref().unwrap().jql,
+        "(cf[12345] = \"No\" AND cf[12346] IN (\"True\", \"False\", \"Default\")) AND project IN (PROJ)"
+    );
+    // Removing quotes changes the canonical upstream query and cannot reuse
+    // a continuation issued for the quoted values.
+    let error = provider
+        .invoke(invoke(
+            "cf[12345] = No AND cf[12346] IN (True, False, Default)",
+            Some(quoted_token),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
 
     // Even a custom predicate which names another project cannot release its issues.
     let mut denied = page_with_upstream_token("private-upstream-cursor");

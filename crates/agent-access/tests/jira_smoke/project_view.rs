@@ -110,6 +110,12 @@ async fn mount(server: &MockServer) {
                 "visibleFieldNames":[
                     {"value":"External ticket number","displayName":"External ticket number","cfid":"cf[12345]","searchable":"true","operators":["~","!~"],"types":["java.lang.String"]},
                     {"value":"fixVersion","displayName":"Fix version","searchable":"true","operators":["=","in"],"types":["com.atlassian.jira.project.version.Version"]},
+                    {"value":"issuetype","displayName":"issuetype - Issue Type","searchable":"true","operators":["=","in"],"types":["com.atlassian.jira.issue.issuetype.IssueType"]},
+                    {"value":"type","displayName":"type - Issue Type","searchable":"true","operators":["=","in"],"types":["com.atlassian.jira.issue.issuetype.IssueType"]},
+                    {"value":"key","displayName":"key - Key","searchable":"true","operators":["="],"types":["java.lang.String"]},
+                    {"value":"issuekey","displayName":"issuekey - Key","searchable":"true","operators":["="],"types":["java.lang.String"]},
+                    {"value":"text","displayName":"Text","searchable":"true","operators":["~"],"types":["java.lang.String"]},
+                    {"value":"statusCategory","displayName":"Status Category","searchable":"true","operators":["="],"types":["java.lang.String"]},
                     {"value":"UNSUPPORTED_FIELD","displayName":"UNPROJECTED_FIELD","searchable":"true","operators":["~"],"types":["java.lang.String"]}
                 ],
                 "visibleFunctionNames":[{"value":"UNPROJECTED_FUNCTION()"}]
@@ -249,7 +255,7 @@ async fn jira_project_view_discovers_then_searches_across_cli_http_and_mcp() {
         assert_eq!(result["project"]["id"], "10001");
         assert_eq!(result["project"]["key"], "PROJ");
         assert_eq!(result["project"]["name"], "Visible project");
-        assert_eq!(result["fields"]["count"], 2);
+        assert_eq!(result["fields"]["count"], 4);
         assert_eq!(result["fields"]["truncated"], false);
         let custom = result["fields"]["items"]
             .as_array()
@@ -260,6 +266,32 @@ async fn jira_project_view_discovers_then_searches_across_cli_http_and_mcp() {
         assert_eq!(custom["name"], "External ticket number");
         assert_eq!(custom["jqlReference"], "cf[12345]");
         assert_eq!(custom["operators"], json!(["~"]));
+        let fields = result["fields"]["items"].as_array().unwrap();
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field["jqlReference"] == "issuetype")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field["jqlReference"] == "key")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field["jqlReference"] == "key")
+                .unwrap()["id"],
+            "issuekey"
+        );
+        assert!(
+            fields.iter().all(|field| field["jqlReference"] != "text"
+                && field["jqlReference"] != "statusCategory")
+        );
         for section in ["versions", "components", "issueTypes", "statuses"] {
             assert!(result.get(section).is_none(), "{result}");
         }

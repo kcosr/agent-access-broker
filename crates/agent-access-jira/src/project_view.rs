@@ -15,7 +15,7 @@ pub(crate) fn descriptor() -> ActionDescriptor {
         "properties":{
             "project":{"type":"string","pattern":JIRA_PROJECT_KEY_PATTERN},
             "include":{"type":"array","uniqueItems":true,"maxItems":5,"default":["fields"],"items":{"type":"string","enum":SECTIONS}},
-            "query":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive name, ID or JQL reference substring filter for included collections"}
+            "query":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive name, ID or JQL reference substring filter, at most 256 characters"}
         }
     }))
     .sensitive_output("/result/project/name")
@@ -27,8 +27,8 @@ pub(crate) fn descriptor() -> ActionDescriptor {
     .sensitive_output("/result/statuses/items")
     .documentation(json!({
         "discovery":"Project identity is always returned. include defaults to fields; [] requests identity only. Other sections are versions, components, issueTypes and statuses. This is a searchable field catalog, not an inventory of every field context, allowed value, or creation requirement. System fields are site-wide; Jira restricts custom fields to the project.",
-        "fields":"Each field has id, name, jqlReference, types and operators. Custom field IDs use customfield_N and JQL references use cf[N]. Operators are the intersection of Jira's reported capabilities and Broker's restricted JQL grammar. Types retain Jira's type names. Text matching (~) is not whole-value equality. Searches remain separately authorized.",
-        "limits":"Each included collection contains at most 100 items, with count and truncated. query filters names, IDs and JQL references before the cap; narrow it when truncated is true. Names and descriptions are limited to 4096 UTF-8 bytes, with previewTruncated on shortened objects. HTTP responses and the combined result remain subject to the provider byte cap. No automatic pagination or field-option enumeration occurs.",
+        "fields":"Each field has id, name, jqlReference, types and operators. Custom field IDs use customfield_N and JQL references use cf[N]. System clause aliases and the JQL-only text and statusCategory clauses are omitted; the key clause has REST field ID issuekey. Operators are the intersection of Jira's reported capabilities and Broker's restricted JQL grammar. Types retain Jira's type names. Text matching (~) is not whole-value equality. Searches remain separately authorized.",
+        "limits":"Each included collection contains at most 100 items, with count and truncated. query is at most 256 characters and filters names, IDs and JQL references before the cap; narrow it when truncated is true. Names and descriptions are limited to 4096 UTF-8 bytes, with previewTruncated on shortened objects. HTTP responses and the combined result remain subject to the provider byte cap. No automatic pagination or field-option enumeration occurs.",
         "authorization":"Uses the selected execution credential and Browse Projects access. The current project key must equal the authorized key before any field or status discovery. No lookup credential or create/admin metadata API is used.",
         "examples":[{"project":"PROJ"},{"project":"PROJ","include":["fields","versions"],"query":"external"}]
     }))
@@ -96,7 +96,7 @@ pub(crate) fn parse_inputs(value: &Value) -> Result<Inputs, ProviderError> {
                 .as_str()
                 .filter(|query| {
                     !query.trim().is_empty()
-                        && query.len() <= 256
+                        && query.chars().count() <= 256
                         && !query.chars().any(char::is_control)
                 })
                 .ok_or_else(invalid)?;
@@ -361,11 +361,11 @@ fn searchable_fields(value: &Value) -> Result<Vec<Value>, ProviderError> {
             None | Some("true") => {}
             _ => return Err(protocol()),
         }
-        let reference = match value.get("cfid") {
+        let upstream_reference = match value.get("cfid") {
             Some(value) => value.as_str().ok_or_else(protocol)?,
             None => required_string(value, "value")?,
         };
-        let Some((reference, supported)) = jql::jql_field_capabilities(reference) else {
+        let Some((reference, supported)) = jql::jql_field_capabilities(upstream_reference) else {
             continue;
         };
         // A custom descriptor must carry an explicit cf[N] identity; human names
@@ -379,7 +379,17 @@ fn searchable_fields(value: &Value) -> Result<Vec<Value>, ProviderError> {
         {
             format!("customfield_{id}")
         } else {
+            // Jira advertises aliases as separate rows, with distinct display
+            // names. Keep its canonical row rather than treating alias metadata
+            // as a conflicting field identity. The master text clause and the
+            // status-derived category have no corresponding REST field ID.
+            if matches!(reference.as_str(), "text" | "statusCategory")
+                || !upstream_reference.eq_ignore_ascii_case(&reference)
+            {
+                continue;
+            }
             match reference.as_str() {
+                "key" => "issuekey",
                 "component" => "components",
                 "fixVersion" => "fixVersions",
                 "affectedVersion" => "versions",

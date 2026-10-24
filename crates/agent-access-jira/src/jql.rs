@@ -972,7 +972,11 @@ impl JqlValue {
             Self::Identifier(value) => jql_bare_or_string_literal(value),
             Self::Date(value) if is_safe_jql_bare_date(value) => value.clone(),
             Self::Date(value) => jql_string_literal(value),
-            Self::String(value) if field.is_text() || operator == JqlOperator::Contains => {
+            Self::String(value)
+                if field.is_text()
+                    || matches!(field, JqlField::Custom(_))
+                    || operator == JqlOperator::Contains =>
+            {
                 jql_string_literal(value)
             }
             Self::String(value) => jql_bare_or_string_literal(value),

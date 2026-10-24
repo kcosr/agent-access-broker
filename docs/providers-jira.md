@@ -383,7 +383,7 @@ Projects access. Discovery does not grant search or issue access.
 `include` selects any of `fields`, `versions`, `components`, `issueTypes`, and
 `statuses`. Omitting it selects only `fields`; an empty array requests only
 project details. Typed CLI uses comma-separated `--include` values. Optional
-`query` (`--query`) accepts at most 256 UTF-8 bytes, contains no control
+`query` (`--query`) accepts at most 256 Unicode characters, contains no control
 characters, and must be nonempty after trimming. It filters each requested
 collection by case-insensitive name or ID substring,
 also matching `jqlReference` for fields, before the item cap. Use it to narrow
@@ -404,6 +404,10 @@ Each `fields.items` entry contains:
 | `jqlReference` | Broker-supported query reference, such as `cf[12345]`. |
 | `types` | Jira's reported search types. |
 | `operators` | Operators supported by both Jira's discovery response and Broker's parser. |
+
+System-field clause aliases are consolidated to canonical query references.
+The JQL-only `text` and `statusCategory` clauses remain available in search but
+are not field entries.
 
 Versions include their ID, name, description, released/archived flags and
 optional release and start dates. Components include ID, name and description. Issue
@@ -1405,6 +1409,8 @@ Supported JQL is intentionally bounded:
   selected field; Jira validates type compatibility. `~` requires a quoted
   string. Custom-field values use the existing scalar/list literal grammar
   and limits; functions and custom-field sorting are not supported.
+  Quoted custom-field values remain quoted, including option names such as
+  `"No"` or `"Default"` that Jira reserves as unquoted keywords.
 
 Custom-field IDs must be positive decimal integers within the unsigned 64-bit
 range, with no leading zero, sign, or whitespace inside `cf[...]`. The `cf`
@@ -1488,8 +1494,9 @@ A search result's `nextPageToken` is an opaque broker-signed continuation, not
 Jira's own token. To fetch the next page, pass it back unchanged as
 `nextPageToken` with the same search:
 
-- the same `query` type and canonical JQL (equivalent spellings, such as quoted
-  and bare values, are the same query);
+- the same `query` type and canonical JQL (single- and double-quoted strings
+  normalize alike; custom-field strings retain quotes and remain distinct
+  from bare values);
 - the same `projects`, compared as a set;
 - the same effective `maxResults`; an omitted value equals the configured
   default, and values above `providers.jira.search.max_results` equal the cap.

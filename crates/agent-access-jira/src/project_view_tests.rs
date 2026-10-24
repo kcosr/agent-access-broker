@@ -293,7 +293,7 @@ fn fields_filter_unsupported_operators_and_preserve_stable_custom_identity() {
     omitted.as_object_mut().unwrap().remove("searchable");
     let value = json!({"visibleFieldNames":[
         omitted,
-        {"value":"fixVersions","displayName":"Fix versions","types":["Version"],"operators":["=","was","in"]},
+        {"value":"fixVersion","displayName":"Fix versions","types":["Version"],"operators":["=","was","in"]},
         {"value":"summary","displayName":"Summary","types":["java.lang.String"],"operators":["=","~","!~"]},
         {"value":"unknown","displayName":"Unsupported","types":[],"operators":[]},
         {"value":"\"Component[Dropdown]\"","displayName":"Collapsed","types":["Option"],"operators":["="]},
@@ -306,6 +306,63 @@ fn fields_filter_unsupported_operators_and_preserve_stable_custom_identity() {
     assert_eq!(items[1]["jqlReference"], "fixVersion");
     assert_eq!(items[1]["operators"], json!(["=", "IN"]));
     assert_eq!(items[2]["operators"], json!(["~"]));
+}
+
+#[test]
+fn system_alias_rows_do_not_conflict_with_canonical_field_metadata() {
+    let value = json!({"visibleFieldNames":[
+        {"value":"type","displayName":"type","types":["IssueType"],"operators":["="]},
+        {"value":"issuetype","displayName":"issuetype","types":["IssueType"],"operators":["=","in"]},
+        {"value":"key","displayName":"key","types":["Issue"],"operators":["=","in"]},
+        {"value":"issuekey","displayName":"issuekey","types":["Issue"],"operators":["="]},
+        {"value":"fixVersions","displayName":"Fix Versions alias","types":["Version"],"operators":["="]},
+        {"value":"FIXVERSION","displayName":"Fix Version","types":["Version"],"operators":["=","in"]},
+        {"value":"text","displayName":"Text","types":["java.lang.String"],"operators":["~"]},
+        {"value":"statusCategory","displayName":"Status Category","types":["StatusCategory"],"operators":["=","in"]}
+    ]});
+    let projected = collection(searchable_fields(&value).unwrap(), None).unwrap();
+    assert_eq!(projected["count"], 3);
+    assert_eq!(projected["items"][0]["id"], "issuetype");
+    assert_eq!(projected["items"][0]["name"], "issuetype");
+    assert_eq!(projected["items"][0]["operators"], json!(["=", "IN"]));
+    assert_eq!(projected["items"][1]["id"], "issuekey");
+    assert_eq!(projected["items"][1]["jqlReference"], "key");
+    assert_eq!(projected["items"][2]["id"], "fixVersions");
+    assert_eq!(projected["items"][2]["jqlReference"], "fixVersion");
+    assert!(
+        !projected["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == "text" || item["id"] == "statusCategory")
+    );
+}
+
+#[test]
+fn conflicting_custom_field_metadata_still_fails_closed() {
+    let first = field();
+    let mut second = field();
+    second["displayName"] = json!("Conflicting name");
+    let items = searchable_fields(&json!({"visibleFieldNames":[first,second]})).unwrap();
+    assert_eq!(
+        collection(items, None).unwrap_err().reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+}
+
+#[test]
+fn query_length_counts_unicode_characters_consistently_with_schema() {
+    let query = "検索語".repeat(50);
+    let input = parse_inputs(&json!({"project":"PROJ","query":query})).unwrap();
+    assert_eq!(input.query.as_deref(), Some(query.as_str()));
+    assert!(parse_inputs(&json!({"project":"PROJ","query":"語".repeat(256)})).is_ok());
+    assert_eq!(
+        parse_inputs(&json!({"project":"PROJ","query":"語".repeat(257)}))
+            .err()
+            .unwrap()
+            .reason_code(),
+        ReasonCode::InputInvalid
+    );
 }
 
 #[test]
