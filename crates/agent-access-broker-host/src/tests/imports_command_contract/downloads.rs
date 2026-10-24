@@ -335,7 +335,7 @@ async fn download_command_failures_keep_json_status_retry_and_process_facts() {
     assert_eq!(records[0]["providerAudit"]["command"]["exitCode"], 7);
     assert_eq!(
         records[0]["providerAudit"]["command"]["contractViolation"],
-        Value::Null
+        false
     );
     assert!(records[0]["providerAudit"].get("streamPhase").is_none());
     drop(app);
