@@ -11,7 +11,7 @@ use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     BrokerResponse, BrokerRuntime, ExecutionContext, GatewayConfig, GatewayGitConfig,
     GovernedOperationContext, IdentityContext, IdentityFailure, OperationContext,
-    PreparedGatewayOperation, REASON_CODE_HEADER, SourceContext, new_broker_request_id,
+    PreparedGatewayOperation, REASON_CODE_HEADER, new_broker_request_id,
 };
 use agent_access_provider::{
     BROKER_REQUEST_ID_HEADER, ProviderError, REQUEST_ID_HEADER, ReasonCode, ReasonCodeId,
