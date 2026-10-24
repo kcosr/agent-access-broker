@@ -140,7 +140,7 @@ async fn confluence_space_list_service_personal_cli_send_http_and_mcp() {
             json!([{"id":"9","key":"HIDDEN","name":"DENIED_SPACE_NAME"},{"id":"8","key":"EXCLUDED","name":"EXCLUDED_SPACE_NAME"}]),
         )
         .await;
-        mount(&server,1,true,json!([{"id":"1","key":"ENG","name":"Visible space","owner":"UNPROJECTED_OWNER"},{"id":"2","key":"NEW","name":"Unregistered space"}])).await;
+        mount(&server,1,true,json!([{"id":"1","key":"ENG","name":"Visible space","owner":"UNPROJECTED_OWNER"},{"id":"2","key":"TeamDocs","name":"Unregistered space"}])).await;
         let broker = start(&server, access, &["space.list"]).await;
         let base = broker.public_url();
         let output = authenticated_confluence_cli(&base)
@@ -188,7 +188,7 @@ async fn confluence_space_list_service_personal_cli_send_http_and_mcp() {
         assert_eq!(second["result"]["items"][0]["key"], "ENG");
         if matches!(access, ConfluenceAccess::AgentPerUser) {
             assert_eq!(second["result"]["count"], 2);
-            assert_eq!(second["result"]["items"][1]["key"], "NEW");
+            assert_eq!(second["result"]["items"][1]["key"], "TeamDocs");
         } else {
             assert_eq!(second["result"]["count"], 1);
         }

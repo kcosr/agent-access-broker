@@ -772,6 +772,12 @@ audit append fails, the code instead appears on `audit_append_failed`, because
 no `invoke_completed` event is emitted for that request. Correlate either event
 with the response using its `agentRequestId` and `brokerRequestId`.
 
+Confluence `space.list` uses `confluence_space_list_*` diagnostic codes to
+identify invalid collection shape, excessive result count, invalid or repeated
+continuation cursors, invalid `id`, `key`, `name`, `type`, or `status`, and
+duplicate IDs or keys. For example, `confluence_space_list_key_invalid` names
+the rejected field without exposing its value or the upstream response body.
+
 `diagnosticCode` is strictly an operator-log field. It is never returned in a
 response envelope or result, set in an HTTP header or request span, or written
 to durable audit records. Keep using the public `reasonCode` and safe result for
