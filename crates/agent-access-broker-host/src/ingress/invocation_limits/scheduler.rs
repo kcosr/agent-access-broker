@@ -514,6 +514,11 @@ impl InvocationLimiter {
                     continue;
                 }
                 let now = Instant::now();
+                if let Some(deadline) = request.hard_deadline
+                    && now >= deadline.at
+                {
+                    return Err(InvocationAdmissionError::Deadline(deadline.kind));
+                }
                 let now_ns = duration_ns(self.clock.monotonic());
                 self.process(
                     &mut state,
@@ -525,7 +530,7 @@ impl InvocationLimiter {
                 );
                 let projection = project(&state, &key, resolved.limit, now, now_ns);
                 let deadline = request.hard_deadline;
-                if projection.next_ns == now_ns && deadline.is_none_or(|bound| now < bound.at) {
+                if projection.next_ns == now_ns {
                     record(&mut state, &key, resolved.limit, now_ns);
                     return Ok(InvocationAdmissionGrant {
                         waited: false,
@@ -538,7 +543,7 @@ impl InvocationLimiter {
                 let opportunity = instant_for(now, now_ns, projection.next_ns);
                 if request.max_wait.is_zero()
                     || opportunity > rate_deadline
-                    || deadline.is_some_and(|bound| opportunity >= bound.at || now >= bound.at)
+                    || deadline.is_some_and(|bound| opportunity >= bound.at)
                 {
                     return Err(InvocationAdmissionError::RateLimited(self.rejection(
                         &request.service,

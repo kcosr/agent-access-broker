@@ -2374,6 +2374,13 @@ request's audit record carries `providerAudit.rateLimit`, and the
 timing honors accepted waiters, and queue deadline expiry uses the same 429
 contract. Proven pre-admission cancellation instead uses the original action's
 `operation_cancelled`, `executionState: "not_dispatched"`, `retrySafe: true`.
+A hard deadline already elapsed before grant or queue insertion retains the
+surface timeout (REST 400 `body_malformed`, Git 400 `gateway_request_body_denied`,
+HTTP MCP `operation_timeout` with Broker status 504), with the same host proof and
+`deadlineKind` (`body` or `operation`) in result/audit; Git exposes its proof through audit.
+Native HTTP MCP retains HTTP 200 JSON-RPC tool-error delivery.
+This outcome is consistent before, during and just after initial settings
+resolution; an infeasible future FIFO turn or queued expiry still uses 429.
 Ordinary final audit/service events include bounded admission wait and outcome
 metadata; successful waiting creates no rejection record.
 

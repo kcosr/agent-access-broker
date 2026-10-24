@@ -1073,3 +1073,80 @@ async fn initial_read_timeout_returns_while_retaining_original_permits_and_regis
     assert_eq!(limiter.key_count(), 0);
     assert!(limiter.state.lock().unwrap().scheduler.settings.is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn deadline_elapsed_just_after_initial_read_neither_charges_nor_queues() {
+    use std::sync::atomic::AtomicBool;
+
+    struct ExpireAfterRead {
+        resolved: Arc<AtomicBool>,
+        expired: AtomicBool,
+    }
+
+    impl AdmissionCancellation for ExpireAfterRead {
+        fn reason(&self) -> Option<AdmissionCancellationReason> {
+            if self.resolved.load(Ordering::SeqCst) && !self.expired.swap(true, Ordering::SeqCst) {
+                // The cancellation check is the first synchronous boundary
+                // after the selected read completes. Advance paused time on
+                // another thread so expiry occurs at exactly this boundary,
+                // after resolve_initial's timer select has already completed.
+                let runtime = tokio::runtime::Handle::current();
+                std::thread::spawn(move || {
+                    runtime.block_on(tokio::time::advance(Duration::from_secs(1)));
+                })
+                .join()
+                .unwrap();
+            }
+            None
+        }
+
+        fn cancelled(&self) -> BoxFuture<'_, AdmissionCancellationReason> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    for kind in [
+        InvocationDeadlineKind::Body,
+        InvocationDeadlineKind::Operation,
+    ] {
+        for exhausted in [false, true] {
+            let limiter = Arc::new(InvocationLimiter::new());
+            let rate = limit(1, 10);
+            if exhausted {
+                limiter.admit(request(&limiter, rate, 0)).await.unwrap();
+            }
+            let resolved = Arc::new(AtomicBool::new(false));
+            let cancellation = Arc::new(ExpireAfterRead {
+                resolved: resolved.clone(),
+                expired: AtomicBool::new(false),
+            });
+            let mut waiting = request(&limiter, rate, 20);
+            waiting.hard_deadline = Some(AdmissionDeadline {
+                at: Instant::now() + Duration::from_secs(1),
+                kind,
+            });
+            waiting.cancellation = cancellation.clone();
+            waiting.resolve_limit = Arc::new(move || {
+                let resolved = resolved.clone();
+                Box::pin(async move {
+                    resolved.store(true, Ordering::SeqCst);
+                    Ok(rate)
+                })
+            });
+            let result = limiter.admit(waiting).await;
+            assert!(cancellation.expired.load(Ordering::SeqCst));
+            assert!(matches!(
+                result,
+                Err(InvocationAdmissionError::Deadline(actual)) if actual == kind
+            ));
+            let state = limiter.state.lock().unwrap();
+            assert!(state.scheduler.queues.is_empty());
+            assert_eq!(state.scheduler.next_ticket, 0);
+            if exhausted {
+                assert_eq!(state.keys["alice"]["jira"].total, 1);
+            } else {
+                assert!(state.keys.is_empty());
+            }
+        }
+    }
+}

@@ -3032,11 +3032,15 @@ invocation, without adding the MCP deadline to existing HTTP/stdio calls.
 `operation_timeout` identifies the HTTP MCP overall deadline; `operation_failed`
 identifies an unexpected preparation/provider failure. Interrupted results include
 `executionState` (`not_dispatched` or `unknown`) and normally `retrySafe: false`.
-Removal proven to precede rate admission is the exception: it returns
+Removal proven to precede rate admission is one exception: it returns
 `operation_cancelled` for the original service/action, `executionState:
-"not_dispatched"` and `retrySafe: true`. See [rate limits](#rate-limits).
-Cancellation
-and timeout after dispatch do not prove that a mutation failed. An audit failure
+"not_dispatched"` and `retrySafe: true`. A hard deadline already elapsed during
+initial admission, before a grant or queue insertion, also carries that proof
+plus `deadlineKind`; it retains the surface's timeout reason and status. See
+[rate limits](#rate-limits). These proofs establish no dispatch for this attempt;
+they do not guarantee unchanged identity, configuration or authorization for a
+later attempt. Cancellation and timeout after dispatch do not prove that a
+mutation failed. An audit failure
 after provider completion remains `audit_unavailable` and includes bounded
 completion evidence with `retrySafe: false`; it never returns execution success
 before the required audit acknowledgement. Inspect operation state and audit
@@ -3081,10 +3085,34 @@ request slots. Only admission charges quota. A queued request is one attempt;
 do not resubmit pending calls. If slots fill, new requests can instead receive
 `concurrency_limited`, including requests for another service.
 
+If a hard deadline has already elapsed before a rate grant or queue insertion,
+the initial admission check retains the surface's timeout outcome. This applies
+whether expiry is noticed before, during or just after the initial rate-settings
+read, including with `max_wait = "0s"`:
+
+| Surface | Broker status | Reason code | `deadlineKind` |
+| --- | --- | --- | --- |
+| REST invoke, including CLI and local stdio MCP | 400 | `body_malformed` | `body` |
+| Git pack POST | 400 | `gateway_request_body_denied` | `body` |
+| HTTP MCP action call | 504 | `operation_timeout` | `operation` |
+
+HTTP MCP delivers this failure through its existing HTTP 200 JSON-RPC tool error,
+with `operation_timeout` in structured content; its underlying Broker status is 504.
+No rate unit is charged. The original service/action's response result and audit
+carry host-owned `executionState: "not_dispatched"`, `retrySafe: true` and the
+`deadlineKind` above; Git preserves its plain-text response and records this
+structured proof in audit. These outcomes have no rate retry forecast. Validate
+the response correlation and complete proof before concluding this attempt did
+not dispatch; a timeout status or reason alone is insufficient. A later attempt
+still needs current identity, configuration and authorization, and is never
+retried automatically.
+
 A rate refusal, an infeasible FIFO turn or a request deadline reached while still
 queued returns HTTP 429 with `reasonCode = "rate_limited"`
-and a `Retry-After` header in whole seconds. The reserved admission envelope
-proves that the provider was not dispatched (correlation fields abridged):
+and a `Retry-After` header in whole seconds. A future projected turn that cannot
+fit the remaining deadline remains a rate refusal, even before queue insertion.
+The reserved admission envelope proves that the provider was not dispatched
+(correlation fields abridged):
 
 ```http
 HTTP/1.1 429 Too Many Requests

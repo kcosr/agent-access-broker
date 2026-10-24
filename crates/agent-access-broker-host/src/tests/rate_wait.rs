@@ -844,3 +844,138 @@ async fn http1_disconnect_with_unread_declared_body_has_bounded_admission_lifeti
 async fn http1_disconnect_with_expect_continue_has_bounded_admission_lifetime() {
     disconnected_http1_body_wait(true).await;
 }
+
+fn assert_initial_settings_deadline_audit(record: &Value, reason: &str) {
+    assert_eq!(record["reasonCode"], reason);
+    assert_eq!(record["providerAudit"]["executionState"], "not_dispatched");
+    assert_eq!(record["providerAudit"]["retrySafe"], true);
+    assert_eq!(record["providerAudit"]["deadlineKind"], "body");
+    assert_eq!(
+        record["providerAudit"]["admission"],
+        json!({"waited": false, "waitedMilliseconds": 0, "outcome": "rejected"})
+    );
+    assert!(record.get("matchedGrant").is_none());
+}
+
+#[tokio::test]
+async fn initial_settings_deadline_keeps_rest_body_response_and_proves_no_dispatch() {
+    let fixture = fixture("1s", "3s", |config| {
+        config.limits.request_body_timeout_ms = 250;
+    })
+    .await;
+    // A real managed-update fence prevents settings resolution until after
+    // the original body budget. No rate history or queued ticket is needed.
+    let write = fixture
+        .state
+        .shared_invocations
+        .begin_update("alice", "fake");
+    let (waiting, polls) = pending(&fixture.app, "initial-settings-rest", ALICE);
+    let response = tokio::time::timeout(Duration::from_secs(3), waiting)
+        .await
+        .expect("initial settings resolution must respect the original body deadline")
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(!response.headers().contains_key(RETRY_AFTER));
+    let value = response_json(response).await;
+    assert_eq!(value["service"], "fake");
+    assert_eq!(value["action"], "echo");
+    assert_eq!(value["reasonCode"], "body_malformed");
+    assert_eq!(
+        value["error"]["message"],
+        "request body receive deadline exceeded"
+    );
+    assert_eq!(
+        value["result"],
+        json!({
+            "executionState": "not_dispatched", "retrySafe": true, "deadlineKind": "body"
+        })
+    );
+    assert_initial_settings_deadline_audit(
+        &terminal_audit(&fixture, "initial-settings-rest").await,
+        "body_malformed",
+    );
+    assert_eq!(polls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.provider.scope_resolutions.load(Ordering::SeqCst), 0);
+    assert!(fixture.provider.calls.lock().unwrap().is_empty());
+    assert_eq!(fixture.state.shared_invocations.key_count(), 0);
+    write.finish(false);
+    let observed = queued(&fixture.app, "Authorization", ALICE, 0).await;
+    assert_eq!(observed["limits"]["invocations"]["countedRequests"], 0);
+    assert_eq!(fixture.state.shared_invocations.key_count(), 0);
+}
+
+#[tokio::test]
+async fn initial_settings_deadline_keeps_git_body_response_and_proves_no_dispatch() {
+    let fixture = test_gateway_router_with_config(false, &["repo.fetch"], |config| {
+        config.limits.request_body_timeout_ms = 250;
+        config
+            .limits
+            .invocations
+            .services
+            .insert("gitlab_git".into(), waiting_limit(1, "1s", "3s"));
+    })
+    .await;
+    let state = fixture._broker.state();
+    let write = state
+        .shared_invocations
+        .begin_update("gateway-user", "gitlab_git");
+    let basic = format!(
+        "Basic {}",
+        BASE64.encode(format!("agent-access:{}", fixture.agent_token))
+    );
+    let (body, polls) = counted_body("initial-settings-git");
+    let response = tokio::time::timeout(
+        Duration::from_secs(3),
+        gateway_request(GatewayRequestSpec {
+            app: fixture.app.clone(),
+            method: Method::POST,
+            uri: "/sip/service.git/git-upload-pack".parse().unwrap(),
+            host: Some("git.example.test"),
+            request_id: Some("initial-settings-git"),
+            authorization: Some(&basic),
+            headers: &[(
+                CONTENT_TYPE.as_str(),
+                "application/x-git-upload-pack-request",
+            )],
+            body,
+        }),
+    )
+    .await
+    .expect("Git initial settings resolution must respect the original body deadline");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_request_body_denied"
+    );
+    assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+    assert!(
+        response.headers()[CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain")
+    );
+    assert!(!response.headers().contains_key(WWW_AUTHENTICATE));
+    assert!(!response.headers().contains_key(RETRY_AFTER));
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap(),
+        "gateway request body read timed out\n"
+    );
+    let records = require_audit_request(
+        &fixture.audit_path,
+        "initial-settings-git",
+        "gitlab_git",
+        "repo.fetch",
+    );
+    assert_eq!(records.len(), 1);
+    assert_initial_settings_deadline_audit(&records[0], "gateway_request_body_denied");
+    assert_eq!(records[0]["principal"], "gateway-user");
+    assert_eq!(polls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.shared_invocations.key_count(), 0);
+    write.finish(false);
+    tokio::task::yield_now().await;
+    assert_eq!(state.shared_invocations.key_count(), 0);
+    assert_eq!(read_audit_records(&fixture.audit_path).len(), 1);
+}

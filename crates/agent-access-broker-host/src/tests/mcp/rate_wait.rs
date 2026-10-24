@@ -157,3 +157,51 @@ async fn native_rate_wait_and_execution_share_one_absolute_operation_deadline() 
             > 500
     );
 }
+
+#[tokio::test]
+async fn initial_settings_deadline_returns_mcp_timeout_with_proven_no_dispatch() {
+    let provider = ControlledProvider::new(false);
+    let fixture = waiting_fixture(provider.clone(), |config| {
+        config.mcp.operation_timeout_ms = 250;
+        config.mcp.protocol_timeout_ms = 5_000;
+    })
+    .await;
+    let session = fixture.initialize().await;
+    let write = fixture
+        .state
+        .shared_invocations
+        .begin_update("mcp-user", "fake");
+    let response = start_controlled_call(&fixture, &session, 205).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let result = tokio::time::timeout(Duration::from_secs(3), rpc_body(response))
+        .await
+        .expect("initial settings resolution must respect the original MCP operation deadline");
+    assert_eq!(result["result"]["isError"], true);
+    let envelope = structured(&result);
+    assert_eq!(envelope["reasonCode"], "operation_timeout");
+    assert_eq!(
+        envelope["result"],
+        json!({
+            "executionState": "not_dispatched", "retrySafe": true, "deadlineKind": "operation"
+        })
+    );
+    let records = read_audit_records(&fixture.audit_path);
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record["reasonCode"], "operation_timeout");
+    assert_eq!(record["providerAudit"]["executionState"], "not_dispatched");
+    assert_eq!(record["providerAudit"]["retrySafe"], true);
+    assert_eq!(record["providerAudit"]["deadlineKind"], "operation");
+    assert_eq!(
+        record["providerAudit"]["admission"],
+        json!({
+            "waited": false, "waitedMilliseconds": 0, "outcome": "rejected"
+        })
+    );
+    assert_eq!(provider.executions.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.state.shared_invocations.key_count(), 0);
+    write.finish(false);
+    let observed = queue_size(&fixture, &session, 0).await;
+    assert_eq!(observed["limits"]["invocations"]["countedRequests"], 0);
+    assert_eq!(fixture.state.shared_invocations.key_count(), 0);
+}

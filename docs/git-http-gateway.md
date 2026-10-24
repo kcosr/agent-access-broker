@@ -337,7 +337,8 @@ Self-service credential verification that the upstream throttles returns
 
 Request and response byte caps inherit the global limits unless overridden on
 the gateway. Inbound pack uploads have a total body deadline of
-`limits.request_body_timeout_ms` (default five minutes), measured from admission;
+`limits.request_body_timeout_ms` (default five minutes), measured from ingress
+admission;
 continued progress does not extend it. Both uploads and downloads remain bounded
 by `streaming_idle_timeout_ms` for stalled request uploads, upstream response
 header waits, and response body streaming, plus byte caps, rate limits, and
@@ -373,12 +374,23 @@ the original ingress body deadline. Observed pending cancellation removes the
 request without a charge or dispatch; delayed disconnect detection means a
 client timeout alone cannot prove a push was not applied.
 
+If that body deadline has already elapsed during initial admission, before a
+rate grant or queue insertion, the pack POST returns HTTP 400
+`gateway_request_body_denied` with the existing plain-text timeout error and
+`X-Agent-Access-Reason-Code` header. This applies before, during or just after
+the initial rate-settings read. No rate unit is charged; audit carries
+`executionState: "not_dispatched"`, `retrySafe: true` and `deadlineKind: "body"`.
+Git receives no JSON result. The status/reason alone is not proof of nonapplication;
+use correlated audit evidence when needed. This proof covers only this attempt,
+and any later attempt still depends on current identity, configuration and policy.
+
 A refused or expired queued pack POST returns HTTP 429 with whole-second
 `Retry-After`, `X-Agent-Access-Reason-Code: rate_limited`, and a plain-text message
 identifying the effective rate, configured wait, limiting deadline, pending
 count and next unreserved admission. Retry timing honors accepted waiters; do
-not repeat still-pending calls. The rejection is audited with the resolved
-principal, the real gateway action, and `providerAudit.rateLimit`.
+not repeat still-pending calls. A future projected FIFO turn that cannot fit the
+remaining deadline also uses this 429 outcome. The rejection is audited with the
+resolved principal, the real gateway action, and `providerAudit.rateLimit`.
 
 Credentialed gateway forwarding is audit-gated with
 `providerAudit.gateway.phase = "started"` before upstream credentials are sent,

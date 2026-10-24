@@ -1384,6 +1384,13 @@ executing: detecting a closed connection can be delayed. Reconcile a mutation
 through its response/audit or an authorized upstream read before resubmitting it.
 The CLI never retries automatically.
 
+A correlated HTTP 400 `body_malformed` result with `executionState:
+"not_dispatched"`, `retrySafe: true` and `deadlineKind: "body"` proves the
+initial admission deadline expired without dispatch. Queued expiry and infeasible
+future FIFO turns still return 429. See [admission outcomes](http-api.md#rate-limits);
+the status/reason alone proves nothing about application, and a later attempt
+still needs current identity, configuration and authorization.
+
 - Every request sets `X-Agent-Access-Request-Id` to a fresh UUID v4.
 - If a token resolved, it is placed in the configured identity header as
   `Bearer <token>` when the scheme is exactly `Bearer`, otherwise as the raw

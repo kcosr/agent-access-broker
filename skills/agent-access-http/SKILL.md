@@ -921,6 +921,16 @@ resubmitting them. A correlated pre-admission `operation_cancelled` response wit
 `executionState: "not_dispatched"` and `retrySafe: true` proves no dispatch;
 local timeout or cancellation alone does not.
 
+If the ingress body deadline is already elapsed during initial admission before
+a rate grant or queue insertion, REST invoke returns HTTP 400 `body_malformed`.
+Its original action result carries `executionState: "not_dispatched"`,
+`retrySafe: true` and `deadlineKind: "body"`, whether expiry is noticed before,
+during or just after the initial rate-settings read. Validate the complete proof
+and request correlation; the status/reason alone is insufficient. An actually
+queued expiry or a future FIFO turn that cannot fit remains HTTP 429
+`rate_limited`. Proven non-dispatch covers only this attempt; any later attempt
+still needs current identity, configuration and authorization. Do not retry automatically.
+
 HTTP 429 reports `rate_limited` (a Broker limit on how often you may invoke the
 service), `upstream_rate_limited` (the upstream service throttled the request),
 or `concurrency_limited`. For the rate limits, the envelope's error message

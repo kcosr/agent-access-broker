@@ -812,7 +812,22 @@ share one absolute operation deadline; REST-backed stdio uses its configured
 HTTP timeout and the Broker's existing ingress deadline. Do not resubmit calls
 that remain pending.
 
-A tool call rejected with HTTP 429 is a tool error. For `rate_limited` (a
+If the absolute deadline is already elapsed during initial admission, before a
+rate grant or queue insertion, HTTP MCP returns a tool error with
+`operation_timeout`, `executionState: "not_dispatched"`, `retrySafe: true` and
+`deadlineKind: "operation"` in the original action's result and audit.
+The underlying Broker status is 504; native HTTP MCP retains HTTP 200 JSON-RPC
+tool-error delivery. REST-backed stdio preserves `body_malformed` (HTTP 400)
+with the same proof and
+`deadlineKind: "body"`. The outcome is the same before, during or just after the
+initial rate-settings read and consumes no rate unit. An actually queued deadline
+expiry or a future FIFO turn that cannot fit still produces the existing
+`rate_limited` tool error (Broker status 429). Only the correlated complete proof
+establishes no dispatch; timeouts without it remain uncertain. It does not
+guarantee unchanged access or
+configuration for a later attempt, and neither transport retries automatically.
+
+A tool call rejected with Broker status 429 is a tool error. For `rate_limited` (a
 Broker limit on how often you may invoke the service) and
 `upstream_rate_limited` (the upstream service throttled the request), both the
 local stdio adapter and the Broker's HTTP MCP endpoint make the tool error's

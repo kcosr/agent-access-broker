@@ -1165,6 +1165,11 @@ pub(crate) struct AdmittedInvocation {
     pub(crate) permits: RequestPermits,
 }
 
+enum InvocationIngress<'a> {
+    Rest,
+    HttpMcp(&'a crate::mcp::IdentityPin),
+}
+
 pub(crate) async fn admit_invoke(
     state: &AppState,
     snapshot: std::sync::Arc<RuntimeSnapshot>,
@@ -1173,7 +1178,16 @@ pub(crate) async fn admit_invoke(
     service: String,
     action: String,
 ) -> Result<AdmittedInvocation, Box<axum::response::Response>> {
-    admit_invoke_with_identity(state, snapshot, remote_addr, headers, service, action, None).await
+    admit_invoke_with_identity(
+        state,
+        snapshot,
+        remote_addr,
+        headers,
+        service,
+        action,
+        InvocationIngress::Rest,
+    )
+    .await
 }
 
 pub(crate) async fn admit_mcp_invoke(
@@ -1192,7 +1206,7 @@ pub(crate) async fn admit_mcp_invoke(
         headers,
         service,
         action,
-        Some(identity_pin),
+        InvocationIngress::HttpMcp(identity_pin),
     )
     .await
 }
@@ -1204,8 +1218,12 @@ async fn admit_invoke_with_identity(
     headers: &HeaderMap,
     service: String,
     action: String,
-    identity_pin: Option<&crate::mcp::IdentityPin>,
+    ingress: InvocationIngress<'_>,
 ) -> Result<AdmittedInvocation, Box<axum::response::Response>> {
+    let (identity_pin, surface) = match ingress {
+        InvocationIngress::Rest => (None, crate::admission::AdmissionSurface::RestInvoke),
+        InvocationIngress::HttpMcp(pin) => (Some(pin), crate::admission::AdmissionSurface::HttpMcp),
+    };
     let (context, permits, original_pin) = prepare_invocation_admission(
         state,
         snapshot.clone(),
@@ -1252,7 +1270,9 @@ async fn admit_invoke_with_identity(
         })
     });
     let (context, permits) =
-        match admit_service_invocation(state, &snapshot, context, permits, revalidate).await {
+        match admit_service_invocation(state, &snapshot, context, permits, revalidate, surface)
+            .await
+        {
             Ok(admitted) => admitted,
             Err(response) => return Err(Box::new(envelope_response(*response).into_response())),
         };

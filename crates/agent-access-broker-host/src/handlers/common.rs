@@ -225,6 +225,7 @@ pub(crate) async fn admit_service_invocation(
     context: GovernedOperationContext,
     permits: RequestPermits,
     revalidate: crate::admission::AdmissionRevalidation,
+    surface: crate::admission::AdmissionSurface,
 ) -> Result<(GovernedOperationContext, RequestPermits), Box<BrokerResponse<Value>>> {
     if snapshot
         .runtime
@@ -233,7 +234,7 @@ pub(crate) async fn admit_service_invocation(
     {
         return Ok((context, permits));
     }
-    crate::admission::admit(state, snapshot, context, permits, revalidate).await
+    crate::admission::admit(state, snapshot, context, permits, revalidate, surface).await
 }
 
 /// Rechecks the original identity inside the admission owner after its rate

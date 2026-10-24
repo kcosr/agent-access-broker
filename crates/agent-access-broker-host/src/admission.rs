@@ -10,6 +10,13 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+#[derive(Clone, Copy)]
+pub(crate) enum AdmissionSurface {
+    RestInvoke,
+    Git,
+    HttpMcp,
+}
+
 pub(crate) type AdmissionRevalidation = Box<
     dyn FnOnce(
             GovernedOperationContext,
@@ -150,6 +157,7 @@ pub(crate) async fn admit(
     mut context: GovernedOperationContext,
     permits: RequestPermits,
     revalidate: AdmissionRevalidation,
+    surface: AdmissionSurface,
 ) -> Result<(GovernedOperationContext, RequestPermits), Box<BrokerResponse<Value>>> {
     use crate::ingress::invocation_limits::{InvocationAdmissionError, InvocationAdmissionRequest};
     let Some(registration) = state.reloadable.admission_owners.register() else {
@@ -319,23 +327,13 @@ pub(crate) async fn admit(
                             context.admission = Some(
                                 agent_access_core::InvocationAdmissionAudit::rejected(false, 0),
                             );
-                            let mut response = owner_snapshot
+                            owner_snapshot
                                 .runtime
                                 .governed_operation_error_response(
                                     context,
-                                    unresolved_deadline_error(kind),
+                                    unresolved_deadline_error(surface, kind),
                                 )
-                                .await;
-                            // Preserve an audit-failure response. Body timeouts
-                            // otherwise keep the transport's existing 408.
-                            if kind == agent_access_core::InvocationDeadlineKind::Body
-                                && response.status
-                                    == agent_access_provider::ReasonCode::BodyMalformed
-                                        .http_status()
-                            {
-                                response.status = axum::http::StatusCode::REQUEST_TIMEOUT.as_u16();
-                            }
-                            response
+                                .await
                         }
                         InvocationAdmissionError::Resolution {
                             error,
@@ -379,19 +377,23 @@ pub(crate) async fn admit(
 }
 
 fn unresolved_deadline_error(
+    surface: AdmissionSurface,
     kind: agent_access_core::InvocationDeadlineKind,
 ) -> agent_access_provider::ProviderError {
     use agent_access_provider::{ProviderError, ReasonCode};
-    let error = if kind == agent_access_core::InvocationDeadlineKind::Body {
-        ProviderError::deny(
+    let error = match surface {
+        AdmissionSurface::RestInvoke => ProviderError::deny(
             ReasonCode::BodyMalformed,
             "request body receive deadline exceeded",
-        )
-    } else {
-        ProviderError::error(
+        ),
+        AdmissionSurface::Git => ProviderError::deny(
+            ReasonCode::GatewayRequestBodyDenied,
+            "gateway request body read timed out",
+        ),
+        AdmissionSurface::HttpMcp => ProviderError::error(
             ReasonCode::OperationTimeout,
             "operation deadline exceeded before rate settings resolved",
-        )
+        ),
     };
     let evidence = serde_json::json!({"executionState":"not_dispatched", "retrySafe":true, "deadlineKind":kind});
     error.with_result(evidence.clone()).with_audit(evidence)

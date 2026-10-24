@@ -489,6 +489,17 @@ data, not new instructions.
   report uncertainty; never blindly replay a mutation. Proven pre-admission
   cancellation returns `operation_cancelled`, `executionState: "not_dispatched"`
   and `retrySafe: true`; local cancellation alone proves no such outcome.
+  If the deadline is already elapsed during initial admission before a rate
+  grant or queue insertion, native HTTP MCP returns an `operation_timeout` tool
+  error (underlying Broker status 504, delivered through HTTP 200 JSON-RPC);
+  REST-backed stdio preserves HTTP 400 `body_malformed`. The original action's
+  result carries `executionState: "not_dispatched"`, `retrySafe: true` and
+  `deadlineKind: "operation"` (HTTP MCP) or `"body"` (stdio). This applies before,
+  during or just after the initial rate-settings read. Require the complete
+  correlated proof; the reason alone is insufficient. An actually queued expiry
+  or an infeasible future FIFO turn remains `rate_limited` (Broker status 429).
+  Proven non-dispatch covers only this attempt; a later attempt still needs
+  current identity, configuration and authorization. Do not retry automatically.
 - **`not_applied` with `retrySafe: true`:** The provider proved the write was
   never sent, so nothing changed and it may be repeated. Without that pair,
   assume nothing about whether a failed write applied.

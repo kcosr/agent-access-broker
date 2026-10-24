@@ -779,6 +779,7 @@ async fn gateway_context(
             },
             permits,
             revalidate,
+            crate::admission::AdmissionSurface::Git,
         )
         .await
         .map_err(|response| Box::new(gateway_runtime_response_with_basic_challenge(*response)))?;

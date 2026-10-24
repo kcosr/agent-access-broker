@@ -2084,7 +2084,10 @@ describe has independent bounded capacity; see [live limits](http-api.md#live-se
 `max_wait` bounds the opportunity for rate capacity, not exact response latency:
 a due opportunity is handled on the timer's first wake. HTTP MCP's absolute
 operation deadline and REST/Git's ingress body deadline remain strict and include
-the wait. Leave time for transfer and useful execution, and align client/proxy
+the wait. Expiry during initial admission before grant or queue insertion retains
+the surface's timeout outcome; queued expiry and infeasible future FIFO turns
+use HTTP 429. See [admission outcomes](http-api.md#rate-limits).
+Leave time for transfer and useful execution, and align client/proxy
 timeouts; the CLI uses [`service.request_timeout_ms`](#cli-client-config-and-config-validate).
 
 Observed cancellation or connection termination before admission removes a
@@ -2197,7 +2200,7 @@ use `request_body_timeout_ms` directly (five minutes by default). All total
 receive deadlines start at admission and progress does not reset them. Public
 body idle timing uses `streaming_idle_timeout_ms`; Git retains its matched
 gateway idle setting and byte-limit reason codes. Control-plane receive timeouts
-return HTTP 408 with an explicit deadline message. Invoke timeouts retain
+return HTTP 408 with an explicit deadline message. Invoke timeouts retain HTTP 400
 `body_malformed` with a distinct deadline message; Git retains its timeout reasons.
 Downstream HTTP MCP uses its own configured intake limits.
 
