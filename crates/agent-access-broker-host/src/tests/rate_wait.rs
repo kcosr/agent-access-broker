@@ -677,7 +677,7 @@ async fn git_revocation_during_rate_wait(exhaust_auth_budget: bool) {
         "gateway_auth_invalid"
     };
     assert_eq!(response.headers()[REASON_CODE_HEADER], expected_reason);
-    assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[CACHE_CONTROL], "private, no-store");
     assert_eq!(polls.load(Ordering::SeqCst), 0);
     drop(response);
     let records = require_audit_request(
@@ -948,7 +948,7 @@ async fn initial_settings_deadline_keeps_git_body_response_and_proves_no_dispatc
         response.headers()[REASON_CODE_HEADER],
         "gateway_request_body_denied"
     );
-    assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[CACHE_CONTROL], "private, no-store");
     assert!(
         response.headers()[CONTENT_TYPE]
             .to_str()
