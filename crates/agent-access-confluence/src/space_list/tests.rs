@@ -110,6 +110,174 @@ async fn local_validation_and_descriptor_need_no_space_or_lookup() {
 }
 
 #[tokio::test]
+async fn mixed_case_space_keys_survive_full_and_small_pages() {
+    let server = MockServer::start().await;
+    let values = (1..=50)
+        .map(|id| {
+            let key = match id {
+                45 => "TeamDocs".to_string(),
+                46 => "eng".to_string(),
+                47 => "7Ops".to_string(),
+                48 => "A".to_string(),
+                _ => format!("~person{id}"),
+            };
+            space(&id.to_string(), &key)
+        })
+        .collect::<Vec<_>>();
+    for size in [50, 10, 4] {
+        for (page, chunk) in values.chunks(size).enumerate() {
+            let start = page * size;
+            let end = start + chunk.len();
+            let cursor = (start != 0).then(|| format!("offset-{start}"));
+            let next = (end < values.len()).then(|| format!("offset-{end}"));
+            mount(
+                &server,
+                cursor.as_deref(),
+                size as u32,
+                json!(chunk),
+                next.as_deref(),
+            )
+            .await;
+        }
+    }
+    let p = provider(&server, config(&server), ProviderLimits::default());
+    let expected_keys = values
+        .iter()
+        .map(|item| item["key"].clone())
+        .collect::<Vec<_>>();
+    for size in [50, 10, 4] {
+        let mut input = if size == 50 {
+            json!({})
+        } else {
+            json!({"maxResults":size})
+        };
+        let mut keys = Vec::new();
+        for _ in 0..50 {
+            let result = p.invoke(invocation(input.clone(), scope())).await.unwrap();
+            let items = result.result["items"].as_array().unwrap();
+            keys.extend(items.iter().map(|item| item["key"].clone()));
+            assert!(items.len() <= size);
+            if result.result["scanStatus"] == "exhausted" {
+                assert!(result.result.get("nextPageToken").is_none());
+                break;
+            }
+            assert_eq!(result.result["scanStatus"], "more");
+            input["pageToken"] = result.result["nextPageToken"].clone();
+        }
+        assert_eq!(keys, expected_keys, "page size {size}");
+    }
+}
+
+#[tokio::test]
+async fn mixed_case_listing_keys_use_exact_inclusions_and_exclusions() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        None,
+        3,
+        json!([space("1", "ENG"), space("2", "eng"), space("3", "Eng")]),
+        None,
+    )
+    .await;
+    let p = provider(&server, config(&server), ProviderLimits::default());
+    let exact = ResourceSelector::Exact {
+        value: "Eng".into(),
+    };
+    for (scope, expected) in [
+        (
+            SearchAuthorizationScope::from_selectors(vec![exact.clone()], vec![]),
+            json!(["Eng"]),
+        ),
+        (
+            SearchAuthorizationScope::from_selectors(vec![ResourceSelector::All], vec![exact]),
+            json!(["ENG", "eng"]),
+        ),
+    ] {
+        let result = p
+            .invoke(invocation(json!({"maxResults":3}), scope))
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(
+                result.result["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["key"].clone())
+                    .collect::<Vec<_>>()
+            ),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejected_space_fields_have_private_fixed_diagnostics() {
+    let mut cases = vec![
+        (
+            json!({"results":null}),
+            "confluence_space_list_results_invalid",
+        ),
+        (
+            json!({"results":[space("1", "ENG"), space("1", "OPS")]}),
+            "confluence_space_list_duplicate_id",
+        ),
+        (
+            json!({"results":[space("1", "ENG"), space("2", "ENG")]}),
+            "confluence_space_list_duplicate_key",
+        ),
+    ];
+    for (field, value, code) in [
+        (
+            "id",
+            json!("PRIVATE_ID"),
+            "confluence_space_list_id_invalid",
+        ),
+        (
+            "key",
+            json!("PRIVATE/KEY"),
+            "confluence_space_list_key_invalid",
+        ),
+        ("name", json!(null), "confluence_space_list_name_invalid"),
+        ("name", json!(""), "confluence_space_list_name_invalid"),
+        (
+            "type",
+            json!("PRIVATE-TYPE"),
+            "confluence_space_list_type_invalid",
+        ),
+        (
+            "status",
+            json!("PRIVATE_STATUS"),
+            "confluence_space_list_status_invalid",
+        ),
+    ] {
+        let mut item = space("1", "ENG");
+        item[field] = value;
+        cases.push((json!({"results":[item]}), code));
+    }
+    for (body, code) in cases {
+        let server = MockServer::start().await;
+        Mock::given(path("/wiki/api/v2/spaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let error = provider(&server, config(&server), ProviderLimits::default())
+            .invoke(invocation(json!({}), scope()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.internal_diagnostic_code, Some(code));
+        assert_eq!(
+            error.message,
+            "Confluence space listing response protocol error"
+        );
+        assert!(error.result.is_none());
+        assert!(error.audit.is_none());
+        assert!(error.object_ids.is_none());
+    }
+}
+
+#[tokio::test]
 async fn canonical_keys_filter_before_metadata_and_aliases_only_control_links() {
     let server = MockServer::start().await;
     let mut personal = space("2", "~personal");

@@ -391,6 +391,9 @@ binary and needs `python3`, whose absence fails it.
   seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
   page-token and draft-handle families, `config.rs`, `present.rs`), with the
   same `test-support` provider fixture as Jira.
+  Space keys preserve exact upstream case, including ordinary keys with mixed
+  case, a leading digit, or one character; keep the shared catalog, input, CQL,
+  and response validator aligned. Never normalize keys for authorization.
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `access.rs` the credential each request
   presents: a static token, or delegated access pinned to the instance before
