@@ -4,6 +4,10 @@ use agent_access_content::render_adf_bounded_with_budget;
 use agent_access_provider::presentation::*;
 use serde_json::{Map, Value};
 
+#[cfg(test)]
+#[path = "../tests/fixtures/custom_fields.rs"]
+mod custom_fields_fixture;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WholeRenderer {
     IssueTypeList,
@@ -26,7 +30,16 @@ struct ResultDescriptor {
 
 const NO_BODIES: &[EmbeddedBody] = &[];
 
-const ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(&[], &AdfBody("description"))];
+const ISSUE_BODIES: &[EmbeddedBody] = &[
+    EmbeddedBody::new(&[], &AdfBody("description")),
+    EmbeddedBody::new(
+        &[
+            BodyPathSegment::Field("customFields"),
+            BodyPathSegment::Each,
+        ],
+        &CustomFieldBody,
+    ),
+];
 
 const NESTED_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(
     &[BodyPathSegment::Field("issue")],
@@ -46,7 +59,7 @@ const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
     },
     ResultDescriptor {
         action: "issue.view",
-        embedded_bodies: ISSUE_DESCRIPTION,
+        embedded_bodies: ISSUE_BODIES,
         whole: Some(WholeRenderer::Issue),
     },
     ResultDescriptor {
@@ -149,6 +162,26 @@ impl EmbeddedBodyCodec for AdfBody {
     }
 }
 
+/// Only the provider's supported ADF projection declares a rich-content body.
+struct CustomFieldBody;
+
+impl EmbeddedBodyCodec for CustomFieldBody {
+    fn render(
+        &self,
+        owner: &Map<String, Value>,
+        format: ReadContentFormat,
+        max_body_bytes: u64,
+        budget: &mut RenderBudget,
+    ) -> Result<Option<RenderedBody>, RenderError> {
+        if owner.get("status").and_then(Value::as_str) != Some("supported")
+            || owner.get("type").and_then(Value::as_str) != Some("adf")
+        {
+            return Ok(None);
+        }
+        AdfBody("value").render(owner, format, max_body_bytes, budget)
+    }
+}
+
 impl WholeResultRenderer for WholeRenderer {
     fn render(&self, result: &Value, context: &mut RenderContext) -> Result<(), RenderError> {
         let RenderContext {
@@ -175,7 +208,7 @@ impl WholeResultRenderer for WholeRenderer {
 
 fn render_issue(
     value: &Value,
-    include_description: bool,
+    include_view_details: bool,
     heading: &str,
     out: &mut MarkdownWriter,
     max_body_bytes: u64,
@@ -241,7 +274,11 @@ fn render_issue(
     if let Some(url) = optional_scalar(object, "webUrl")? {
         field_url(out, "URL", url)?;
     }
-    if include_description && let Some(links) = object.get("issueLinks") {
+    if include_view_details {
+        render_issue_context(object, out, budget)?;
+        render_issue_hierarchy(object, out, budget)?;
+    }
+    if include_view_details && let Some(links) = object.get("issueLinks") {
         let links = array(links)?;
         budget.charge_work(links.len())?;
         out.push("\n## Issue links\n\n")?;
@@ -271,7 +308,7 @@ fn render_issue(
             out.push("\n")?;
         }
     }
-    if include_description
+    if include_view_details
         && let Some(description) = object.get("description").filter(|value| !value.is_null())
     {
         let rendered = render_adf_bounded_with_budget(
@@ -287,7 +324,281 @@ fn render_issue(
         out.push(&rendered.value)?;
         out.push("\n")?;
     }
+    if include_view_details {
+        render_custom_fields(
+            required(object, "customFields")?,
+            out,
+            max_body_bytes,
+            budget,
+        )?;
+    }
     Ok(())
+}
+
+fn render_issue_context(
+    object: &Map<String, Value>,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    if let Some(resolution) = object.get("resolution").filter(|value| !value.is_null()) {
+        out.push("- Resolution: ")?;
+        render_context_named_object(resolution, out, budget)?;
+        out.push("\n")?;
+    }
+    code_fields(
+        out,
+        &[
+            (
+                "Resolution date",
+                optional_scalar(object, "resolutionDate")?,
+            ),
+            ("Due date", optional_scalar(object, "dueDate")?),
+        ],
+    )?;
+    if let Some(category) = object
+        .get("statusCategory")
+        .filter(|value| !value.is_null())
+    {
+        let category = as_object(category)?;
+        budget.charge_work(category.len())?;
+        let id = required(category, "id")?.as_u64().ok_or(RenderError)?;
+        let key = required_scalar(category, "key")?;
+        out.push("- Status category: ")?;
+        if let Some(name) = optional_scalar(category, "name")? {
+            out.push_escaped(name)?;
+            out.push(" (key: ")?;
+            out.push_code(key)?;
+            out.push("; ID: ")?;
+        } else {
+            out.push_code(key)?;
+            out.push(" (ID: ")?;
+        }
+        out.push_code(&id.to_string())?;
+        out.push(")\n")?;
+    }
+    for (key, heading, label) in [
+        ("components", "Components", "Component"),
+        ("fixVersions", "Fix versions", "Version"),
+        ("affectedVersions", "Affected versions", "Version"),
+    ] {
+        let Some(values) = object.get(key).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let values = array(values)?;
+        budget.charge_work(values.len())?;
+        out.push("\n## ")?;
+        out.push(heading)?;
+        out.push("\n\n")?;
+        if values.is_empty() {
+            out.push("None.\n")?;
+        }
+        for value in values {
+            out.push("- ")?;
+            out.push(label)?;
+            out.push(": ")?;
+            render_context_named_object(value, out, budget)?;
+            out.push("\n")?;
+        }
+    }
+    Ok(())
+}
+
+fn render_context_named_object(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let object = as_object(value)?;
+    budget.charge_work(object.len())?;
+    let id = required_scalar(object, "id")?;
+    if let Some(name) = optional_scalar(object, "name")? {
+        out.push_escaped(name)?;
+        out.push(" (ID: ")?;
+        out.push_code(id)?;
+        out.push(")")
+    } else {
+        out.push_code(id)
+    }
+}
+
+fn render_issue_hierarchy(
+    object: &Map<String, Value>,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    if let Some(parent) = object.get("parent") {
+        out.push("\n## Parent\n\n")?;
+        if parent.is_null() {
+            out.push("No parent returned.\n")?;
+        } else {
+            out.push("- Parent: ")?;
+            render_issue_reference(parent, out, budget)?;
+            out.push("\n")?;
+        }
+    }
+    if let Some(subtasks) = object.get("subtasks") {
+        let subtasks = array(subtasks)?;
+        budget.charge_work(subtasks.len())?;
+        out.push("\n## Subtasks\n\n")?;
+        if subtasks.is_empty() {
+            out.push("None.\n")?;
+        }
+        for subtask in subtasks {
+            out.push("- Subtask: ")?;
+            render_issue_reference(subtask, out, budget)?;
+            out.push("\n")?;
+        }
+    }
+    Ok(())
+}
+
+fn render_issue_reference(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let issue = as_object(value)?;
+    budget.charge_work(issue.len())?;
+    out.push_code(required_scalar(issue, "key")?)?;
+    if let Some(issue_type) = optional_scalar(issue, "issueType")? {
+        out.push(" (issue type: ")?;
+        out.push_escaped(issue_type)?;
+        out.push(")")?;
+    }
+    if let Some(summary) = optional_scalar(issue, "summary")? {
+        out.push(" — ")?;
+        out.push_escaped(summary)?;
+    }
+    Ok(())
+}
+
+fn render_custom_fields(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    max_body_bytes: u64,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let fields = array(value)?;
+    budget.charge_work(fields.len())?;
+    out.push("\n## Custom fields\n\n")?;
+    if fields.is_empty() {
+        return out.push("No custom fields returned.\n");
+    }
+    for field_value in fields {
+        let entry = as_object(field_value)?;
+        budget.charge_work(entry.len())?;
+        out.push("### ")?;
+        if let Some(name) = optional_scalar(entry, "name")? {
+            out.push_heading_text(name)?;
+            out.push(" (")?;
+            out.push_code(required_scalar(entry, "id")?)?;
+            out.push(")")?;
+        } else {
+            out.push_code(required_scalar(entry, "id")?)?;
+        }
+        out.push("\n\n")?;
+        if let Some(kind) = optional_scalar(entry, "type")? {
+            field_code(out, "Type", kind)?;
+        }
+        let status = required_scalar(entry, "status")?;
+        match status {
+            "supported" => {}
+            "unsupported" | "withheld" => field_code(out, "Status", status)?,
+            _ => return Err(RenderError),
+        }
+        let value = entry.get("value");
+        if value.is_some_and(|value| value.is_null() || value.as_array().is_some_and(Vec::is_empty))
+        {
+            out.push("- Value: not set\n\n")?;
+            continue;
+        }
+        if status != "supported" {
+            out.push("\n")?;
+            continue;
+        }
+        let value = value.ok_or(RenderError)?;
+        match required_scalar(entry, "type")? {
+            "text" => field(out, "Value", scalar(value)?)?,
+            "url" | "date" | "datetime" => field_code(out, "Value", scalar(value)?)?,
+            "number" => {
+                let Value::Number(number) = value else {
+                    return Err(RenderError);
+                };
+                field(out, "Value", &number.to_string())?;
+            }
+            "option" | "cascadingOption" => {
+                out.push("- Value: ")?;
+                render_custom_option(value, out, budget)?;
+                if required_scalar(entry, "type")? == "cascadingOption"
+                    && let Some(child) = value.get("child").filter(|child| !child.is_null())
+                {
+                    out.push(" → ")?;
+                    render_custom_option(child, out, budget)?;
+                }
+                out.push("\n")?;
+            }
+            "user" => {
+                budget.charge_work(as_object(value)?.len())?;
+                field_raw(out, "Value", &render_user(value)?)?;
+            }
+            "labels" => {
+                let values = array(value)?;
+                budget.charge_work(values.len())?;
+                out.push("\nValues:\n\n")?;
+                for value in values {
+                    out.push("- Label: ")?;
+                    out.push_code(scalar(value)?)?;
+                    out.push("\n")?;
+                }
+            }
+            "options" | "users" => {
+                let values = array(value)?;
+                budget.charge_work(values.len())?;
+                out.push("\nValues:\n\n")?;
+                for value in values {
+                    if required_scalar(entry, "type")? == "options" {
+                        out.push("- Option: ")?;
+                        render_custom_option(value, out, budget)?;
+                    } else {
+                        out.push("- User: ")?;
+                        budget.charge_work(as_object(value)?.len())?;
+                        out.push(&render_user(value)?)?;
+                    }
+                    out.push("\n")?;
+                }
+            }
+            "adf" => {
+                let rendered = render_adf_bounded_with_budget(
+                    value,
+                    ReadContentFormat::Markdown,
+                    max_body_bytes,
+                    max_body_bytes,
+                    &mut budget.rich_content,
+                )
+                .map_err(|_| RenderError)?
+                .ok_or(RenderError)?;
+                out.push("\n")?;
+                out.push(&rendered.value)?;
+                out.push("\n")?;
+            }
+            _ => return Err(RenderError),
+        }
+        out.push("\n")?;
+    }
+    Ok(())
+}
+
+fn render_custom_option(
+    value: &Value,
+    out: &mut MarkdownWriter,
+    budget: &mut PresentationBudget,
+) -> Result<(), RenderError> {
+    let option = as_object(value)?;
+    budget.charge_work(option.len())?;
+    out.push_escaped(required_scalar(option, "value")?)?;
+    out.push(" (ID: ")?;
+    out.push_code(required_scalar(option, "id")?)?;
+    out.push(")")
 }
 
 fn render_issue_type_list(
@@ -762,7 +1073,7 @@ mod tests {
 
     #[test]
     fn native_mode_validates_declared_content_and_omits_companion() {
-        let mut result = json!({"description":{"type":"not-a-doc"}});
+        let mut result = json!({"description":{"type":"not-a-doc"},"customFields":[]});
         let error = present_provider_result(
             "issue.view",
             &mut result,
@@ -783,7 +1094,8 @@ mod tests {
             "assignee":{"displayName":"Ada","accountId":"a`b"}, "reporter":null,
             "creator":{"accountId":"creator"}, "labels":["one","two"],
             "created":"2026-08-01", "updated":"2026-08-02",
-            "webUrl":"https://example.test/browse/SBC-1", "description":adf("")
+            "webUrl":"https://example.test/browse/SBC-1", "description":adf(""),
+            "customFields":[]
         });
         present_provider_result(
             "issue.view",
@@ -797,7 +1109,8 @@ mod tests {
         assert!(text.starts_with("# `SBC-1` — Ship \\*it\\*\n"));
         assert!(text.contains("- Priority: High (ID: `3`)\n"));
         assert!(text.contains("- Assignee: Ada (account ID: ``a`b``)\n"));
-        assert!(text.ends_with("\n## Description\n"));
+        assert!(text.contains("\n## Description\n"));
+        assert!(text.ends_with("\n## Custom fields\n\nNo custom fields returned.\n"));
         assert_eq!(result["format"], "markdown");
     }
 
@@ -805,7 +1118,7 @@ mod tests {
     fn whole_markdown_charges_rendered_adf_once_at_the_final_document_bound() {
         let source = json!({
             "id":"100", "key":"SBC-1", "summary":"Near the result limit",
-            "description":adf(&"x".repeat(1024))
+            "description":adf(&"x".repeat(1024)),"customFields":[]
         });
         let mut generously_bounded = source.clone();
         present_provider_result(
@@ -862,7 +1175,10 @@ mod tests {
     fn every_whole_markdown_template_has_exactly_one_terminal_lf() {
         let cases = [
             ("issue_type.list", json!({"project":"PROJ","issueTypes":[]})),
-            ("issue.view", json!({"key":"SBC-1","description":adf("")})),
+            (
+                "issue.view",
+                json!({"key":"SBC-1","description":adf(""),"customFields":[]}),
+            ),
             (
                 "comment.view",
                 json!({"issue":{"key":"SBC-1"},"comment":{"commentId":"7","body":adf("")}}),
@@ -937,6 +1253,202 @@ mod tests {
     }
 
     #[test]
+    fn issue_context_and_hierarchy_markdown_preserve_identity_order_and_literal_text() {
+        let mut result = json!({
+            "key":"PROJ-1","description":null,"customFields":[],
+            "resolution":{"id":"r`1","name":"Fixed *now*\n## forged"},
+            "resolutionDate":"2026-10-23T12:34:56.000+0000",
+            "dueDate":"2026-11-01",
+            "statusCategory":{"id":3,"key":"done`key","name":"# Done"},
+            "components":[{"id":"2","name":"# Main"},{"id":"1","name":null},{"id":"2","name":"# Main"}],
+            "fixVersions":[],
+            "affectedVersions":[{"id":"v`1","name":"1. Release\n## forged"}],
+            "parent":{"key":"PLAN-2","summary":"# Deliver *this*\n## forged","issueType":"Epic"},
+            "subtasks":[
+                {"key":"PROJ-3","summary":"- Work","issueType":"Subtask"},
+                {"key":"PROJ-2","summary":null,"issueType":null},
+                {"key":"PROJ-3","summary":"- Work","issueType":"Subtask"}
+            ]
+        });
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for expected in [
+            "- Resolution: Fixed \\*now\\* ## forged (ID: ``r`1``)",
+            "- Resolution date: `2026-10-23T12:34:56.000+0000`",
+            "- Due date: `2026-11-01`",
+            "- Status category: # Done (key: ``done`key``; ID: `3`)",
+            "## Components\n\n- Component: # Main (ID: `2`)\n- Component: `1`\n- Component: # Main (ID: `2`)",
+            "## Fix versions\n\nNone.",
+            "## Affected versions\n\n- Version: 1. Release ## forged (ID: ``v`1``)",
+            "## Parent\n\n- Parent: `PLAN-2` (issue type: Epic) — # Deliver \\*this\\* ## forged",
+            "## Subtasks\n\n- Subtask: `PROJ-3` (issue type: Subtask) — - Work\n- Subtask: `PROJ-2`\n- Subtask: `PROJ-3` (issue type: Subtask) — - Work",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected:?}: {markdown}"
+            );
+        }
+        assert!(!markdown.contains("\n## forged"));
+        assert!(!markdown.contains("\n- #"));
+        assert!(!markdown.contains("\n- 1."));
+    }
+
+    #[test]
+    fn issue_context_nulls_and_hierarchy_absence_do_not_claim_empty_values() {
+        let source = json!({
+            "key":"PROJ-1","description":null,"customFields":[],
+            "resolution":null,"resolutionDate":null,"dueDate":null,
+            "statusCategory":null,"components":null,"fixVersions":null,"affectedVersions":null
+        });
+        let options = ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown);
+        let mut result = source.clone();
+        present_provider_result("issue.view", &mut result, options, 4096, 16384).unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for absent in [
+            "Resolution",
+            "Due date",
+            "Status category",
+            "Components",
+            "Fix versions",
+            "Affected versions",
+            "Parent",
+            "Subtasks",
+        ] {
+            assert!(!markdown.contains(absent), "{markdown}");
+        }
+        let mut empty = source.clone();
+        empty["parent"] = Value::Null;
+        empty["subtasks"] = json!([]);
+        for collection in ["components", "fixVersions", "affectedVersions"] {
+            empty[collection] = json!([]);
+        }
+        present_provider_result("issue.view", &mut empty, options, 4096, 16384).unwrap();
+        let markdown = empty["value"].as_str().unwrap();
+        assert!(markdown.contains("## Parent\n\nNo parent returned.\n"));
+        for heading in [
+            "Components",
+            "Fix versions",
+            "Affected versions",
+            "Subtasks",
+        ] {
+            assert!(
+                markdown.contains(&format!("## {heading}\n\nNone.\n")),
+                "{markdown}"
+            );
+        }
+        let mut parent_only = source;
+        parent_only["parent"] = Value::Null;
+        present_provider_result("issue.view", &mut parent_only, options, 4096, 16384).unwrap();
+        let markdown = parent_only["value"].as_str().unwrap();
+        assert!(markdown.contains("No parent returned."));
+        assert!(!markdown.contains("## Subtasks"));
+    }
+
+    #[test]
+    fn unnamed_context_objects_keep_their_id_or_category_key() {
+        let mut result = json!({
+            "key":"PROJ-1","description":null,"customFields":[],
+            "resolution":{"id":"resolution-1","name":null},
+            "statusCategory":{"id":0,"key":"new","name":null},
+            "components":[{"id":"component-1","name":null}],
+            "fixVersions":[{"id":"fix-1","name":null}],
+            "affectedVersions":[{"id":"affected-1","name":null}]
+        });
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for expected in [
+            "- Resolution: `resolution-1`",
+            "- Status category: `new` (ID: `0`)",
+            "- Component: `component-1`",
+            "- Version: `fix-1`",
+            "- Version: `affected-1`",
+        ] {
+            assert!(markdown.contains(expected), "{markdown}");
+        }
+    }
+
+    #[test]
+    fn search_markdown_does_not_consume_view_only_context_or_hierarchy() {
+        // Even malformed unsolicited view-only metadata cannot change a search result.
+        let mut result = json!({"issues":[{
+            "key":"PROJ-1","summary":"Search result",
+            "resolution":{"invalid":"HIDDEN"},"resolutionDate":{},"dueDate":{},
+            "statusCategory":true,"components":"HIDDEN","fixVersions":true,"affectedVersions":42,
+            "parent":{"key":"HIDDEN-1"},"subtasks":"HIDDEN",
+            "customFields":[{"type":"labels","value":["HIDDEN"]}]
+        }]});
+        present_provider_result(
+            "search",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        assert!(markdown.contains("## `PROJ-1` — Search result"));
+        for absent in [
+            "HIDDEN",
+            "Resolution",
+            "Due date",
+            "Status category",
+            "Components",
+            "Fix versions",
+            "Affected versions",
+            "Parent",
+            "Subtasks",
+            "Custom fields",
+        ] {
+            assert!(!markdown.contains(absent), "{markdown}");
+        }
+    }
+
+    #[test]
+    fn view_context_and_hierarchy_share_work_and_output_bounds() {
+        let object = json!({
+            "components":[{"id":"1","name":"component"}],
+            "parent":{"key":"PROJ-2","summary":"PRIVATE_SUMMARY","issueType":"Task"}
+        });
+        let mut budget = PresentationBudget::new(16384);
+        budget.charge_work(MAX_PRESENTATION_WORK_UNITS - 5).unwrap();
+        let mut out = MarkdownWriter::new(16384);
+        render_issue_context(object.as_object().unwrap(), &mut out, &mut budget).unwrap();
+        assert!(
+            render_issue_hierarchy(object.as_object().unwrap(), &mut out, &mut budget).is_err()
+        );
+
+        let mut result = json!({
+            "key":"PROJ-1","customFields":[],
+            "components":[{"id":"1","name":"PRIVATE_CONTEXT".repeat(40)}]
+        });
+        let error = present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            128,
+        )
+        .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+        assert!(error.result.is_none());
+    }
+
+    #[test]
     fn property_json_and_tokens_use_collision_safe_delimiters() {
         let mut property = json!({
             "issue":{"id":"1","key":"SBC-1","project":"SBC","webUrl":"https://example.test"},
@@ -995,7 +1507,7 @@ mod tests {
             "updated":"2026-08-29T02:03:04.000-0500",
             "webUrl":"https://example.test/browse/SBC-1?x=1",
             "assignee":{"displayName":"Ada\n## forged","accountId":"acct\r\nforged"},
-            "description":adf("")
+            "description":adf(""),"customFields":[]
         });
         present_provider_result(
             "issue.view",
@@ -1016,7 +1528,7 @@ mod tests {
         assert!(!markdown.contains("SBC\\-1"));
 
         let mut unsafe_url = json!({
-            "key":"SBC-2", "webUrl":"https://example.test/path\n## forged"
+            "key":"SBC-2", "webUrl":"https://example.test/path\n## forged","customFields":[]
         });
         present_provider_result(
             "issue.view",
@@ -1034,7 +1546,7 @@ mod tests {
         );
 
         let mut credential_url = json!({
-            "key":"SBC-3", "webUrl":"https://user:secret@example.test/browse/SBC-3"
+            "key":"SBC-3", "webUrl":"https://user:secret@example.test/browse/SBC-3","customFields":[]
         });
         present_provider_result(
             "issue.view",
@@ -1055,7 +1567,7 @@ mod tests {
     #[test]
     fn heading_metadata_preserves_trailing_hash_runs() {
         let mut issue = json!({
-            "key":"SBC-4", "summary":"Fix flaky retry #"
+            "key":"SBC-4", "summary":"Fix flaky retry #","customFields":[]
         });
         present_provider_result(
             "issue.view",
@@ -1072,7 +1584,7 @@ mod tests {
                 .starts_with("# `SBC-4` — Fix flaky retry \\#\n")
         );
 
-        let mut hash_only_issue = json!({"key":"SBC-5", "summary":"#"});
+        let mut hash_only_issue = json!({"key":"SBC-5", "summary":"#","customFields":[]});
         present_provider_result(
             "issue.view",
             &mut hash_only_issue,
@@ -1159,7 +1671,8 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ResponseFormatUnsupported);
 
-        let mut result = json!({"id":"1","key":"SBC-1","description":adf("body")});
+        let mut result =
+            json!({"id":"1","key":"SBC-1","description":adf("body"),"customFields":[]});
         let error = present_provider_result(
             "issue.view",
             &mut result,
@@ -1199,5 +1712,457 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["comment"]["renderedBody"]["value"], "");
+    }
+
+    fn supported_field(id: usize, kind: &str, value: Value) -> Value {
+        json!({
+            "id":format!("customfield_{id}"),"name":format!("Field {id}"),
+            "type":kind,"status":"supported","value":value
+        })
+    }
+
+    #[test]
+    fn custom_field_body_owner_is_declared_only_for_issue_view() {
+        let owners = |action| {
+            presentation(action)
+                .unwrap()
+                .embedded_bodies()
+                .iter()
+                .map(EmbeddedBody::owner_pointer)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(owners("issue.view"), ["", "/customFields/*"]);
+        assert_eq!(owners("issue.create"), ["/issue"]);
+        assert_eq!(owners("issue.update"), ["/issue"]);
+        assert!(owners("search").is_empty());
+    }
+
+    #[test]
+    fn custom_null_empty_arrays_and_empty_adf_keep_their_meaning_in_every_format() {
+        let mut fields = [
+            "text",
+            "url",
+            "number",
+            "date",
+            "datetime",
+            "adf",
+            "option",
+            "options",
+            "cascadingOption",
+            "user",
+            "users",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| supported_field(index + 1, kind, Value::Null))
+        .collect::<Vec<_>>();
+        fields.push(supported_field(12, "options", json!([])));
+        fields.push(supported_field(13, "users", json!([])));
+        for (index, status) in ["unsupported", "withheld"].into_iter().enumerate() {
+            for (offset, value) in [Value::Null, json!([])].into_iter().enumerate() {
+                fields.push(json!({
+                    "id":format!("customfield_{}", 14 + index * 2 + offset),
+                    "name":null,"type":null,"status":status,"value":value
+                }));
+            }
+        }
+        let empty_count = fields.len();
+        fields.push(supported_field(18, "adf", adf("")));
+        let source = json!({"key":"PROJ-1","description":null,"customFields":fields});
+
+        for content in [
+            ReadContentFormat::Native,
+            ReadContentFormat::Markdown,
+            ReadContentFormat::Text,
+        ] {
+            let mut result = source.clone();
+            present_provider_result(
+                "issue.view",
+                &mut result,
+                ResponseOptions::new(content, ResponseFormat::Json),
+                4096,
+                16384,
+            )
+            .unwrap();
+            assert!(result.get("renderedBody").is_none());
+            for index in 0..empty_count {
+                assert_eq!(result["customFields"][index], source["customFields"][index]);
+                assert!(result["customFields"][index].get("renderedBody").is_none());
+            }
+            let empty_adf = &result["customFields"][empty_count];
+            assert_eq!(empty_adf["value"], adf(""));
+            if content == ReadContentFormat::Native {
+                assert!(empty_adf.get("renderedBody").is_none());
+            } else {
+                assert_eq!(
+                    empty_adf["renderedBody"],
+                    json!({"format":content,"value":""})
+                );
+            }
+        }
+        let mut result = source;
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        assert_eq!(markdown.matches("- Value: not set").count(), empty_count);
+        assert_eq!(markdown.matches("- Status: `unsupported`").count(), 2);
+        assert_eq!(markdown.matches("- Status: `withheld`").count(), 2);
+        assert!(markdown.contains("### `customfield_14`"));
+    }
+
+    #[test]
+    fn custom_multi_value_block_markers_remain_literal_text() {
+        let labels = [
+            "1. Must have",
+            "2) Should",
+            "# Blocker",
+            "- Ada",
+            "+ x",
+            "---",
+        ];
+        let options = labels
+            .iter()
+            .enumerate()
+            .map(|(id, label)| json!({"id": id.to_string(), "value": label}))
+            .collect::<Vec<_>>();
+        let users = labels
+            .iter()
+            .enumerate()
+            .map(|(id, label)| json!({"accountId": id.to_string(), "displayName": label}))
+            .collect::<Vec<_>>();
+        let mut result = json!({
+            "key": "PROJ-1", "description": null,
+            "customFields": [supported_field(1, "options", json!(options)),
+                             supported_field(2, "users", json!(users))]
+        });
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        for (id, label) in labels.iter().enumerate() {
+            assert!(markdown.contains(&format!("\n- Option: {label} (ID: `{id}`)\n")));
+            assert!(markdown.contains(&format!("\n- User: {label} (account ID: `{id}`)\n")));
+        }
+    }
+
+    #[test]
+    fn custom_labels_preserve_empty_strings_duplicates_and_order_in_every_format() {
+        let source = json!({
+            "key":"PROJ-1","description":null,
+            "resolution":{"id":"1","name":null},
+            "resolutionDate":"2026-10-23T01:02:03.000+0000","dueDate":null,
+            "components":[],"fixVersions":null,"affectedVersions":[],
+            "statusCategory":{"id":3,"key":"done","name":"Done"},
+            "parent":null,"subtasks":[],
+            "customFields":[
+                supported_field(1, "labels", Value::Null),
+                supported_field(2, "labels", json!([])),
+                supported_field(3, "labels", json!(["", "# Blocker", "1. Release", "one`two", "line\n## forged", "# Blocker"]))
+            ]
+        });
+        for content in [
+            ReadContentFormat::Native,
+            ReadContentFormat::Markdown,
+            ReadContentFormat::Text,
+        ] {
+            let mut result = source.clone();
+            present_provider_result(
+                "issue.view",
+                &mut result,
+                ResponseOptions::new(content, ResponseFormat::Json),
+                4096,
+                16384,
+            )
+            .unwrap();
+            // Labels and standard context are typed metadata, never ADF companions.
+            assert_eq!(result, source);
+        }
+        let mut result = source;
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let markdown = result["value"].as_str().unwrap();
+        assert_eq!(markdown.matches("- Value: not set").count(), 2);
+        assert_eq!(
+            markdown
+                .lines()
+                .filter(|line| line.starts_with("- Label:"))
+                .collect::<Vec<_>>(),
+            [
+                "- Label: `  `",
+                "- Label: `# Blocker`",
+                "- Label: `1. Release`",
+                "- Label: ``one`two``",
+                "- Label: `line ## forged`",
+                "- Label: `# Blocker`",
+            ]
+        );
+        assert!(!markdown.contains("\n## forged"));
+    }
+
+    #[test]
+    fn custom_field_markdown_is_typed_copyable_and_escapes_dynamic_labels() {
+        let mut fields = vec![
+            supported_field(1, "text", json!("Customer *impact*\n## forged")),
+            supported_field(2, "url", json!("https://user:secret@example.test/a`b")),
+            supported_field(3, "number", json!(4.5)),
+            supported_field(4, "date", json!("2026-10-23")),
+            supported_field(5, "datetime", json!("2026-10-23T10:00:00.000Z")),
+            supported_field(6, "option", json!({"id":"a`b","value":"High *priority*"})),
+            supported_field(
+                7,
+                "options",
+                json!([
+                    {"id":"1","value":"First"},{"id":"2","value":"Second"}
+                ]),
+            ),
+            supported_field(
+                8,
+                "cascadingOption",
+                json!({
+                    "id":"1","value":"Parent","child":{"id":"2","value":"Child"}
+                }),
+            ),
+            supported_field(
+                9,
+                "user",
+                json!({"accountId":"a`b","displayName":"Ada *Example*"}),
+            ),
+            supported_field(
+                10,
+                "users",
+                json!([
+                    {"accountId":"one","displayName":"Ada"},{"accountId":"two","displayName":null}
+                ]),
+            ),
+            supported_field(11, "adf", adf("custom body")),
+            json!({"id":"customfield_12","name":"Unknown","type":null,"status":"unsupported"}),
+            json!({"id":"customfield_13","name":"Invalid","type":"text","status":"withheld"}),
+        ];
+        fields[0]["name"] = json!("Business *impact*\n### injected #");
+        fields[1]["name"] = Value::Null;
+        fields[2]["name"] = json!("Duplicate name");
+        fields[3]["name"] = json!("Duplicate name");
+        let mut result =
+            json!({"key":"PROJ-1","description":adf("root body"),"customFields":fields});
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            4096,
+            16384,
+        )
+        .unwrap();
+        let text = result["value"].as_str().unwrap();
+        for expected in [
+            "### Business \\*impact\\* ### injected \\# (`customfield_1`)",
+            "### `customfield_2`",
+            "Customer \\*impact\\* ## forged",
+            "- Value: ``https://user:secret@example.test/a`b``",
+            "- Value: 4.5",
+            "- Value: `2026-10-23`",
+            "- Value: `2026-10-23T10:00:00.000Z`",
+            "High \\*priority\\* (ID: ``a`b``)",
+            "- Option: First (ID: `1`)\n- Option: Second (ID: `2`)",
+            "Parent (ID: `1`) → Child (ID: `2`)",
+            "Ada \\*Example\\* (account ID: ``a`b``)",
+            "- User: Ada (account ID: `one`)\n- User: account ID: `two`",
+            "custom body",
+            "- Status: `unsupported`",
+            "- Status: `withheld`",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?}: {text}");
+        }
+        assert_eq!(text.matches("### Duplicate name").count(), 2);
+        assert!(text.find("root body").unwrap() < text.find("## Custom fields").unwrap());
+        assert!(!text.contains("\n### injected"));
+        assert!(!text.contains("\n## forged"));
+        assert!(!text.contains("<https://user:secret"));
+    }
+
+    #[test]
+    fn custom_body_codec_does_not_guess_unsupported_or_withheld_content() {
+        for status in ["unsupported", "withheld"] {
+            let entry = json!({"status":status,"type":"adf","value":{"malformed":"body"}});
+            let mut budget = RenderBudget::with_limits(0, 0);
+            assert!(
+                CustomFieldBody
+                    .render(
+                        entry.as_object().unwrap(),
+                        ReadContentFormat::Markdown,
+                        1,
+                        &mut budget,
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn realistic_multi_mib_custom_fields_are_complete_in_every_format() {
+        const BODY_LIMIT: u64 = 1024 * 1024;
+        const RESULT_LIMIT: u64 = 16 * 1024 * 1024;
+        let source = custom_fields_fixture::realistic_issue_view();
+        let source_size = serde_json::to_vec(&source).unwrap().len();
+        assert!(
+            (2 * 1024 * 1024..3 * 1024 * 1024).contains(&source_size),
+            "{source_size}"
+        );
+        assert_eq!(source["customFields"].as_array().unwrap().len(), 256);
+
+        for content in [
+            ReadContentFormat::Native,
+            ReadContentFormat::Markdown,
+            ReadContentFormat::Text,
+        ] {
+            let mut result = source.clone();
+            present_provider_result(
+                "issue.view",
+                &mut result,
+                ResponseOptions::new(content, ResponseFormat::Json),
+                BODY_LIMIT,
+                RESULT_LIMIT,
+            )
+            .unwrap();
+            assert_eq!(result["description"], source["description"]);
+            for (original, actual) in source["customFields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(result["customFields"].as_array().unwrap())
+            {
+                assert_eq!(actual["value"], original["value"]);
+                assert_eq!(actual["id"], original["id"]);
+                assert_eq!(actual["name"], original["name"]);
+                if original["type"] == "adf" {
+                    assert!(
+                        serde_json::to_vec(&original["value"]).unwrap().len() < BODY_LIMIT as usize
+                    );
+                    let expected = render_adf_bounded_with_budget(
+                        &original["value"],
+                        content,
+                        BODY_LIMIT,
+                        BODY_LIMIT,
+                        &mut RenderBudget::default(),
+                    )
+                    .unwrap();
+                    if let Some(expected) = expected {
+                        assert_eq!(
+                            actual["renderedBody"],
+                            serde_json::to_value(expected).unwrap()
+                        );
+                    } else {
+                        assert!(actual.get("renderedBody").is_none());
+                    }
+                } else {
+                    assert_eq!(actual, original);
+                }
+            }
+            if content == ReadContentFormat::Native {
+                assert_eq!(result, source);
+            } else {
+                assert_eq!(
+                    result["renderedBody"]["value"],
+                    if content == ReadContentFormat::Markdown {
+                        "ROOT\\_DESCRIPTION"
+                    } else {
+                        "ROOT_DESCRIPTION"
+                    }
+                );
+            }
+        }
+
+        let mut result = source;
+        present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            BODY_LIMIT,
+            RESULT_LIMIT,
+        )
+        .unwrap();
+        let text = result["value"].as_str().unwrap();
+        assert_eq!(text.matches("### Field ").count(), 256);
+        for field in (32..=256).step_by(32) {
+            for block in 0..128 {
+                for boundary in ["START", "END"] {
+                    assert!(text.contains(&format!("FIELD{field}\\_BLOCK{block}\\_{boundary}")));
+                }
+            }
+        }
+        assert!(text.contains("| Topic | Details |"));
+        assert!(text.contains("- Confirm service health\\."));
+        assert!(text.contains("[ Reference\\.](https://example.test/rollout)"));
+    }
+
+    #[test]
+    fn custom_adf_fields_cannot_reset_the_shared_complexity_budget() {
+        const BODY_LIMIT: u64 = 1024 * 1024;
+        const RESULT_LIMIT: u64 = 16 * 1024 * 1024;
+        let body = json!({
+            "type":"doc","version":1,
+            "content":vec![json!({"type":"paragraph","content":[]});22_000]
+        });
+        assert!(serde_json::to_vec(&body).unwrap().len() < BODY_LIMIT as usize);
+        let fields = (1..=6)
+            .map(|id| supported_field(id, "adf", body.clone()))
+            .collect::<Vec<_>>();
+        let source = json!({"key":"PROJ-1","description":adf("root"),"customFields":fields});
+        for content in [
+            ReadContentFormat::Native,
+            ReadContentFormat::Markdown,
+            ReadContentFormat::Text,
+        ] {
+            // Each field fits both the per-document byte and complexity guards.
+            render_adf_bounded_with_budget(
+                &body,
+                content,
+                BODY_LIMIT,
+                BODY_LIMIT,
+                &mut RenderBudget::default(),
+            )
+            .unwrap();
+            let mut result = source.clone();
+            let error = present_provider_result(
+                "issue.view",
+                &mut result,
+                ResponseOptions::new(content, ResponseFormat::Json),
+                BODY_LIMIT,
+                RESULT_LIMIT,
+            )
+            .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+            assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+            assert!(error.result.is_none());
+        }
+        let mut result = source;
+        let error = present_provider_result(
+            "issue.view",
+            &mut result,
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            BODY_LIMIT,
+            RESULT_LIMIT,
+        )
+        .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+        assert!(error.result.is_none());
     }
 }

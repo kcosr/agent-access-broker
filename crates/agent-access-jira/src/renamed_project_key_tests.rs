@@ -117,11 +117,20 @@ impl JiraBackend for RenamedJira {
         &self,
         issue_key: &str,
         credential: &AtlassianCredential,
-        _include_issue_links: bool,
+        _include_issue_references: bool,
     ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
         let response = self.issue(issue_key, credential).await?;
         ok(JiraIssueView {
             issue: response.value,
+            context: JiraIssueViewContext {
+                parent: Some(JiraIssueViewReference {
+                    key: "OTHER-42".into(),
+                    summary: Some(SECRET_SUMMARY.into()),
+                    issue_type: None,
+                }),
+                ..Default::default()
+            },
+            custom_fields: Vec::new(),
             issue_links: None,
         })
     }

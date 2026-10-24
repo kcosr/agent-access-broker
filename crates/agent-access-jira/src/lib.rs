@@ -5,6 +5,8 @@
 mod access_tests;
 mod backend;
 mod config;
+mod custom_fields;
+mod issue_view_context;
 mod jql;
 mod present;
 mod search_continuation;
@@ -15,6 +17,10 @@ mod validation;
 
 pub use backend::*;
 pub use config::*;
+pub use issue_view_context::{
+    JiraIssueViewContext, JiraIssueViewNamedValue, JiraIssueViewReference,
+    JiraIssueViewStatusCategory,
+};
 use jql::*;
 use search_continuation::*;
 use validation::*;
@@ -228,7 +234,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         })),
         jira_read_action(
             "issue.view",
-            "View a Jira issue and ADF description after project-scope confirmation",
+            "View Jira issue context, ADF description, custom fields and eligible embedded references",
             json!({
                 "type": "object",
                 "oneOf": [
@@ -245,8 +251,12 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         .lookup(LookupRequirement::ScopeResolution)
         .reports_universal_reach()
         .documentation(json!({
+            "context": "Always includes nullable resolution, resolutionDate, dueDate, components, fixVersions, affectedVersions and statusCategory. Resolution, components and versions contain string id and nullable name; statusCategory contains a nonnegative integer id, string key and nullable name. Date strings retain Jira's representation. Missing and null values both become null, including fields hidden or not returned by Jira; null is not proof that a value is unset. Explicit empty collections remain [], and array order and duplicates are preserved. Only these allowlisted properties are disclosed; malformed supplied shapes fail the request. This context is exclusive to issue.view, not search or mutation readbacks.",
+            "customFields": "Always includes an array of custom fields returned by Jira, ordered by numeric field ID. Each entry has id, nullable Jira display name, nullable normalized type, and status (supported, unsupported, or withheld). Supported values retain JSON types; unsupported implementations and malformed known values omit nonempty values. Explicit null and empty-array values are retained with their status. Only reviewed built-in text, URL, number, date, datetime, ADF, option, user and Labels field implementations are supported; arbitrary app and resource-reference values are not disclosed. Labels require Jira's built-in labels implementation with an array-of-string schema and preserve order and duplicates. Field values, names and type metadata share the authorized issue fetch, with no extra request.",
+            "customFieldContent": "ADF custom values use the same per-document content byte limit and shared rendering complexity limits as the description. readContentFormat adds renderedBody beside each supported non-null ADF value. Malformed custom ADF is withheld; any byte or complexity limit fails the whole request. Search and mutation readbacks do not return customFields.",
             "issueLinks": "Included only when effective issue.view authority in the selected credential mode covers every Jira project and Jira returns the requested field. Each entry contains key, type (link type name), direction (inward/outward), relationship (directional label), summary and issueType. Read the relationship as <viewed issue> <relationship> <key>, such as PROJ-1 blocks CM-42 or PROJ-1 is blocked by CM-42. Optional summary and issueType are null when unavailable. Order and multiplicity match Jira's embedded list; keys and linked content are not independently resolved. No extra Jira requests are made.",
-            "omission": "Missing issueLinks means links were withheld or Jira did not return the field, not that no links exist. Only an explicit empty Jira list becomes []. Any gap in universal same-mode authority withholds all links. A listed link does not guarantee a later issue.view succeeds, including when lookup and execution credentials differ."
+            "hierarchy": "Parent and subtasks use the same effective universal same-mode authority as issueLinks. When eligible, parent is always present: null means Jira returned no parent to the execution credential, otherwise it contains key, nullable summary and nullable issueType. Subtasks is omitted if not returned; otherwise it is an ordered array of those reference objects, preserving duplicates and []. Only canonical fields.parent is used, including a direct epic parent when Jira supplies one. No Epic Link fallback, ancestry traversal, parent classification or linked-issue lookup occurs. A subtask's direct parent may be a story, and subtasks is not a complete epic-child or descendant search.",
+            "omission": "Missing parent means hierarchy was withheld. A null parent is not independent proof that the issue has no parent. Missing subtasks or issueLinks means withheld or not returned; an explicit empty list only describes that returned field. Any gap in universal same-mode authority withholds all links, parent and subtasks. A listed reference does not guarantee a later issue.view succeeds, including when lookup and execution credentials differ."
         })),
         jira_action(
             "issue.create",
@@ -1143,7 +1153,12 @@ impl JiraProvider {
             .issue_view(&metadata.key, credential, request.universal_reach())
             .await
             .map_err(jira_backend_error)?;
-        let issue = response.value.issue;
+        let JiraIssueView {
+            issue,
+            issue_links,
+            mut custom_fields,
+            context,
+        } = response.value;
         if issue.id != metadata.id || issue.key != metadata.key || issue.project != metadata.project
         {
             return Err(ProviderError::deny(
@@ -1157,11 +1172,46 @@ impl JiraProvider {
                 "Jira issue response did not include a valid current key and project",
             ));
         }
-        validate_returned_issue_description(&issue, &self.config)?;
+        custom_fields::preflight_issue_view_content(
+            issue.description.as_ref(),
+            &mut custom_fields,
+            self.config.content.max_body_bytes,
+        )?;
         let mut result = issue_view_result(&issue, &self.config);
+        let custom_fields_audit = json!({
+            "count": custom_fields.len(),
+            "unsupported": custom_fields.iter().filter(|field| field["status"] == "unsupported").count(),
+            "withheld": custom_fields.iter().filter(|field| field["status"] == "withheld").count(),
+        });
+        result["customFields"] = Value::Array(custom_fields);
+        result["resolution"] = json!(context.resolution);
+        result["resolutionDate"] = json!(context.resolution_date);
+        result["dueDate"] = json!(context.due_date);
+        result["components"] = json!(context.components);
+        result["fixVersions"] = json!(context.fix_versions);
+        result["affectedVersions"] = json!(context.affected_versions);
+        result["statusCategory"] = json!(context.status_category);
+        // Reapply the disclosure gate to injected backends without inspecting
+        // or counting any restricted hierarchy payload.
+        let (parent_audit, subtasks_audit) = if !request.universal_reach() {
+            (json!({"status": "withheld"}), json!({"status": "withheld"}))
+        } else {
+            let parent_audit = json!({
+                "status": "disclosed", "count": usize::from(context.parent.is_some()),
+            });
+            result["parent"] = json!(context.parent);
+            let subtasks_audit = if let Some(subtasks) = context.subtasks {
+                let count = subtasks.len();
+                result["subtasks"] = json!(subtasks);
+                json!({"status": "disclosed", "count": count})
+            } else {
+                json!({"status": "not-returned"})
+            };
+            (parent_audit, subtasks_audit)
+        };
         let links_audit = if !request.universal_reach() {
             json!({"status": "withheld"})
-        } else if let Some(links) = response.value.issue_links {
+        } else if let Some(links) = issue_links {
             let count = links.len();
             result["issueLinks"] = json!(links);
             json!({"status": "disclosed", "count": count})
@@ -1178,6 +1228,9 @@ impl JiraProvider {
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
                 "issueLinks": links_audit,
+                "parent": parent_audit,
+                "subtasks": subtasks_audit,
+                "customFields": custom_fields_audit,
             }))
             .with_upstream(
                 Some(response.status),

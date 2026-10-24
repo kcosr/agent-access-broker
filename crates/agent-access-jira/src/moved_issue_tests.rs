@@ -53,7 +53,7 @@ impl JiraBackend for MovingJira {
         &self,
         _issue_key: &str,
         _credential: &AtlassianCredential,
-        _include_issue_links: bool,
+        _include_issue_references: bool,
     ) -> Result<JiraBackendResponse<JiraIssueView>, JiraBackendError> {
         Err(self.sent("issue_view"))
     }
