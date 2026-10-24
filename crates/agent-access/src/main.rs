@@ -141,9 +141,9 @@ enum Command {
         #[command(subcommand)]
         command: ServicesCommand,
     },
-    Resources {
+    ResourceAccess {
         #[command(subcommand)]
-        command: DiscoveryResourcesCommand,
+        command: ResourceAccessCommand,
     },
     Actions {
         #[command(subcommand)]
@@ -780,26 +780,29 @@ struct DiscoveryListArgs {
 }
 
 #[derive(Debug, Subcommand)]
-enum DiscoveryResourcesCommand {
-    /// List registered concrete resources with the action inputs that address them, plus your namespace or all coverage on the first page. Empty resources with coverage means broad access, not no access; check a known value with actions list --resource.
-    List {
+enum ResourceAccessCommand {
+    /// Describe local single-target access by action and resource type, with configured resource references and optional live listing actions.
+    Describe {
         #[arg(long)]
         service: String,
+        /// Filter to one exact canonical action ID.
+        #[arg(long)]
+        action: Option<String>,
         #[arg(
             long,
-            help = "Registered resource type to list; required when the service authorizes several resource types"
+            help = "Filter access and configured references to this registered resource type"
         )]
         resource_type: Option<String>,
         #[arg(long)]
         prefix: Option<String>,
         #[arg(
             long,
-            help = "Page size (1–100, default 50); repeat the same limit and prefix on continuation"
+            help = "Configured reference page size (1–100, default 50); coverage repeats on every page"
         )]
         limit: Option<u32>,
         #[arg(
             long,
-            help = "Opaque continuation cursor; repeat the same service, prefix, and limit"
+            help = "Opaque continuation cursor; repeat the same service, action, resource type, prefix, and limit"
         )]
         cursor: Option<String>,
     },
@@ -3286,7 +3289,7 @@ const CLOUDBEES_CI_BUILD_SELECTORS: [&str; 7] = [
 /// flag is `--job-url` because `--url` selects the broker.
 #[derive(Debug, Args)]
 struct CloudbeesCiJobArgs {
-    /// Configured controller alias: the first segment of a cloudbees_ci_job resource value (see resources list inputs or coverage).
+    /// Configured controller alias: the first segment of a cloudbees_ci_job resource value (see resource-access describe inputs or coverage).
     #[arg(required_unless_present = "job_url")]
     controller: Option<String>,
     /// Jenkins full name below the controller, such as payments/build-api; not a display name or URL.
@@ -4863,7 +4866,7 @@ fn validate_output_command(cli: &Cli) -> Result<()> {
                 | Command::Send { .. }
                 | Command::Spec { .. }
                 | Command::Services { .. }
-                | Command::Resources { .. }
+                | Command::ResourceAccess { .. }
                 | Command::Actions { .. }
                 | Command::Broker {
                     command: BrokerCommand::Status
@@ -4987,10 +4990,11 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
                 discovery::service_describe(ctx.settings, service).await,
             ),
         },
-        Command::Resources {
+        Command::ResourceAccess {
             command:
-                DiscoveryResourcesCommand::List {
+                ResourceAccessCommand::Describe {
                     service,
+                    action,
                     resource_type,
                     prefix,
                     limit,
@@ -4998,9 +5002,10 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
                 },
         } => render_discovery(
             ctx,
-            discovery::resources_list(
+            discovery::resource_access_describe(
                 ctx.settings,
                 service,
+                action.as_deref(),
                 resource_type.as_deref(),
                 prefix.as_deref(),
                 *limit,
@@ -18188,6 +18193,7 @@ mod tests {
     fn discovery_removed_flags_are_rejected_and_resource_query_parses() {
         for args in [
             vec!["services", "list", "--names-only"],
+            vec!["resources", "list", "--service", "fake"],
             vec!["actions", "list", "--service", "fake", "--names-only"],
         ] {
             assert!(Cli::try_parse_from(std::iter::once("agent-access").chain(args)).is_err());
@@ -18195,8 +18201,8 @@ mod tests {
         assert!(
             Cli::try_parse_from([
                 "agent-access",
-                "resources",
-                "list",
+                "resource-access",
+                "describe",
                 "--service",
                 "gitlab",
                 "--limit",
@@ -18849,6 +18855,7 @@ mod tests {
         ApiActionSpec {
             scoped_mcp_name: Some("issue.view".to_owned()),
             documentation: None,
+            listing_of: None,
             read_only: true,
             action: "issue.view".to_string(),
             description: "test action".to_string(),
@@ -22514,6 +22521,7 @@ upload_spool_dir = "upload-spool"
                 actions: vec![ApiActionSpec {
                     scoped_mcp_name: Some("call".to_owned()),
                     documentation: None,
+                    listing_of: None,
                     read_only: true,
                     action: "call".to_string(),
                     description: "Call".to_string(),

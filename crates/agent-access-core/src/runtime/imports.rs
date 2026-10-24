@@ -238,6 +238,7 @@ pub(super) fn descriptor(
                 definition.input_schema.clone(),
             )
             .credential_modes(shape.credential_modes);
+            action.listing_of = shape.listing_of;
             if let Some(scope) = shape.scope {
                 action = action.scope(scope.name.clone());
                 resource_scopes.insert(scope.name.clone(), authority::scope_binding(&scope));

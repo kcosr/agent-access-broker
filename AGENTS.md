@@ -71,6 +71,17 @@ actions and exposes typed wrappers for supported services.
   admission may renew the caller's own Microsoft membership (see
   `docs/design.md`). Keep management and setup previews independent so missing
   credentials cannot prevent onboarding.
+- Resource-access discovery describes effective single-target coverage separately
+  per action and resource type, with explicit unscoped actions, admitted execution
+  context and service availability. Scoped enforcement distinguishes Broker
+  request checks, native query/result containment and grants handed to commands;
+  never imply that Broker filters a command's results. Retain useful narrow
+  coverage under restricted broad selectors. Keep registered
+  references separate and paginate/filter only those references; repeat access
+  and live-listing hints on every page. Listing hints require declared
+  `listingOf` metadata and their own usable action authority, never inferred
+  names or a promise of complete inventory for another action. Preserve generic
+  handling for native, imported and command-backed services.
 - Token-only actions (`ActionDescriptor::token_only`, native only) are checked
   with the mode each grant region's winning grant selects, beside the action's
   supported modes: refuse them only where `per_user` selects OAuth, with no

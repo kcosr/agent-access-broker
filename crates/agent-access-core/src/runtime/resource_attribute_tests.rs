@@ -247,10 +247,10 @@ async fn private_resources_require_configuration_and_do_not_require_dummy_creden
     let resources = runtime
         .service_discovery(&identity, &ctx, "attribute_fixture")
         .unwrap()
-        .resources(&ResourceListQuery::default())
+        .resource_access(&ResourceAccessQuery::default())
         .unwrap();
-    assert_eq!(resources.resources.len(), 1);
-    assert_eq!(resources.resources[0].value, "one");
+    assert_eq!(resources.registered_resources.items.len(), 1);
+    assert_eq!(resources.registered_resources.items[0].value, "one");
     assert!(
         !serde_json::to_string(&resources)
             .unwrap()

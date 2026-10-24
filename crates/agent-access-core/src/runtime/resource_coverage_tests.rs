@@ -77,12 +77,28 @@ impl BackendConfig for FixtureConfig {
                 ),
             )]))
             .with_actions(
-                ["view", "trigger"]
+                ["view", "trigger", "jobs.list", "enumerate", "status"]
                     .into_iter()
                     .map(|action| {
-                        ActionDescriptor::new(action, "Fixture action", schema.clone())
-                            .scope("job")
-                            .credential_modes(["service", "per_user"])
+                        let descriptor =
+                            ActionDescriptor::new(action, "Fixture action", schema.clone())
+                                .credential_modes(["service", "per_user"]);
+                        if action == "status" {
+                            return descriptor.read_only();
+                        }
+                        let descriptor = descriptor.scope("job");
+                        if action == "enumerate" {
+                            descriptor
+                                .read_only()
+                                .native_search(
+                                    agent_access_provider::NativeSearchEnforcement::ResultFiltered,
+                                )
+                                .listing_of(JOB.id().clone())
+                        } else if action != "trigger" {
+                            descriptor.read_only()
+                        } else {
+                            descriptor
+                        }
                     })
                     .collect(),
             )
@@ -197,17 +213,33 @@ fn default_context() -> ExecutionContext {
 fn list(
     runtime: &BrokerRuntime,
     identity: &IdentityContext,
-    query: ResourceListQuery,
-) -> ResourceList {
+    query: ResourceAccessQuery,
+) -> ResourceAccessDescription {
     runtime
         .service_discovery(identity, &default_context(), SERVICE)
         .unwrap()
-        .resources(&query)
+        .resource_access(&query)
+        .unwrap()
+}
+
+fn action_coverage<'a>(
+    page: &'a ResourceAccessDescription,
+    action: &str,
+) -> &'a [ResourceCoverage] {
+    page.access
+        .iter()
+        .find(|entry| entry.action() == action)
+        .unwrap()
+        .coverage()
         .unwrap()
 }
 
 fn coverage(runtime: &BrokerRuntime, identity: &IdentityContext) -> Value {
-    serde_json::to_value(list(runtime, identity, ResourceListQuery::default()).coverage).unwrap()
+    serde_json::to_value(action_coverage(
+        &list(runtime, identity, ResourceAccessQuery::default()),
+        "view",
+    ))
+    .unwrap()
 }
 
 fn token(resources: ResourceSelection) -> IdentityContext {
@@ -242,7 +274,6 @@ fn token(resources: ResourceSelection) -> IdentityContext {
 
 fn entry(selector: ResourceSelector, restricted: bool) -> ResourceCoverage {
     ResourceCoverage {
-        resource_type: JOB.id().clone(),
         inputs: job_inputs(&selector),
         selector,
         restricted,
@@ -250,7 +281,7 @@ fn entry(selector: ResourceSelector, restricted: bool) -> ResourceCoverage {
 }
 
 #[test]
-fn exact_resources_carry_inputs_and_report_no_coverage() {
+fn exact_access_is_independent_of_registered_references() {
     let mut config = config(&["team-ci", "other-ci"]);
     config
         .policy
@@ -260,24 +291,125 @@ fn exact_resources_carry_inputs_and_report_no_coverage() {
     let page = list(
         &runtime,
         &IdentityContext::anonymous(),
-        ResourceListQuery::default(),
+        ResourceAccessQuery::default(),
     );
     assert_eq!(
         serde_json::to_value(&page).unwrap(),
         json!({
             "service": SERVICE,
-            "resources": [{
-                "id": "build-api", "type": "coverage_job", "value": "team-ci/payments/build-api",
-                "inputs": {"controller": "team-ci", "job": "payments/build-api"}
+            "executionContext": "default",
+            "availability": {
+                "state": "available", "requirements": [],
+                "message": "Required credentials are locally available; upstream access has not been verified."
+            },
+            "coverageSemantics": "single_target",
+            "access": [{
+                "action": "view", "scope": "resource", "resourceType": "coverage_job",
+                "enforcement": "request",
+                "coverage": [{
+                    "selector": {"kind": "exact", "value": "team-ci/payments/build-api"},
+                    "inputs": {"controller": "team-ci", "job": "payments/build-api"},
+                    "restricted": false
+                }]
             }],
-            "nextCursor": null
+            "registeredResources": {
+                "source": "broker_configuration",
+                "items": [{
+                    "id": "build-api", "type": "coverage_job", "value": "team-ci/payments/build-api",
+                    "inputs": {"controller": "team-ci", "job": "payments/build-api"}
+                }],
+                "nextCursor": null
+            }
         })
     );
-    // Strict clients parse the omitted coverage as empty.
     assert_eq!(
-        serde_json::from_value::<ResourceList>(serde_json::to_value(&page).unwrap()).unwrap(),
+        serde_json::from_value::<ResourceAccessDescription>(serde_json::to_value(&page).unwrap())
+            .unwrap(),
         page
     );
+    let filtered = list(
+        &runtime,
+        &IdentityContext::anonymous(),
+        ResourceAccessQuery {
+            prefix: Some("no-match".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(filtered.access, page.access);
+    assert!(filtered.registered_resources.items.is_empty());
+}
+
+#[test]
+fn actions_keep_distinct_coverage_and_registered_references_follow_action_filter() {
+    let mut config = config(&["team-ci", "other-ci", "Not A Root", "team-ci"]);
+    config
+        .policy
+        .grants
+        .push(grant(&["view"], selection(&["all-jobs"], &[])));
+    config
+        .policy
+        .grants
+        .push(grant(&["trigger"], selection(&["build-api"], &[])));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let identity = IdentityContext::anonymous();
+    let page = list(&runtime, &identity, ResourceAccessQuery::default());
+    assert_eq!(
+        action_coverage(&page, "view"),
+        [
+            entry(namespace("other-ci"), false),
+            entry(namespace("team-ci"), false)
+        ]
+    );
+    assert_eq!(
+        action_coverage(&page, "trigger"),
+        [entry(exact("team-ci/payments/build-api"), false)]
+    );
+    assert_eq!(page.registered_resources.items.len(), 2);
+    let trigger = list(
+        &runtime,
+        &identity,
+        ResourceAccessQuery {
+            action: Some("trigger".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(trigger.access.len(), 1);
+    assert_eq!(
+        trigger
+            .registered_resources
+            .items
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["build-api"]
+    );
+    let context = default_context();
+    let discovery = runtime
+        .service_discovery(&identity, &context, SERVICE)
+        .unwrap();
+    for action in ["hidden", "vie", "enumerate"] {
+        assert_eq!(
+            discovery
+                .resource_access(&ResourceAccessQuery {
+                    action: Some(action.into()),
+                    resource_type: Some(ResourceType::new("unknown_type").unwrap()),
+                    ..Default::default()
+                })
+                .unwrap_err(),
+            "action is not available"
+        );
+    }
+    for action in ["", "bad/name", "has space"] {
+        assert_eq!(
+            discovery
+                .resource_access(&ResourceAccessQuery {
+                    action: Some(action.into()),
+                    ..Default::default()
+                })
+                .unwrap_err(),
+            "action name is invalid"
+        );
+    }
 }
 
 #[test]
@@ -291,60 +423,50 @@ fn namespace_and_all_report_reachable_roots_without_contained_entries() {
     let page = list(
         &runtime,
         &IdentityContext::anonymous(),
-        ResourceListQuery::default(),
+        ResourceAccessQuery::default(),
     );
-    assert_eq!(page.coverage, [entry(namespace("team-ci/payments"), false)]);
     assert_eq!(
-        serde_json::to_value(&page.coverage).unwrap(),
-        json!([{
-            "type": "coverage_job",
-            "selector": {"kind": "namespace", "value": "team-ci/payments"},
-            "inputs": {"controller": "team-ci"},
-            "restricted": false
-        }])
+        action_coverage(&page, "view"),
+        [entry(namespace("team-ci/payments"), false)]
     );
-    // Registered jobs inside the namespace are still listed as resources.
     assert_eq!(
-        page.resources
+        page.registered_resources
+            .items
             .iter()
             .map(|row| row.id.as_str())
             .collect::<Vec<_>>(),
         ["build-api", "deploy"]
     );
-
-    // All is reported per configured, well-formed root; the team namespace
-    // and roots outside the provider's configuration are subsumed or dropped.
-    config.policy.grants.push(grant(
-        &["trigger"],
-        selection(&["all-jobs", "gone-ci"], &[]),
-    ));
+    config
+        .policy
+        .grants
+        .push(grant(&["view"], selection(&["all-jobs", "gone-ci"], &[])));
     let runtime = BrokerRuntime::new(config.clone()).unwrap();
     assert_eq!(
-        list(
-            &runtime,
-            &IdentityContext::anonymous(),
-            ResourceListQuery::default()
-        )
-        .coverage,
+        action_coverage(
+            &list(
+                &runtime,
+                &IdentityContext::anonymous(),
+                ResourceAccessQuery::default()
+            ),
+            "view"
+        ),
         [
             entry(namespace("other-ci"), false),
-            entry(namespace("team-ci"), false),
+            entry(namespace("team-ci"), false)
         ]
     );
-
-    // Without roots, all is reported as such, without inputs.
-    let mut rootless = config.clone();
-    rootless.providers = ProvidersConfig::new(Arc::new(BackendRegistry::new([&BACKEND]).unwrap()))
+    config.providers = ProvidersConfig::new(Arc::new(BackendRegistry::new([&BACKEND]).unwrap()))
         .with(FixtureConfig::default());
-    let runtime = BrokerRuntime::new(rootless).unwrap();
+    let runtime = BrokerRuntime::new(config).unwrap();
     assert_eq!(
         coverage(&runtime, &IdentityContext::anonymous()),
-        json!([{"type": "coverage_job", "selector": {"kind": "all"}, "restricted": false}])
+        json!([{"selector": {"kind": "all"}, "restricted": false}])
     );
 }
 
 #[test]
-fn exclusions_restrict_entries_and_hide_unreachable_roots_and_values() {
+fn exclusions_stay_private_and_independent_grants_restore_only_the_same_action() {
     let mut config = config(&["team-ci", "other-ci"]);
     config.policy.resource_groups = vec![ResourceGroupDefinition {
         id: "visible".into(),
@@ -355,76 +477,61 @@ fn exclusions_restrict_entries_and_hide_unreachable_roots_and_values() {
     config
         .policy
         .grants
-        .push(grant(&["view"], selection(&[], &["visible"])));
+        .push(grant(&["view", "trigger"], selection(&[], &["visible"])));
+    // Exclusion identity remains effective even when its reference is inactive.
+    for resource in &mut config.policy.resources {
+        if resource.id == "secret-folder" {
+            resource.enabled = false;
+        }
+        if resource.id == "other-ci" {
+            resource.allowed_execution_contexts = vec!["external".into()];
+        }
+    }
     let runtime = BrokerRuntime::new(config.clone()).unwrap();
     let page = list(
         &runtime,
         &IdentityContext::anonymous(),
-        ResourceListQuery::default(),
+        ResourceAccessQuery::default(),
     );
-    assert_eq!(page.coverage, [entry(namespace("team-ci"), true)]);
+    for action in ["view", "trigger"] {
+        assert_eq!(
+            action_coverage(&page, action),
+            [entry(namespace("team-ci"), true)]
+        );
+    }
     let rendered = serde_json::to_string(&page).unwrap();
-    for hidden in ["other-ci", "secret-folder"] {
+    for hidden in ["other-ci", "secret-folder", "excluded", "visible"] {
         assert!(!rendered.contains(hidden), "{rendered}");
     }
-
-    // A narrower grant inside the excluded root reports only itself, not the
-    // root; the all grant's exclusion does not withhold it from this action.
     config
         .policy
         .grants
         .push(grant(&["view"], selection(&["other-team"], &[])));
-    let runtime = BrokerRuntime::new(config.clone()).unwrap();
-    assert_eq!(
-        list(
-            &runtime,
-            &IdentityContext::anonymous(),
-            ResourceListQuery::default()
-        )
-        .coverage,
-        [
-            entry(namespace("other-ci/team"), false),
-            entry(namespace("team-ci"), true),
-        ]
-    );
-
-    // Another grant restores the excluded folder for the same action.
+    for resource in &mut config.policy.resources {
+        if resource.id == "secret-folder" {
+            resource.enabled = true;
+        }
+    }
     config
         .policy
         .grants
         .push(grant(&["view"], selection(&["secret-folder"], &[])));
-    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let page = list(
+        &runtime,
+        &IdentityContext::anonymous(),
+        ResourceAccessQuery::default(),
+    );
     assert_eq!(
-        list(
-            &runtime,
-            &IdentityContext::anonymous(),
-            ResourceListQuery::default()
-        )
-        .coverage,
+        action_coverage(&page, "view"),
         [
             entry(namespace("other-ci/team"), false),
-            entry(namespace("team-ci"), false),
+            entry(namespace("team-ci"), false)
         ]
     );
-
-    // An exclusion on a different action whose grant covers the entry still
-    // marks it restricted.
-    config
-        .policy
-        .grants
-        .push(grant(&["trigger"], selection(&[], &["visible"])));
-    let runtime = BrokerRuntime::new(config).unwrap();
     assert_eq!(
-        list(
-            &runtime,
-            &IdentityContext::anonymous(),
-            ResourceListQuery::default()
-        )
-        .coverage,
-        [
-            entry(namespace("other-ci/team"), true),
-            entry(namespace("team-ci"), true),
-        ]
+        action_coverage(&page, "trigger"),
+        [entry(namespace("team-ci"), true)]
     );
 }
 
@@ -440,24 +547,22 @@ fn precedence_conditions_withhold_single_targets_until_another_clause_serves_the
     unusable.priority = Some(10);
     let mut served = grant(&["view"], selection(&["deploy"], &[]));
     served.priority = Some(10);
-    config.policy.grants.extend([unusable, served]);
-    // Configuration validation rejects the unconfigured per-user mode;
-    // install the policy directly to exercise the runtime precedence guard.
     let mut valid = config.clone();
     valid.policy.grants.truncate(1);
+    config.policy.grants.extend([unusable, served]);
     let runtime = BrokerRuntime::new(valid).unwrap();
     runtime
         .policy_snapshot
         .store(Arc::new(PolicySnapshot::from_config(&config, 1)));
-    // The higher, unusable grant withholds every job under other-ci, so that
-    // root is unreachable; the higher, usable grant serves its own job.
     assert_eq!(
-        list(
-            &runtime,
-            &IdentityContext::anonymous(),
-            ResourceListQuery::default()
-        )
-        .coverage,
+        action_coverage(
+            &list(
+                &runtime,
+                &IdentityContext::anonymous(),
+                ResourceAccessQuery::default()
+            ),
+            "view"
+        ),
         [entry(namespace("team-ci"), false)]
     );
     assert!(
@@ -472,7 +577,7 @@ fn precedence_conditions_withhold_single_targets_until_another_clause_serves_the
 }
 
 #[test]
-fn token_restrictions_and_contexts_narrow_coverage() {
+fn token_restrictions_and_contexts_narrow_each_actions_coverage() {
     let mut config = config(&["team-ci", "other-ci"]);
     config
         .policy
@@ -485,115 +590,415 @@ fn token_restrictions_and_contexts_narrow_coverage() {
         excluded_resource_ids: vec!["deploy".into()],
     }];
     let runtime = BrokerRuntime::new(config.clone()).unwrap();
-    assert_eq!(
-        list(
-            &runtime,
-            &token(selection(&["payments"], &[])),
-            ResourceListQuery::default()
-        )
-        .coverage,
-        [entry(namespace("team-ci/payments"), false)]
+    let broad = list(
+        &runtime,
+        &token(selection(&["payments"], &[])),
+        ResourceAccessQuery::default(),
     );
     let restricted = list(
         &runtime,
         &token(selection(&[], &["payments-public"])),
-        ResourceListQuery::default(),
+        ResourceAccessQuery::default(),
     );
-    assert_eq!(
-        restricted.coverage,
-        [entry(namespace("team-ci/payments"), true)]
-    );
+    for action in ["view", "trigger"] {
+        assert_eq!(
+            action_coverage(&broad, action),
+            [entry(namespace("team-ci/payments"), false)]
+        );
+        assert_eq!(
+            action_coverage(&restricted, action),
+            [entry(namespace("team-ci/payments"), true)]
+        );
+    }
     assert!(
         !serde_json::to_string(&restricted)
             .unwrap()
             .contains("deploy")
     );
-
-    // A namespace entry outside the caller's context is not coverage.
-    for entry in &mut config.policy.resources {
-        if entry.id == "payments" {
-            entry.allowed_execution_contexts = vec!["external".into()];
+    for resource in &mut config.policy.resources {
+        if resource.id == "payments" {
+            resource.allowed_execution_contexts = vec!["external".into()];
         }
     }
     config.policy.grants = vec![grant(&["view"], selection(&["payments", "build-api"], &[]))];
     let runtime = BrokerRuntime::new(config).unwrap();
-    assert_eq!(coverage(&runtime, &IdentityContext::anonymous()), json!([]));
+    assert_eq!(
+        coverage(&runtime, &IdentityContext::anonymous()),
+        serde_json::to_value([entry(exact("team-ci/payments/build-api"), false)]).unwrap()
+    );
 }
 
 #[test]
-fn prefix_keeps_entries_matching_or_containing_it_and_pages_omit_coverage() {
+fn prefix_and_reference_pages_always_preserve_complete_access_metadata() {
     let mut config = config(&["team-ci", "other-ci"]);
     config.policy.grants.push(grant(
         &["view"],
         selection(&["all-jobs", "build-api", "deploy"], &[]),
     ));
+    config
+        .policy
+        .grants
+        .push(grant(&["enumerate"], selection(&["payments"], &[])));
     let runtime = BrokerRuntime::new(config).unwrap();
-    let anonymous = IdentityContext::anonymous();
-    for (prefix, expected) in [
-        ("team-ci/payments/b", vec!["team-ci"]),
-        ("team-ci", vec!["team-ci"]),
-        ("o", vec!["other-ci"]),
-        ("team-ci-old", vec![]),
-        ("zz", vec![]),
-    ] {
-        let page = list(
-            &runtime,
-            &anonymous,
-            ResourceListQuery {
-                prefix: Some(prefix.into()),
-                ..ResourceListQuery::default()
-            },
-        );
-        assert_eq!(
-            page.coverage
-                .iter()
-                .map(|entry| entry.selector.clone())
-                .collect::<Vec<_>>(),
-            expected.into_iter().map(namespace).collect::<Vec<_>>(),
-            "{prefix}"
-        );
-    }
+    let identity = IdentityContext::anonymous();
     let first = list(
         &runtime,
-        &anonymous,
-        ResourceListQuery {
+        &identity,
+        ResourceAccessQuery {
             limit: Some(1),
-            ..ResourceListQuery::default()
+            ..Default::default()
         },
     );
-    assert_eq!(first.coverage.len(), 2);
+    for prefix in ["team-ci/payments/b", "team-ci", "o", "team-ci-old", "zz"] {
+        let page = list(
+            &runtime,
+            &identity,
+            ResourceAccessQuery {
+                prefix: Some(prefix.into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(page.access, first.access, "{prefix}");
+        assert_eq!(page.live_listings, first.live_listings, "{prefix}");
+    }
     let second = list(
         &runtime,
-        &anonymous,
-        ResourceListQuery {
+        &identity,
+        ResourceAccessQuery {
             limit: Some(1),
-            cursor: first.next_cursor,
-            ..ResourceListQuery::default()
+            cursor: first.registered_resources.next_cursor.clone(),
+            ..Default::default()
         },
     );
-    assert_eq!(second.resources[0].value, "team-ci/payments/deploy");
-    assert!(second.coverage.is_empty());
+    assert_eq!(
+        second.registered_resources.items[0].value,
+        "team-ci/payments/deploy"
+    );
+    assert_eq!(second.access, first.access);
+    assert_eq!(second.live_listings, first.live_listings);
+    // Changing only the action selection invalidates the reference cursor,
+    // even when both selections have the same registered reference rows.
     assert!(
-        serde_json::to_value(&second)
+        runtime
+            .service_discovery(&identity, &default_context(), SERVICE)
             .unwrap()
-            .get("coverage")
-            .is_none()
+            .resource_access(&ResourceAccessQuery {
+                action: Some("view".into()),
+                limit: Some(1),
+                cursor: first.registered_resources.next_cursor,
+                ..Default::default()
+            })
+            .is_err()
     );
 }
 
 #[test]
-fn types_without_projection_or_roots_list_plain_rows_and_all() {
+fn compound_only_authority_is_not_misreported_as_unscoped_or_single_target_access() {
+    let mut config = config(&[]);
+    config
+        .policy
+        .grants
+        .push(grant(&["view"], selection(&["all-jobs"], &[])));
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    for id in ["build-api", "deploy"] {
+        for mode in ["service", "per_user"] {
+            let mut competing = grant(&["view"], selection(&[id], &[]));
+            competing.priority = Some(10);
+            competing.credential_mode = mode.into();
+            config.policy.grants.push(competing);
+        }
+    }
+    // Same-band mode conflicts are normally rejected at publication. Exercise
+    // the runtime guard and whole-request precedence with an injected policy.
+    runtime
+        .policy_snapshot
+        .store(Arc::new(PolicySnapshot::from_config(&config, 1)));
+    let identity = token(selection(&["build-api", "deploy"], &[]));
+    let context = default_context();
+    let view = runtime
+        .service_discovery(&identity, &context, SERVICE)
+        .unwrap();
+    let page = view
+        .resource_access(&ResourceAccessQuery::default())
+        .unwrap();
+    assert_eq!(page.access.len(), 1);
+    assert!(
+        matches!(&page.access[0], ActionResourceAccess::Resource { coverage, .. } if coverage.is_empty())
+    );
+    assert!(page.registered_resources.items.is_empty());
+    let parsed = parsed_agent_invoke_token_caveats(&identity).unwrap();
+    let clauses = runtime.effective_resource_clauses(
+        &runtime.policy_snapshot(),
+        &identity,
+        &context,
+        SERVICE,
+        "view",
+        parsed.as_ref(),
+    );
+    let first = "team-ci/payments/build-api";
+    let second = "team-ci/payments/deploy";
+    assert!(
+        !clauses
+            .iter()
+            .any(|clause| clause.matches(first) || clause.matches(second))
+    );
+    assert!(
+        clauses
+            .iter()
+            .any(|clause| clause.matches_request(&[first, second]))
+    );
+    let rendered = serde_json::to_string(&page).unwrap();
+    assert!(!rendered.contains("build-api") && !rendered.contains("deploy"));
+}
+
+#[test]
+fn unscoped_actions_have_an_exact_shape_and_listing_links_need_independent_permission() {
+    let mut config = config(&[]);
+    config
+        .policy
+        .grants
+        .push(grant(&["view", "jobs.list"], selection(&["all-jobs"], &[])));
+    config
+        .policy
+        .grants
+        .push(grant(&["status"], ResourceSelection::default()));
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let identity = IdentityContext::anonymous();
+    let page = list(&runtime, &identity, ResourceAccessQuery::default());
+    assert!(
+        page.live_listings.is_empty(),
+        "action names must not imply a listing capability"
+    );
+    let status = page
+        .access
+        .iter()
+        .find(|entry| entry.action() == "status")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(status).unwrap(),
+        json!({"scope":"unscoped", "action":"status"})
+    );
+    assert!(
+        serde_json::from_value::<ActionResourceAccess>(
+            json!({"scope":"unscoped", "action":"status", "coverage":[]})
+        )
+        .is_err()
+    );
+    assert_eq!(
+        runtime
+            .service_discovery(&identity, &default_context(), SERVICE)
+            .unwrap()
+            .resource_access(&ResourceAccessQuery {
+                action: Some("status".into()),
+                resource_type: Some(JOB.id().clone()),
+                ..Default::default()
+            })
+            .unwrap_err(),
+        "action does not use this resourceType"
+    );
+    config
+        .policy
+        .grants
+        .push(grant(&["enumerate"], selection(&["build-api"], &[])));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let view = list(
+        &runtime,
+        &identity,
+        ResourceAccessQuery {
+            action: Some("view".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        view.live_listings,
+        [LiveResourceListing {
+            service: SERVICE.into(),
+            action: "enumerate".into(),
+            resource_type: JOB.id().clone()
+        }]
+    );
+    assert!(
+        list(
+            &runtime,
+            &identity,
+            ResourceAccessQuery {
+                action: Some("status".into()),
+                ..Default::default()
+            }
+        )
+        .live_listings
+        .is_empty()
+    );
+    // Token action restrictions hide enumeration even when the described read remains.
+    let token_view = list(
+        &runtime,
+        &token(selection(&["all-jobs"], &[])),
+        ResourceAccessQuery::default(),
+    );
+    assert!(token_view.live_listings.is_empty());
+}
+
+#[test]
+fn types_without_projection_or_roots_report_plain_references_and_all_access() {
     let mut config = tests::base_fake_config();
     config.policy.grants[0].resources = selection(&["fake-project-all"], &[]);
     let runtime = BrokerRuntime::new(config).unwrap();
     let page = runtime
         .service_discovery(&IdentityContext::anonymous(), &default_context(), "fake")
         .unwrap()
-        .resources(&ResourceListQuery::default())
+        .resource_access(&ResourceAccessQuery::default())
         .unwrap();
-    assert!(page.resources.iter().all(|row| row.inputs.is_none()));
-    assert_eq!(
-        serde_json::to_value(&page.coverage).unwrap(),
-        json!([{"type": "fake_project", "selector": {"kind": "all"}, "restricted": false}])
+    assert!(
+        page.registered_resources
+            .items
+            .iter()
+            .all(|row| row.inputs.is_none())
     );
+    assert_eq!(
+        serde_json::to_value(page.access[0].coverage().unwrap()).unwrap(),
+        json!([{"selector":{"kind":"all"}, "restricted":false}])
+    );
+}
+
+#[test]
+fn restricted_broad_coverage_keeps_useful_narrow_authority() {
+    let mut config = config(&[]);
+    config
+        .policy
+        .resources
+        .push(resource("other-job", exact("other-ci/ops/run")));
+    config.policy.resource_groups = vec![ResourceGroupDefinition {
+        id: "public".into(),
+        name: "Public jobs".into(),
+        included_resource_ids: vec!["all-jobs".into()],
+        excluded_resource_ids: vec!["secret-folder".into()],
+    }];
+    config.policy.grants = vec![
+        grant(&["view"], selection(&[], &["public"])),
+        grant(&["view"], selection(&["payments"], &[])),
+        grant(&["view"], selection(&["build-api", "other-job"], &[])),
+    ];
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let page = list(
+        &runtime,
+        &IdentityContext::anonymous(),
+        ResourceAccessQuery::default(),
+    );
+    assert_eq!(
+        action_coverage(&page, "view"),
+        [
+            entry(exact("other-ci/ops/run"), false),
+            entry(namespace("team-ci/payments"), false),
+            entry(ResourceSelector::All, true),
+        ]
+    );
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("secret-folder")
+    );
+}
+
+#[test]
+fn listing_top_band_and_request_fallback_have_distinct_coverage_and_enforcement() {
+    let mut config = config(&[]);
+    config
+        .policy
+        .grants
+        .push(grant(&["view", "enumerate"], selection(&["all-jobs"], &[])));
+    let mut higher = grant(&["view", "enumerate"], selection(&["build-api"], &[]));
+    higher.priority = Some(10);
+    config.policy.grants.push(higher);
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let page = list(
+        &runtime,
+        &IdentityContext::anonymous(),
+        ResourceAccessQuery::default(),
+    );
+    assert_eq!(
+        action_coverage(&page, "view"),
+        [entry(ResourceSelector::All, false)]
+    );
+    assert_eq!(
+        action_coverage(&page, "enumerate"),
+        [entry(exact("team-ci/payments/build-api"), false)]
+    );
+    assert!(matches!(
+        page.access
+            .iter()
+            .find(|entry| entry.action() == "view")
+            .unwrap(),
+        ActionResourceAccess::Resource {
+            enforcement: ResourceAccessEnforcement::Request,
+            ..
+        }
+    ));
+    assert!(matches!(
+        page.access
+            .iter()
+            .find(|entry| entry.action() == "enumerate")
+            .unwrap(),
+        ActionResourceAccess::Resource {
+            enforcement: ResourceAccessEnforcement::Results,
+            ..
+        }
+    ));
+    assert_eq!(page.live_listings.len(), 1);
+}
+
+#[test]
+fn large_exact_authority_remains_complete_while_references_are_paginated() {
+    const COUNT: usize = 256;
+    let mut config = config(&[]);
+    config.policy.resources = (0..COUNT)
+        .map(|index| {
+            resource(
+                &format!("job-{index:04}"),
+                exact(&format!("team-ci/jobs/job-{index:04}")),
+            )
+        })
+        .collect();
+    config.policy.grants.push(grant(
+        &["view"],
+        ResourceSelection {
+            resource_ids: config
+                .policy
+                .resources
+                .iter()
+                .map(|resource| resource.id.clone())
+                .collect(),
+            resource_group_ids: Vec::new(),
+        },
+    ));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let identity = IdentityContext::anonymous();
+    let first = list(
+        &runtime,
+        &identity,
+        ResourceAccessQuery {
+            limit: Some(2),
+            ..Default::default()
+        },
+    );
+    let coverage = action_coverage(&first, "view");
+    assert_eq!(coverage.len(), COUNT);
+    assert!(coverage.iter().all(
+        |entry| matches!(entry.selector, ResourceSelector::Exact { .. }) && !entry.restricted
+    ));
+    assert_eq!(
+        coverage.last().unwrap().selector,
+        exact("team-ci/jobs/job-0255")
+    );
+    assert_eq!(first.registered_resources.items.len(), 2);
+    let second = list(
+        &runtime,
+        &identity,
+        ResourceAccessQuery {
+            limit: Some(2),
+            cursor: first.registered_resources.next_cursor.clone(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(second.access, first.access);
+    assert_eq!(second.registered_resources.items[0].id, "job-0002");
 }

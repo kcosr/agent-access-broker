@@ -5,7 +5,9 @@ Runtime catalogs use `agent-access.catalog.v2`. Every service includes
 These fields describe service-specific MCP projection only; canonical action IDs,
 grants, invoke routes, and send envelopes are independent of that projection.
 Catalog-dependent clients must support `agent-access.catalog.v2`. Missing required
-metadata is a contract error.
+metadata is a contract error. Upgrade the CLI and Broker together: resource-access
+discovery requires the current route and response contract and has no compatibility
+aliases.
 
 `agent-access` is the broker client binary. It resolves a broker URL, an identity
 token, and transport settings, then calls the broker's HTTP API. The CLI never
@@ -257,32 +259,61 @@ access. Unknown readiness also hides affected capabilities. Resolve the reported
 user/administrator requirement and refresh discovery. No upstream check or OAuth
 refresh occurs while listing. See [availability](http-api.md#credential-availability).
 
-### `resources`
+### `resource-access`
 
-`resources list --service SERVICE [--resource-type TYPE] [--prefix PREFIX] [--limit N] [--cursor CURSOR]`
-lists registered concrete resources on which the caller has some policy access,
-and on the first page the caller's broader `coverage`.
-`--resource-type` is required when the service authorizes several resource
-types:
+`resource-access describe --service SERVICE [--action ACTION] [--resource-type TYPE] [--prefix PREFIX] [--limit N] [--cursor CURSOR]`
+describes effective local access per action and resource type, followed by
+registered references and optional live-listing action hints. `--action` is an
+exact canonical action name. `--resource-type` is optional even for services with
+several types; without it, all types and unscoped actions are described.
+`executionContext` identifies the admitted context; `availability` uses the same
+credential readiness and remediation shape as `services list`, including when
+missing credentials leave `access` empty.
 
 ```json
-{"service":"jira","resources":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}
-{"service":"cloudbees_ci","resources":[],"coverage":[{"type":"cloudbees_ci_job","selector":{"kind":"namespace","value":"team-ci"},"inputs":{"controller":"team-ci"},"restricted":false}],"nextCursor":null}
+{"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
 ```
 
-Rows contain no actions. Optional configured display names are omitted when
-absent. Only enabled, context-eligible exact entries appear. A row's optional
-`inputs` are the action inputs that address it. `coverage` lists namespace or
-all access, with `restricted: true` when some resources inside are withheld; an
-empty `resources` list with coverage means broad access, not no access. See
-[caller discovery](resources.md#caller-discovery). This command does not query
-upstream inventory. Pass a row's `value`, not its catalog `id`, to
-`actions list --resource`.
+Scoped `access` entries contain `coverage` of `exact`, `namespace`, or `all`
+selectors and optional action `inputs`. Their `enforcement` is `request` for
+Broker request checks, `results` for native query/result containment, or `command`
+for grants passed to a command that must enforce them. `restricted: true` means
+some values inside are withheld. Useful exact or narrower entries remain under restricted
+broad coverage. Unscoped actions use `{action,scope:"unscoped"}` without
+`enforcement`. Coverage reflects policy and locally usable credentials, not backend existence or access.
+It describes single targets; invocation authorizes a complete multi-target
+request. A compound-only action can have empty singleton coverage. An unknown or
+unavailable `--action` returns `action is not available`; invalid syntax returns
+`action name is invalid`. An action/type filter combination that does not match
+the action's resource binding is rejected.
 
-Pages default to 50 entries, with a maximum of 100. Follow `nextCursor` by
-repeating the same service, prefix, and limit; continuation pages omit
-`coverage`. The CLI does not aggregate pages. A stale, changed-filter, or
-foreign cursor fails; restart without the cursor.
+`registeredResources.items` contains enabled, context-eligible exact references,
+with optional configured display names and action `inputs`. Empty items do not
+imply no access. Pass a reference's `value`, not its catalog `id`, to
+`actions list --resource`. Optional `liveListings` entries identify separately
+granted enumeration actions as `{service,action,resourceType}`. Several can list
+the same type, always within the described service. Their own access can differ from another action's; use their schemas and pagination when invoking.
+Each has its own coverage and enforcement entry: with `--action`, describe the
+listing action itself to inspect that entry. Combining listings does not establish
+another action's complete inventory.
+See [caller discovery](resources.md#caller-discovery).
+
+Only registered references are paginated: default 50, maximum 100. `--prefix`
+filters those references only. Follow `registeredResources.nextCursor` with the
+same service, action, resource type, prefix, and limit. Every page repeats the
+complete access summary and hints. JSON `send` exposes this as HTTP operation
+`resource_access.describe` at `/v1/services/{service}/resource-access`.
+The CLI does not aggregate pages. A stale, changed-filter, or foreign cursor
+fails; restart without the cursor.
+A cursor belongs to the Broker runtime that issued it and becomes invalid after
+reload or restart. Multi-instance deployments need session affinity so every
+page reaches the issuing instance; otherwise restart without the cursor.
+
+The access summary is complete and unpaginated on every page. The reference
+`limit` does not bound the whole response. Action and resource-type filters can
+reduce its size, but even a single action is not guaranteed to fit. MCP and CLI
+transport size limits fail closed rather than return partial access.
+See [caller discovery](resources.md#caller-discovery) for oversized-response alternatives.
 
 ### `actions`
 
@@ -1950,7 +1981,8 @@ agent-access cloudbees-ci job list team-ci --folder payments --max-results 50 --
 Other `cloudbees-ci` typed commands locate a job by `CONTROLLER JOB` positionals or
 by `--job-url URL`. `CONTROLLER` is a configured controller alias, the first
 segment of a `cloudbees_ci_job` resource value; `JOB` is the Jenkins full name
-below it, such as `payments/build-api`. Take both from `resources list` row or
+below it, such as `payments/build-api`. Take both from a
+`resource-access describe` registered reference or
 coverage `inputs`. `--job-url` accepts a Jenkins job or build URL on a configured
 controller and is sent as the `url` input (`--url` remains the broker URL).
 Build commands take a `BUILD_NUMBER` positional or `--build-selector

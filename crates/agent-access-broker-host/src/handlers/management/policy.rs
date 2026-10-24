@@ -120,6 +120,8 @@ struct PolicyActionCatalog {
     read_only: bool,
     description: String,
     required_scope_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    listing_of: Option<agent_access_provider::ResourceType>,
     credential_modes: Vec<String>,
     lookup_required: bool,
     input_schema: Value,
@@ -1751,6 +1753,7 @@ fn action_catalog(action: ActionCapabilities) -> PolicyActionCatalog {
         read_only: action.read_only,
         description: action.description,
         required_scope_types: action.required_scope_types,
+        listing_of: action.listing_of,
         credential_modes: action.credential_modes,
         lookup_required: action.lookup_required,
         input_schema: action.input_schema,

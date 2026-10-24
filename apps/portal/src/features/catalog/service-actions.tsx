@@ -8,7 +8,7 @@ import type { ImportActionRecord, ImportActionStatus, ImportPreviewResult, Impor
 import type { PolicyActionCatalog } from "../../types";
 import { ACTION_GRANT_LABEL } from "../../lib/helpers";
 import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
-import { COMMAND_CHECK_CAVEAT, COMMAND_KIND, commandResourceCheck, resourceCheckParts, resourceCheckText } from "../../lib/import-command";
+import { COMMAND_CHECK_CAVEAT, COMMAND_KIND, commandListingType, commandResourceCheck, resourceCheckParts, resourceCheckText } from "../../lib/import-command";
 import { groupRows, sortRows } from "../../lib/table-sort";
 import { urlParam } from "../../lib/url-state";
 import { Badge, Banner, Button, type DataColumn, DataTable, Disclosure, Drawer, DrawerSection, EmptyState, FilterInput, Icon, KeyValue, List, ListFooter, plural, Seg, type SortState, StateCell, StatePill, TableGroupHeader, type Tone, Toolbar, ToolbarRow, ToolbarSummary } from "../../workbench";
@@ -93,7 +93,7 @@ function filterRows(rows: ActionRow[], state: { effect: string; q: string }, typ
     if (!query) return true;
     const operation = row.record ? openApiOperation(row.record.definition) : null;
     const checked = row.record && types ? resourceCheckText(actionResourceCheck(row), types) : null;
-    return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, checked, ...(row.catalog?.requiredScopeTypes ?? [])]
+    return [row.action, row.label, row.description, row.status, operation ? `${operation.method} ${operation.path}` : null, checked, row.catalog?.listingOf, row.record && types ? commandListingType(row.record.definition) : null, ...(row.catalog?.requiredScopeTypes ?? [])]
       .filter(Boolean)
       .join(" ")
       .toLowerCase()
@@ -459,6 +459,8 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
   const check = open.record && types ? actionResourceCheck(open) : null;
   const checkParts = check && types ? resourceCheckParts(check, types) : null;
   const checkType = check?.type ? types?.find((type) => type.id === check.type) : undefined;
+  const sourceListing = open.record && types ? commandListingType(open.record.definition) : null;
+  const listingType = open.catalog?.listingOf ?? (sourceListing ? types?.find((type) => type.id === sourceListing)?.brokerType : null);
   const transitions = open.record && data ? actionTransitions(open, data) : [];
   const status = open.status ? ACTION_STATUS[open.status] : null;
   const inputSchema = open.record?.definition.inputSchema ?? open.catalog?.inputSchema;
@@ -530,6 +532,7 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
               : null,
             open.catalog ? { label: "Credential modes", value: <span className="wb-mono">{open.catalog.credentialModes.join(", ") || "none"}</span> } : null,
             open.catalog?.lookupRequired ? { label: "Lookup", value: "Requires the lookup credential" } : null,
+            listingType ? { label: "Live listing", value: <><span className="wb-mono">{listingType}</span><span className="wb-muted"> · Permission to list grants no other action access.</span></> } : null,
             open.record ? { label: "Version", value: <span className="wb-num">{open.record.version}</span> } : null
           ]}
         />

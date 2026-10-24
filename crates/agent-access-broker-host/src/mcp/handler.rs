@@ -4,7 +4,7 @@ use crate::{
     state::AppState,
 };
 use agent_access_core::{
-    ApiCatalog, InvocationControl, InvokeRequest, ResourceListQuery,
+    ApiCatalog, InvocationControl, InvokeRequest, ResourceAccessQuery,
     mcp::{self, McpView, ProjectionMode, ToolRegistry, ToolTarget},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -131,7 +131,11 @@ impl Handler {
                     let limit = request.snapshot.runtime.config().mcp.max_response_bytes;
                     Ok(match self.helper(request, &catalog, &registry, helper.as_str(), params.arguments.unwrap_or_default()) {
                         Ok(value) => output::result(value, false, limit).unwrap_or_else(|_| output::message(
-                            "Discovery result exceeds MCP response limit; use narrower discovery",
+                            if *helper == mcp::HelperKind::ResourceAccessDescribe {
+                                "Resource access result exceeds MCP response limit; use action or resourceType filters, or actions_list for known resources"
+                            } else {
+                                "Discovery result exceeds MCP response limit; use narrower discovery"
+                            },
                         )),
                         Err(message) => output::message(message),
                     })
@@ -282,11 +286,15 @@ impl Handler {
             "services_describe" => {
                 serde_json::to_value(capabilities).map_err(|_| "Cannot encode service capabilities")
             }
-            "resources_list" => {
+            "resource_access_describe" => {
                 let discovery = runtime
                     .service_discovery(&request.identity, &request.context, service)
                     .ok_or("Service is not visible or does not exist")?;
-                let page = discovery.resources(&ResourceListQuery {
+                let page = discovery.resource_access(&ResourceAccessQuery {
+                    action: args
+                        .get("action")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                     resource_type: mcp_resource_type(&args)?,
                     prefix: prefix.map(str::to_owned),
                     limit: args
@@ -298,7 +306,7 @@ impl Handler {
                         .and_then(Value::as_str)
                         .map(str::to_owned),
                 })?;
-                serde_json::to_value(page).map_err(|_| "Cannot encode resource discovery")
+                serde_json::to_value(page).map_err(|_| "Cannot encode resource access discovery")
             }
             "actions_list" => {
                 let discovery = runtime
@@ -365,7 +373,7 @@ impl ServerHandler for Handler {
         // The assembly names the aggregate server; a scoped server is named
         // after its service. Both report the assembly's version.
         let assembly = &self.endpoint.0.state.build_status;
-        let mut info=ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(Implementation::new(self.view.service().unwrap_or(assembly.assembly_name()).to_owned(),assembly.assembly_version())).with_instructions("Discover Broker services/resources/actions with the five read-only helpers. Only listed native JSON tools execute through this HTTP endpoint. Use local agent-access mcp serve for requestFile, secretSources, multipart uploads and raw downloads. Discovery is not authorization; every call checks current resource grants. Refresh tools/list or reconnect to discover changes. Cancellation and connection loss do not guarantee rollback; never automatically retry uncertain mutations.");
+        let mut info=ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(Implementation::new(self.view.service().unwrap_or(assembly.assembly_name()).to_owned(),assembly.assembly_version())).with_instructions("Discover Broker services/resource access/actions with the five read-only helpers. Only listed native JSON tools execute through this HTTP endpoint. Use local agent-access mcp serve for requestFile, secretSources, multipart uploads and raw downloads. Discovery is not authorization; every call checks current resource grants. Refresh tools/list or reconnect to discover changes. Cancellation and connection loss do not guarantee rollback; never automatically retry uncertain mutations.");
         if let Some(service) = self.view.service() {
             info.instructions = Some(format!(
                 "This connection exposes only service {service}. Provider tools use their original names; discovery action IDs remain canonical Broker action IDs. The five helpers require this service when their schema requests service. Only listed JSON tools execute here; file workflows use local agent-access mcp serve --service {service}. Discovery grants no authority; every call checks current policy and credentials. Refresh tools/list after changes. Never automatically retry uncertain mutations."

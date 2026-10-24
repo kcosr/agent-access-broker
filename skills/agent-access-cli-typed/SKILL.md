@@ -116,8 +116,10 @@ from the broker, and treat denials as authoritative.
 ## Teams notifications
 
 Teams uses configured destination aliases, not channel IDs or webhook URLs.
-Discover allowed aliases through resource listing for service `teams`. Only
-registered, enabled, configured destinations can execute, including under broad
+Discover allowed aliases with
+`agent-access resource-access describe --service teams` and use
+`registeredResources.items[].value`. Only registered, enabled, configured
+destinations can execute, including under broad
 grants. Never request, construct, or send a signed Workflow URL as action input.
 `teams.notification.send` takes `destination`, explicit `contentFormat` (`simple`
 or `microsoft`), and `content`. Simple content is nonempty `text` plus optional
@@ -139,7 +141,7 @@ Start with visible services and typed action availability:
 
 ```bash
 agent-access services list
-agent-access resources list --service gitlab --limit 50
+agent-access resource-access describe --service gitlab --limit 50
 agent-access actions list --service gitlab --resource team/repository
 agent-access actions list --service gitlab --prefix merge_request.
 agent-access actions describe --service gitlab merge_request.draft_note.publish
@@ -158,16 +160,55 @@ this does not prevent typed CLI invocation. Literal case-sensitive prefixes
 match service IDs, action names, or resource values. Empty arrays inside the
 compact object are successful results.
 
-Resource lists show registered exact entries without per-resource actions. An
-entry's `inputs`, when present, are the action inputs that address it. The first
-page's `coverage` lists namespace or all access, such as each CloudBees CI
-controller alias you reach, with `restricted: true` when some resources inside
-are withheld; an empty list with `coverage` means broad access, not no access.
-Coverage never enumerates resources. Follow `nextCursor` with the same service,
-resource type, prefix, and limit. Use a row's `value`, not its `id`, for `actions list --resource`; a known
-unregistered value can also be allowed. A service that authorizes several
-resource types needs `--resource-type` (a row's `type`) on both commands. This checks single-target policy, not full-request or
-upstream authorization. Actual execution remains authoritative.
+`resource-access describe` reports `access` per action and resource type, separate
+from `registeredResources: {source:"broker_configuration",items,nextCursor}`.
+Optionally filter one exact `--action ACTION` or `--resource-type TYPE`; omitting
+the type includes all types and unscoped actions. Scoped access carries
+`resourceType` and `coverage` of `exact`, `namespace`, or `all` selectors, optional
+`inputs`, and `restricted: true` when some values inside are withheld. Unscoped
+actions carry `scope: "unscoped"`, not all-resource coverage.
+
+The access summary is unpaginated; reference `limit` does not bound its size.
+Narrow by action or resource type first. If one action/type still exceeds the
+limit, check known locators with
+`agent-access actions list --service SERVICE --resource VALUE`, or request
+`GET /v1/services/{service}/resource-access` using an HTTP client that accepts
+the response size. An oversized-response error does not mean no access.
+
+Each hinted listing has its own coverage and `enforcement` entry in `access`.
+When filtering by another action, describe the listing action itself to inspect
+its entry. Combining listings does not establish another action's complete
+inventory.
+
+The response includes `executionContext` and service-wide `availability`, using
+the service list's credential readiness and remediation fields to explain empty
+access from missing credentials. Scoped `enforcement` is `request` for Broker
+checks of resolved targets, `results` for native query/result containment, or
+`command` for grants handed to a command that must enforce them and filter its
+own results. Unscoped entries omit `enforcement`. Restricted broad coverage
+retains useful exact/narrower granted entries. Unknown and unavailable exact
+action filters both fail with `action is not available`; invalid syntax fails
+with `action name is invalid`. An action/type filter combination that does not
+match the action's resource binding is rejected.
+
+References are configured exact values, not live inventory. Empty items do not
+mean no access. Use optional reference `inputs` as-is. Optional `liveListings`
+identifies explicitly declared and available `{service,action,resourceType}`
+actions; use their schemas for live enumeration. Each has its own grant and
+credential coverage, which may differ from another action's. Several listings can
+name the same type; each names the described service. Never infer listings
+from names. MCP and OpenAPI imports currently report unscoped actions with no
+listing hints; native and command-backed services can declare listings.
+
+Only references are paginated and filtered by `--prefix`; repeat service, action,
+resource type, prefix, and limit with `registeredResources.nextCursor`. Each page
+repeats full access and listing hints. The default is 50 references, maximum 100.
+Discovery checks local policy and usable credentials without backend requests or
+OAuth refresh. `coverageSemantics: "single_target"` does not authorize a complete
+multi-target request; compound-only actions can have empty singleton coverage.
+Use a reference's `value`, not `id`, or a known unregistered value for
+`actions list --resource`. That command requires `--resource-type` for services
+with several types. Actual execution remains authoritative.
 
 `agent-access broker status` reports the running executable's `assembly` (`name`,
 `version`, `qualification`, `source`), the linked `host` and `sdk` packages, the
@@ -228,7 +269,7 @@ unchanged `maxResults` through `more` and empty `scan_budget` pages until
 `exhausted`. Typed CLI uses `--page-token`. The default maximum is 50, capped
 by configuration at 100. Results contain `items`, `count`, `maxResults`, and
 `scanStatus`, without upstream totals. Tokens expire 15 minutes after the first
-page and reject changed authority. Local resource discovery is unchanged.
+page and reject changed authority. Local resource-access discovery describes policy and registered references.
 
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
 `components`, `fixVersions`, `affectedVersions`, and `statusCategory`. These
@@ -490,7 +531,7 @@ Use `project.list` to list live authorized GitLab projects, including archived
 projects. It accepts only pagination and is independently grantable from
 `project.search` and object reads. Its token cannot be used with project search.
 Use `project.search` to filter authorized GitLab projects live, including
-namespace-granted projects not individually listed by `agent-access resources list`,
+namespace-granted projects without individual Broker resource registrations,
 then use a separately authorized native content search:
 
 ```bash
@@ -1013,8 +1054,9 @@ agent-access cloudbees-ci job list team-ci --folder payments --max-results 50 --
 Other commands take `CONTROLLER JOB` positionals or `--job-url URL`. `CONTROLLER`
 is the configured alias, the first segment of a `cloudbees_ci_job` value; `JOB`
 is the Jenkins full name below it, such as `payments/build-api`, never a
-display name or the alias again. Take both from `resources list` entry `inputs`,
-or the controller from a `coverage` entry for a job name the user supplies.
+display name or the alias again. Take both from a `registeredResources.items`
+reference's `inputs`, or the controller from an `access[].coverage` entry for
+a job name the user supplies.
 Never use a resource `id` as the controller or guess aliases. When the user
 pastes a Jenkins job or build link, pass it as `--job-url` (`--url` is the
 broker URL) and omit the positionals. Build commands take `BUILD_NUMBER` or

@@ -1,4 +1,5 @@
 import type { ImportActionRecord, ImportClassification, ImportClassificationChange, ImportPreviewResult, ImportScopedMcpWarning, ImportSelection, ImportedServiceRecord, ImportedTool } from "../import-types";
+import { COMMAND_KIND, commandListingType } from "./import-command";
 
 /** Adapter locators are compared by value, independently of JSON key order. */
 export function importSourceKey(value: unknown): string {
@@ -76,6 +77,7 @@ export function importSelectionError(data: ImportPreviewResult, rows: ImportRevi
   const names = new Set<string>();
   for (const row of selected) {
     const name = row.action.trim();
+    if (service.definition.adapterKind === COMMAND_KIND && commandListingType(row.tool.definition) && !row.readOnly) return `Classify live listing action ${name} as reviewed read-only before accepting it.`;
     if (name.length > 256 || !/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(name) || name.startsWith(`${service.definition.service}.`)) return "Action names must use lowercase words, dots, hyphens or underscores, and must not repeat the service prefix.";
     if (names.has(name) || service.actions.some((old) => old.definition.action === name && (old.status === "retired" || importSourceKey(old.definition.source) !== row.key))) return `Action name ${name} is already used.`;
     if (row.existing && row.existing.status !== "retired" && name !== row.existing.definition.action) return "Accepted action names cannot be changed.";

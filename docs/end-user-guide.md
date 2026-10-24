@@ -307,6 +307,11 @@ requests. See [resources](resources.md).
 
 ## Connect the CLI or MCP client
 
+Use the CLI version matching your Broker and upgrade them together. Current
+resource-access discovery requires the current helper, route, and response
+contract without compatibility aliases. Refresh MCP tool discovery after an
+upgrade.
+
 Create a separate invocation client config:
 
 ```toml

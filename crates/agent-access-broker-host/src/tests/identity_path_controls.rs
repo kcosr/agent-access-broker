@@ -22,7 +22,7 @@ const NOTICE: &str =
 const HELPERS: [&str; 5] = [
     "actions_describe",
     "actions_list",
-    "resources_list",
+    "resource_access_describe",
     "services_describe",
     "services_list",
 ];
@@ -800,10 +800,15 @@ async fn http_mcp_read_only_paths_announce_list_and_call_only_reads() {
                 assert_eq!(detail["action"], "note.write", "{case}: {detail}");
             }
             let resources = f
-                .helper(via, &session, "resources_list", json!({"service": "fake"}))
+                .helper(
+                    via,
+                    &session,
+                    "resource_access_describe",
+                    json!({"service": "fake"}),
+                )
                 .await;
             assert_eq!(
-                resources["resources"]
+                resources["registeredResources"]["items"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -967,9 +972,9 @@ async fn fingerprint_rest_read_only_path_filters_specs_and_denies_writes_before_
         assert_eq!(status == StatusCode::OK, !read_only, "{case}: {status}");
         let (_, actions) = f.get("/v1/services/fake/actions?resource=TEST").await;
         assert_eq!(actions["actions"], json!(fake_actions), "{case}");
-        let (_, resources) = f.get("/v1/services/fake/resources").await;
+        let (_, resources) = f.get("/v1/services/fake/resource-access").await;
         assert_eq!(
-            resources["resources"]
+            resources["registeredResources"]["items"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -1087,10 +1092,13 @@ async fn fingerprint_rest_read_only_path_filters_specs_and_denies_writes_before_
 #[tokio::test]
 async fn resource_discovery_cursors_do_not_survive_a_read_only_toggle() {
     let f = fixture().await;
-    let (status, page) = f.get("/v1/services/fake/resources?limit=1").await;
+    let (status, page) = f.get("/v1/services/fake/resource-access?limit=1").await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let cursor = page["nextCursor"].as_str().unwrap().to_owned();
-    let next = format!("/v1/services/fake/resources?limit=1&cursor={cursor}");
+    let cursor = page["registeredResources"]["nextCursor"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let next = format!("/v1/services/fake/resource-access?limit=1&cursor={cursor}");
     let (status, _) = f.get(&next).await;
     assert_eq!(status, StatusCode::OK);
     f.set_read_only(Via::Fingerprint, true).await;

@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Resource-access discovery replaces resource listing.** Use MCP
+  `resource_access_describe`, CLI `resource-access describe`, HTTP
+  `/v1/services/{service}/resource-access`, and send operation
+  `resource_access.describe` in place of `resources_list`, `resources list`,
+  `/v1/services/{service}/resources`, and `resources.list`. Responses separate
+  access by action/type from `registeredResources`, repeat access on every page,
+  and optionally identify declared live listings. Update clients to use
+  `registeredResources.items` and `registeredResources.nextCursor`; no aliases
+  remain. Upgrade the CLI and Broker together and refresh MCP tool discovery.
+  See [caller discovery](docs/resources.md#caller-discovery).
+  ([#62](https://github.com/kcosr/agent-access-broker/pull/62))
+
 - **CloudBees CI response-limit minimum.** Configurations with a CloudBees
   provider must set `limits.max_upstream_response_bytes` to at least 11491
   before upgrading, even if `job.list` is not granted. Smaller limits now fail
@@ -39,44 +51,19 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **Live CloudBees CI job listing.** Separately grantable, read-only `job.list`
-  and `cloudbees-ci job list` recursively enumerate authorized jobs and folders.
-  Bounded scans preserve exclusions, confidential continuation, and explicit
-  incomplete coverage. New [`providers.cloudbees_ci.listing` configuration](docs/configuration.md#providerscloudbees_ci)
-  controls work budgets; the host result limit must be at least 11491 bytes.
-  The action is JSON-only and eligible for read-only trusted-identity paths
-  when separately granted. See [job listing](docs/providers-cloudbees-ci.md#live-job-listing).
-  ([#60](https://github.com/kcosr/agent-access-broker/pull/60))
-
-- **Live Confluence space listing.** The separately grantable, read-only
-  `space.list` action and `confluence space list` command enumerate current
-  spaces within effective space grants, including personal spaces. Bounded
-  scans, confidential continuations, and Markdown preserve filtered results
-  and completion status. New [`providers.confluence.listing` configuration](docs/configuration.md#providersconfluence)
-  bounds pages, HTTP attempts including the shared OAuth replay, and scanned bytes.
-  It is eligible for read-only trusted-identity paths
-  when separately granted. Existing content search and local discovery retain
-  their contracts. See [space listing](docs/providers-confluence.md#live-space-listing).
-  ([#59](https://github.com/kcosr/agent-access-broker/pull/59))
-
-- **Live Jira project listing.** The independently grantable, read-only
-  `project.list` action and `jira project list` command enumerate visible live
-  projects, filter current keys through effective grants, and support bounded
-  scans, confidential continuations, and whole-result Markdown. New
-  `providers.jira.listing` limits bound pages, HTTP attempts, and scanned bytes.
-  It is eligible for separately granted read-only trusted-identity paths.
-  Existing resource discovery and issue search are unchanged.
-  ([#58](https://github.com/kcosr/agent-access-broker/pull/58))
-
-- **Live GitLab project listing.** The separately grantable, read-only
-  `project.list` action and `gitlab project list` command list current projects
-  within effective repository grants, including namespace descendants and
-  archived projects. Only pagination inputs are accepted. Results share the
-  bounded scan and confidential continuation contract of project search, with
-  action-specific authority and tokens. It is eligible for
-  [read-only trusted-identity paths](docs/managed-identity.md#read-only-paths)
-  when separately granted. Local resource discovery is unchanged.
-  ([#56](https://github.com/kcosr/agent-access-broker/pull/56))
+- **Live resource listing.** Separately grantable, read-only GitLab/Jira
+  `project.list`, Confluence `space.list`, and CloudBees CI `job.list` actions
+  enumerate authorized live resources through typed CLI and MCP/HTTP surfaces.
+  Bounded scans, confidential continuations, and explicit completion status
+  preserve filtering; each listing has independent grants and credentials.
+  Jira, Confluence, and CloudBees CI add provider `listing` configuration;
+  [CloudBees configuration](docs/configuration.md#providerscloudbees_ci) also
+  requires the response minimum above. All four actions are eligible for
+  separately granted read-only trusted-identity paths. Explicit SDK `listing_of(ResourceType)` and
+  command-manifest `listingOf` metadata let generic resource-access discovery
+  advertise available enumeration actions. MCP/OpenAPI imports remain unscoped.
+  See [caller discovery](docs/resources.md#caller-discovery) and the provider guides.
+  ([#56](https://github.com/kcosr/agent-access-broker/pull/56), [#58](https://github.com/kcosr/agent-access-broker/pull/58), [#59](https://github.com/kcosr/agent-access-broker/pull/59), [#60](https://github.com/kcosr/agent-access-broker/pull/60), [#62](https://github.com/kcosr/agent-access-broker/pull/62))
 
 - **Richer Jira issue views.** `issue.view` returns resolution, dates, components,
   versions, status category, and supported named custom fields, including Labels,

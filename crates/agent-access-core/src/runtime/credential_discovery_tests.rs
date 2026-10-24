@@ -65,8 +65,10 @@ fn discovery_rechecks_shared_files_and_keeps_only_a_service_shell_when_missing()
             .actions
             .is_empty()
     );
-    let resources = discovery.resources(&ResourceListQuery::default()).unwrap();
-    assert!(resources.resources.is_empty() && resources.coverage.is_empty());
+    let resources = discovery
+        .resource_access(&ResourceAccessQuery::default())
+        .unwrap();
+    assert!(resources.registered_resources.items.is_empty() && resources.access.is_empty());
     let catalog = runtime.api_services_for_identity(&identity, &context);
     assert_eq!(catalog.len(), 1);
     assert!(catalog[0].actions.is_empty());
@@ -111,15 +113,30 @@ fn discovery_retains_usable_resource_regions_without_falling_back_from_personal_
         view.actions(Some("OPS"), None, None).unwrap().actions,
         ["issue.view"]
     );
+    let description = view
+        .resource_access(&ResourceAccessQuery::default())
+        .unwrap();
     assert_eq!(
-        view.resources(&ResourceListQuery::default())
-            .unwrap()
-            .resources
+        description
+            .registered_resources
+            .items
             .iter()
             .map(|r| r.value.as_str())
             .collect::<Vec<_>>(),
         ["OPS"]
     );
+    assert_eq!(
+        description.access[0].coverage().unwrap(),
+        &[ResourceCoverage {
+            selector: ResourceSelector::Exact {
+                value: "OPS".into()
+            },
+            inputs: None,
+            restricted: false,
+        }]
+    );
+    let serialized = serde_json::to_string(&description).unwrap();
+    assert!(!serialized.contains("\"ENG\"") && !serialized.contains("project-ENG"));
     // Removing personal material must not change the policy-only setup preview.
     assert!(runtime.has_any_per_user_policy_for_service(&identity, "jira"));
     assert!(
@@ -212,31 +229,100 @@ fn discovery_filters_broad_coverage_and_invalidates_resource_cursors() {
     let page = runtime
         .service_discovery(&identity, &context, "jira")
         .unwrap()
-        .resources(&ResourceListQuery {
+        .resource_access(&ResourceAccessQuery {
             limit: Some(1),
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(page.coverage.len(), 1);
-    assert!(page.coverage[0].restricted);
-    assert_ne!(page.resources[0].value, "ENG");
-    assert!(page.next_cursor.is_some());
+    assert_eq!(page.access[0].coverage().unwrap().len(), 1);
+    assert!(page.access[0].coverage().unwrap()[0].restricted);
+    assert_eq!(page.availability.state, AvailabilityState::Partial);
+    assert_eq!(page.execution_context, context);
+    assert_ne!(page.registered_resources.items[0].value, "ENG");
+    assert!(page.registered_resources.next_cursor.is_some());
     fs::remove_file(path).unwrap();
     let unavailable = runtime
         .service_discovery(&identity, &context, "jira")
         .unwrap();
     let empty = unavailable
-        .resources(&ResourceListQuery::default())
+        .resource_access(&ResourceAccessQuery::default())
         .unwrap();
-    assert!(empty.resources.is_empty() && empty.coverage.is_empty());
+    assert!(empty.registered_resources.items.is_empty() && empty.access.is_empty());
+    assert_eq!(empty.availability.state, AvailabilityState::Unavailable);
     assert!(
         unavailable
-            .resources(&ResourceListQuery {
+            .resource_access(&ResourceAccessQuery {
                 limit: Some(1),
-                cursor: page.next_cursor,
+                cursor: page.registered_resources.next_cursor,
                 ..Default::default()
             })
             .is_err()
+    );
+}
+
+#[test]
+fn discovery_cursor_rejects_an_availability_only_change_from_real_local_credentials() {
+    let mut config = jira_config();
+    configure_lookup_trace_missing_per_user(&mut config, "other-users-token");
+    config.policy.grants[0].resources = resource_selection(&["project-all"]);
+    let mut personal = lookup_trace_grant("per_user", None, &["project-ENG"]);
+    personal.subjects = vec!["user:agent-one".into()];
+    config.policy.grants.push(personal);
+    let store_path = config.credentials.per_user["jira"].path.clone().unwrap();
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let identity = agent_one_identity();
+    let context = default_execution_context();
+    let query = ResourceAccessQuery {
+        limit: Some(1),
+        ..Default::default()
+    };
+    let before = runtime
+        .service_discovery(&identity, &context, "jira")
+        .unwrap()
+        .resource_access(&query)
+        .unwrap();
+    let cursor = before
+        .registered_resources
+        .next_cursor
+        .clone()
+        .expect("multiple available registered projects");
+    let generation = runtime.policy_generation();
+    assert_eq!(
+        before.availability.requirements[0].reason,
+        "credential_not_provisioned"
+    );
+
+    // The same personal grant stays unavailable, but the current local check
+    // now reports an invalid store. No policy or catalog publication occurs.
+    fs::write(store_path, "invalid credential store JSON").unwrap();
+    let discovery = runtime
+        .service_discovery(&identity, &context, "jira")
+        .unwrap();
+    let after = discovery.resource_access(&query).unwrap();
+    assert_eq!(
+        after.availability.requirements[0].reason,
+        "credential_invalid"
+    );
+    assert_eq!(after.availability.state, before.availability.state);
+    assert_eq!(runtime.policy_generation(), generation);
+    assert_eq!(after.access, before.access);
+    assert_eq!(
+        after.registered_resources.items,
+        before.registered_resources.items
+    );
+    assert_eq!(after.live_listings, before.live_listings);
+    assert_ne!(
+        after.registered_resources.next_cursor,
+        before.registered_resources.next_cursor
+    );
+    assert_eq!(
+        discovery
+            .resource_access(&ResourceAccessQuery {
+                cursor: Some(cursor),
+                ..query
+            })
+            .unwrap_err(),
+        "resource cursor is invalid or stale; restart without the cursor"
     );
 }
 

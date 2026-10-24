@@ -55,8 +55,14 @@ describe("a backend the portal was not written for", () => {
     expect(choices.resources.map(({ id }) => id)).toEqual(["item"]);
     expect(choices.groups[0].included).toEqual(["item"]);
     expect(choices.hasMismatch).toBe(false);
-    expect(service.actions.map(({ action }) => action)).toEqual(["item.view", "item.download", "item.upload"]);
-    expect(service.actions.map(({ readOnly }) => readOnly)).toEqual([true, true, false]);
+    expect(service.actions.map(({ action }) => action)).toEqual(["item.view", "item.download", "item.upload", "item.list"]);
+    expect(service.actions.map(({ readOnly }) => readOnly)).toEqual([true, true, false, true]);
+  });
+
+  test("recognizes explicit live enumeration from an unfamiliar backend", () => {
+    expect(service.actions.filter(({ listingOf }) => listingOf).map(({ action, listingOf }) => ({ action, listingOf }))).toEqual([
+      { action: "item.list", listingOf: "conformance_item" }
+    ]);
   });
 
   test("builds private attribute fields from its type metadata", () => {

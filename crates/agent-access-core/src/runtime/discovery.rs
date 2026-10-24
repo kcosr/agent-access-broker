@@ -2,6 +2,28 @@
 use super::resource_access::boundaries_cover;
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, Mac};
+use rand::{RngCore, rngs::OsRng};
+
+/// Private, per-runtime cursor authentication material. It deliberately has no
+/// Debug or serialization implementation, and clones of the runtime share it.
+pub(super) struct DiscoveryCursorKey([u8; 32]);
+
+impl DiscoveryCursorKey {
+    pub(super) fn new() -> Self {
+        let mut key = [0; 32];
+        OsRng.fill_bytes(&mut key);
+        Self(key)
+    }
+
+    fn authenticate(&self, binding: &[u8], position: usize) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.0).expect("fixed HMAC key length");
+        mac.update(b"agent-access-resource-discovery-v1\0");
+        mac.update(binding);
+        mac.update(&(position as u64).to_be_bytes());
+        mac
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -17,14 +39,11 @@ pub struct DiscoveredResource {
     pub inputs: Option<serde_json::Map<String, Value>>,
 }
 
-/// Broad access the caller holds without a registered exact resource: a
-/// namespace, or every resource of the type. `restricted` reports that some
-/// resources inside are withheld, without naming them.
+/// A positive selector reached by one action's single-target authority.
+/// `restricted` reports withheld targets without disclosing their identities.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceCoverage {
-    #[serde(rename = "type")]
-    pub resource_type: ResourceType,
     pub selector: ResourceSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs: Option<serde_json::Map<String, Value>>,
@@ -32,14 +51,91 @@ pub struct ResourceCoverage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActionResourceAccess {
+    Resource {
+        action: String,
+        #[serde(rename = "resourceType")]
+        resource_type: ResourceType,
+        enforcement: ResourceAccessEnforcement,
+        coverage: Vec<ResourceCoverage>,
+    },
+    Unscoped {
+        action: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceAccessEnforcement {
+    Request,
+    Results,
+    Command,
+}
+
+impl ActionResourceAccess {
+    pub fn action(&self) -> &str {
+        match self {
+            Self::Resource { action, .. } | Self::Unscoped { action } => action,
+        }
+    }
+
+    pub fn resource_type(&self) -> Option<&ResourceType> {
+        match self {
+            Self::Resource { resource_type, .. } => Some(resource_type),
+            Self::Unscoped { .. } => None,
+        }
+    }
+
+    pub fn coverage(&self) -> Option<&[ResourceCoverage]> {
+        match self {
+            Self::Resource { coverage, .. } => Some(coverage),
+            Self::Unscoped { .. } => None,
+        }
+    }
+}
+
+/// Discovery summarizes independent single-target requests. The complete
+/// target tuple of a multi-resource request is reauthorized at invocation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceCoverageSemantics {
+    SingleTarget,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegisteredResourceSource {
+    BrokerConfiguration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResourceList {
-    pub service: String,
-    pub resources: Vec<DiscoveredResource>,
-    /// First page only; omitted when the caller has no broad access.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub coverage: Vec<ResourceCoverage>,
+pub struct RegisteredResourcePage {
+    pub source: RegisteredResourceSource,
+    pub items: Vec<DiscoveredResource>,
     pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LiveResourceListing {
+    pub service: String,
+    pub action: String,
+    pub resource_type: ResourceType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceAccessDescription {
+    pub service: String,
+    pub execution_context: ExecutionContext,
+    pub availability: ServiceAvailability,
+    pub coverage_semantics: ResourceCoverageSemantics,
+    pub access: Vec<ActionResourceAccess>,
+    pub registered_resources: RegisteredResourcePage,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_listings: Vec<LiveResourceListing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,9 +148,12 @@ pub struct ActionList {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ResourceListQuery {
-    /// Required when the service authorizes more than one resource type.
+pub struct ResourceAccessQuery {
+    /// Describe only this exact, caller-visible action.
+    pub action: Option<String>,
+    /// Describe only actions bound to this resource type.
     pub resource_type: Option<ResourceType>,
+    /// Filters registered references only, never action coverage.
     pub prefix: Option<String>,
     pub limit: Option<usize>,
     pub cursor: Option<String>,
@@ -68,6 +167,7 @@ pub struct ServiceDiscovery<'a> {
     context: &'a ExecutionContext,
     snapshot: Arc<PolicySnapshot>,
     capabilities: ServiceDescriptor,
+    availability: ServiceAvailability,
     clauses: BTreeMap<String, Vec<EffectiveAccessClause>>,
 }
 
@@ -89,6 +189,7 @@ impl BrokerRuntime {
             context,
             snapshot,
             capabilities: service.descriptor,
+            availability: service.availability,
             clauses: service.clauses,
         })
     }
@@ -195,30 +296,125 @@ impl ServiceDiscovery<'_> {
         })
     }
 
-    pub fn resources(&self, query: &ResourceListQuery) -> Result<ResourceList, &'static str> {
+    pub fn resource_access(
+        &self,
+        query: &ResourceAccessQuery,
+    ) -> Result<ResourceAccessDescription, &'static str> {
+        if query
+            .action
+            .as_deref()
+            .is_some_and(|action| !agent_access_provider::is_action_name(action))
+        {
+            return Err("action name is invalid");
+        }
         nonempty(query.prefix.as_deref(), "prefix must be nonempty")?;
         nonempty(query.cursor.as_deref(), CURSOR_ERROR)?;
         let limit = query.limit.unwrap_or(50);
         if !(1..=100).contains(&limit) {
             return Err("limit must be an integer between 1 and 100");
         }
-        let descriptor = self.resource_type(query.resource_type.as_ref())?;
-        let kind = descriptor.map(|kind| kind.id().clone());
-        let action_clauses = self
+        let mut actions = self
             .capabilities
             .actions
             .iter()
-            .filter(|action| self.action_resource_type(&action.action) == kind.as_ref())
-            .map(|action| self.clauses(&action.action))
+            .filter(|action| {
+                query
+                    .action
+                    .as_deref()
+                    .is_none_or(|selected| action.action == selected)
+            })
             .collect::<Vec<_>>();
-        let clauses = action_clauses.concat();
+        if query.action.is_some() && actions.is_empty() {
+            return Err("action is not available");
+        }
+        if let (Some(action), Some(resource_type)) =
+            (query.action.as_deref(), query.resource_type.as_ref())
+            && self.action_resource_type(action) != Some(resource_type)
+        {
+            return Err("action does not use this resourceType");
+        }
+        // A credential-unavailable service retains no action scope metadata.
+        if !actions.is_empty()
+            && query.resource_type.as_ref().is_some_and(|requested| {
+                !self
+                    .capabilities
+                    .resource_scopes
+                    .values()
+                    .any(|scope| &scope.resource_type == requested)
+            })
+        {
+            return Err("resourceType is not used by this service");
+        }
+        actions.retain(|action| {
+            query.resource_type.as_ref().is_none_or(|requested| {
+                self.action_resource_type(&action.action) == Some(requested)
+            })
+        });
+        actions.sort_by(|left, right| left.action.cmp(&right.action));
+        let mut access = Vec::new();
+        let mut action_clauses = BTreeMap::new();
+        for action in &actions {
+            if action.resource_scope.is_none() {
+                access.push(ActionResourceAccess::Unscoped {
+                    action: action.action.clone(),
+                });
+                continue;
+            }
+            let resource_type = self
+                .action_resource_type(&action.action)
+                .ok_or("action resource scope is not registered")?;
+            let descriptor = self
+                .runtime
+                .resource_types
+                .get(resource_type)
+                .ok_or("resource type is not registered")?;
+            let clauses = self.clauses(&action.action);
+            access.push(ActionResourceAccess::Resource {
+                action: action.action.clone(),
+                resource_type: resource_type.clone(),
+                enforcement: if self
+                    .runtime
+                    .command_enforced(&self.capabilities.service, &action.action)
+                {
+                    ResourceAccessEnforcement::Command
+                } else if action.native_search.is_some() {
+                    ResourceAccessEnforcement::Results
+                } else {
+                    ResourceAccessEnforcement::Request
+                },
+                coverage: self.coverage(descriptor, &clauses),
+            });
+            action_clauses.insert(action.action.as_str(), clauses);
+        }
+        let types = access
+            .iter()
+            .filter_map(ActionResourceAccess::resource_type)
+            .collect::<BTreeSet<_>>();
+        // Listing links have their own action permission and local credential
+        // checks. Their scope is never claimed to equal the described action's.
+        let mut live_listings = self
+            .capabilities
+            .actions
+            .iter()
+            .filter_map(|action| {
+                let resource_type = action.listing_of.as_ref()?;
+                types.contains(resource_type).then(|| LiveResourceListing {
+                    service: self.capabilities.service.clone(),
+                    action: action.action.clone(),
+                    resource_type: resource_type.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        live_listings.sort_by(|left, right| {
+            (&left.action, &left.resource_type).cmp(&(&right.action, &right.resource_type))
+        });
         let mut rows = self
             .snapshot
             .resource_catalog
             .resources
             .iter()
             .filter_map(|entry| {
-                if Some(&entry.resource_type) != kind.as_ref()
+                if !types.contains(&entry.resource_type)
                     || !entry.enabled
                     || !entry
                         .allowed_execution_contexts
@@ -234,9 +430,12 @@ impl ServiceDiscovery<'_> {
                     .prefix
                     .as_deref()
                     .is_some_and(|prefix| !value.starts_with(prefix))
-                    || !clauses
-                        .iter()
-                        .any(|clause| clause.matches_request(&[value.as_str()]))
+                    || !action_clauses.iter().any(|(action, clauses)| {
+                        self.action_resource_type(action) == Some(&entry.resource_type)
+                            && clauses
+                                .iter()
+                                .any(|clause| clause.matches_request(&[value.as_str()]))
+                    })
                 {
                     return None;
                 }
@@ -245,7 +444,11 @@ impl ServiceDiscovery<'_> {
                     resource_type: entry.resource_type.clone(),
                     value: value.clone(),
                     display_name: entry.display_name.clone(),
-                    inputs: descriptor.and_then(|kind| action_inputs(kind, &entry.selector)),
+                    inputs: self
+                        .runtime
+                        .resource_types
+                        .get(&entry.resource_type)
+                        .and_then(|kind| action_inputs(kind, &entry.selector)),
                 })
             })
             .collect::<Vec<_>>();
@@ -257,22 +460,27 @@ impl ServiceDiscovery<'_> {
             ))
         });
         // token_scopes is intentionally skipped by IdentitySourceAudit's ordinary
-        // serialization, but it is essential to cursor binding.
+        // serialization, but it is essential to cursor binding. Bind complete
+        // authority metadata too, even though only reference rows are paginated.
         let binding = json!({
             "identity": self.identity,
             "restrictions": self.identity.source.as_ref().and_then(|source| source.token_scopes.as_ref()),
             "context": self.context,
             "capabilities": self.capabilities.capabilities(),
-            "resourceType": kind,
+            "availability": self.availability,
+            "action": query.action,
+            "resourceType": query.resource_type,
             "prefix": query.prefix,
             "limit": limit,
             "configGeneration": self.runtime.config_generation,
             "importCatalogRevision": self.runtime.import_catalog_revision(),
             "policyGeneration": self.snapshot.generation(),
-            "clauses": clauses,
+            "clauses": action_clauses,
+            "access": access,
+            "liveListings": live_listings,
             "resources": rows,
         });
-        let fingerprint = format!("{:x}", Sha256::digest(binding.to_string().as_bytes()));
+        let binding = serde_json::to_vec(&binding).expect("cursor binding serialization");
         let position = match query.cursor.as_deref() {
             None => 0,
             Some(cursor) => {
@@ -282,10 +490,18 @@ impl ServiceDiscovery<'_> {
                 let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| CURSOR_ERROR)?;
                 let cursor: ResourceCursor =
                     serde_json::from_slice(&bytes).map_err(|_| CURSOR_ERROR)?;
-                if cursor.fingerprint != fingerprint
-                    || cursor.position == 0
+                let signature = URL_SAFE_NO_PAD
+                    .decode(&cursor.mac)
+                    .map_err(|_| CURSOR_ERROR)?;
+                if cursor.position == 0
                     || cursor.position >= rows.len()
                     || !cursor.position.is_multiple_of(limit)
+                    || self
+                        .runtime
+                        .resource_cursor_key
+                        .authenticate(&binding, cursor.position)
+                        .verify_slice(&signature)
+                        .is_err()
                 {
                     return Err(CURSOR_ERROR);
                 }
@@ -296,38 +512,41 @@ impl ServiceDiscovery<'_> {
         let next_cursor = (end < rows.len()).then(|| {
             URL_SAFE_NO_PAD.encode(
                 serde_json::to_vec(&ResourceCursor {
-                    fingerprint,
                     position: end,
+                    mac: URL_SAFE_NO_PAD.encode(
+                        self.runtime
+                            .resource_cursor_key
+                            .authenticate(&binding, end)
+                            .finalize()
+                            .into_bytes(),
+                    ),
                 })
                 .expect("cursor serialization"),
             )
         });
-        let coverage = match descriptor {
-            Some(kind) if query.cursor.is_none() => {
-                self.coverage(kind, &action_clauses, query.prefix.as_deref())
-            }
-            _ => Vec::new(),
-        };
-        Ok(ResourceList {
+        Ok(ResourceAccessDescription {
             service: self.capabilities.service.clone(),
-            resources: rows[position..end].to_vec(),
-            coverage,
-            next_cursor,
+            execution_context: self.context.clone(),
+            availability: self.availability.clone(),
+            coverage_semantics: ResourceCoverageSemantics::SingleTarget,
+            access,
+            registered_resources: RegisteredResourcePage {
+                source: RegisteredResourceSource::BrokerConfiguration,
+                items: rows[position..end].to_vec(),
+                next_cursor,
+            },
+            live_listings,
         })
     }
 
-    /// The caller's namespace and all-resource access of one type, from the
-    /// same effective clauses as the resource rows. Entries come only from
-    /// the caller's own included selectors (or the provider's roots for an
-    /// all selector), never from exclusions, and are listed when that clause
-    /// reaches a resource inside them. An entry is `restricted` when an
-    /// action whose clause includes all of it reaches only part of it, after
-    /// exclusions, token restrictions and precedence conditions.
+    /// Positive selectors reached by independent single-target requests for one
+    /// action. Exclusions and whole-request precedence conditions stay private.
+    /// Selector identities come only from included authority or declared roots,
+    /// never from the subtraction used to prove reach and complete coverage.
     fn coverage(
         &self,
         kind: &ResourceTypeDescriptor,
-        action_clauses: &[Vec<EffectiveAccessClause>],
-        prefix: Option<&str>,
+        clauses: &[EffectiveAccessClause],
     ) -> Vec<ResourceCoverage> {
         let mut roots = self
             .runtime
@@ -341,23 +560,20 @@ impl ServiceDiscovery<'_> {
             .collect::<Vec<_>>();
         roots.sort();
         roots.dedup();
-        // An entry is listed when its own clause reaches a resource inside it,
-        // so a narrower grant never surfaces a root another clause excludes.
-        let reached = action_clauses
+        // An entry is listed only when its own clause reaches a singleton
+        // inside it, so a narrow grant cannot surface an excluded broad root.
+        let reached = clauses
             .iter()
-            .flatten()
             .flat_map(|clause| {
                 let reach = clause.single_target_reach();
                 clause
                     .included
                     .iter()
                     .flat_map(|selector| match selector {
-                        ResourceSelector::Exact { .. } => Vec::new(),
-                        // Roots enumerate the type's top-level namespaces.
                         ResourceSelector::All if !roots.is_empty() => roots.clone(),
-                        ResourceSelector::All | ResourceSelector::Namespace { .. } => {
-                            vec![selector.clone()]
-                        }
+                        ResourceSelector::All
+                        | ResourceSelector::Namespace { .. }
+                        | ResourceSelector::Exact { .. } => vec![selector.clone()],
                         // A selector form this build does not know is never reported.
                         _ => Vec::new(),
                     })
@@ -371,49 +587,42 @@ impl ServiceDiscovery<'_> {
                     .collect::<Vec<_>>()
             })
             .collect::<BTreeSet<_>>();
-        // Precedence conditions withhold a target only when no other clause of
-        // the same action serves it, so restriction uses each action's reach.
-        let actions = action_clauses
+        let reach = clauses
             .iter()
-            .map(|clauses| {
-                let reach = clauses
-                    .iter()
-                    .flat_map(EffectiveAccessClause::single_target_reach)
-                    .collect::<Vec<_>>();
-                (clauses, reach)
-            })
+            .flat_map(EffectiveAccessClause::single_target_reach)
             .collect::<Vec<_>>();
-        reached
+        let coverage = reached
             .iter()
             .filter(|entry| {
-                !reached
-                    .iter()
-                    .any(|other| other != *entry && other.contains(entry))
-            })
-            .filter(|entry| {
-                let ResourceSelector::Namespace { value } = entry else {
-                    return true;
-                };
-                (roots.is_empty() || roots.iter().any(|root| root.contains(entry)))
-                    && prefix.is_none_or(|prefix| {
-                        value.starts_with(prefix)
-                            || prefix
-                                .strip_prefix(value.as_str())
-                                .is_some_and(|rest| rest.starts_with('/'))
-                    })
+                !matches!(entry, ResourceSelector::Namespace { .. })
+                    || roots.is_empty()
+                    || roots.iter().any(|root| root.contains(entry))
             })
             .map(|entry| ResourceCoverage {
-                resource_type: kind.id().clone(),
                 selector: entry.clone(),
                 inputs: action_inputs(kind, entry),
-                restricted: actions.iter().any(|(clauses, reach)| {
-                    clauses
-                        .iter()
-                        .flat_map(|clause| &clause.included)
-                        .any(|selector| selector.contains(entry))
-                        && !boundaries_cover(reach, entry)
-                }),
+                // A reached exact selector names one admitted singleton. A
+                // symbolic coverage proof would repeat quadratic normalization
+                // of the complete authority for every exact entry.
+                restricted: !matches!(entry, ResourceSelector::Exact { .. })
+                    && !boundaries_cover(&reach, entry),
             })
+            .collect::<Vec<_>>();
+        let unrestricted_broad = coverage
+            .iter()
+            .filter(|entry| {
+                !entry.restricted && !matches!(entry.selector, ResourceSelector::Exact { .. })
+            })
+            .map(|entry| &entry.selector)
+            .collect::<Vec<_>>();
+        coverage
+            .iter()
+            .filter(|entry| {
+                !unrestricted_broad
+                    .iter()
+                    .any(|other| *other != &entry.selector && other.contains(&entry.selector))
+            })
+            .cloned()
             .collect()
     }
 }
@@ -437,8 +646,8 @@ const CURSOR_ERROR: &str = "resource cursor is invalid or stale; restart without
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResourceCursor {
-    fingerprint: String,
     position: usize,
+    mac: String,
 }
 
 #[cfg(test)]
@@ -529,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_selects_one_resource_type_for_services_with_several() {
+    fn discovery_describes_all_resource_types_and_can_filter_one() {
         // The shared fixtures already register `space-ENG` as a Confluence space.
         let mut config = config();
         let runtime =
@@ -554,9 +763,21 @@ mod tests {
             .id()
             .clone();
 
-        assert_eq!(
-            view.resources(&ResourceListQuery::default()).unwrap_err(),
-            "resourceType is required for a service with several resource types"
+        let all = view
+            .resource_access(&ResourceAccessQuery::default())
+            .unwrap();
+        assert_eq!(all.access.len(), 2);
+        assert!(
+            all.registered_resources
+                .items
+                .iter()
+                .any(|row| row.resource_type == space)
+        );
+        assert!(
+            all.registered_resources
+                .items
+                .iter()
+                .any(|row| row.resource_type == fake_project)
         );
         assert_eq!(
             view.actions(Some("ENG"), None, None).unwrap_err(),
@@ -569,29 +790,40 @@ mod tests {
         );
 
         let spaces = view
-            .resources(&ResourceListQuery {
+            .resource_access(&ResourceAccessQuery {
                 resource_type: Some(space.clone()),
-                ..ResourceListQuery::default()
+                ..ResourceAccessQuery::default()
             })
             .unwrap();
         assert_eq!(
+            view.resource_access(&ResourceAccessQuery {
+                action: Some("echo".into()),
+                resource_type: Some(space.clone()),
+                ..Default::default()
+            })
+            .unwrap_err(),
+            "action does not use this resourceType"
+        );
+        assert_eq!(
             spaces
-                .resources
+                .registered_resources
+                .items
                 .iter()
                 .map(|row| (row.id.as_str(), row.resource_type.as_str()))
                 .collect::<Vec<_>>(),
             [("space-ENG", "confluence_space")]
         );
         let projects = view
-            .resources(&ResourceListQuery {
+            .resource_access(&ResourceAccessQuery {
                 resource_type: Some(fake_project.clone()),
                 limit: Some(1),
-                ..ResourceListQuery::default()
+                ..ResourceAccessQuery::default()
             })
             .unwrap();
         assert!(
             projects
-                .resources
+                .registered_resources
+                .items
                 .iter()
                 .all(|row| row.resource_type == fake_project)
         );
@@ -612,13 +844,16 @@ mod tests {
         );
 
         // A cursor is bound to the resource type it was issued for.
-        let cursor = projects.next_cursor.expect("more than one fake project");
+        let cursor = projects
+            .registered_resources
+            .next_cursor
+            .expect("more than one fake project");
         assert!(
-            view.resources(&ResourceListQuery {
+            view.resource_access(&ResourceAccessQuery {
                 resource_type: Some(space),
                 limit: Some(1),
                 cursor: Some(cursor),
-                ..ResourceListQuery::default()
+                ..ResourceAccessQuery::default()
             })
             .is_err()
         );
@@ -649,20 +884,29 @@ mod tests {
         let view = runtime
             .service_discovery(&identity, &context, "fake")
             .unwrap();
-        let resources = view.resources(&ResourceListQuery::default()).unwrap();
+        let resources = view
+            .resource_access(&ResourceAccessQuery::default())
+            .unwrap();
         assert_eq!(
             resources
-                .resources
+                .registered_resources
+                .items
                 .iter()
                 .map(|row| row.value.as_str())
                 .collect::<Vec<_>>(),
             ["OTHER", "PROJ", "RESEARCH", "TEST"]
         );
         assert_eq!(
-            resources.resources.last().unwrap().display_name.as_deref(),
+            resources
+                .registered_resources
+                .items
+                .last()
+                .unwrap()
+                .display_name
+                .as_deref(),
             Some("Test project")
         );
-        assert!(resources.next_cursor.is_none());
+        assert!(resources.registered_resources.next_cursor.is_none());
         for resource in ["UNREGISTERED", "OPS", "ENG"] {
             assert_eq!(
                 view.actions(Some(resource), None, None).unwrap().actions,
@@ -750,9 +994,10 @@ mod tests {
         );
         assert!(
             !view
-                .resources(&ResourceListQuery::default())
+                .resource_access(&ResourceAccessQuery::default())
                 .unwrap()
-                .resources
+                .registered_resources
+                .items
                 .iter()
                 .any(|row| row.value == "TEST")
         );
@@ -795,45 +1040,47 @@ mod tests {
         let view = runtime
             .service_discovery(&identity, &context, "fake")
             .unwrap();
-        let query = ResourceListQuery {
+        let query = ResourceAccessQuery {
+            action: None,
             resource_type: None,
             prefix: Some("T".into()),
             limit: Some(1),
             cursor: None,
         };
-        let first = view.resources(&query).unwrap();
-        assert_eq!(first.resources[0].id, "fake-project-TEST");
-        let cursor = first.next_cursor.unwrap();
-        let continuation = ResourceListQuery {
+        let first = view.resource_access(&query).unwrap();
+        assert_eq!(first.registered_resources.items[0].id, "fake-project-TEST");
+        let cursor = first.registered_resources.next_cursor.unwrap();
+        let continuation = ResourceAccessQuery {
             cursor: Some(cursor.clone()),
             ..query.clone()
         };
-        let second = view.resources(&continuation).unwrap();
-        assert_eq!(second.resources[0].id, "fake-project-TWO");
-        assert!(second.next_cursor.is_none());
+        let second = view.resource_access(&continuation).unwrap();
+        assert_eq!(second.registered_resources.items[0].id, "fake-project-TWO");
+        assert!(second.registered_resources.next_cursor.is_none());
+        assert_eq!(first.access, second.access);
         for bad in [
-            ResourceListQuery {
+            ResourceAccessQuery {
                 prefix: None,
                 ..continuation.clone()
             },
-            ResourceListQuery {
+            ResourceAccessQuery {
                 limit: Some(2),
                 ..continuation.clone()
             },
-            ResourceListQuery {
+            ResourceAccessQuery {
                 cursor: Some("malformed".into()),
                 ..continuation.clone()
             },
-            ResourceListQuery {
+            ResourceAccessQuery {
                 limit: Some(0),
                 ..query.clone()
             },
-            ResourceListQuery {
+            ResourceAccessQuery {
                 limit: Some(101),
                 ..query.clone()
             },
         ] {
-            assert!(view.resources(&bad).is_err());
+            assert!(view.resource_access(&bad).is_err());
         }
         let foreign = token(ResourceSelection {
             resource_ids: vec!["fake-project-all".into()],
@@ -843,7 +1090,7 @@ mod tests {
             runtime
                 .service_discovery(&foreign, &context, "fake")
                 .unwrap()
-                .resources(&continuation)
+                .resource_access(&continuation)
                 .is_err()
         );
         // A different token restriction with the same visible rows is still bound.
@@ -859,14 +1106,15 @@ mod tests {
         let token_cursor = runtime
             .service_discovery(&foreign, &context, "fake")
             .unwrap()
-            .resources(&query)
+            .resource_access(&query)
             .unwrap()
+            .registered_resources
             .next_cursor;
         assert!(
             runtime
                 .service_discovery(&restricted, &context, "fake")
                 .unwrap()
-                .resources(&ResourceListQuery {
+                .resource_access(&ResourceAccessQuery {
                     cursor: token_cursor,
                     ..query.clone()
                 })
@@ -887,7 +1135,7 @@ mod tests {
             restarted
                 .service_discovery(&identity, &context, "fake")
                 .unwrap()
-                .resources(&continuation)
+                .resource_access(&continuation)
                 .is_err()
         );
         let changed_generation = runtime.clone().with_config_generation(2);
@@ -895,17 +1143,127 @@ mod tests {
             changed_generation
                 .service_discovery(&identity, &context, "fake")
                 .unwrap()
-                .resources(&continuation)
+                .resource_access(&continuation)
                 .is_err()
         );
         assert!(
-            view.resources(&ResourceListQuery {
+            view.resource_access(&ResourceAccessQuery {
                 prefix: Some("ZZ".into()),
                 ..Default::default()
             })
             .unwrap()
-            .resources
+            .registered_resources
+            .items
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn discovery_cursors_authenticate_position_metadata_and_runtime_without_public_digest() {
+        let config = config();
+        let runtime = BrokerRuntime::new(config.clone()).unwrap();
+        let identity = IdentityContext::anonymous();
+        let context = context();
+        let view = runtime
+            .service_discovery(&identity, &context, "fake")
+            .unwrap();
+        let query = ResourceAccessQuery {
+            limit: Some(1),
+            ..Default::default()
+        };
+        let first = view.resource_access(&query).unwrap();
+        let encoded = first.registered_resources.next_cursor.unwrap();
+        let continuation = ResourceAccessQuery {
+            cursor: Some(encoded.clone()),
+            ..query.clone()
+        };
+        assert!(view.resource_access(&continuation).is_ok());
+        assert_eq!(
+            view.resource_access(&query)
+                .unwrap()
+                .registered_resources
+                .next_cursor
+                .as_deref(),
+            Some(encoded.as_str())
+        );
+        let raw: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
+        assert_eq!(
+            raw.as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["mac".into(), "position".into()])
+        );
+        let mut tampered: ResourceCursor = serde_json::from_value(raw).unwrap();
+        // Position two is otherwise a valid page boundary with the same limit.
+        tampered.position = 2;
+        assert_eq!(
+            view.resource_access(&ResourceAccessQuery {
+                cursor: Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&tampered).unwrap())),
+                ..query.clone()
+            })
+            .unwrap_err(),
+            CURSOR_ERROR
+        );
+        tampered.position = 1;
+        let mut signature = URL_SAFE_NO_PAD.decode(&tampered.mac).unwrap();
+        signature[0] ^= 1;
+        tampered.mac = URL_SAFE_NO_PAD.encode(signature);
+        assert_eq!(
+            view.resource_access(&ResourceAccessQuery {
+                cursor: Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&tampered).unwrap())),
+                ..query
+            })
+            .unwrap_err(),
+            CURSOR_ERROR
+        );
+
+        // Runtime clones share the key, while a fresh runtime and a reload do not.
+        assert!(
+            runtime
+                .clone()
+                .service_discovery(&identity, &context, "fake")
+                .unwrap()
+                .resource_access(&continuation)
+                .is_ok()
+        );
+        for foreign in [
+            BrokerRuntime::new(config.clone()).unwrap(),
+            BrokerRuntime::new_for_reload(config.clone(), &runtime).unwrap(),
+        ] {
+            assert_eq!(
+                foreign
+                    .service_discovery(&identity, &context, "fake")
+                    .unwrap()
+                    .resource_access(&continuation)
+                    .unwrap_err(),
+                CURSOR_ERROR
+            );
+        }
+
+        // Keep the key and generation unchanged to isolate metadata binding.
+        let mut changed = runtime.clone();
+        let mut changed_config = config;
+        changed_config
+            .policy
+            .resources
+            .iter_mut()
+            .find(|entry| entry.id == "fake-project-TEST")
+            .unwrap()
+            .display_name = Some("Updated reference".into());
+        changed.policy_snapshot = Arc::new(ArcSwap::from_pointee(PolicySnapshot::from_config(
+            &changed_config,
+            runtime.policy_snapshot().generation(),
+        )));
+        assert_eq!(
+            changed
+                .service_discovery(&identity, &context, "fake")
+                .unwrap()
+                .resource_access(&continuation)
+                .unwrap_err(),
+            CURSOR_ERROR
         );
     }
 
@@ -948,7 +1306,10 @@ mod tests {
         view.capabilities
             .resource_scopes
             .insert("alias".into(), same_type);
-        assert!(view.resources(&ResourceListQuery::default()).is_ok());
+        assert!(
+            view.resource_access(&ResourceAccessQuery::default())
+                .is_ok()
+        );
         view.capabilities.resource_scopes.insert(
             "space".into(),
             ResourceScopeCapabilities::new(
@@ -958,15 +1319,16 @@ mod tests {
                 vec!["exact".into()],
             ),
         );
-        assert!(view.resources(&ResourceListQuery::default()).is_err());
+        assert!(
+            view.resource_access(&ResourceAccessQuery::default())
+                .is_ok()
+        );
         assert!(view.actions(Some("TEST"), None, None).is_err());
         assert_eq!(view.actions(None, None, None).unwrap().actions, ["echo"]);
         view.capabilities.resource_scopes.clear();
         assert!(
-            view.resources(&ResourceListQuery::default())
-                .unwrap()
-                .resources
-                .is_empty()
+            view.resource_access(&ResourceAccessQuery::default())
+                .is_err()
         );
         assert!(view.actions(Some("TEST"), None, None).is_err());
     }
@@ -1022,9 +1384,10 @@ mod tests {
         );
         assert!(
             !view
-                .resources(&ResourceListQuery::default())
+                .resource_access(&ResourceAccessQuery::default())
                 .unwrap()
-                .resources
+                .registered_resources
+                .items
                 .iter()
                 .any(|row| row.value == "TEST")
         );

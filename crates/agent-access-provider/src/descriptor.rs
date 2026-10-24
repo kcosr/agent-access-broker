@@ -78,6 +78,9 @@ pub struct ActionDescriptor {
     /// Scope the action is authorized against; unscoped actions need an
     /// explicit grant without a resource selection.
     pub resource_scope: Option<String>,
+    /// Explicit live enumeration of this resource type under this action's
+    /// own authority. Discovery never infers this capability from its name.
+    pub listing_of: Option<crate::ResourceType>,
     /// Resolve private attributes for exactly one admitted resource of this backend.
     pub requires_resource_attributes: bool,
     pub credential_modes: Vec<String>,
@@ -298,6 +301,7 @@ impl ActionDescriptor {
             read_only: false,
             input_schema,
             resource_scope: None,
+            listing_of: None,
             requires_resource_attributes: false,
             credential_modes: Vec::new(),
             token_only: false,
@@ -327,6 +331,17 @@ impl ActionDescriptor {
 
     pub fn scope(mut self, scope: impl Into<String>) -> Self {
         self.resource_scope = Some(scope.into());
+        self
+    }
+
+    /// Declare live enumeration of the action's own resource type.
+    ///
+    /// The action must be a scoped, reviewed read-only JSON collection without
+    /// private resource attributes. Native actions also declare their search
+    /// enforcement. This is a discovery hint, never authority for another
+    /// action: callers must check that action's access independently.
+    pub fn listing_of(mut self, resource_type: crate::ResourceType) -> Self {
+        self.listing_of = Some(resource_type);
         self
     }
 
@@ -436,6 +451,7 @@ impl ActionDescriptor {
             description: self.description.clone(),
             documentation: self.documentation.clone(),
             required_scope_types: self.required_scope_types(),
+            listing_of: self.listing_of.clone(),
             credential_modes: self.credential_modes.clone(),
             lookup_required: self.lookup.credential_required(),
             upstream_resource_ownership: self.upstream_resource_ownership,
@@ -710,6 +726,26 @@ impl ServiceDescriptor {
                 errors.push(format!(
                     "{service}.{name} declares native search without a resource scope"
                 ));
+            }
+            if let Some(listing_of) = &action.listing_of {
+                let binding = action
+                    .resource_scope
+                    .as_ref()
+                    .and_then(|scope| self.resource_scopes.get(scope));
+                let collection = match action.scoped_mcp_name_source {
+                    ScopedMcpNameSource::CanonicalAction => action.native_search.is_some(),
+                    ScopedMcpNameSource::Imported { .. } => true,
+                };
+                if !action.read_only
+                    || !matches!(action.io, ActionIo::Json)
+                    || action.requires_resource_attributes
+                    || !collection
+                    || binding.is_none_or(|binding| &binding.resource_type != listing_of)
+                {
+                    errors.push(format!(
+                        "{service}.{name} listingOf requires a read-only JSON collection of its own scoped resource type without private resource attributes"
+                    ));
+                }
             }
             if action.reports_universal_reach
                 && (!action.read_only
@@ -1009,6 +1045,63 @@ mod tests {
         let marked = action("item.token").token_only();
         assert!(marked.token_only);
         assert_eq!(errors(vec![marked]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn listing_metadata_is_explicit_and_requires_a_matching_read_collection() {
+        let resource_type = ResourceType::new("example_project").unwrap();
+        let ordinary = action("project.list")
+            .read_only()
+            .native_search(NativeSearchEnforcement::ResultFiltered);
+        assert!(ordinary.listing_of.is_none());
+        assert!(
+            serde_json::to_value(ordinary.capabilities())
+                .unwrap()
+                .get("listingOf")
+                .is_none()
+        );
+        let listing = ordinary.clone().listing_of(resource_type.clone());
+        assert!(errors(vec![listing.clone()]).is_empty());
+        let mut second_listing = listing.clone();
+        second_listing.action = "project.enumerate".into();
+        assert!(errors(vec![listing.clone(), second_listing]).is_empty());
+        assert_eq!(listing.capabilities().listing_of, Some(resource_type));
+        assert_eq!(
+            serde_json::to_value(listing.capabilities()).unwrap()["listingOf"],
+            "example_project"
+        );
+
+        let mut unscoped = listing.clone();
+        unscoped.resource_scope = None;
+        let mut write = listing.clone();
+        write.read_only = false;
+        let mut ordinary_read = listing.clone();
+        ordinary_read.native_search = None;
+        for invalid in [
+            unscoped,
+            write,
+            ordinary_read,
+            listing.clone().raw_download(),
+            listing.clone().resource_attributes(),
+            listing.listing_of(ResourceType::new("other_project").unwrap()),
+        ] {
+            assert!(
+                errors(vec![invalid])
+                    .iter()
+                    .any(|error| error.contains("listingOf requires"))
+            );
+        }
+    }
+
+    #[test]
+    fn imported_listing_metadata_uses_the_same_scope_contract_without_native_search() {
+        let mut imported = action("project.list")
+            .read_only()
+            .listing_of(ResourceType::new("example_project").unwrap());
+        imported.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
+            name: Some("list_projects".into()),
+        };
+        assert!(errors(vec![imported]).is_empty());
     }
 
     #[test]

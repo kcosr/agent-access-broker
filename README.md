@@ -72,7 +72,7 @@ not a complete list of epic children or descendants.
 
 GitLab's [live project listing](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
 action, `project.list`, returns authorized repositories, including namespace-granted
-projects that are not individually registered in `resources_list`. It accepts only pagination,
+projects without individual Broker resource registrations. It accepts only pagination,
 includes archived projects, and is separately grantable from `project.search`
 and object reads. `project.search` adds optional project filters; content actions
 search issues, merge requests, code, commits, project wikis, or comments. Each
@@ -97,6 +97,13 @@ named in an action's inputs before the command runs, and hands other actions
 the caller's grants to filter by.
 Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
 connections.
+
+Use [`resource-access describe`](docs/cli.md#resource-access), or MCP
+`resource_access_describe`, to see effective local access by action and resource
+type across these integrations. It separates access coverage from registered
+resource references and identifies explicitly declared live-listing actions.
+The summary reflects current policy and usable credentials without contacting
+upstream services; invocation still checks every target together.
 
 Native integrations are ordinary Rust crates built on the provider SDK. A team
 can write providers in its own repository and build its own Broker distribution

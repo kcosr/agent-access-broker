@@ -586,6 +586,7 @@ credential modes, lookup requirement (none, execution-time only, or before
 policy to resolve scope), its optional native search enforcement mode, upstream resource
 ownership, JSON/multipart-upload/raw-download I/O, explicit `read_only`,
 sensitive output pointers, optional extended `documentation`,
+optional explicit `listingOf` enumeration metadata,
 attribution capability, and whether it issues durable handles that need a stable
 signing key. At service level it declares accepted service credential kinds,
 managed credential profiles, whether invocations need a broker-selected
@@ -1468,11 +1469,34 @@ Microsoft membership ([membership renewal](#microsoft-membership-renewal)),
 which is not upstream service access. Results are reused within a service's
 discovery request and rechecked on the next request.
 
-Registered resources and broad coverage use credential-filtered effective clauses
-from one policy snapshot. These are advisory: invocation rechecks credentials,
-upstream access and all targets together. Pagination binds identity, context,
-policy/config state, filters, effective clauses and registered row content. Native
-MCP lists are rebuilt when requested; no list-change push notification is sent,
+Resource-access discovery uses credential-filtered effective clauses from one
+policy snapshot, reporting single-target coverage separately per action and type
+and explicitly marking unscoped actions. The response includes its admitted
+execution context and service credential availability. Scoped entries identify
+request checks, native query/result containment, or grants delegated to a command
+for enforcement; Broker does not filter that command's output. Restricted broad
+selectors retain useful granted narrower entries. Registered exact references are a
+separate collection; only those references are paginated or prefix-filtered.
+Every page repeats the full access summary and available explicit `listingOf`
+enumeration hints within that service, including multiple actions for one type.
+A listing has its own grants and credentials, so its results
+cannot stand in for another action's authority. The same implementation handles
+native, imported, and command-backed services; it infers no scopes or listing
+capabilities from action names. The summary is advisory: invocation rechecks
+credentials, upstream access and all targets together. Empty singleton coverage
+does not rule out an allowed compound request. Pagination binds identity, context,
+policy/config state, filters, effective clauses and registered row content.
+A cursor belongs to the Broker runtime that issued it and becomes invalid after
+reload or restart. Multi-instance deployments need session affinity so every
+page reaches the issuing instance; otherwise restart without the cursor.
+
+The access summary is complete and unpaginated on every page. The reference
+`limit` does not bound the whole response. Action and resource-type filters can
+reduce its size, but even a single action is not guaranteed to fit. MCP and CLI
+transport size limits fail closed rather than return partial access.
+See [caller discovery](resources.md#caller-discovery) for oversized-response alternatives.
+
+Native MCP lists are rebuilt when requested; no list-change push notification is sent,
 so clients must refresh discovery or reconnect after credential changes.
 
 CLI and the five local MCP discovery helpers share projection code over broker

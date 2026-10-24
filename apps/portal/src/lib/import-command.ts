@@ -80,6 +80,12 @@ export function commandResourceCheck(definition: ImportActionDefinition): Resour
   return { by: type && inputs.length ? "broker" : "command", type, inputs };
 }
 
+/** Source type explicitly enumerated live; never inferred from an action name. */
+export function commandListingType(definition: ImportActionDefinition): string | null {
+  const listing = (definition.annotations as { command?: { listingOf?: unknown } } | null)?.command?.listingOf;
+  return typeof listing === "string" && listing.length > 0 ? listing : null;
+}
+
 /** `/project` names the input `project`; JSON pointer escapes are decoded. */
 function pointerName(pointer: string): string {
   return pointer.replace(/^\//, "").replaceAll("~1", "/").replaceAll("~0", "~");

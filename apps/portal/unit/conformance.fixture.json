@@ -155,6 +155,26 @@
         "requiredScopeTypes": [
           "item"
         ]
+      },
+      {
+        "action": "item.list",
+        "available": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "description": "List live items within effective item grants",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "listingOf": "conformance_item",
+        "lookupRequired": false,
+        "readOnly": true,
+        "requiredScopeTypes": [
+          "item"
+        ]
       }
     ],
     "available": true,

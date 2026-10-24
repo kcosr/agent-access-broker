@@ -82,6 +82,7 @@ pub(super) fn descriptor(config: &CloudbeesCiListingConfig) -> ActionDescriptor 
         }
     })).scope("job").credential_modes(["service","per_user"]).read_only()
     .native_search(NativeSearchEnforcement::ResultFiltered)
+    .listing_of(CLOUDBEES_CI_JOB_RESOURCE.id().clone())
     .sensitive_output("/result/items").sensitive_output("/result/nextPageToken")
     .documentation(json!({
         "listing":"Recursively enumerates jobs and containers from a configured controller and optional canonical folder. The starting container is excluded. Permission to list grants no inspection or build access. Only effective authorized items are released; denied parents may be traversed to reach allowed children.",

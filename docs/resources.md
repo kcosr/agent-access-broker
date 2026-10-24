@@ -146,48 +146,83 @@ Groups grant access and do not send to multiple destinations. See
 
 ## Caller discovery
 
-`agent-access resources list --service SERVICE` and MCP `resources_list` show
-only exact registered entries that are enabled, eligible in the caller's
-execution context, and covered by at least one effective action clause. When a
-service authorizes more than one resource type, discovery requires a
-`resourceType` (`--resource-type`) so rows and resource-filtered action checks
-never mix types; a service with one type uses it implicitly. Rows
-contain IDs, types, values, optional configured names, and, when the resource
-type defines them, the action `inputs` that address the value (for example,
-CloudBees CI `{"controller":"team-ci","job":"payments/build-api"}`). Rows have
-no action lists and never query upstream inventory.
-
-The first page (no `cursor`) also reports the caller's broad access as
-`coverage`, omitted when empty:
+`agent-access resource-access describe --service SERVICE`, MCP
+`resource_access_describe`, and `GET /v1/services/{service}/resource-access`
+describe the caller's effective local access by action and resource type. Optional
+`action` selects one exact canonical action name; optional `resourceType`
+(`--resource-type`) filters the type. Without that filter, the response covers
+all action-bound types and explicitly marks actions without resource scoping.
+The same discovery contract applies to native services, imported services, and
+command-backed services. `executionContext` identifies the admitted context.
+`availability` has the same credential readiness and remediation shape as the
+service list, explaining an empty `access` array when credentials are unavailable.
+An unknown or unavailable exact action filter returns `action is not available`;
+invalid action syntax returns `action name is invalid`. Supplying an `action`
+with a `resourceType` it does not use is an error.
 
 ```json
-{"service":"cloudbees_ci","resources":[],"coverage":[{"type":"cloudbees_ci_job","selector":{"kind":"namespace","value":"team-ci"},"inputs":{"controller":"team-ci"},"restricted":true}],"nextCursor":null}
+{"service":"cloudbees_ci","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"job.view","scope":"resource","enforcement":"request","resourceType":"cloudbees_ci_job","coverage":[{"selector":{"kind":"namespace","value":"team-ci"},"inputs":{"controller":"team-ci"},"restricted":true}]}],"registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}}
 ```
 
-- Each entry is a `namespace` or `all` selector from the caller's own
-  effective clauses (grants and groups after exclusions, credential precedence,
-  token restrictions, execution context, and local credential availability), across the type's actions. An
-  entry is listed when the clause it comes from reaches some resource inside
-  it. Resources inside are not enumerated; use `actions list` with a concrete
-  value to check a particular action.
-- A type whose provider declares roots, such as CloudBees CI controller aliases,
-  reports an `all` selector as one `namespace` entry per root that clause
-  reaches. A root its clause excludes or withholds is omitted even when a
-  narrower grant reaches inside it; that grant is reported as its own entry.
-  Namespace entries outside every root are dropped. Other types report
-  `{"kind":"all"}`.
-- Entries contained by another entry are dropped. `inputs` are the type's action
-  inputs for the selector, when it defines any.
-- `restricted: true` means an action whose clause includes the whole entry can
-  reach only part of it because of exclusions, token restrictions, or
-  precedence conflicts. Withheld values are never named.
-- `prefix` keeps entries whose value starts with the prefix or whose namespace
-  contains it; `all` entries are kept.
+`access` contains one entry per visible action. A resource-scoped entry has
+`scope: "resource"`, `resourceType`, `enforcement`, and a `coverage` array.
+`enforcement` states who applies resource containment:
 
-An empty `resources` list with `coverage` means broad access, not no access.
-Check a known value with `actions list` before concluding it is not accessible.
-Teams execution always requires a configured exact destination; its listing never
-reveals the URL.
+- `request`: the Broker checks the complete request's resolved targets.
+- `results`: a native collection action constrains the upstream query or filters
+  returned results using admitted authority.
+- `command`: the Broker hands grants to the approved command, which must check
+  targets and filter its results. Coverage describes those supplied grants, not
+  a Broker check of the command's output.
+
+An action without
+resource scoping has only its `action` and `scope: "unscoped"`; it does not claim
+access to every resource. MCP and OpenAPI imports currently use this unscoped
+form. Coverage uses the caller's effective clauses after grant precedence,
+group exclusions, token restrictions, execution context, and current usable
+execution and lookup credentials. Discovery neither contacts the backend nor
+refreshes OAuth, and it does not verify upstream existence or permission.
+Native searches and listings select credentials for the collection as a whole;
+ordinary reads can select the winning grant per resource. Their coverage can
+therefore differ even when grants name the same resources.
+
+- A coverage selector is `exact`, `namespace`, or `all`; `exact` and `namespace`
+  carry `value`. Optional `inputs` address that selector, such as
+  `{"controller":"team-ci","job":"payments/build-api"}` for a CloudBees job.
+- A type whose provider declares roots, such as CloudBees CI controller aliases,
+  reports `all` as reachable `namespace` entries. Unreachable roots and denied
+  identities are never exposed. Other types can report `{"kind":"all"}`.
+- `restricted: true` means the entry contains withheld values. A false value
+  means full single-target coverage within that selector. Neither result
+  authorizes a request combining several targets: invocation checks the complete
+  request against one effective clause. `coverageSemantics: "single_target"`
+  makes this limitation explicit. A compound-only action may have empty
+  singleton coverage while a complete multi-resource request is allowed.
+- A restricted broad entry retains useful granted exact or narrower entries
+  within it. Contained entries are omitted only when an unrestricted entry
+  already describes their full reach.
+
+`registeredResources` is a separate, paginated collection with
+`source: "broker_configuration"`. Its `items` contain only registered exact
+entries that are enabled, context-eligible, and covered by a selected action.
+Rows carry `id`, `type`, `value`, optional `displayName`, and optional action
+`inputs`; no private attributes are returned. These references are not a live
+inventory or a complete enumeration of coverage. Empty items can accompany broad
+access or a prefix filter that excludes registered values. Teams execution still requires
+a configured exact destination, whose URL is never disclosed.
+
+Optional `liveListings` identifies explicitly declared enumeration actions as
+`{service,action,resourceType}`. Several listings can be advertised, including
+several for the same type; each `service` is the described service. Describe and
+invoke the selected action to fetch live resources. Each listing has its own
+coverage and enforcement entry. When filtering by another action, describe the
+listing action itself to inspect its coverage. Each listing has independent
+grants and credentials; even combining their results does not establish another
+action's complete inventory. A hint is present only when the
+listing action is available to the caller. The Broker never guesses listing
+capabilities from action names. Native providers declare them with SDK
+`listing_of`, and command imports use accepted `listingOf` metadata. MCP and
+OpenAPI imports currently declare neither resource scopes nor listing hints.
 
 Use the returned `value` with `actions list --service SERVICE --resource VALUE`
 or MCP `actions_list` to check action names for one target. A known unregistered
@@ -197,11 +232,26 @@ full-request authorization or upstream existence check: multiple request targets
 must still fit one effective clause at execution time. A disabled catalog row
 is omitted metadata, not a new global deny over a separate broad grant.
 
-Resource pages default to 50 and cap at 100. Repeat the original service,
-prefix, and limit with `nextCursor`; continuation pages omit `coverage`.
-Changed identity, context, policy, effective credential availability, resource labels or filters require
-restarting. See [CLI discovery](cli.md#resources)
-and [HTTP discovery](http-api.md#resource-and-action-discovery).
+Registered-reference pages default to 50 and cap at 100. `prefix` is a literal,
+case-sensitive filter on registered values only; it never narrows `access` or
+`liveListings`. Repeat the original service, action, resource type, prefix, and
+limit with `registeredResources.nextCursor`. Every page repeats the full access
+summary and listing hints. Changed identity, context, policy, effective credential
+availability, resource labels or filters require restarting.
+A cursor belongs to the Broker runtime that issued it and becomes invalid after
+reload or restart. Multi-instance deployments need session affinity so every
+page reaches the issuing instance; otherwise restart without the cursor.
+
+The access summary is complete and unpaginated on every page. The reference
+`limit` does not bound the whole response. Action and resource-type filters can
+reduce its size, but even a single action is not guaranteed to fit. MCP and CLI
+transport size limits fail closed rather than return partial access. If one
+action/type still exceeds those limits, use the HTTP resource-access route with
+a client that accepts the response size, or use `actions list --resource` / MCP
+`actions_list` for checks of known locators. An oversized-response error is never
+evidence of no access.
+See [CLI discovery](cli.md#resource-access) and
+[HTTP discovery](http-api.md#resource-and-action-discovery).
 
 ## Groups and exclusions
 

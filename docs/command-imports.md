@@ -497,6 +497,13 @@ must:
       "resources": { "type": "project" }
     },
     {
+      "name": "project.list", "description": "List visible projects.",
+      "readOnly": true, "listingOf": "project",
+      "inputSchema": { "type": "object", "properties": {},
+        "additionalProperties": false },
+      "resources": { "type": "project" }
+    },
+    {
       "name": "issue.create", "description": "Create an issue in a project.",
       "readOnly": false,
       "inputSchema": { "type": "object", "required": ["project", "summary"],
@@ -531,6 +538,7 @@ must:
 | `.inputSchema` | `type: object` in the import schema profile |
 | `.outputSchema` | Optional; `result` must validate against it |
 | `.readOnly` | A suggestion; the administrator classifies each action |
+| `.listingOf` | Optional declared source type ID, equal to `.resources.type`; requires a command-enforced collection without resource input pointers and administrator acceptance as read-only |
 | `.credentialModes` | Optional subset of `credential.modes`; absent without `credential` |
 | `.resources.type` | A declared type ID; an action has at most one resource type |
 | `.resources.inputs` | 1–4 JSON pointers to required string or string-array inputs; their presence makes the action Broker-enforced |
@@ -539,6 +547,28 @@ must:
 Other fields are rejected. The [import limits](imported-services.md#limits-and-admission)
 apply: a 16 MiB manifest and 256 KiB per action, including schemas. Resource
 types support exact and all-resources selectors.
+
+`listingOf` explicitly declares ordinary enumeration of canonical items of the
+action's resource type without a required query. Query searches and collections
+of other objects must not declare it. In the example, `project.list` is
+command-enforced: it filters every emitted project
+against the supplied authority. The administrator must accept it as read-only;
+the manifest's `readOnly` suggestion alone does not authorize publication.
+Acceptance maps the source type ID (`project`) to that import's stable Broker
+type ID. The accepted action's capabilities and runtime catalog expose this
+Broker ID as `listingOf`, and OpenAPI/send projections expose
+`x-agent-access-listing-of`.
+
+The shared [resource-access helper](resources.md#caller-discovery) can then
+advertise the action in `liveListings` when its own grants and credentials make
+it available. This hint does not promise a complete inventory for another action
+or grant access to it. No action name implies listing capability, and a command
+without `listingOf` gets no enumeration hint. The helper still describes each
+scoped or unscoped action's local access and registered references.
+For a command-enforced action, `enforcement: "command"` identifies coverage as
+the grants the Broker hands to the command. The command must enforce that
+boundary and filter results itself; the helper does not imply Broker checks of
+the command's output. Broker-enforced resource inputs use `enforcement: "request"`.
 
 #### Patterns
 

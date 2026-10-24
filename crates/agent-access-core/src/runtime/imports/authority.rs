@@ -18,6 +18,7 @@ pub(super) struct ImportedActionShape {
     /// and whether the import enforces it from the passed grants.
     pub scope: Option<ImportedActionScope>,
     pub credential_modes: Vec<&'static str>,
+    pub listing_of: Option<ResourceType>,
 }
 
 pub(super) struct ImportedActionScope {
@@ -80,6 +81,7 @@ pub(super) fn action_shape(
             resource_type: UNRESOLVED_RESOURCE_TYPE.id().clone(),
         }),
         credential_modes: declared_modes.to_vec(),
+        listing_of: None,
     };
     let authority = match adapter.map(|adapter| adapter.action_authority(definition)) {
         Some(Ok(authority)) => authority,
@@ -106,6 +108,10 @@ pub(super) fn action_shape(
         }
     };
     ImportedActionShape {
+        listing_of: authority
+            .listing_of
+            .as_ref()
+            .map(|source_type| broker_type(record, source_type, registry)),
         scope: authority.resources.map(|resources| ImportedActionScope {
             resource_type: broker_type(record, &resources.resource_type, registry),
             name: resources.resource_type,

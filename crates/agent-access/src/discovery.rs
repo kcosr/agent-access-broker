@@ -1,5 +1,5 @@
 //! Shared caller discovery for CLI and MCP. All resource policy is evaluated by the broker.
-use agent_access_core::{ActionList, ApiCatalog, ResourceList};
+use agent_access_core::{ActionList, ApiCatalog, ResourceAccessDescription};
 use agent_access_provider::ActionCapabilities;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -99,9 +99,10 @@ pub(crate) async fn service_describe(
     Ok(parsed.raw)
 }
 
-pub(crate) async fn resources_list(
+pub(crate) async fn resource_access_describe(
     settings: &crate::ResolvedCliSettings,
     service: &str,
+    action: Option<&str>,
     resource_type: Option<&str>,
     prefix: Option<&str>,
     limit: Option<u32>,
@@ -109,12 +110,16 @@ pub(crate) async fn resources_list(
 ) -> Result<Value> {
     input(crate::validate_service_argument(service))?;
     input(crate::validate_discovery_prefix(prefix))?;
+    nonempty("action", action)?;
     nonempty("cursor", cursor)?;
     nonempty("resource type", resource_type)?;
     if limit.is_some_and(|limit| !(1..=100).contains(&limit)) {
         return Err(InputError("limit must be between 1 and 100".into()).into());
     }
     let mut query = Vec::new();
+    if let Some(action) = action {
+        query.push(("action", action.to_owned()));
+    }
     if let Some(resource_type) = resource_type {
         query.push(("resourceType", resource_type.to_owned()));
     }
@@ -129,15 +134,25 @@ pub(crate) async fn resources_list(
     }
     let value = get(
         settings,
-        &format!("/v1/services/{service}/resources"),
+        &format!("/v1/services/{service}/resource-access"),
         &query,
         crate::ResponseShape::Object,
     )
     .await?;
-    let page: ResourceList = serde_json::from_value(value.clone())
-        .map_err(|_| anyhow::anyhow!("invalid broker resource list"))?;
+    let page: ResourceAccessDescription = serde_json::from_value(value.clone()).map_err(|_| {
+        anyhow::anyhow!(
+            "this agent-access version does not support the Broker's resource-access response; upgrade agent-access to match the Broker"
+        )
+    })?;
     if page.service != service {
         bail!("broker returned a different service");
+    }
+    if page
+        .live_listings
+        .iter()
+        .any(|listing| listing.service != page.service)
+    {
+        bail!("broker returned a live listing for a different service");
     }
     Ok(value)
 }
@@ -601,9 +616,10 @@ mod tests {
     #[tokio::test]
     async fn resource_page_is_returned_once_with_encoded_filters_and_cursor() {
         let server = MockServer::start().await;
-        let page = json!({"service":"gitlab","resources":[{"id":"r","type":"git_repository","value":"team/repo","displayName":"Repository"}],"nextCursor":"opaque:+/="});
+        let page = json!({"service":"gitlab","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Locally available"},"coverageSemantics":"single_target","access":[{"action":"project.view","scope":"resource","resourceType":"git_repository","enforcement":"request","coverage":[{"selector":{"kind":"all"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"r","type":"git_repository","value":"team/repo","displayName":"Repository"}],"nextCursor":"opaque:+/="},"liveListings":[{"service":"gitlab","action":"project.list","resourceType":"git_repository"}]});
         Mock::given(method("GET"))
-            .and(path("/v1/services/gitlab/resources"))
+            .and(path("/v1/services/gitlab/resource-access"))
+            .and(query_param("action", "project.view"))
             .and(query_param("resourceType", "git_repository"))
             .and(query_param("prefix", "team/"))
             .and(query_param("limit", "1"))
@@ -613,9 +629,10 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(
-            resources_list(
+            resource_access_describe(
                 &settings(&server),
                 "gitlab",
+                Some("project.view"),
                 Some("git_repository"),
                 Some("team/"),
                 Some(1),
@@ -624,6 +641,57 @@ mod tests {
             .await
             .unwrap(),
             page
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_access_rejects_live_listing_links_to_another_service() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "/v1/services/gitlab/resource-access",
+            200,
+            json!({
+                "service":"gitlab", "executionContext":"default",
+                "availability":{"state":"available","requirements":[],"message":"Locally available"},
+                "coverageSemantics":"single_target", "access":[],
+                "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null},
+                "liveListings":[{"service":"different","action":"project.list","resourceType":"git_repository"}]
+            }),
+        ).await;
+        let error =
+            resource_access_describe(&settings(&server), "gitlab", None, None, None, None, None)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "broker returned a live listing for a different service"
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_access_unknown_contract_reports_how_to_upgrade() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "/v1/services/gitlab/resource-access",
+            200,
+            json!({
+                "service":"gitlab", "executionContext":"default",
+                "availability":{"state":"available","requirements":[],"message":"Locally available"},
+                "coverageSemantics":"single_target",
+                "access":[{"action":"project.view","scope":"resource","resourceType":"git_repository",
+                    "enforcement":"future_mode","coverage":[]}],
+                "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}
+            }),
+        ).await;
+        let error =
+            resource_access_describe(&settings(&server), "gitlab", None, None, None, None, None)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "this agent-access version does not support the Broker's resource-access response; upgrade agent-access to match the Broker"
         );
     }
 }

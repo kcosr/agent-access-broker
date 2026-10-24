@@ -1505,7 +1505,7 @@ mod tests {
                 ("two", "duplicate"),
                 ("three", "duplicate"),
                 ("invalid", "private/invalid name"),
-                ("reserved", "resources_list"),
+                ("reserved", "resource_access_describe"),
                 ("free", "available"),
                 ("same", "same"),
             ]

@@ -25,6 +25,7 @@ import {
   TYPE_CHANGE_LABEL,
   blockedTypeChanges,
   commandCredentialText,
+  commandListingType,
   commandName,
   commandNotices,
   commandResourceCheck,
@@ -107,21 +108,26 @@ export function OperationDetails({ definition }: { definition: ImportActionDefin
 function ResourcesCheckedBy({ definition, types, caveatId }: { definition: ImportActionDefinition; types: readonly ImportResourceTypeDeclaration[]; caveatId?: string | undefined }) {
   const check = commandResourceCheck(definition);
   const parts = resourceCheckParts(check, types);
+  const listingType = commandListingType(definition);
+  const listingLabel = types.find((type) => type.id === listingType)?.pluralLabel ?? listingType;
   return (
-    <p className="pt-catalog-op" aria-describedby={check.by === "command" ? caveatId : undefined}>
-      Resources checked by: <b>{check.by === "broker" ? "Broker" : "Command"}</b>
-      <span className="wb-muted">
-        {" · "}
-        {parts.type ?? "no resource type"}
-        {parts.inputs.length ? ", from " : null}
-        {parts.inputs.map((input, index) => (
-          <Fragment key={input}>
-            {index ? ", " : null}
-            <span className="wb-mono">{input}</span>
-          </Fragment>
-        ))}
-      </span>
-    </p>
+    <>
+      <p className="pt-catalog-op" aria-describedby={check.by === "command" ? caveatId : undefined}>
+        Resources checked by: <b>{check.by === "broker" ? "Broker" : "Command"}</b>
+        <span className="wb-muted">
+          {" · "}
+          {parts.type ?? "no resource type"}
+          {parts.inputs.length ? ", from " : null}
+          {parts.inputs.map((input, index) => (
+            <Fragment key={input}>
+              {index ? ", " : null}
+              <span className="wb-mono">{input}</span>
+            </Fragment>
+          ))}
+        </span>
+      </p>
+      {listingLabel ? <p className="pt-catalog-op">Live listing: <b>{listingLabel}</b>. Requires reviewed read-only classification; permission to list grants no other action access.</p> : null}
+    </>
   );
 }
 
@@ -439,7 +445,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   const query = search.trim().toLowerCase();
   const matches = (row: ImportReviewRow) =>
     !query ||
-    `${row.action} ${row.tool.definition.description} ${row.change} ${JSON.stringify(row.tool.definition.source)} ${JSON.stringify(openApiOperation(row.tool.definition))} ${command ? resourceCheckText(commandResourceCheck(row.tool.definition), types) : ""}`
+    `${row.action} ${row.tool.definition.description} ${row.change} ${JSON.stringify(row.tool.definition.source)} ${JSON.stringify(openApiOperation(row.tool.definition))} ${command ? `${resourceCheckText(commandResourceCheck(row.tool.definition), types)} ${commandListingType(row.tool.definition) ?? ""}` : ""}`
       .toLowerCase()
       .includes(query);
   const edited = () => {

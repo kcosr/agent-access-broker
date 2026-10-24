@@ -1,7 +1,7 @@
 use crate::handlers::auth::{auth_local_login, auth_logout, auth_password_change, auth_session};
 use crate::handlers::data::{
     broker_status, capabilities, healthz, invoke, me, readyz, resource_types, service,
-    service_actions, service_resources, services,
+    service_actions, service_resource_access, services,
 };
 use crate::handlers::gateway::gateway_dispatch;
 use crate::handlers::management::admin::{
@@ -141,7 +141,10 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/services", get(services))
         .route("/v1/services/{service}", get(service))
-        .route("/v1/services/{service}/resources", get(service_resources))
+        .route(
+            "/v1/services/{service}/resource-access",
+            get(service_resource_access),
+        )
         .route("/v1/services/{service}/actions", get(service_actions))
         .route("/v1/spec/catalog", get(spec_catalog))
         .route("/v1/spec/openapi.json", get(spec_openapi))

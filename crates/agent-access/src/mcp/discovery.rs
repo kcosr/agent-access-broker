@@ -23,10 +23,11 @@ pub(super) async fn call(
     }
     let result = match name {
         "services_list" => crate::discovery::services_list(settings, text("prefix"), false).await,
-        "resources_list" => {
-            crate::discovery::resources_list(
+        "resource_access_describe" => {
+            crate::discovery::resource_access_describe(
                 settings,
                 text("service").unwrap(),
+                text("action"),
                 text("resourceType"),
                 text("prefix"),
                 arguments

@@ -1801,6 +1801,48 @@ fn gitlab_note_mutation_actions_are_registered_and_project_scoped() {
 }
 
 #[test]
+fn only_project_list_declares_live_repository_enumeration() {
+    let descriptor = gitlab_descriptor(&config());
+    descriptor.validate().unwrap();
+    let listings = descriptor
+        .actions
+        .iter()
+        .filter_map(|action| {
+            action
+                .listing_of
+                .as_ref()
+                .map(|resource_type| (action.action.as_str(), resource_type))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(listings, [("project.list", GIT_REPOSITORY_RESOURCE.id())]);
+    let capabilities = descriptor.capabilities();
+    assert_eq!(
+        capabilities
+            .actions
+            .iter()
+            .filter_map(|action| action
+                .listing_of
+                .as_ref()
+                .map(|resource_type| (action.action.as_str(), resource_type)))
+            .collect::<Vec<_>>(),
+        listings
+    );
+    for name in ["project.search", "pipeline.list", "job.list"] {
+        assert!(
+            descriptor.action(name).unwrap().listing_of.is_none(),
+            "{name}"
+        );
+    }
+    for action in descriptor
+        .actions
+        .iter()
+        .filter(|action| action.action.starts_with("search."))
+    {
+        assert!(action.listing_of.is_none(), "{}", action.action);
+    }
+}
+
+#[test]
 fn acting_user_ownership_metadata_covers_exact_draft_review_actions() {
     let descriptor = gitlab_descriptor(&config());
     let marked = descriptor

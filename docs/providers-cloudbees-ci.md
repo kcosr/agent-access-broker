@@ -76,7 +76,7 @@ slash-separated segments. Thus `namespace team-ci/payments` covers
 `team-ci/payments` itself. It has no glob syntax. Broad selectors include
 future jobs. Separately granted `job.list` enumerates the live upstream inventory.
 
-Resource discovery (`resources_list`) shows the action inputs for each
+Resource discovery (`resource_access_describe`) shows the action inputs for each
 selector, so callers need not split resource values themselves:
 
 | Selector | Discovery `inputs` |
@@ -85,9 +85,11 @@ selector, so callers need not split resource values themselves:
 | `namespace team-ci` or `namespace team-ci/payments` | `{"controller":"team-ci"}` |
 | `all` | none; coverage names each configured controller alias the caller's grant reaches |
 
-Registered exact entries appear as resources. Namespace and `all` grants appear
-as caller coverage, with `all` reported per reachable controller alias. Neither
-lists jobs. See [resources](resources.md) for the coverage fields.
+Registered exact entries appear in `registeredResources.items`. Per-action
+`access[].coverage` describes exact, namespace and `all` reach, with `all`
+reported per reachable controller alias. Neither enumerates live jobs. An
+available `job.list` action appears in `liveListings`; its own action grants
+can differ from job reads or writes. See [resources](resources.md) for details.
 
 The `job` input is the Jenkins `fullName`, not its display name. A folder path
 uses `/` between item names. A literal `%` in a multibranch job name is valid:
@@ -148,8 +150,8 @@ records both. Log cursors bind to the numeric build: continue a
 `controller`, optionally starting at a canonical `folder` path. The starting
 container itself is excluded. It requires its own read-only grant and supports
 service or personal Basic API tokens. Listing grants no job inspection or build
-permission; registered resources and the local `resources_list` helper keep their
-existing meaning.
+permission. Local `resource_access_describe` reports access by action and
+registered references, and identifies `job.list` when it is available.
 
 ```sh
 agent-access cloudbees-ci job list team-ci --folder payments --max-results 50

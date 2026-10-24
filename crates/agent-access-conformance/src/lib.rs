@@ -2,7 +2,8 @@
 //! contract: a namespace-capable resource type with an action-input
 //! projection and configured roots, typed configuration, a
 //! managed credential profile, JSON, raw-download, and multipart-upload
-//! actions (the upload token-only), a presenter with an embedded body and a
+//! actions (the upload token-only), an explicitly declared live collection
+//! filtered by native search authority, a presenter with an embedded body and a
 //! whole-result Markdown renderer, and (when `endpoints` is enabled) a
 //! resource type whose entries keep a private attribute that a
 //! single-attempt action consumes. Its writes
@@ -18,20 +19,21 @@ use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
     BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
     ClientProfile, CredentialDescriptor, CredentialProfile, EgressDeclaration, EgressProxyConfig,
-    MutationReceipt, NamespaceSelectorDescriptor, Provider, ProviderBuildError, ProviderError,
-    ProviderInvocation, ProviderResult, ProviderResultStream, ProviderState, ReasonCode,
-    ResourceAttributeDescriptor, ResourceAttributes, ResourceScopeCapabilities, ResourceScopes,
-    ResourceSelector, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, StateDisposition, StaticCredentialKind, UpstreamAuthority,
-    UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec, UpstreamError,
-    ValidationContext, attachment_upload_plan, complete_upstream_trace, file_upload_body,
-    parse_backend_config, read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    MutationReceipt, NamespaceSelectorDescriptor, NativeSearchEnforcement, Provider,
+    ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
+    ProviderState, ReasonCode, ResourceAttributeDescriptor, ResourceAttributes,
+    ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
+    StaticCredentialKind, UpstreamAuthority, UpstreamAuthorization, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
+    complete_upstream_trace, file_upload_body, parse_backend_config, read_bounded_body,
+    take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
+    validate_upstream_base_url,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -39,6 +41,7 @@ use url::Url;
 const SERVICE: &str = "conformance";
 const LABEL: &str = "providers.conformance";
 const MAX_PING_MESSAGE_BYTES: usize = 1024;
+const MAX_LIST_ITEMS: usize = 128;
 
 pub static CONFORMANCE_BACKEND: BackendRegistration = BackendRegistration::new(
     agent_access_provider::module_metadata!(),
@@ -216,7 +219,7 @@ impl BackendConfig for ConformanceConfig {
     }
 }
 
-/// The conformance service. Its actions differ only in how they move bytes.
+/// The conformance service exercises invocation shapes and collection metadata.
 pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     let item = || json!({"type": "string", "description": "Item path, such as shelf-one/item-one"});
     let locator = json!({
@@ -274,6 +277,14 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         )
         .multipart_upload(attachment_upload_plan(&["item"], Some(1)))
         .token_only(),
+        action(
+            "item.list",
+            "List live items within effective item grants",
+            &json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        )
+        .read_only()
+        .native_search(NativeSearchEnforcement::ResultFiltered)
+        .listing_of(CONFORMANCE_ITEM_RESOURCE.id().clone()),
     ];
     if config.endpoints {
         resource_scopes.insert(
@@ -416,6 +427,13 @@ fn ping_inputs(inputs: &Value) -> Result<PingInputs, ProviderError> {
 #[serde(deny_unknown_fields)]
 struct ItemInputs {
     item: String,
+}
+
+fn list_inputs(inputs: &Value) -> Result<(), ProviderError> {
+    if !inputs.as_object().is_some_and(Map::is_empty) {
+        return Err(invalid("conformance listing accepts an empty input object"));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -657,6 +675,70 @@ impl ConformanceProvider {
             ).with_upstream(Some(status), Some(started.elapsed().as_millis() as u64)).with_object_ids(json!({"endpoint": inputs.endpoint})))
     }
 
+    /// The test upstream exposes a finite inventory. Validate it before
+    /// releasing only canonical paths inside the invocation's authority.
+    async fn list(&self, request: &ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        // Native search admission does not run the scope-resolution hook.
+        list_inputs(request.inputs())?;
+        let authority = request.search_authorization()?;
+        if authority.scope_type != "item" || authority.scope.is_empty() {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "conformance listing has no item authority",
+            ));
+        }
+        let authorization = Self::authorization(request)?;
+        let mut url = self.requests.base().clone();
+        url.path_segments_mut()
+            .expect("base URLs have a path")
+            .pop_if_empty()
+            .push("items");
+        let started = Instant::now();
+        let response = self
+            .requests
+            .send(
+                self.requests.request(reqwest::Method::GET, url),
+                UpstreamCall::new("item.list").with_authorization(&authorization),
+            )
+            .await
+            .map_err(upstream_error)?;
+        let status = response.status().as_u16();
+        let items = self
+            .read_json(response, |value| {
+                let protocol = || {
+                    ProviderError::error(
+                        ReasonCode::UpstreamProtocolFailed,
+                        "conformance inventory is malformed or exceeds the item limit",
+                    )
+                };
+                let candidates = value
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .ok_or_else(protocol)?;
+                if candidates.len() > MAX_LIST_ITEMS {
+                    return Err(protocol());
+                }
+                let mut items = BTreeSet::new();
+                for candidate in candidates {
+                    let item = candidate
+                        .as_str()
+                        .filter(|item| is_item_path(item, 2..=4))
+                        .ok_or_else(protocol)?;
+                    if authority.scope.matches(item) && self.on_configured_shelf(item) {
+                        items.insert(item.to_owned());
+                    }
+                }
+                Ok(items
+                    .into_iter()
+                    .map(|path| json!({"path": path}))
+                    .collect::<Vec<_>>())
+            })
+            .await?;
+        Ok(ProviderResult::new(json!({"items": items}))
+            .with_audit(json!({"provider": SERVICE, "operation": "item.list"}))
+            .with_upstream(Some(status), Some(started.elapsed().as_millis() as u64)))
+    }
+
     async fn view(
         &self,
         request: &ProviderInvocation,
@@ -861,10 +943,22 @@ fn check_part(part: &BrokerBodyPart, attachment: &AttachmentInput) -> Result<(),
 }
 
 impl ConformanceProvider {
+    fn on_configured_shelf(&self, item: &str) -> bool {
+        self.shelves.is_empty()
+            || self
+                .shelves
+                .iter()
+                .any(|shelf| item.split('/').next() == Some(shelf.as_str()))
+    }
+
     fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         if action == "endpoint.ping" && self.endpoints {
             let endpoint = ping_inputs(inputs)?.endpoint;
             return Ok(BTreeMap::from([("endpoint".into(), vec![endpoint])]));
+        }
+        if action == "item.list" {
+            list_inputs(inputs)?;
+            return Ok(BTreeMap::from([("item".into(), vec![])]));
         }
         let item = match action {
             "item.view" | "item.download" => parse::<ItemInputs>(inputs)?.item,
@@ -877,12 +971,7 @@ impl ConformanceProvider {
             }
         };
         checked_item(&item)?;
-        if !self.shelves.is_empty()
-            && !self
-                .shelves
-                .iter()
-                .any(|shelf| item.split('/').next() == Some(shelf.as_str()))
-        {
+        if !self.on_configured_shelf(&item) {
             return Err(invalid("conformance item is not on a configured shelf"));
         }
         Ok(BTreeMap::from([("item".into(), vec![item])]))
@@ -939,6 +1028,9 @@ impl Provider for ConformanceProvider {
         if request.action() == "endpoint.ping" && self.endpoints {
             return self.ping(&request).await;
         }
+        if request.action() == "item.list" {
+            return self.list(&request).await;
+        }
         let item = request
             .resource_scopes()?
             .get("item")
@@ -978,7 +1070,8 @@ mod tests {
         InvocationBuilder, TestHost, bearer_credential, install_trace_capture,
     };
     use agent_access_provider::{
-        ActionIo, CorrelationContext, ProviderLimits, host::with_provider_context,
+        ActionIo, CorrelationContext, ProviderLimits, SearchAuthorization,
+        SearchAuthorizationScope, host::with_provider_context,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
@@ -1256,6 +1349,72 @@ mod tests {
         .await
     }
 
+    #[tokio::test]
+    async fn live_inventory_enforces_authority_configuration_and_protocol_bounds() {
+        for (items, succeeds) in [
+            (
+                json!([
+                    "shelf-one/item",
+                    "shelf-one/excluded",
+                    "shelf-two/item",
+                    "shelf-three/item"
+                ]),
+                true,
+            ),
+            (json!(["shelf-one/item", "shelf-one/../invalid"]), false),
+            (json!(["shelf-one/item", 7]), false),
+            (json!(vec!["shelf-one/item"; MAX_LIST_ITEMS + 1]), false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/items"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": items})))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut provider = provider(&server.uri(), ProviderLimits::default());
+            provider.shelves = vec!["shelf-one".into(), "shelf-two".into()];
+            assert!(provider.local_scopes("item.list", &json!({})).is_ok());
+            assert!(
+                provider
+                    .local_scopes("item.list", &json!({"item": "shelf-one/item"}))
+                    .is_err()
+            );
+            let request = InvocationBuilder::new(SERVICE, "item.list")
+                .inputs(json!({}))
+                .search(SearchAuthorization::new(
+                    "item",
+                    SearchAuthorizationScope::from_selectors(
+                        vec![
+                            ResourceSelector::Namespace {
+                                value: "shelf-one".into(),
+                            },
+                            ResourceSelector::Namespace {
+                                value: "shelf-three".into(),
+                            },
+                        ],
+                        vec![ResourceSelector::Exact {
+                            value: "shelf-one/excluded".into(),
+                        }],
+                    ),
+                ))
+                .credential(bearer_credential("token"))
+                .build();
+            let result = provider.invoke(request).await;
+            if succeeds {
+                assert_eq!(
+                    result.unwrap().result,
+                    json!({"items": [{"path": "shelf-one/item"}]})
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().reason_code(),
+                    ReasonCode::UpstreamProtocolFailed
+                );
+            }
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn json_traces_record_how_the_body_turned_out() {
         let limits = ProviderLimits::default().with_max_upstream_response_bytes(64);
@@ -1378,8 +1537,29 @@ mod tests {
         let ping = descriptor.action("endpoint.ping").unwrap();
         assert!(ping.requires_resource_attributes && !ping.read_only);
         let action = |name: &str| descriptor.action(name).unwrap();
+        let listing = action("item.list");
+        assert!(listing.read_only);
+        assert_eq!(
+            listing.listing_of.as_ref(),
+            Some(CONFORMANCE_ITEM_RESOURCE.id())
+        );
+        assert_eq!(
+            listing.native_search,
+            Some(NativeSearchEnforcement::ResultFiltered)
+        );
+        assert_eq!(
+            descriptor
+                .capabilities()
+                .actions
+                .iter()
+                .find(|action| action.action == "item.list")
+                .unwrap()
+                .listing_of
+                .as_ref(),
+            Some(CONFORMANCE_ITEM_RESOURCE.id())
+        );
         assert!(action("item.view").reports_universal_reach);
-        for name in ["item.download", "item.upload", "endpoint.ping"] {
+        for name in ["item.download", "item.upload", "item.list", "endpoint.ping"] {
             assert!(!action(name).reports_universal_reach);
         }
         let view = response_capabilities(action("item.view").presentation.as_ref());

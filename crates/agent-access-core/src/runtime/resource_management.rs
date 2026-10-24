@@ -890,7 +890,7 @@ mod tests {
         let first = runtime
             .service_discovery(&identity, &context, "fake")
             .unwrap()
-            .resources(&ResourceListQuery {
+            .resource_access(&ResourceAccessQuery {
                 limit: Some(1),
                 ..Default::default()
             })
@@ -914,17 +914,18 @@ mod tests {
             .service_discovery(&identity, &context, "fake")
             .unwrap();
         assert!(
-            view.resources(&ResourceListQuery {
+            view.resource_access(&ResourceAccessQuery {
                 limit: Some(1),
-                cursor: first.next_cursor,
+                cursor: first.registered_resources.next_cursor,
                 ..Default::default()
             })
             .is_err()
         );
         assert_eq!(
-            view.resources(&ResourceListQuery::default())
+            view.resource_access(&ResourceAccessQuery::default())
                 .unwrap()
-                .resources[1]
+                .registered_resources
+                .items[1]
                 .display_name
                 .as_deref(),
             Some("Second project")

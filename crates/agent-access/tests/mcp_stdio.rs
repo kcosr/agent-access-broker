@@ -229,6 +229,7 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
     assert!(discovered.get("error").is_none(), "{discovered}");
     let tools = discovered["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 6, "{discovered}");
+    assert!(!tools.iter().any(|tool| tool["name"] == "resources_list"));
     let tool = tools
         .iter()
         .find(|tool| tool["_meta"]["agent-access/action"] == "echo")
@@ -243,10 +244,17 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
     assert_eq!(name, "fake_echo");
     let legacy = client.request("tools/call", json!({"name":"fake_echo_245a0744f1fbd877","arguments":{"inputs":{"project":"TEST","message":"old name"}}})).await;
     assert_eq!(legacy["error"]["code"], -32602, "{legacy}");
+    let retired = client
+        .request(
+            "tools/call",
+            json!({"name":"resources_list","arguments":{"service":"fake"}}),
+        )
+        .await;
+    assert_eq!(retired["error"]["code"], -32602, "{retired}");
 
     for helper in [
         "services_list",
-        "resources_list",
+        "resource_access_describe",
         "actions_list",
         "actions_describe",
         "services_describe",
@@ -277,15 +285,56 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
             .output()
             .unwrap()
     };
-    let cli_resources = cli_call(&["resources", "list", "--service", "fake", "--limit", "1"]);
+    let cli_resources = cli_call(&[
+        "resource-access",
+        "describe",
+        "--service",
+        "fake",
+        "--action",
+        "echo",
+        "--limit",
+        "1",
+    ]);
     assert!(
         cli_resources.status.success(),
         "{}",
         String::from_utf8_lossy(&cli_resources.stderr)
     );
     let cli_page: Value = serde_json::from_slice(&cli_resources.stdout).unwrap();
-    assert_eq!(cli_page["resources"].as_array().unwrap().len(), 1);
-    assert!(cli_page["nextCursor"].is_string());
+    assert_eq!(
+        cli_page["registeredResources"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(cli_page["registeredResources"]["nextCursor"].is_string());
+    assert_eq!(cli_page["coverageSemantics"], "single_target");
+    assert_eq!(cli_page["executionContext"], "default");
+    assert_eq!(cli_page["availability"]["state"], "available");
+    assert_eq!(cli_page["access"].as_array().unwrap().len(), 1);
+    assert_eq!(cli_page["access"][0]["action"], "echo");
+    assert_eq!(cli_page["access"][0]["enforcement"], "request");
+    let http_page: Value = reqwest::Client::new()
+        .get(format!("{base}/v1/services/fake/resource-access"))
+        .header("X-Agent-Access-Identity-Token", "mcp-principal-one-token")
+        .header("X-Agent-Access-Request-Id", "resource-access-parity")
+        .query(&[("action", "echo"), ("limit", "1")])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(http_page, cli_page);
+    assert_eq!(
+        cli_call(&["resources", "list", "--service", "fake"])
+            .status
+            .code(),
+        Some(2)
+    );
     let cli_actions = cli_call(&["actions", "list", "--service", "fake", "--resource", "TEST"]);
     assert!(cli_actions.status.success());
     assert_eq!(
@@ -319,15 +368,15 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
         Some(3)
     );
     assert_eq!(
-        cli_call(&["resources", "list", "--service", "hidden"])
+        cli_call(&["resource-access", "describe", "--service", "hidden"])
             .status
             .code(),
         Some(2)
     );
     assert_eq!(
         cli_call(&[
-            "resources",
-            "list",
+            "resource-access",
+            "describe",
             "--service",
             "fake",
             "--cursor",
@@ -388,38 +437,59 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
     let page = client
         .request(
             "tools/call",
-            json!({"name":"resources_list","arguments":{"service":"fake","limit":1}}),
+            json!({"name":"resource_access_describe","arguments":{"service":"fake","action":"echo","limit":1}}),
         )
         .await;
     assert_eq!(page["result"]["isError"], false, "{page}");
+    assert_eq!(page["result"]["structuredContent"], cli_page);
     assert_eq!(
-        page["result"]["structuredContent"]["resources"][0]["value"],
+        page["result"]["structuredContent"]["registeredResources"]["items"][0]["value"],
         "TEST"
     );
     assert!(
-        page["result"]["structuredContent"]["resources"][0]
+        page["result"]["structuredContent"]["registeredResources"]["items"][0]
             .get("actions")
             .is_none()
     );
-    let cursor = page["result"]["structuredContent"]["nextCursor"]
+    let cursor = page["result"]["structuredContent"]["registeredResources"]["nextCursor"]
         .as_str()
         .unwrap();
-    let continuation = client.request("tools/call", json!({"name":"resources_list","arguments":{"service":"fake","limit":1,"cursor":cursor}})).await;
+    let continuation = client.request("tools/call", json!({"name":"resource_access_describe","arguments":{"service":"fake","action":"echo","limit":1,"cursor":cursor}})).await;
     assert_eq!(
-        continuation["result"]["structuredContent"]["resources"][0]["value"],
+        continuation["result"]["structuredContent"]["access"],
+        cli_page["access"]
+    );
+    assert_eq!(
+        continuation["result"]["structuredContent"]["coverageSemantics"],
+        "single_target"
+    );
+    assert_eq!(
+        continuation["result"]["structuredContent"]["registeredResources"]["items"][0]["value"],
         "TEST2"
     );
-    assert!(continuation["result"]["structuredContent"]["nextCursor"].is_null());
+    assert!(
+        continuation["result"]["structuredContent"]["registeredResources"]["nextCursor"].is_null()
+    );
     let invalid_cursor = client
         .request(
             "tools/call",
-            json!({"name":"resources_list","arguments":{"service":"fake","cursor":cursor}}),
+            json!({"name":"resource_access_describe","arguments":{"service":"fake","cursor":cursor}}),
         )
         .await;
     assert_eq!(invalid_cursor["result"]["isError"], true);
     assert_eq!(
         invalid_cursor["result"]["structuredContent"]["reasonCode"],
         "input_invalid"
+    );
+    // An action filter is part of the cursor binding even if the unfiltered
+    // service happens to have the same single visible action.
+    let changed_action = client.request("tools/call", json!({"name":"resource_access_describe","arguments":{"service":"fake","limit":1,"cursor":cursor}})).await;
+    assert_eq!(changed_action["result"]["isError"], true);
+    let hidden_action = client.request("tools/call", json!({"name":"resource_access_describe","arguments":{"service":"fake","action":"missing"}})).await;
+    assert_eq!(hidden_action["result"]["isError"], true);
+    assert_eq!(
+        hidden_action["result"]["structuredContent"]["error"]["message"],
+        "action is not available"
     );
     for (resource, expected) in [("TEST", json!(["echo"])), ("OTHER", json!([]))] {
         let actions = client
@@ -442,7 +512,7 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
         let invalid = client
             .request(
                 "tools/call",
-                json!({"name":"resources_list","arguments":args}),
+                json!({"name":"resource_access_describe","arguments":args}),
             )
             .await;
         assert_eq!(invalid["result"]["isError"], true, "{invalid}");
@@ -550,7 +620,7 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
         rotated_services["result"]["structuredContent"],
         json!({"services":[]})
     );
-    let revoked = client.request("tools/call", json!({"name":"resources_list","arguments":{"service":"fake","limit":1,"cursor":cursor}})).await;
+    let revoked = client.request("tools/call", json!({"name":"resource_access_describe","arguments":{"service":"fake","limit":1,"cursor":cursor}})).await;
     assert_eq!(revoked["result"]["isError"], true);
     assert_eq!(
         revoked["result"]["structuredContent"]["reasonCode"],
@@ -882,7 +952,7 @@ async fn scoped_stdio_recovers_after_token_rotation_without_broadening_or_local_
     let wrong = process
         .request(
             "tools/call",
-            json!({"name":"resources_list","arguments":{"service":"other","outputPath":output}}),
+            json!({"name":"resource_access_describe","arguments":{"service":"other","outputPath":output}}),
         )
         .await;
     assert_eq!(wrong["result"]["isError"], true);

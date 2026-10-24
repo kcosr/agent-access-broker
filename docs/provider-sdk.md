@@ -277,6 +277,7 @@ its builder methods:
 | `.reports_universal_reach()` | Ask the host whether this scoped native read has effective access to every resource in its selected credential mode; see [universal reach](#universal-reach). |
 | `.lookup(LookupRequirement::ScopeResolution)` | That scope resolution needs a host-selected lookup credential before policy. `LookupRequirement::Execution` asks for one only at execution. |
 | `.native_search(NativeSearchEnforcement::UpstreamConstrained)` or `.native_search(NativeSearchEnforcement::ResultFiltered)` | Reviewed native search with a complete host-admitted boundary and the declared query/result enforcement. |
+| `.listing_of(resource_type)` | Explicit live enumeration of the action's scoped resource type; advertises `listingOf` for discovery. |
 | `.raw_download()`, `.multipart_upload(plan)` | Streamed response bodies, or admitted file uploads. |
 | `.resource_attributes()` | That dispatch needs the private attributes of the one admitted exact resource. |
 | `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. The host sends such responses with `Cache-Control: no-store`. |
@@ -286,6 +287,18 @@ its builder methods:
 Keep the description and input schema concise; they are part of initial MCP tool
 discovery. Put grammar, limits and examples in `documentation`, which detailed
 discovery, OpenAPI and the send schema carry but MCP tool definitions omit.
+
+`listing_of(ResourceType)` declares ordinary live enumeration of canonical items
+of that type without a required query, such as a project collection. Query
+searches and collections of other objects must not declare it. It requires a
+scoped, reviewed read-only JSON action
+whose scope binds that same resource type, with native search enforcement and
+without private resource attributes. Capabilities and catalogs expose the type
+as `listingOf`; OpenAPI and send projections carry
+`x-agent-access-listing-of`. Generic resource-access discovery uses this metadata
+for `liveListings` only when the caller can use the listing action. The listing
+has its own grants and credentials: its results do not enumerate another
+action's authority. A name such as `project.list` alone declares nothing.
 
 `CredentialDescriptor` states whether invocations need a broker-selected
 execution credential (`CredentialDescriptor::without_execution_credential()`

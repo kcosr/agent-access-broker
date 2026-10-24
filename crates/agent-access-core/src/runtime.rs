@@ -88,7 +88,9 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use chrono::Utc;
 pub use discovery::{
-    ActionList, DiscoveredResource, ResourceCoverage, ResourceList, ResourceListQuery,
+    ActionList, ActionResourceAccess, DiscoveredResource, LiveResourceListing,
+    RegisteredResourcePage, RegisteredResourceSource, ResourceAccessDescription,
+    ResourceAccessEnforcement, ResourceAccessQuery, ResourceCoverage, ResourceCoverageSemantics,
     ServiceDiscovery,
 };
 use futures_util::Stream;
@@ -1723,6 +1725,8 @@ pub struct BrokerRuntime {
     /// The effective node ID; see [`crate::resolve_node_id`].
     node_id: Arc<str>,
     config_generation: Option<u64>,
+    /// Random per-runtime key authenticating private discovery cursor bindings.
+    resource_cursor_key: Arc<discovery::DiscoveryCursorKey>,
     /// Test-fixture provider instances, inherited by reload candidates.
     /// Empty, and zero-sized, outside test-support builds.
     provider_fixtures: ProviderFixtureSlot,
@@ -2292,6 +2296,7 @@ impl BrokerRuntime {
             audit_registry,
             node_id,
             config_generation: None,
+            resource_cursor_key: Arc::new(discovery::DiscoveryCursorKey::new()),
             provider_fixtures,
         };
         runtime.initialize_import_dispatch(previous);

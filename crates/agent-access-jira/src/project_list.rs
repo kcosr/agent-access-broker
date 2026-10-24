@@ -25,6 +25,7 @@ pub(crate) fn descriptor(config: &JiraListingConfig) -> ActionDescriptor {
         }
     }))
     .native_search(NativeSearchEnforcement::ResultFiltered)
+    .listing_of(JIRA_PROJECT_RESOURCE.id().clone())
     .sensitive_output("/result/items")
     .sensitive_output("/result/nextPageToken")
     .documentation(json!({

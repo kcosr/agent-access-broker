@@ -20,6 +20,13 @@ can access. Importing it does not create folder, project, namespace, or query-le
 containment. Use a compiled provider, or a command import that declares resource
 types, when that containment is needed.
 
+The shared [resource-access discovery](resources.md#caller-discovery) reports
+each available MCP/OpenAPI action as `scope: "unscoped"` and omits live-listing
+hints. This describes action authority without claiming all-resource access.
+Command imports can declare scopes and explicit `listingOf` metadata for live
+enumeration; the Broker maps those declarations to accepted resource type IDs.
+Every listing remains independently granted and credential-filtered.
+
 ## Operator setup
 
 Enable managed identity and policy, managed-store encryption, and management, then
