@@ -87,6 +87,12 @@ pub(super) async fn call_tool(
     name: &str,
     arguments: Map<String, Value>,
 ) -> Result<CallToolResult> {
+    // Detail has its own bounded control admission. Its authoritative readiness
+    // and authenticated limits projection let this helper retain scoped-view
+    // checks without an execution-capacity-dependent catalog round trip.
+    if matches!(view, McpView::Service(_)) && name == "services_describe" {
+        return super::discovery::call(settings, view, name, arguments).await;
+    }
     // Aggregate discovery keeps its ordinary broker authorization, including
     // permitted anonymous reads. Fixed helper names are reserved, so resolve
     // them through the same bounded registry generator
@@ -170,8 +176,12 @@ pub(super) async fn call_tool(
                 .json(&invoke_request(inputs, options))
                 .send()
                 .await
-                .map_err(|_| anyhow::anyhow!("broker request failed"))?;
-            decode_json(response, crate::ResponseShape::Envelope).await?
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        crate::invocation_request_error(error, "broker request failed").to_string()
+                    )
+                })?;
+            decode_invocation_json(response).await?
         }
         ActionIo::MultipartUpload { plan } => {
             crate::validate_upload_files(plan, &args.files, service, &action.action)?;
@@ -207,8 +217,13 @@ pub(super) async fn call_tool(
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|_| anyhow::anyhow!("broker upload request failed"))?;
-            decode_json(response, crate::ResponseShape::Envelope).await?
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        crate::invocation_request_error(error, "broker upload request failed")
+                            .to_string()
+                    )
+                })?;
+            decode_invocation_json(response).await?
         }
         ActionIo::RawDownload {
             metadata_header, ..
@@ -229,17 +244,22 @@ pub(super) async fn call_tool(
             )?;
             let client = mcp_http_client(settings, true)?;
             let response = tokio::time::timeout(
-                crate::CLI_REQUEST_TIMEOUT,
+                settings.request_timeout(),
                 crate::request_builder(client.post(endpoint), settings)
                     .header("Accept", "application/octet-stream")
                     .json(&invoke_request(inputs, options))
                     .send(),
             )
             .await
-            .map_err(|_| anyhow::anyhow!("broker download request timed out"))?
-            .map_err(|_| anyhow::anyhow!("broker download request failed"))?;
+            .map_err(|_| anyhow::anyhow!(crate::INVOCATION_TIMEOUT_MESSAGE))?
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    crate::invocation_request_error(error, "broker download request failed")
+                        .to_string()
+                )
+            })?;
             if response.status().as_u16() >= 400 {
-                decode_json(response, crate::ResponseShape::Envelope).await?
+                decode_invocation_json(response).await?
             } else {
                 crate::download_response_value(
                     response,
@@ -569,7 +589,7 @@ pub(crate) fn mcp_http_client(
     // In particular, never forward a custom identity header to a redirect target.
     let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
     if !streaming {
-        builder = builder.timeout(crate::CLI_REQUEST_TIMEOUT);
+        builder = builder.timeout(settings.request_timeout());
     }
     crate::build_http_client(builder, &settings.tls)
 }
@@ -594,9 +614,26 @@ async fn fetch_catalog(settings: &crate::ResolvedCliSettings) -> Result<ApiCatal
     serde_json::from_value(value).map_err(|_| anyhow::anyhow!("invalid broker catalog"))
 }
 
+async fn decode_invocation_json(response: reqwest::Response) -> Result<(u16, Value)> {
+    decode_json_with_timeout_message(
+        response,
+        crate::ResponseShape::Envelope,
+        crate::INVOCATION_TIMEOUT_MESSAGE,
+    )
+    .await
+}
+
 pub(crate) async fn decode_json(
+    response: reqwest::Response,
+    shape: crate::ResponseShape,
+) -> Result<(u16, Value)> {
+    decode_json_with_timeout_message(response, shape, "broker response stalled").await
+}
+
+async fn decode_json_with_timeout_message(
     mut response: reqwest::Response,
     shape: crate::ResponseShape,
+    timeout_message: &'static str,
 ) -> Result<(u16, Value)> {
     let status = response.status().as_u16();
     if (300..400).contains(&status) {
@@ -606,8 +643,14 @@ pub(crate) async fn decode_json(
     while let Some(chunk) =
         tokio::time::timeout(crate::CLI_STREAMING_IDLE_TIMEOUT, response.chunk())
             .await
-            .map_err(|_| anyhow::anyhow!("broker response stalled"))?
-            .map_err(|_| anyhow::anyhow!("could not read broker response"))?
+            .map_err(|_| anyhow::anyhow!(timeout_message))?
+            .map_err(|error| {
+                anyhow::anyhow!(if error.is_timeout() {
+                    timeout_message
+                } else {
+                    "could not read broker response"
+                })
+            })?
     {
         if (bytes.len() + chunk.len()) as u64 > MAX_JSON_BYTES {
             bail!("broker JSON response exceeds 16 MiB limit");
@@ -658,6 +701,7 @@ mod tests {
     fn settings(server: &MockServer) -> crate::ResolvedCliSettings {
         crate::ResolvedCliSettings {
             url: server.uri(),
+            request_timeout_ms: 30_000,
             tls: Default::default(),
             token: Some("broker-secret".into()),
             token_from_literal_arg: false,
@@ -681,6 +725,243 @@ mod tests {
     }
     fn allow(result: Value) -> Value {
         json!({"agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","result":result})
+    }
+
+    #[tokio::test]
+    async fn request_timeout_applies_to_stdio_json_upload_and_download_headers_without_retry() {
+        for kind in ["json", "upload", "download"] {
+            let server = MockServer::start().await;
+            let directory = tempfile::tempdir().unwrap();
+            let file = directory.path().join("input.txt");
+            let destination = directory.path().join("output");
+            std::fs::write(&file, "upload data").unwrap();
+            std::fs::write(&destination, "original").unwrap();
+            let mut action = action();
+            action.read_only = false;
+            let arguments = match kind {
+                "upload" => {
+                    action.io = ActionIo::MultipartUpload {
+                        plan: agent_access_provider::MultipartUploadSpec::new(
+                            "attachment",
+                            "/attachments",
+                            "upload",
+                        )
+                        .with_file_count(1, Some(1)),
+                    };
+                    json!({"inputs":{},"files":[{"role":"attachment","path":file}]})
+                }
+                "download" => {
+                    action.io = agent_access_provider::raw_download_io();
+                    json!({"inputs":{},"outputPath":destination})
+                }
+                _ => json!({"inputs":{}}),
+            };
+            serve_catalog(&server, action).await;
+            Mock::given(method("POST"))
+                .and(path("/v1/invoke/jira-team/issue.view"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(allow(json!({})))
+                        .set_delay(std::time::Duration::from_secs(1)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut settings = settings(&server);
+            settings.request_timeout_ms = 100;
+            let error = call_tool(
+                &settings,
+                &McpView::Aggregate,
+                &tool_name("jira-team", "issue.view"),
+                arguments.as_object().unwrap().clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                crate::INVOCATION_TIMEOUT_MESSAGE,
+                "{kind}"
+            );
+            assert_eq!(std::fs::read_to_string(destination).unwrap(), "original");
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn request_timeout_includes_stdio_json_body_and_keeps_discovery_errors_distinct() {
+        for invocation in [true, false] {
+            let (url, task) = crate::request_timeout_tests::delayed_body_server(
+                "application/json",
+                "",
+                serde_json::to_vec(&allow(json!({}))).unwrap(),
+            )
+            .await;
+            let server = MockServer::start().await;
+            let mut settings = settings(&server);
+            settings.url = url;
+            settings.request_timeout_ms = 100;
+            let response = mcp_http_client(&settings, false)
+                .unwrap()
+                .get(&settings.url)
+                .send()
+                .await
+                .unwrap();
+            let error = if invocation {
+                decode_invocation_json(response).await.unwrap_err()
+            } else {
+                decode_json(response, crate::ResponseShape::Object)
+                    .await
+                    .unwrap_err()
+            };
+            if invocation {
+                assert_eq!(error.to_string(), crate::INVOCATION_TIMEOUT_MESSAGE);
+            } else {
+                assert_eq!(error.to_string(), "broker response stalled");
+                assert!(!error.to_string().contains("mutation"));
+            }
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn service_describe_preserves_limits_in_stdio_structured_and_text_output() {
+        let server = MockServer::start().await;
+        let detail = json!({
+            "service":"jira-team", "displayName":"Example service", "surface":"invoke",
+            "scopeTypes":[], "actions":[action()], "scopedMcpReady":true,
+            "availability":{"state":"available","requirements":[],"message":"Locally available"},
+            "limits":{
+                "scope":"principal_service", "stateScope":"broker_process",
+                "instanceId":"opaque-test-instance", "observedAt":"2026-10-24T12:00:00Z",
+                "invocations":{"requests":2,"windowSeconds":10,"maxWaitSeconds":10,
+                    "countedRequests":2,"queuedRequests":2,"availableImmediately":0,
+                    "nextAdmissionAfterSeconds":20,"nextAdmissionAt":"2026-10-24T12:00:20Z"},
+                "capacity":{"maxConcurrentRequests":100,"maxConcurrentRequestsPerPrincipal":10,"principalInFlightRequests":4}
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/jira-team"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&detail))
+            .expect(3)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            crate::discovery::service_describe(&settings(&server), "jira-team")
+                .await
+                .unwrap(),
+            detail
+        );
+        for view in [McpView::Aggregate, McpView::Service("jira-team".into())] {
+            let output = serde_json::to_value(
+                call_tool(
+                    &settings(&server),
+                    &view,
+                    "services_describe",
+                    json!({"service":"jira-team"}).as_object().unwrap().clone(),
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(output["structuredContent"], detail);
+            let text: Value =
+                serde_json::from_str(output["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(text, detail);
+        }
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn scoped_service_describe_fails_closed_before_saving_without_catalog_requests() {
+        let server = MockServer::start().await;
+        let detail = json!({
+            "service":"jira-team", "displayName":"Example service", "surface":"invoke",
+            "scopeTypes":[], "actions":[action()], "scopedMcpReady":true, "limits":{},
+            "availability":{"state":"available","requirements":[],"message":"Locally available"}
+        });
+        let current = std::sync::Arc::new(std::sync::Mutex::new(detail.clone()));
+        let respond = current.clone();
+        Mock::given(method("GET"))
+            .and(path("/v1/services/jira-team"))
+            .respond_with(move |_: &wiremock::Request| {
+                ResponseTemplate::new(200).set_body_json(respond.lock().unwrap().clone())
+            })
+            .expect(7)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/spec/catalog"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("existing.json");
+        std::fs::write(&output, "preserve").unwrap();
+        for change in [
+            "missing_limits",
+            "missing_readiness",
+            "false_readiness",
+            "gateway",
+            "empty_available",
+            "duplicate_action",
+        ] {
+            let mut value = detail.clone();
+            match change {
+                "missing_limits" => {
+                    value.as_object_mut().unwrap().remove("limits");
+                }
+                "missing_readiness" => {
+                    value.as_object_mut().unwrap().remove("scopedMcpReady");
+                }
+                "false_readiness" => value["scopedMcpReady"] = json!(false),
+                "gateway" => value["surface"] = json!("gateway"),
+                "empty_available" => value["actions"] = json!([]),
+                "duplicate_action" => value["actions"] = json!([action(), action()]),
+                _ => unreachable!(),
+            }
+            *current.lock().unwrap() = value;
+            let error = call_tool(
+                &settings(&server),
+                &McpView::Service("jira-team".into()),
+                "services_describe",
+                json!({"service":"jira-team","outputPath":output})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.to_string(), "service view is unavailable", "{change}");
+            assert_eq!(std::fs::read_to_string(&output).unwrap(), "preserve");
+        }
+        let error = call_tool(
+            &settings(&server),
+            &McpView::Service("jira-team".into()),
+            "services_describe",
+            json!({"service":"second","outputPath":output})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "service is outside this MCP view");
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), "preserve");
+        let mut unavailable = detail;
+        unavailable["availability"]["state"] = json!("unavailable");
+        unavailable["actions"] = json!([]);
+        *current.lock().unwrap() = unavailable;
+        let result = call_tool(
+            &settings(&server),
+            &McpView::Service("jira-team".into()),
+            "services_describe",
+            json!({"service":"jira-team"}).as_object().unwrap().clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(serde_json::to_value(result).unwrap()["isError"], false);
+        server.verify().await;
     }
 
     #[tokio::test]

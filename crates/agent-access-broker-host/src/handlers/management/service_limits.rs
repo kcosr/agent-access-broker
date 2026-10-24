@@ -158,8 +158,27 @@ pub(crate) async fn set(
         limit,
         actor: context.identity.principal.clone(),
     };
+    let Some(owner) = state.reloadable.admission_owners.register() else {
+        return management_host_error_response(
+            &context,
+            operation,
+            target,
+            ReasonCode::OperationCancelled,
+            "broker is shutting down",
+        )
+        .await;
+    };
+    let update = state
+        .reloadable
+        .shared_invocations
+        .begin_update(&request.principal_id, &service);
     match management_store_call(&context, move |store| {
-        store.upsert_principal_service_limit(request)
+        // The blocking store owner keeps the fence and notification even when
+        // its HTTP response waiter has disappeared.
+        let _owner = owner;
+        let result = store.upsert_principal_service_limit(request);
+        update.finish(result.is_ok());
+        result
     })
     .await
     {
@@ -214,9 +233,27 @@ pub(crate) async fn clear(
     }
     let principal_for_store = principal.clone();
     let service_for_store = service.clone();
+    let Some(owner) = state.reloadable.admission_owners.register() else {
+        return management_host_error_response(
+            &context,
+            operation,
+            target,
+            ReasonCode::OperationCancelled,
+            "broker is shutting down",
+        )
+        .await;
+    };
+    let update = state
+        .reloadable
+        .shared_invocations
+        .begin_update(&principal, &service);
     match management_store_call(&context, move |store| {
-        store.principal(&principal_for_store)?;
-        store.delete_principal_service_limit(&principal_for_store, &service_for_store)
+        let _owner = owner;
+        let result = store.principal(&principal_for_store).and_then(|_| {
+            store.delete_principal_service_limit(&principal_for_store, &service_for_store)
+        });
+        update.finish(result.is_ok());
+        result
     })
     .await
     {

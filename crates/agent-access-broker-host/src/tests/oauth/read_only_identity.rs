@@ -167,6 +167,7 @@ async fn read_only_identity_refuses_a_write_before_leasing_the_callers_oauth_acc
     let invoke = |read_only: bool, action: &str| {
         fixture.runtime.invoke(
             GovernedOperationContext {
+                admission: None,
                 operation: OperationContext {
                     agent_request_id: format!("read-only-{action}"),
                     broker_request_id: format!("broker-read-only-{action}"),

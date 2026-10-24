@@ -552,6 +552,7 @@ async fn prepare(
     runtime
         .prepare_invoke(
             GovernedOperationContext {
+                admission: None,
                 operation: OperationContext {
                     agent_request_id: "agent-request".into(),
                     broker_request_id: "broker-request".into(),
@@ -1532,6 +1533,7 @@ async fn broker_enforced_calls_select_one_grant_covering_the_named_resources() {
     let response = runtime
         .invoke(
             GovernedOperationContext {
+                admission: None,
                 operation: OperationContext {
                     agent_request_id: "agent-request".into(),
                     broker_request_id: "broker-request".into(),

@@ -963,11 +963,14 @@ upload_spool_max_bytes = 2147483648
 # runtime specs, management, and MCP protocol messages are not counted.
 # Precedence: principal override -> service limit -> default -> 100 per 1m.
 [limits.invocations]
-default = { requests = 100, window = "1m" }
+# max_wait defaults to 0s (immediate rejection). Waiting retains request slots.
+default = { requests = 100, window = "1m", max_wait = "0s" }
 
 [limits.invocations.services.jira]
 requests = 60
 window = "1m"
+# Optional: override default.max_wait independently of principal rate overrides.
+# max_wait = "10s"
 
 # Principal overrides are only valid with identity.authority = "toml" and must
 # name a configured static principal (or "anonymous"). Managed deployments

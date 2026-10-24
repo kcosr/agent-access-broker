@@ -5,6 +5,12 @@ pub use trusted_callers::{
 };
 use trusted_callers::{ResolvedTrustedCaller, load_trusted_callers};
 mod action_eligibility;
+mod admission_audit;
+pub use admission_audit::InvocationAdmissionAudit;
+use admission_audit::{
+    admission_outcome, admission_waited, admission_waited_milliseconds, attach_admission_audit,
+    preserve_admission_audit,
+};
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
@@ -289,12 +295,16 @@ pub struct OperationContext {
 
 #[derive(Debug, Clone)]
 pub struct GovernedOperationContext {
+    /// Host rate-admission facts, retained through final audit and stream delivery.
+    pub admission: Option<InvocationAdmissionAudit>,
     pub operation: OperationContext,
     pub execution_context: ExecutionContext,
 }
 
 #[derive(Debug, Clone)]
 pub struct GovernedIdentityFailureContext {
+    /// Present when identity revalidation failed after host rate admission.
+    pub admission: Option<InvocationAdmissionAudit>,
     pub agent_request_id: String,
     pub broker_request_id: String,
     pub service: String,
@@ -834,10 +844,18 @@ fn gateway_terminal_audit_value(
         return Some(value);
     }
 
+    // Error/progress audit can omit gateway details. Preserve the host field at
+    // the record's top level when wrapping that provider-specific shape.
+    let admission = value
+        .as_object_mut()
+        .and_then(|fields| fields.remove("admission"));
     let mut wrapped = json!({
         "providerAudit": value,
         "gatewayPhase": phase,
     });
+    if let Some(admission) = admission {
+        wrapped["admission"] = admission;
+    }
     if let Some(message) = message
         && let Some(object) = wrapped.as_object_mut()
     {
@@ -908,6 +926,9 @@ macro_rules! emit_invoke_completed_event {
                 credentialMode = credential_mode,
                 upstreamStatus = $record.upstream_status,
                 upstreamDurationMs = $record.upstream_duration_ms,
+                admissionWaited = admission_waited($record),
+                admissionWaitedMilliseconds = admission_waited_milliseconds($record),
+                admissionOutcome = admission_outcome($record),
                 diagnosticCode = $diagnostic_code,
             );
         } else {
@@ -926,6 +947,9 @@ macro_rules! emit_invoke_completed_event {
                 resourceScopeKeys = $resource_scope_keys.as_str(),
                 upstreamStatus = $record.upstream_status,
                 upstreamDurationMs = $record.upstream_duration_ms,
+                admissionWaited = admission_waited($record),
+                admissionWaitedMilliseconds = admission_waited_milliseconds($record),
+                admissionOutcome = admission_outcome($record),
                 diagnosticCode = $diagnostic_code,
             );
         }
@@ -1008,6 +1032,9 @@ macro_rules! emit_invoke_stream_started_event {
                 credentialMode = credential_mode,
                 upstreamStatus = $record.upstream_status,
                 upstreamDurationMs = $record.upstream_duration_ms,
+                admissionWaited = admission_waited($record),
+                admissionWaitedMilliseconds = admission_waited_milliseconds($record),
+                admissionOutcome = admission_outcome($record),
                 streamPhase = "started",
             );
         } else {
@@ -1025,6 +1052,9 @@ macro_rules! emit_invoke_stream_started_event {
                 resourceScopeKeys = $resource_scope_keys.as_str(),
                 upstreamStatus = $record.upstream_status,
                 upstreamDurationMs = $record.upstream_duration_ms,
+                admissionWaited = admission_waited($record),
+                admissionWaitedMilliseconds = admission_waited_milliseconds($record),
+                admissionOutcome = admission_outcome($record),
                 streamPhase = "started",
             );
         }
@@ -1059,6 +1089,9 @@ macro_rules! emit_invoke_stream_terminal_event {
                 credentialMode = credential_mode,
                 upstreamStatus = $record.upstream_status,
                 upstreamDurationMs = $record.upstream_duration_ms,
+                admissionWaited = admission_waited($record),
+                admissionWaitedMilliseconds = admission_waited_milliseconds($record),
+                admissionOutcome = admission_outcome($record),
                 streamPhase = $phase,
                 streamBytes = $stream_bytes,
                 streamDurationMs = $stream_duration_ms,
@@ -1077,6 +1110,9 @@ macro_rules! emit_invoke_stream_terminal_event {
                 resourceScopeKeys = $resource_scope_keys.as_str(),
                 upstreamStatus = $record.upstream_status,
                 upstreamDurationMs = $record.upstream_duration_ms,
+                admissionWaited = admission_waited($record),
+                admissionWaitedMilliseconds = admission_waited_milliseconds($record),
+                admissionOutcome = admission_outcome($record),
                 streamPhase = $phase,
                 streamBytes = $stream_bytes,
                 streamDurationMs = $stream_duration_ms,
@@ -1159,6 +1195,9 @@ fn emit_gateway_terminal(record: &AuditRecord, phase: &str, duration_ms: u64) {
             credentialMode = credential_mode,
             upstreamStatus = record.upstream_status,
             upstreamDurationMs = record.upstream_duration_ms,
+            admissionWaited = admission_waited(record),
+            admissionWaitedMilliseconds = admission_waited_milliseconds(record),
+            admissionOutcome = admission_outcome(record),
             gatewayPhase = phase,
             gatewayResponseBytes = gateway_bytes,
             gatewayDurationMs = duration_ms,
@@ -1177,6 +1216,9 @@ fn emit_gateway_terminal(record: &AuditRecord, phase: &str, duration_ms: u64) {
             credentialMode = credential_mode,
             upstreamStatus = record.upstream_status,
             upstreamDurationMs = record.upstream_duration_ms,
+            admissionWaited = admission_waited(record),
+            admissionWaitedMilliseconds = admission_waited_milliseconds(record),
+            admissionOutcome = admission_outcome(record),
             gatewayPhase = phase,
             gatewayResponseBytes = gateway_bytes,
             gatewayDurationMs = duration_ms,
@@ -1888,6 +1930,7 @@ enum AuditAppendMode {
 
 #[derive(Clone)]
 struct FinalizeContext {
+    admission: Option<InvocationAdmissionAudit>,
     search_authorization: Option<SearchAuthorizationPlan>,
     /// A command-import call from admission on: its authority, the resources
     /// its request names and its process facts, which finalization audits
@@ -2204,6 +2247,13 @@ impl BrokerRuntime {
             // provider builder fails that service closed on semantic validation.
             services.insert(name.clone(), Arc::new(descriptor));
         }
+        let mut invocation_limit_errors = Vec::new();
+        crate::invocation_limits::validate_invocation_limit_service_references(
+            &config,
+            &services,
+            &mut invocation_limit_errors,
+        );
+        crate::finish_validation(invocation_limit_errors)?;
         if config.imports.enabled
             && let (Some(store), Some(ring)) = (&managed_store, &credential_key_ring)
         {
@@ -3135,6 +3185,7 @@ impl BrokerRuntime {
         stage.apply(
             self.governed_operation_error_response(
                 GovernedOperationContext {
+                    admission: context.admission,
                     operation: OperationContext {
                         agent_request_id: context.agent_request_id,
                         broker_request_id: context.broker_request_id,
@@ -3159,6 +3210,7 @@ impl BrokerRuntime {
         let policy_generation = self.policy_generation();
         self.finalize(
             FinalizeContext {
+                admission: None,
                 search_authorization: None,
                 command: None,
                 agent_request_id: context.agent_request_id,
@@ -3204,11 +3256,13 @@ impl BrokerRuntime {
     ) -> BrokerResponse<Value> {
         let policy_generation = self.policy_generation();
         let GovernedOperationContext {
+            admission: admission_audit,
             operation,
             execution_context,
         } = context;
         self.finalize(
             FinalizeContext {
+                admission: admission_audit,
                 search_authorization: None,
                 command: None,
                 agent_request_id: operation.agent_request_id,
@@ -3820,6 +3874,7 @@ impl BrokerRuntime {
         resource_scopes: ResourceScopes,
     ) -> Result<PlannedGatewayOperation, Box<BrokerResponse<Value>>> {
         let GovernedOperationContext {
+            admission: admission_audit,
             operation:
                 OperationContext {
                     agent_request_id,
@@ -3841,6 +3896,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3871,6 +3927,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3902,6 +3959,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3933,6 +3991,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -3970,6 +4029,7 @@ impl BrokerRuntime {
                 return Err(Box::new(
                     self.finalize_pre_dispatch(
                         FinalizeContext {
+                            admission: admission_audit,
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -4007,6 +4067,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4045,6 +4106,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4082,6 +4144,7 @@ impl BrokerRuntime {
                 return Err(Box::new(
                     self.finalize_pre_dispatch(
                         FinalizeContext {
+                            admission: admission_audit,
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -4114,6 +4177,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4147,6 +4211,7 @@ impl BrokerRuntime {
             credential_mode: policy.credential_mode.clone(),
             matched_grant: policy.matched_grant.clone(),
             finalize_context: FinalizeContext {
+                admission: admission_audit,
                 search_authorization: None,
                 command: None,
                 agent_request_id,
@@ -4217,7 +4282,10 @@ impl BrokerRuntime {
             caller_id: identity.caller_id.clone(),
             source: context.source.clone(),
             execution_context: context.execution_context.clone(),
-            provider_audit: Some(gateway_started_audit_value(audit)),
+            provider_audit: attach_admission_audit(
+                Some(gateway_started_audit_value(audit)),
+                context.admission,
+            ),
         };
 
         let terminal_permit = match self.audit.reserve_terminal().await {
@@ -4663,6 +4731,7 @@ impl BrokerRuntime {
         request: InvokeRequest,
     ) -> Result<PreparedInvocation, Box<owned::PreparationFailure>> {
         let GovernedOperationContext {
+            admission: admission_audit,
             operation:
                 OperationContext {
                     agent_request_id,
@@ -4684,6 +4753,7 @@ impl BrokerRuntime {
         let Some(provider) = self.providers.get(&service).cloned() else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    admission: admission_audit,
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4711,6 +4781,7 @@ impl BrokerRuntime {
         if let Err(error) = self.enforce_invocation_identity_admission(&identity).await {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    admission: admission_audit,
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4745,6 +4816,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4774,6 +4846,7 @@ impl BrokerRuntime {
         else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    admission: admission_audit,
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4807,6 +4880,7 @@ impl BrokerRuntime {
         {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    admission: admission_audit,
                     search_authorization: None,
                     command: None,
                     agent_request_id,
@@ -4847,6 +4921,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: None,
                         command: None,
                         agent_request_id,
@@ -4903,6 +4978,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -4937,6 +5013,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -4969,6 +5046,7 @@ impl BrokerRuntime {
                 ) {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
+                            admission: admission_audit,
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -5036,6 +5114,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -5081,6 +5160,7 @@ impl BrokerRuntime {
                     };
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
+                            admission: admission_audit,
                             search_authorization: None,
                             command: None,
                             agent_request_id,
@@ -5115,6 +5195,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
                                 agent_request_id,
@@ -5196,6 +5277,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: audit_search_authorization,
                         command,
                         agent_request_id,
@@ -5244,6 +5326,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        admission: admission_audit,
                         search_authorization: audit_search_authorization,
                         command,
                         agent_request_id,
@@ -5331,6 +5414,7 @@ impl BrokerRuntime {
             response_options,
             body_part_specs: Vec::new(),
             finalize_context: FinalizeContext {
+                admission: admission_audit,
                 search_authorization: audit_search_authorization,
                 command,
                 agent_request_id,
@@ -6344,6 +6428,7 @@ impl BrokerRuntime {
         append_mode: AuditAppendMode,
     ) -> BrokerResponse<Value> {
         let FinalizeContext {
+            admission: admission_audit,
             search_authorization,
             command,
             agent_request_id,
@@ -6469,6 +6554,7 @@ impl BrokerRuntime {
         } else {
             provider_audit
         };
+        let provider_audit = attach_admission_audit(provider_audit, admission_audit);
         let credential_connection = self.audit_credential_connection(
             &service,
             credential_mode.as_deref(),
@@ -10010,7 +10096,8 @@ impl GatewayTerminalAuditState {
             return;
         }
         inner.base_record.upstream_status = Some(upstream_status);
-        inner.base_record.provider_audit = Some(audit);
+        inner.base_record.provider_audit =
+            preserve_admission_audit(Some(audit), inner.base_record.provider_audit.as_ref());
     }
 
     fn cancel(&self, phase: &str, message: &str) -> bool {

@@ -57,6 +57,25 @@ The managed store holds the import catalog and encrypted service-owned token
 slots. All retained slots participate in key readiness, used-key inventory, and
 credential rewrap. See [database operations](database.md).
 
+Imports share the Broker's [invocation queue](configuration.md#service-invocation-limits).
+After creating the service or draft, configure its wait by stored service ID:
+
+```toml
+[limits.invocations.services.observability]
+requests = 20
+window = "1m"
+max_wait = "10s"
+```
+
+The import's managed `invocationLimit`, if set, overrides this `requests`/`window`
+pair; without it, the TOML pair is the service default. Waiting policy stays in
+TOML: service `max_wait`, then `limits.invocations.default.max_wait`, then `0s`.
+Principal rate overrides do not change it. Reload TOML changes; catalog edits
+preserve the configured wait. Offline validation defers unknown service names
+when a managed store is configured, and startup/reload rejects any name missing
+from the complete catalog. Disabled and retired records still count as retained
+names, so disabling or retiring an import does not invalidate its TOML entry.
+
 ## Administrative workflow
 
 1. Open **Admin > Catalog** as a base administrator, choose **Import service**,

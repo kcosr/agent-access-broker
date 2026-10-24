@@ -273,9 +273,10 @@ are never counted, so an exhausted invocation budget does not prevent
 cancellation. Authentication-failure budgets apply to failed identity resolution. Streaming body reads retain the existing idle
 timeout; SSE keepalives are scheduled within that idle window.
 
-`operation_timeout_ms` is the total HTTP MCP execution deadline, including
-preparation and verification. It does not change existing REST/stdio timeout
-semantics. `protocol_timeout_ms` bounds protocol/discovery and completed-response
+`operation_timeout_ms` is the total HTTP MCP invocation deadline, including
+rate waiting, preparation, execution and verification; admission does not restart
+it. It does not change REST/stdio's own deadlines. `protocol_timeout_ms` bounds
+protocol/identity phases, discovery and completed-response
 delivery; keepalives do not extend these deadlines. Session storage is ephemeral.
 Restart or changes to `[mcp]`, `[identity]`,
 `[execution_context]`, `[broker_tokens]`, `[managed_store]`, or trusted-proxy
@@ -1995,11 +1996,12 @@ upload_spool_dir = "/var/lib/agent-access-broker/spool"   # required; no default
 upload_spool_max_bytes = 2147483648       # 2 GiB (= max_http_body_bytes * 4)
 
 [limits.invocations]
-default = { requests = 100, window = "1m" }   # optional; built-in default shown
+default = { requests = 100, window = "1m", max_wait = "0s" } # built-in defaults
 
 [limits.invocations.services.jira]            # optional per-service default
 requests = 20
 window = "1m"
+max_wait = "10s"                            # optional; inherits default.max_wait
 
 # Only valid with identity.authority = "toml".
 [[limits.invocations.principal_overrides]]
@@ -2029,7 +2031,7 @@ later makes:
   counted, but every pack POST is, including protocol v2 `ls-refs` POSTs,
   additional fetch negotiation rounds, and a push's probe POST, so one fetch
   or clone typically costs two or more. Leave room for that in gateway limits:
-  a limit of 1 makes protocol v2 fetches impossible (see
+  a limit of 1 without waiting prevents protocol v2 fetches (see
   [Git HTTP gateway](git-http-gateway.md)).
 
 Nothing else is counted: discovery (`/v1/services*`, `/v1/capabilities`),
@@ -2038,7 +2040,7 @@ self-service and admin management, and authentication routes. The count is
 taken after identity resolution and after the service is known to be
 configured, and before policy evaluation, credential selection, pre-policy
 resource lookups, and upstream calls. Requests later denied by policy still
-count; a request rejected by the limit is never recorded. Unknown services are
+count; a request rejected by the limit is never added to rate history. Unknown services are
 rejected by existing validation and never create limiter state.
 
 The effective limit for a principal and service is the first of:
@@ -2050,9 +2052,55 @@ The effective limit for a principal and service is the first of:
 3. `[limits.invocations].default`.
 4. The built-in default: 100 requests per `1m`.
 
-Limits are read on every admission, so reloads and managed-store override
-changes apply to the next request without a restart. Limiter history is held
-in memory per broker process and survives reloads. When the effective window
+Waiting policy resolves separately: explicit service `max_wait`, then explicit
+`default.max_wait`, then `0s`. Principal overrides select only `requests` and
+`window`; managed overrides do not store waiting policy. A service entry must
+still specify both rate fields, even when setting `max_wait`.
+
+Imported services use the same TOML service table, keyed by their stored service
+ID. An import's managed `invocationLimit`, when present, supplies its service
+`requests`/`window`; otherwise the TOML service pair applies. Its `max_wait` always
+comes from TOML and survives catalog edits. Create the imported service or draft
+before adding its TOML entry and reloading. Offline config validation checks the
+values and name syntax; with a managed store, startup/reload resolves otherwise
+unknown names against the retained import catalog and rejects names absent from
+both catalogs. Disabled and retired imports remain valid references, including
+when imports are disabled globally.
+
+With positive `max_wait`, a request can wait in FIFO order for its existing
+principal/service allowance, shared across tokens and transports. Its projected
+turn must fit the configured wait and the remaining request deadline. Waiting
+holds the original inbound request open before policy, credentials or upstream
+work. REST and Git also wait before body parsing/spooling; HTTP MCP has already
+parsed its protocol message before service admission. Only admission consumes a
+rate unit; later denials still count. No automatic retry or durable job is created.
+
+Waiters retain existing global/per-principal request slots (defaults 100/10),
+including any MCP response slot. Waiting can fill a principal's slots across
+services or all global invocation slots; subsequent requests then receive
+`concurrency_limited`. There is no separate queue-count setting. Single-service
+describe has independent bounded capacity; see [live limits](http-api.md#live-service-limits).
+
+`max_wait` bounds the opportunity for rate capacity, not exact response latency:
+a due opportunity is handled on the timer's first wake. HTTP MCP's absolute
+operation deadline and REST/Git's ingress body deadline remain strict and include
+the wait. Expiry during initial admission before grant or queue insertion retains
+the surface's timeout outcome; queued expiry and infeasible future FIFO turns
+use HTTP 429. See [admission outcomes](http-api.md#rate-limits).
+Leave time for transfer and useful execution, and align client/proxy
+timeouts; the CLI uses [`service.request_timeout_ms`](#cli-client-config-and-config-validate).
+
+Observed cancellation or connection termination before admission removes a
+waiter without a charge or upstream dispatch. Detection can be delayed by unread
+bodies, proxies or network loss; a client timeout does not prove cancellation.
+Reconcile a mutation's outcome before resubmitting it. Once admitted, its charge
+remains and existing operation ownership applies.
+
+Managed override updates reforecast affected pending requests without extending
+their deadlines. Runtime publication, including reload and imported-catalog
+replacement, cancels pending admission; already-admitted operations retain their
+existing snapshot behavior. Failed reloads leave requests unchanged. Limiter
+history is held in memory per broker process and survives reloads. When the effective window
 length for a key changes, that key's history resets; when only `requests`
 changes, the existing history is evaluated against the new value.
 
@@ -2067,8 +2115,11 @@ Validation:
 - `requests` is an integer from 1 to 1,000,000.
 - `window` uses the broker duration syntax (`s`, `m`, `h`, `d`) and must be
   from `1s` to `1d` inclusive.
-- `services.<service>` keys must be configured services (provider kinds and
-  gateway names).
+- `max_wait` accepts nonnegative whole-second durations in `s`, `m`, `h`, or
+  `d` syntax, within representable duration/deadline bounds. It may exceed the
+  rate window or a transport deadline; the request's remaining deadline wins.
+- `services.<service>` keys must be configured native, imported or gateway
+  service names.
 - `principal_overrides` is rejected unless `identity.authority = "toml"`. Each
   entry must name a configured static principal (or `anonymous`) and a
   configured service; duplicate `(principal, service)` pairs are rejected.
@@ -2116,7 +2167,12 @@ spec, and management traffic does not consume it.
 HTTP admission acquires the global concurrency permit before body extraction
 or identity lookup and shares it with the handler and any supervised operation.
 Health/readiness probes and bodiless portal asset reads bypass this admission;
-downstream HTTP MCP has independent admission. Anonymous control-plane body reads
+downstream HTTP MCP has independent admission. Matched single-service detail
+`GET`/`HEAD /v1/services/{service}` also uses an independent pool, with the same
+configured global/principal caps and separate counters retained through delivery.
+Its assembly is bounded by the smaller of `request_body_timeout_ms` and 15 seconds
+from ingress. These caps are not a universal bound on every HTTP request.
+Anonymous control-plane body reads
 also use a pool capped at `max(1, max_concurrent_requests / 4)` and a per-source
 slot capped by `max_concurrent_requests_per_principal`, released when the body
 finishes. Source grouping matches the authentication budget. Verified management
@@ -2144,7 +2200,7 @@ use `request_body_timeout_ms` directly (five minutes by default). All total
 receive deadlines start at admission and progress does not reset them. Public
 body idle timing uses `streaming_idle_timeout_ms`; Git retains its matched
 gateway idle setting and byte-limit reason codes. Control-plane receive timeouts
-return HTTP 408 with an explicit deadline message. Invoke timeouts retain
+return HTTP 408 with an explicit deadline message. Invoke timeouts retain HTTP 400
 `body_malformed` with a distinct deadline message; Git retains its timeout reasons.
 Downstream HTTP MCP uses its own configured intake limits.
 
@@ -2292,6 +2348,7 @@ The `agent-access` CLI reads a separate `CliConfig` file (sample:
 ```toml
 [service]
 url = "http://127.0.0.1:8787"   # default
+request_timeout_ms = 30000     # default; positive milliseconds
 
 [service.tls]
 verify_certificates = true      # default
@@ -2313,6 +2370,11 @@ output_format = "json"                     # json | markdown
 
 - `service.url` must use the `http`, `https`, or `unix` scheme. A non-local
   `http` URL is rejected unless `identity.disabled` is `true`.
+- `service.request_timeout_ms` must be positive and representable as a deadline.
+  It bounds the total JSON/upload request and the download send/header phase,
+  for CLI and local stdio MCP. Download response-body idle timeout remains
+  30 seconds. There is no flag or environment override and no automatic timeout
+  negotiation; allow rate waiting plus useful execution within client/proxy limits.
 - `service.tls.verify_certificates` defaults to `true`. With verification
   enabled, the CLI keeps rustls certificate-chain and hostname verification and
   adds any parsed `service.tls.additional_ca_cert_files` certificates to the

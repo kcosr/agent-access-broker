@@ -236,7 +236,9 @@ Sensitive output markers remain advisory in both transports.
 
 Explicit cancellation before provider dispatch prevents execution. Session closure,
 including at shutdown, and reload do not synthesize explicit cancellation for
-already admitted work.
+already admitted work. Runtime publication and shutdown do remove pending rate
+admission without dispatch; ordinary session preservation does not preserve a
+queued call across publication.
 Once dispatched, execution and audit remain owned by the broker until completion or the bounded
 deadline; losing the HTTP response does not prove a mutation failed. An oversized
 result returns `mcp_response_too_large` with correlation IDs, broker outcome,
@@ -532,7 +534,17 @@ idempotent helpers.
 | `resource_access_describe` | Required `service`; optional `action`, `resourceType`, `prefix`, `limit`, `cursor` | `{service,executionContext,availability,coverageSemantics:"single_target",access:[...],registeredResources:{source:"broker_configuration",items:[...],nextCursor},liveListings?:[{service,action,resourceType}]}` |
 | `actions_list` | Required `service`; optional `resource`, `resourceType`, `prefix` | `{service,resource?,actions:[names]}` |
 | `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool` |
-| `services_describe` | Required `service` | Complete service capabilities and action schemas |
+| `services_describe` | Required `service` | Complete service capabilities, action schemas and authenticated caller limits |
+
+`services_describe` includes [live service limits](http-api.md#live-service-limits)
+on both transports, including service-scoped connections. Its process-local
+observations describe this principal's effective rate, FIFO queue and shared
+request occupancy; they reserve nothing. Anonymous detail omits `limits`, and
+`services_list`/`tools/list` stay static. Describe retains independent bounded
+capacity when invocation slots are full. Scoped stdio `services_describe` uses
+that detail directly, requiring an authenticated, visible invoke service with
+`scopedMcpReady: true`; it does not require a separate catalog request. Other
+scoped helpers and provider calls retain their catalog admission.
 
 Start with `services_list` when the service is unknown. Use
 `resource_access_describe` to see effective local access by action and resource
@@ -737,12 +749,16 @@ uploads have a combined 512 MiB limit. Downloads use the Broker's configured
 Use `requestFile` for requests that would exceed the frame limit after JSON
 escaping. Broker/provider upload limits can be lower.
 
-JSON requests and multipart uploads inherit the CLI's 30-second total HTTP
-deadline, including upload transmission and the broker's response. The 512 MiB
-upload cap is a size ceiling, not a guarantee that a transfer of that size will
-finish before the deadline. Downloads instead allow 30 seconds for response
-headers and a 30-second idle timeout while reading the body. A timed-out mutation
-may have completed upstream; inspect its state before retrying.
+JSON requests and multipart uploads use the CLI's `[service].request_timeout_ms`
+(default `30000`) for the whole HTTP request, including upload transmission,
+Broker rate waiting and response. The 512 MiB upload cap is a size ceiling, not a
+promise of completion before the deadline. Downloads use that setting for the
+send/header phase and retain a separate 30-second body idle timeout. Compare
+`services_describe`'s `maxWaitSeconds` with client/proxy timeouts and allow useful
+execution time. No automatic timeout negotiation or retry occurs.
+
+A timed-out request may still be queued or executing because close detection can
+be delayed. Reconcile a mutation's outcome before resubmitting it.
 
 An oversized incoming MCP frame ends the stdio session with a non-zero exit;
 the client must restart the process. This bounds input buffering even for an
@@ -789,7 +805,29 @@ boundary.
 
 ### Rate limits
 
-A tool call rejected with HTTP 429 is a tool error. For `rate_limited` (a
+Optional Broker `max_wait` holds the same tool call in a FIFO queue for its
+principal/service before execution. Waiting retains existing request/response
+slots and consumes no rate unit until admission. HTTP MCP waiting and execution
+share one absolute operation deadline; REST-backed stdio uses its configured
+HTTP timeout and the Broker's existing ingress deadline. Do not resubmit calls
+that remain pending.
+
+If the absolute deadline is already elapsed during initial admission, before a
+rate grant or queue insertion, HTTP MCP returns a tool error with
+`operation_timeout`, `executionState: "not_dispatched"`, `retrySafe: true` and
+`deadlineKind: "operation"` in the original action's result and audit.
+The underlying Broker status is 504; native HTTP MCP retains HTTP 200 JSON-RPC
+tool-error delivery. REST-backed stdio preserves `body_malformed` (HTTP 400)
+with the same proof and
+`deadlineKind: "body"`. The outcome is the same before, during or just after the
+initial rate-settings read and consumes no rate unit. An actually queued deadline
+expiry or a future FIFO turn that cannot fit still produces the existing
+`rate_limited` tool error (Broker status 429). Only the correlated complete proof
+establishes no dispatch; timeouts without it remain uncertain. It does not
+guarantee unchanged access or
+configuration for a later attempt, and neither transport retries automatically.
+
+A tool call rejected with Broker status 429 is a tool error. For `rate_limited` (a
 Broker limit on how often you may invoke the service) and
 `upstream_rate_limited` (the upstream service throttled the request), both the
 local stdio adapter and the Broker's HTTP MCP endpoint make the tool error's
@@ -808,13 +846,20 @@ before retrying, and must not retry in a loop. A validated, correlated
 `broker/request.admit` tuple proves the request was not dispatched. An upstream rate limit
 never claims that: a multi-step action may already have completed earlier
 upstream calls, so inspect any reported outcome (such as `mutationStatus`)
-first. On `concurrency_limited`, wait for your in-flight requests to finish.
-Neither transport retries automatically.
+first. Retry timing honors accepted waiters. On `concurrency_limited`, wait for
+capacity without resubmitting in-flight requests, including rate waiters; this
+rejection has no `Retry-After`. Neither transport retries automatically.
 
-Cancellation stops awaiting the request and drops its HTTP operation. It does
-not guarantee rollback of an upstream mutation. No mutation is automatically
-retried; inspect the broker result/audit or upstream state before retrying an
-uncertain operation. Closing stdin ends the server; diagnostics use stderr.
+Stdio cancellation drops its local HTTP future. The Broker removes pending rate
+admission without a charge or dispatch when it observes abandonment; HTTP MCP
+explicit cancellation reaches its admission owner directly. Observed cancellation
+before admission returns `operation_cancelled` with `executionState:
+"not_dispatched"` and `retrySafe: true`. Runtime publication and shutdown likewise
+cancel pending admission. Connection loss detection can be delayed, so local
+cancellation or timeout alone does not prove that outcome. After admission,
+existing operation ownership and explicit-cancellation dispatch checks apply;
+delivery loss does not roll back a mutation. Reconcile an uncertain outcome
+before retrying. Closing stdin ends the server; diagnostics use stderr.
 
 ## Validation
 

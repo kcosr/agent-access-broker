@@ -269,7 +269,11 @@ metadata; it does not replace health or readiness checks.
 
 Surfaces use the broker's canonical `invoke` or `gateway` spelling. Action names replace counts. `--verbose` returns an unwrapped array of
 complete service objects, including action schemas. `services describe SERVICE`
-returns one complete service object. An empty compact list is `{"services":[]}`.
+returns one complete service object, including authenticated callers' effective
+`limits`, FIFO queue/rate observations and shared request occupancy in JSON and
+text output. Observations are process-local estimates, not reservations; anonymous
+detail omits them. Lists remain static. See [live service limits](http-api.md#live-service-limits).
+An empty compact list is `{"services":[]}`.
 `availability` reports local credential readiness. Missing or unusable credentials
 hide actions, schemas, resources and coverage; an authorized service remains with
 empty actions and safe setup requirements. Partial services retain only usable
@@ -819,7 +823,9 @@ the same effective group.
   1,000,000) and the window (1s to 1d). These commands require managed
   identity authority; TOML deployments configure
   `[[limits.invocations.principal_overrides]]`. Changes apply to the
-  principal's next counted request.
+  principal's next counted request and reforecast pending waiters without
+  extending deadlines. These overrides select requests/window only; service or
+  default `max_wait` still applies independently.
 
   ```sh
   agent-access admin principals service-limits list alice
@@ -1280,8 +1286,9 @@ The CLI maps the broker's HTTP status to a process exit code via
 | everything else | `1` |
 
 HTTP 429 covers the Broker's own `rate_limited`, the upstream service's
-`upstream_rate_limited`, and `concurrency_limited`. Exit `7` means "wait, then
-try again"; it is separate from `5`, which reports 503 and network failures.
+`upstream_rate_limited`, and `concurrency_limited`. Exit `7` reports throttling;
+inspect retry guidance and mutation outcomes before retrying. It is separate
+from `5`, which reports 503 and network failures.
 
 For `rate_limited` and `upstream_rate_limited`, the CLI also writes the Broker's
 message to stderr as one line prefixed `rate limited: `, for example:
@@ -1301,8 +1308,11 @@ destination untouched. Broker admission limits use the reserved
 nonapplication. The error message reports the wait. Upstream failures may carry
 `result.retryAfterSeconds` and `result.retryAt` when known. The CLI never
 retries automatically; wait before running the command again, and do not retry
-in a loop. `concurrency_limited` prints no extra line: wait for your in-flight
-requests to finish.
+in a loop. Optional Broker waiting holds the original request open; do not
+resubmit pending calls. Retry guidance accounts for this principal/service's
+accepted FIFO queue. `concurrency_limited` prints no extra line and has no
+`Retry-After`: waiting calls can occupy existing slots across services, so wait
+for capacity without duplicating them.
 
 In addition to HTTP-derived codes:
 
@@ -1374,14 +1384,32 @@ only.
 
 ## Outbound request construction and timeouts
 
+Set the client timeout to allow Broker rate waiting plus useful execution and
+transfer time, within any proxy timeout. `services describe SERVICE` reports
+configured `limits.invocations.maxWaitSeconds`; it is optional guidance, not a
+required preflight. A shorter server operation/body deadline can still win.
+Timeouts during invocation mean the Broker request may still be queued or
+executing: detecting a closed connection can be delayed. Reconcile a mutation
+through its response/audit or an authorized upstream read before resubmitting it.
+The CLI never retries automatically.
+
+A correlated HTTP 400 `body_malformed` result with `executionState:
+"not_dispatched"`, `retrySafe: true` and `deadlineKind: "body"` proves the
+initial admission deadline expired without dispatch. Queued expiry and infeasible
+future FIFO turns still return 429. See [admission outcomes](http-api.md#rate-limits);
+the status/reason alone proves nothing about application, and a later attempt
+still needs current identity, configuration and authorization.
+
 - Every request sets `X-Agent-Access-Request-Id` to a fresh UUID v4.
 - If a token resolved, it is placed in the configured identity header as
   `Bearer <token>` when the scheme is exactly `Bearer`, otherwise as the raw
   token value.
-- The standard HTTP client uses a 30-second overall timeout.
-- Streaming downloads use a client with no overall timeout; the request send is
-  bounded by the same 30-second request timeout, and each streamed chunk read is
-  bounded by a 30-second idle timeout (a stalled stream aborts).
+- `[service].request_timeout_ms` sets the total JSON/upload HTTP timeout and
+  defaults to `30000`. It must be positive and representable. It applies to CLI
+  and local stdio MCP and has no flag or environment override.
+- Streaming downloads use a client with no overall timeout; their send/header
+  phase uses `request_timeout_ms`, while response-body reads retain the separate
+  30-second idle timeout (a stalled stream aborts).
 - The CLI validates the broker response JSON shape per the expected
   `ResponseShape`:
   - `Array` — a JSON array.

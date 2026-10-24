@@ -907,15 +907,22 @@ Agent Access Broker applies these controls in the request path:
 - **Operational limits**: request body caps, upstream response caps,
   concurrency/rate limits, timeouts, health, and readiness checks bound runtime
   behavior. Service invocations (invoke, HTTP MCP action tools, and Git pack
-  transfers) are rate limited per principal and service, so one agent cannot
-  exhaust an upstream service's budget for others and principals sharing an
-  ingress address (such as a shared proxy) never lock each other out. Discovery,
+  transfers) are rate limited per principal and service across tokens and
+  transports. Principals sharing an ingress address have independent invocation
+  windows; there is no aggregate service quota protecting a shared upstream
+  budget. Optional FIFO waiting retains existing request slots, so waiting calls
+  can still exhaust shared concurrency. Discovery,
   specs, and management are not rate limited; authentication abuse,
   anonymous traffic, and invalid credentials use independent source and
   principal budgets. The count is taken before policy, credential, or upstream
   work, and rate limits never bypass authorization, CSRF checks, or concurrency
   guards. Limits are process-local and bound request admission, not upstream
-  call volume within one admitted request.
+  call volume within one admitted request. Observed cancellation before rate
+  admission removes a waiter without dispatch; unobserved connection loss may
+  leave it eligible to run. Client timeouts therefore require outcome
+  reconciliation before retrying mutations. Caller-filtered service detail
+  exposes only the caller's local rate/queue state and approximate shared
+  occupancy, omitting anonymous live limits and other principals' usage.
 
 ## Complementary egress and content screening
 

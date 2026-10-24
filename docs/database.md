@@ -976,15 +976,19 @@ overrides. Each row is keyed by `(principal_id, service)` and stores
 `requests` (1 to 1,000,000), `window_seconds` (1 to 86,400), and
 created/updated actor and RFC 3339 timestamp fields; an update keeps the
 creation fields. The principal foreign key cascades, so overrides are deleted
-with their principal. Rows apply to every principal kind and status.
+with their principal. Rows apply to every principal kind and status. They store
+only the rate pair; `max_wait` resolves independently from service/default TOML.
+Rate history and pending requests remain in process memory, with no persistent
+queue or per-principal waiting column.
 
 The store does not know configured services: writers (the
 [admin service-limit routes](http-api.md#per-principal-overrides)) accept an
 override only for a configured service, while rows for a service later removed from config
 stay stored but dormant and apply again if the service returns. With
-`identity.authority = "managed"`, each counted invocation reads the caller's
-row by primary key, so an upsert or delete applies to the next request without
-a reload. With TOML identity authority the table is not consulted; overrides
+`identity.authority = "managed"`, effective settings are resolved from the caller's
+row by primary key under a settings revision fence. An upsert or delete applies
+to new requests and reforecasts affected pending requests without a reload or
+deadline extension. With TOML identity authority the table is not consulted; overrides
 come from `[[limits.invocations.principal_overrides]]`.
 
 ## Delegated OAuth state

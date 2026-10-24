@@ -141,6 +141,39 @@ fn home_expansion_helper_fails_when_home_is_missing() {
 }
 
 #[test]
+fn cli_request_timeout_defaults_and_configured_values() {
+    assert_eq!(CliConfig::default().service.request_timeout_ms, 30_000);
+    for source in ["", "[service]\nurl = 'http://127.0.0.1:8787'"] {
+        let config: CliConfig = toml::from_str(source).unwrap();
+        assert_eq!(config.service.request_timeout_ms, 30_000);
+        validate_cli_config(&config).unwrap();
+    }
+    for timeout in [1, 45_000, 120_000] {
+        let config: CliConfig =
+            toml::from_str(&format!("[service]\nrequest_timeout_ms = {timeout}")).unwrap();
+        assert_eq!(config.service.request_timeout_ms, timeout);
+        validate_cli_config(&config).unwrap();
+    }
+}
+
+#[test]
+fn cli_request_timeout_rejects_zero_and_invalid_values() {
+    let config: CliConfig = toml::from_str("[service]\nrequest_timeout_ms = 0").unwrap();
+    assert_contains(
+        &validation_errors(validate_cli_config(&config)),
+        "service.request_timeout_ms must be non-zero",
+    );
+    for value in ["-1", "1.5", "'30s'", "18446744073709551616"] {
+        assert!(
+            toml::from_str::<CliConfig>(&format!("[service]\nrequest_timeout_ms = {value}"))
+                .is_err(),
+            "accepted {value}"
+        );
+    }
+    assert!(toml::from_str::<CliConfig>("[service]\nrequest_timeout = 30000").is_err());
+}
+
+#[test]
 fn cli_tls_config_defaults_to_verified_default_roots() {
     let config: CliConfig = toml::from_str(
         r#"
@@ -191,6 +224,7 @@ fn cli_tls_config_rejects_empty_certificate_paths_in_both_modes() {
         let config = CliConfig {
             service: CliServiceConfig {
                 url: "https://broker.example".to_string(),
+                request_timeout_ms: 30_000,
                 tls: CliTlsConfig {
                     verify_certificates,
                     additional_ca_cert_files: vec!["  ".to_string()],
@@ -5389,7 +5423,8 @@ fn authentication_rate_limits_default_independently_of_invocation_limits() {
         limits.invocations.default,
         Some(InvocationLimitConfig {
             requests: 7,
-            window: "30s".into()
+            window: "30s".into(),
+            max_wait: None,
         })
     );
     assert_eq!(limits.auth_requests_per_principal_per_minute, 100);
@@ -5526,6 +5561,7 @@ fn invocation_limits_validate_values_services_and_overrides() {
     let limit = |requests: u64, window: &str| InvocationLimitConfig {
         requests,
         window: window.into(),
+        max_wait: None,
     };
     let entry = |principal: &str, service: &str| PrincipalInvocationLimitConfig {
         principal: principal.into(),

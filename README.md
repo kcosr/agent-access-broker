@@ -16,6 +16,12 @@ Agents can use individual user accounts or shared service accounts, with
 organization-level policy limiting permitted actions and supported resource
 scopes. Upstream permissions and token scopes continue to apply, while the broker
 adds further restrictions, audit logging, rate limiting, and attribution.
+[Invocation limits](docs/configuration.md#service-invocation-limits) can hold a
+request in a bounded FIFO wait before execution. Existing service describe
+commands expose the caller's effective limits and live process-local capacity;
+see [live service limits](docs/http-api.md#live-service-limits).
+Imported services use the same TOML wait policy alongside their managed rate
+settings; see [import operator setup](docs/imported-services.md#operator-setup).
 
 This setup works best with organization-managed execution environments or network
 egress controls that limit direct access to upstream services. Through its

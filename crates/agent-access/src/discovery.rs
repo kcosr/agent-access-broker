@@ -299,6 +299,7 @@ mod tests {
     fn settings(server: &MockServer) -> crate::ResolvedCliSettings {
         crate::ResolvedCliSettings {
             url: server.uri(),
+            request_timeout_ms: 30_000,
             tls: Default::default(),
             token: Some("discovery-token".into()),
             token_from_literal_arg: false,

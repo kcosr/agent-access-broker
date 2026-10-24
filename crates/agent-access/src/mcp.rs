@@ -362,6 +362,7 @@ mod tests {
     fn rejected_transport_explains_https_and_development_override_without_secrets() {
         let settings = crate::ResolvedCliSettings {
             url: "http://broker.example.test".into(),
+            request_timeout_ms: 30_000,
             tls: Default::default(),
             token: Some("private-token-marker".into()),
             token_from_literal_arg: false,

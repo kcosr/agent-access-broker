@@ -1434,14 +1434,15 @@
             <tr><td>Service invocations</td><td>One principal on one service, across that principal's tokens, clients and source addresses</td></tr>
             <tr><td>Login attempts</td><td>One user from one source address (local password sign-in and password change)</td></tr>
             <tr><td>Authentication traffic</td><td>One source address: sign-in attempts and requests that fail authentication</td></tr>
-            <tr><td>Concurrency</td><td>Requests currently running for one principal</td></tr>
-            <tr><td>Concurrency</td><td>Requests currently running across the broker instance</td></tr>
+            <tr><td>Concurrency</td><td>Shared request slots held by one principal, including rate waiters</td></tr>
+            <tr><td>Concurrency</td><td>Shared request slots held across the broker instance, including rate waiters</td></tr>
           </tbody>
         </table>
         <ul class="list" style="margin-top:16px">
           <li><b>What counts.</b> Only requests that invoke a backend: <code>POST /v1/invoke</code>, MCP action tool calls and Git pack requests (a protocol v2 fetch or clone sends two or more). Discovery, specs, management and MCP protocol traffic are not counted, and each request counts once however many upstream calls it makes.</li>
           <li><b>Limit values.</b> Configuration sets a default and optional per-service limits. Administrators can override one principal's limit for a service in the portal, CLI or admin API, and users see their own limits on their Account page. Changing tokens or machines does not reset a principal's allowance; principals behind one proxy address are counted separately.</li>
-          <li><b>Rejections.</b> A rate-limited request is not executed. The broker returns <code>429 rate_limited</code> with <code>Retry-After</code>, the limit and the exact retry time, so agents wait instead of looping; the CLI exits with code 7. Throttling by an upstream service is reported separately as <code>upstream_rate_limited</code> with the upstream's wait, except after a write has already been applied, which is reported as an unverified write that must not be retried.</li>
+          <li><b>Waiting and discovery.</b> Optional <code>max_wait</code> holds a request in FIFO order within existing request capacity; the default is immediate refusal. Service describe reports the caller's effective rate, pending count and estimated next admission without reserving capacity. Its separate bounded capacity remains available when invocation slots fill. Client timeouts can leave requests queued or executing; reconcile a mutation before resubmitting it.</li>
+          <li><b>Rejections.</b> A rate-limited request is not executed. The broker returns <code>429 rate_limited</code> with <code>Retry-After</code>, the limit and an estimated retry time after accepted waiters, so agents wait without duplicating pending calls; the CLI exits with code 7. Throttling by an upstream service is reported separately as <code>upstream_rate_limited</code> with the upstream's wait, except after a write has already been applied, which is reported as an unverified write that must not be retried.</li>
           <li><b>Login protection.</b> Failed local passwords lock a user out from one source address (IPv6 grouped by /64) for the lockout period without affecting other addresses. Beyond 256 failing addresses for one user, further addresses share a single counter.</li>
           <li><b>Counter scope.</b> Counters are maintained per broker instance and are not shared across replicas. Invocation limits use a rolling window; authentication limits use fixed 60-second windows.</li>
         </ul>

@@ -6,6 +6,8 @@ mod import_commands;
 mod mcp;
 mod output;
 #[cfg(test)]
+mod request_timeout_tests;
+#[cfg(test)]
 use agent_access_core::ExitPolicy;
 use agent_access_core::imports::ImportedCredentialInputPolicy;
 use agent_access_core::{
@@ -43,7 +45,7 @@ mod resource_commands;
 use audit_commands::{AdminAuditCommand, AuditCommand};
 use resource_commands::{ResourceGroupsCommand, ResourcesCommand};
 
-const CLI_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const INVOCATION_TIMEOUT_MESSAGE: &str = "broker request timed out; the Broker request may still be queued or executing; do not resubmit a mutation without reconciling its outcome";
 const CLI_STREAMING_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const NORMALIZED_CONTENT_FILE_MAX_BYTES: u64 = 536_870_912;
 const NORMALIZED_CONTENT_FILE_HELP: &str = "Read normalized rich content from PATH (maximum 512 MiB / 536870912 bytes; provider and server limits may be lower; '-' is a literal path, not stdin)";
@@ -15831,9 +15833,9 @@ async fn send_invoke_multipart(
         .multipart(form)
         .send()
         .await
-        .context("broker request failed")
+        .map_err(|error| invocation_request_error(error, "broker request failed"))
         .map_err(DeferredCliError::remote)?;
-    response_value(response, ResponseShape::Envelope).await
+    invocation_response_value(response).await
 }
 
 fn read_json_file(path: &Path) -> serde_json::Value {
@@ -16332,9 +16334,9 @@ async fn send_invoke_parts_with_options(
         })
         .send()
         .await
-        .context("broker request failed")
+        .map_err(|error| invocation_request_error(error, "broker request failed"))
         .map_err(DeferredCliError::remote)?;
-    response_value(response, ResponseShape::Envelope).await
+    invocation_response_value(response).await
 }
 
 async fn send_download_parts(
@@ -16356,7 +16358,7 @@ async fn send_download_parts(
     let client = streaming_http_client(resolved)
         .map_err(|error| DownloadResponseError::Local(DeferredCliError::input(error).into()))?;
     let response = tokio::time::timeout(
-        CLI_REQUEST_TIMEOUT,
+        resolved.request_timeout(),
         request_builder(client.post(endpoint), resolved)
             .header("Accept", "application/octet-stream")
             .json(&InvokeRequest {
@@ -16368,9 +16370,9 @@ async fn send_download_parts(
             .send(),
     )
     .await
-    .context("broker request timed out")
+    .map_err(|_| anyhow::anyhow!(INVOCATION_TIMEOUT_MESSAGE))
     .map_err(DownloadResponseError::Remote)?
-    .context("broker request failed")
+    .map_err(|error| invocation_request_error(error, "broker request failed"))
     .map_err(DownloadResponseError::Remote)?;
     download_response_value(
         response,
@@ -16383,7 +16385,7 @@ async fn send_download_parts(
 }
 
 fn http_client(settings: &ResolvedCliSettings) -> Result<reqwest::Client> {
-    let builder = reqwest::Client::builder().timeout(CLI_REQUEST_TIMEOUT);
+    let builder = reqwest::Client::builder().timeout(settings.request_timeout());
     build_http_client(builder, &settings.tls)
 }
 
@@ -16665,16 +16667,49 @@ fn reject_broker_redirect(response: &reqwest::Response) -> Result<()> {
     Ok(())
 }
 
+fn invocation_request_error(error: reqwest::Error, fallback: &'static str) -> anyhow::Error {
+    if error.is_timeout() {
+        anyhow::anyhow!(INVOCATION_TIMEOUT_MESSAGE)
+    } else {
+        anyhow::Error::new(error).context(fallback)
+    }
+}
+
+async fn invocation_response_value(
+    response: reqwest::Response,
+) -> Result<(u16, serde_json::Value)> {
+    response_value_with_timeout_message(
+        response,
+        ResponseShape::Envelope,
+        INVOCATION_TIMEOUT_MESSAGE,
+    )
+    .await
+}
+
 async fn response_value(
     response: reqwest::Response,
     shape: ResponseShape,
+) -> Result<(u16, serde_json::Value)> {
+    response_value_with_timeout_message(response, shape, "failed to read broker response").await
+}
+
+async fn response_value_with_timeout_message(
+    response: reqwest::Response,
+    shape: ResponseShape,
+    timeout_message: &'static str,
 ) -> Result<(u16, serde_json::Value)> {
     reject_broker_redirect(&response)?;
     let status = response.status().as_u16();
     let body = response
         .text()
         .await
-        .context("failed to read broker response")
+        .map_err(|error| {
+            if error.is_timeout() {
+                anyhow::anyhow!(timeout_message)
+            } else {
+                anyhow::Error::new(error).context("failed to read broker response")
+            }
+        })
         .map_err(DeferredCliError::remote)?;
     let value =
         serde_json::from_str::<serde_json::Value>(&body).map_err(DeferredCliError::malformed)?;
@@ -17066,6 +17101,7 @@ fn require_cli_input<T>(result: Result<T>) -> T {
 #[derive(Debug)]
 struct ResolvedCliSettings {
     url: String,
+    request_timeout_ms: u64,
     tls: CliTlsConfig,
     token: Option<String>,
     token_from_literal_arg: bool,
@@ -17074,6 +17110,12 @@ struct ResolvedCliSettings {
     allow_insecure_broker_http: bool,
     read_content_format: ReadContentFormat,
     output_format: ResponseFormat,
+}
+
+impl ResolvedCliSettings {
+    fn request_timeout(&self) -> Duration {
+        Duration::from_millis(self.request_timeout_ms)
+    }
 }
 
 fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliSettings> {
@@ -17127,6 +17169,7 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
 
     let resolved = ResolvedCliSettings {
         url,
+        request_timeout_ms: config.service.request_timeout_ms,
         tls,
         token,
         token_from_literal_arg,
@@ -17139,6 +17182,7 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
     validate_cli_config(&CliConfig {
         service: agent_access_core::CliServiceConfig {
             url: resolved.url.clone(),
+            request_timeout_ms: resolved.request_timeout_ms,
             tls: resolved.tls.clone(),
         },
         identity: agent_access_core::CliIdentityConfig {
@@ -19034,6 +19078,7 @@ mod tests {
     ) -> ResolvedCliSettings {
         ResolvedCliSettings {
             url: "http://127.0.0.1:8787".to_string(),
+            request_timeout_ms: 30_000,
             tls: CliTlsConfig::default(),
             token: None,
             token_from_literal_arg: false,
@@ -23105,6 +23150,7 @@ upload_spool_dir = "upload-spool"
     fn send_rejects_literal_token_for_management_routes() {
         let settings = ResolvedCliSettings {
             url: "http://127.0.0.1:8787".to_string(),
+            request_timeout_ms: 30_000,
             tls: CliTlsConfig::default(),
             token: Some("literal".to_string()),
             token_from_literal_arg: true,

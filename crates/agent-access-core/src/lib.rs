@@ -1454,6 +1454,9 @@ pub struct CliDefaultsConfig {
 pub struct CliServiceConfig {
     #[serde(default = "default_broker_url")]
     pub url: String,
+    /// Total JSON/upload HTTP deadline; send/header deadline for downloads.
+    #[serde(default = "default_cli_request_timeout_ms")]
+    pub request_timeout_ms: u64,
     #[serde(default)]
     pub tls: CliTlsConfig,
 }
@@ -1462,9 +1465,14 @@ impl Default for CliServiceConfig {
     fn default() -> Self {
         Self {
             url: default_broker_url(),
+            request_timeout_ms: default_cli_request_timeout_ms(),
             tls: CliTlsConfig::default(),
         }
     }
+}
+
+fn default_cli_request_timeout_ms() -> u64 {
+    30_000
 }
 
 fn default_broker_url() -> String {
@@ -1816,6 +1824,16 @@ pub fn validate_cli_config(config: &CliConfig) -> Result<(), ConfigError> {
             }
         }
         Err(_) => errors.push("service.url must be a valid URL".to_string()),
+    }
+    if config.service.request_timeout_ms == 0 {
+        errors.push("service.request_timeout_ms must be non-zero".to_string());
+    } else if std::time::Instant::now()
+        .checked_add(std::time::Duration::from_millis(
+            config.service.request_timeout_ms,
+        ))
+        .is_none()
+    {
+        errors.push("service.request_timeout_ms exceeds the supported deadline range".to_string());
     }
     validate_cli_tls_config(&config.service.tls, &mut errors);
     validate_header_name("identity.header", &config.identity.header, &mut errors);

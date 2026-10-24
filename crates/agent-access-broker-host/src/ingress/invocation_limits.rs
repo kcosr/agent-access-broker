@@ -18,7 +18,11 @@ use agent_access_core::{InvocationLimit, InvocationRateLimited};
 use chrono::{DateTime, Duration as ChronoDuration, DurationRound, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
+
+mod scheduler;
+pub(crate) use scheduler::*;
 
 /// Sub-buckets per window.
 const SUB_BUCKETS: u64 = 60;
@@ -63,6 +67,7 @@ impl LimiterClock for SystemLimiterClock {
 pub(crate) struct InvocationLimiter {
     clock: Arc<dyn LimiterClock>,
     state: Mutex<LimiterState>,
+    instance_id: String,
 }
 
 #[derive(Default)]
@@ -72,8 +77,10 @@ struct LimiterState {
     key_count: usize,
     next_sweep_ns: u64,
     sweep_at_key_count: usize,
+    scheduler: scheduler::SchedulerState,
 }
 
+#[derive(Clone)]
 struct KeyWindow {
     window_ns: u64,
     /// Oldest first; at most [`SLOTS`] entries.
@@ -165,6 +172,7 @@ impl InvocationLimiter {
     pub(crate) fn with_clock(clock: Arc<dyn LimiterClock>) -> Self {
         Self {
             clock,
+            instance_id: uuid::Uuid::new_v4().to_string(),
             state: Mutex::new(LimiterState {
                 next_sweep_ns: duration_ns(SWEEP_INTERVAL),
                 sweep_at_key_count: MIN_SWEEP_KEYS,
@@ -177,6 +185,7 @@ impl InvocationLimiter {
     /// `limit`, or explains when one would be admitted. Only admitted requests
     /// are recorded. A key's history resets when its window length changes;
     /// a changed `requests` value is evaluated against the kept history.
+    #[cfg(test)]
     pub(crate) fn try_admit(
         &self,
         principal: &str,
@@ -205,6 +214,12 @@ impl InvocationLimiter {
             limit,
             retry_after_seconds,
             retry_at: retry_at(self.clock.wall(), retry_after_seconds),
+            max_wait_seconds: 0,
+            queued_requests: 0,
+            deadline_kind: agent_access_core::InvocationDeadlineKind::RateWait,
+            waited_milliseconds: 0,
+            remaining_wait_milliseconds: 0,
+            was_queued: false,
         })
     }
 
@@ -263,6 +278,7 @@ impl LimiterState {
             !services.is_empty()
         });
         self.key_count = self.keys.values().map(HashMap::len).sum();
+        self.scheduler.prune_settings(&self.keys);
         self.next_sweep_ns = now_ns.saturating_add(duration_ns(SWEEP_INTERVAL));
         self.sweep_at_key_count = self.key_count.saturating_mul(2).max(MIN_SWEEP_KEYS);
     }
@@ -276,7 +292,9 @@ fn duration_ns(duration: Duration) -> u64 {
 /// whole second so it is never earlier than the precise admission time.
 fn retry_at(now: DateTime<Utc>, retry_after_seconds: u64) -> DateTime<Utc> {
     let seconds = i64::try_from(retry_after_seconds).unwrap_or(i64::MAX);
-    let at = now + ChronoDuration::seconds(seconds);
+    let at = now
+        .checked_add_signed(ChronoDuration::seconds(seconds))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC);
     let floor = at.duration_trunc(ChronoDuration::seconds(1)).unwrap_or(at);
     if floor == at {
         at

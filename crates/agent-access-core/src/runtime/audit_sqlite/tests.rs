@@ -1255,6 +1255,7 @@ impl agent_access_provider::Provider for CountingProvider {
 
 fn supervised_context(agent_request_id: &str) -> GovernedOperationContext {
     GovernedOperationContext {
+        admission: None,
         operation: OperationContext {
             agent_request_id: agent_request_id.to_string(),
             broker_request_id: format!("{agent_request_id}-broker"),

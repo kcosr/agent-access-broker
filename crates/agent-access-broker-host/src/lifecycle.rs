@@ -259,6 +259,8 @@ pub(crate) struct Listening {
 /// How a completed shutdown drained.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DrainReport {
+    /// Pending-admission owners or retained identity reads still running.
+    pub(crate) unfinished_admissions: usize,
     /// Operations still unfinalized when the operation drain ended.
     pub(crate) unfinished_operations: usize,
     /// Command-import process supervisors that had not reaped their
@@ -613,6 +615,10 @@ async fn drain_lifecycle(
     // Nor does a membership renewal; those that have not submitted their
     // outcome write are cancelled and write nothing more.
     state.membership_renewals.close();
+    // Pending admission is never a background job. Stop grants immediately,
+    // then retain its owners through their terminal audit writes.
+    state.shared_invocations.close();
+    state.admission_owners.close();
     let operation_state = state.clone();
     let operation_budget =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or_default();
@@ -723,6 +729,12 @@ async fn drain_lifecycle(
         .await;
     let remaining =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);
+    let unfinished_admissions = state
+        .admission_owners
+        .drain(remaining.max(SHUTDOWN_DRAIN_FLOOR))
+        .await;
+    let remaining =
+        remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);
     let audit_error = match state.shutdown_audit(remaining).await {
         Ok(()) => None,
         Err(error) => {
@@ -735,6 +747,7 @@ async fn drain_lifecycle(
         return Err(error);
     }
     Ok(DrainReport {
+        unfinished_admissions,
         unfinished_operations,
         unfinished_command_processes,
         forced: timed_out || lifecycle_timed_out,
@@ -1741,6 +1754,7 @@ path="{}"
 
         assert_eq!(report.unfinished_command_processes, 0);
         assert_eq!(report.unfinished_operations, 0);
+        assert_eq!(report.unfinished_admissions, 0);
         assert!(!report.forced);
         for process in [first, second] {
             assert_eq!(process.kills.load(std::sync::atomic::Ordering::SeqCst), 1);

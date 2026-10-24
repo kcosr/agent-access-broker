@@ -1670,9 +1670,8 @@ async fn waiters_check_their_identity_again_after_the_wait() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-/// A sign-in or unlink during an in-flight renewal wins, and a reload
-/// discards the renewal's outcome; the waiting request then sees the
-/// current state.
+/// A sign-in or unlink during an in-flight renewal wins. A reload discards
+/// the renewal's outcome and cancels the old snapshot's unadmitted request.
 #[tokio::test]
 async fn sign_in_reload_and_unlink_during_a_renewal_supersede_it() {
     let f = fixture().await;
@@ -1732,7 +1731,15 @@ async fn sign_in_reload_and_unlink_during_a_renewal_supersede_it() {
     let attempted = f.renewal(&method).unwrap();
     f.broker.reload_config(&f.config).await;
     gate.add_permits(1);
-    assert_eq!(waiting.await.unwrap().status(), StatusCode::FORBIDDEN);
+    let response = waiting.await.unwrap();
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    let response = response_json(response).await;
+    assert_eq!(response["reasonCode"], "operation_cancelled", "{response}");
+    assert_eq!(
+        response["result"]["executionState"], "not_dispatched",
+        "{response}"
+    );
+    assert_eq!(response["result"]["retrySafe"], true, "{response}");
     f.state().membership_renewals.wait_idle().await;
     assert_eq!(f.renewal(&method).unwrap(), attempted);
     assert_eq!(f.valid_until(&method), LONG_AGO);

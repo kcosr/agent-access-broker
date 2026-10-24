@@ -47,6 +47,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 # The host's own integration tests use its test support.
 agent-access-broker-host = { path = ".", features = ["test-support"] }
 agent-access-atlassian = { path = "../agent-access-atlassian", features = ["test-support"] }

@@ -639,11 +639,15 @@ async fn gateway_body_admission_preserves_git_error_headers_and_cache_policy() {
     );
     assert!(response.headers().contains_key(BROKER_REQUEST_ID_HEADER));
     assert_eq!(response.headers()[CACHE_CONTROL], "private, no-store");
+    assert!(response.headers().get(RETRY_AFTER).is_none());
     let bytes = axum::body::to_bytes(response.into_body(), 1024)
         .await
         .unwrap();
     let body = std::str::from_utf8(&bytes).unwrap();
-    assert!(body.starts_with("concurrency limit exceeded"));
+    assert!(body.starts_with("This request was not queued or executed."));
+    assert!(body.contains("shared request concurrency limit of 1"));
+    assert!(body.contains("waiting for rate admission"));
+    assert!(body.contains("do not resend pending requests"));
     assert!(!body.contains("agentRequestId"));
 }
 
