@@ -381,7 +381,31 @@ pub(crate) async fn read_stdout<R: AsyncRead + Unpin>(
         if capture.overflowed {
             continue;
         }
-        if capture.bytes.len() + read > cap {
+        let needed = capture.bytes.len().checked_add(read);
+        let capacity_ready = needed.is_some_and(|needed| {
+            if needed > cap {
+                return false;
+            }
+            if needed > capture.bytes.capacity() {
+                // Explicit growth keeps capture capacity within the configured
+                // limit, rather than relying on Vec's implicit growth policy.
+                let capacity = capture
+                    .bytes
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(needed)
+                    .min(cap);
+                if capture
+                    .bytes
+                    .try_reserve_exact(capacity - capture.bytes.len())
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            capture.bytes.capacity() <= cap
+        });
+        if !capacity_ready {
             capture.overflowed = true;
             capture.bytes = Vec::new();
             if let Some(on_overflow) = on_overflow.take() {
@@ -421,6 +445,34 @@ pub(crate) async fn read_stderr<R: AsyncRead + Unpin>(mut pipe: R, capture: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn captured_capacity_stays_within_the_limit_and_overflow_discards_storage() {
+        for cap in [
+            1,
+            READ_CHUNK_BYTES - 1,
+            READ_CHUNK_BYTES + 1,
+            3 * READ_CHUNK_BYTES + 1,
+        ] {
+            let input = vec![42; cap];
+            let mut capture = StdoutCapture::default();
+            read_stdout(input.as_slice(), cap, &mut capture, || {
+                panic!("exact cap overflowed")
+            })
+            .await;
+            assert_eq!(capture.bytes, input);
+            assert!(capture.bytes.capacity() <= cap);
+            assert!(!capture.overflowed);
+
+            let oversized = vec![42; cap + 1];
+            let mut capture = StdoutCapture::default();
+            let mut called = false;
+            read_stdout(oversized.as_slice(), cap, &mut capture, || called = true).await;
+            assert!(called);
+            assert!(capture.overflowed);
+            assert_eq!(capture.bytes.capacity(), 0);
+        }
+    }
     use crate::supervisor::{SupervisionLimits, SupervisorHandle, Termination, start_command};
     use agent_access_core::imports::{CommandProcessFacts, CommandRegistry};
     use std::path::Path;

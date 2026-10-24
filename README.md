@@ -95,6 +95,11 @@ imports provide action-level authorization without resource or query
 containment. A command can declare resource types: the Broker checks resources
 named in an action's inputs before the command runs, and hands other actions
 the caller's grants to filter by.
+Commands can also declare file-download actions when the operator enables an
+explicit download byte cap. [`agent-access invoke --output`](docs/cli.md#save-action-results-to-a-file)
+saves native and imported downloads with size/hash verification, atomic local
+replacement and a metadata receipt. JSON `send` and local stdio MCP support the
+same downloads; HTTP MCP exposes their detail but excludes executable file tools.
 Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
 connections.
 

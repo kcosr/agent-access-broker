@@ -18,6 +18,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+#[cfg(unix)]
+#[path = "command_import_smoke/downloads.rs"]
+mod downloads;
+
 const SERVICE_TOKEN: &str = "svc-smoke-service-token";
 const PERSONAL_TOKEN: &str = "pat-smoke-personal-token";
 const WEBHOOK_SECRET: &str = "s3cr3t-smoke-webhook";

@@ -31,6 +31,7 @@ fn command_record(
         version: 1,
         actions: vec![ImportedActionRecord {
             definition: ImportedActionDefinition {
+                download: false,
                 action: "issue.view".into(),
                 source: json!({"name":"issue.view"}),
                 label: None,

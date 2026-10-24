@@ -42,6 +42,21 @@ describe("import review", () => {
     data.preview!.manifest.tools[0].definition.inputSchema = { type: "object", required: ["new"] };
     expect(importReviewRows(data)[0]).toMatchObject({ change: "Changed", selected: false, readOnly: false });
   });
+  test.each([[false, true], [true, false]])("download changes from %s to %s require review and grant confirmation", (before, after) => {
+    const data = fixture();
+    data.service.actions[0].definition.download = before;
+    data.preview!.manifest.tools[0].definition.download = after;
+    const rows = importReviewRows(data);
+    expect(rows[0]).toMatchObject({ change: "Changed", selected: false, readOnly: false });
+    rows[0].selected = true;
+    expect(affectedImportGrants(data, rows)).toEqual(["grant1"]);
+    expect(selectedImportActions(rows)[0]).toEqual({ source: { toolName: "read" }, action: "read", readOnly: false });
+  });
+  test("absent and false download flags preserve ordinary JSON review behavior", () => {
+    const data = fixture();
+    data.preview!.manifest.tools[0].definition.download = false;
+    expect(importReviewRows(data)[0]).toMatchObject({ change: "Unchanged", selected: true, readOnly: true });
+  });
   test("action mappings cannot collide with retained identities or rename accepted tools", () => {
     const data = fixture();
     const rows = importReviewRows(data);

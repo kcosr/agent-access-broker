@@ -1206,3 +1206,15 @@ command refuses for a resource outside your access arrives as
 locators when it applied the write, and `unknown` when the outcome is
 uncertain; never replay a write whose outcome is unknown. See
 `docs/command-imports.md`.
+
+For catalog-declared command downloads, send the ordinary JSON invocation with
+`Accept: application/octet-stream`. Success is raw file bytes; decode the bounded
+`X-Agent-Access-Result-Metadata` header for filename, content type, computed root
+`result.size` and `result.sha256`, and command metadata in `result.upstreamCommand`.
+Verify bytes before replacing a destination. Warnings can describe a valid partial
+export; a truncated transfer fails. An explicit command error remains an ordinary
+JSON error envelope. Never send local output paths or an encoding selector.
+Sensitive downloads carry `Cache-Control: no-store`; sensitivity does not redact
+receipt metadata. All raw downloads, native too, reject metadata headers over
+16,384 encoded bytes with `operation_failed`. HTTP MCP excludes executable
+download tools but still permits their action detail.

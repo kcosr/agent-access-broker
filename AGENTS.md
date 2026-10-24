@@ -122,7 +122,10 @@ actions and exposes typed wrappers for supported services.
   outcomes in compact receipts without exposing catalog-marked secrets.
   `--output` is a destination and
   `--output-format` is representation; preserve dedicated raw-download actions
-  and receipt metadata.
+  and receipt metadata. Generic `invoke --output` selects JSON versus raw bytes
+  from one fresh caller catalog; it must not retry after stale discovery.
+  Downloads preserve explicit mutation outcomes on local/transfer failure, and
+  native read headers alone never prove completed delivery.
 - When making changes, audit whether `README.md`, `docs/`, `skills/`, sample
   configs, `CHANGELOG.md`, and this `AGENTS.md` need updates. Update them in
   the same change when behavior, commands, config, architecture, security
@@ -310,7 +313,9 @@ continuations, CLI/send/HTTP and both MCP transports.
 
 The command import smoke (`command_import_smoke.rs`) is included in `cargo
 test`; it imports the reference command through the real `agent-access`
-binary and needs `python3`, whose absence fails it.
+binary and needs `python3`, whose absence fails it. Its `downloads.rs` module
+uses a separate synthetic command to exercise invoke/send/HTTP and a real
+stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 
 ## Layout
 
@@ -460,7 +465,9 @@ binary and needs `python3`, whose absence fails it.
   Unix process supervision (`run.rs`, `process.rs`,
   `supervisor.rs` with its process-control test double): one process group per
   run, the signal lock, `WNOWAIT` exit observation and the budget slot each
-  supervisor holds until it has reaped its process. Core keeps the per-command
+  supervisor holds until it has reaped its process. A download response worker
+  retains the same budget unit through validation/decode/hash, releasing it before
+  delivery. Core keeps the per-command
   budgets and live supervisors in `imports/command_registry.rs`, carried across
   runtime generations and closed by the shutdown drain; its dispatch step
   (`runtime/command_dispatch.rs`) takes a slot before the final checks, then
@@ -986,3 +993,17 @@ Empty imported drafts may change adapter settings/delivery only before actions
 are accepted. Such changes clear execution/discovery slots transactionally and
 require removal of existing personal credentials first; never carry stored
 authority to a new draft destination.
+
+Command downloads declare only `download: true`, with fixed base64 in the
+`agent-access-command/1` response and an explicit operator `max_download_bytes`;
+absence disables the capability. Keep ordinary JSON persisted bytes/hashes
+unchanged. Validate the flag through preview, acceptance, load and build; refresh
+quarantines output-kind changes. The output schema describes bounded `result`
+metadata only. Keep decoding in the command adapter, with checked decoded and
+envelope limits, and publish computed size/hash at the result root.
+Preserve the command budget through response workers within the original deadline,
+then release it before delivery; request permits must outlive every retained
+download byte owner. The common raw HTTP path owns the metadata-header cap and
+sensitive no-store behavior, for native downloads too. Never expose base64 or
+local paths in Broker metadata, audit or diagnostics. Download receipts deliberately
+retain bounded metadata despite sensitivity; do not describe that marker as redaction.

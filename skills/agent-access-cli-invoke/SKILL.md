@@ -206,15 +206,24 @@ made. The CLI applies the shared core invoke contract for these checks.
 ## Save an action result
 
 `--output PATH` saves the normal successful representation for catalog actions
-with JSON or multipart-upload responses, including writes. `--output-format`
+with JSON or multipart-upload responses, including writes, or raw bytes for a
+catalog-declared native or imported download. `--output-format`
 still chooses a supported format; `readOnly` classifies upstream effects only:
 
 ```bash
 agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --output issue.json
 agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --output-format markdown --output issue.md
+agent-access invoke jira.attachment.download --input-json '{"issue":"PROJ-123","attachmentId":"10055"}' --output report.pdf
 ```
 
-Omit `--output`, or use `--output -`, for normal stdout. File output returns a
+For JSON actions, omit `--output`, or use `--output -`, for normal stdout.
+Downloads require `--output`; relative paths are allowed. `--output -` verifies
+the file first, then writes only raw bytes to stdout, without a JSON receipt.
+An output invocation uses the fresh caller catalog to select the I/O contract;
+failed discovery or an unavailable action prevents dispatch. Unsupported explicit
+format conversions fail locally; ambient formatting defaults do not alter bytes.
+Never retry automatically after a stale-catalog error; refresh discovery first.
+File output returns a
 small receipt with `output.path`, `size`, `sha256`, `contentType`, and `sensitive`,
 plus correlation/status identifiers; it does not repeat the saved result.
 Sensitivity is catalog-declared, not discovered by scanning. The client writes
@@ -228,8 +237,10 @@ an upstream `applied_unverified` mutation retains that `operationStatus` in save
 receipts and failures. Inspect its compact reconciliation metadata rather than
 repeating it. Exit `1` alone does not establish whether a request was sent.
 Saving never changes bounds, pagination, grants, or the
-action: a bounded log read remains a chunk. Use dedicated typed downloads or
-`send` for full raw streams. Local paths are never forwarded to the broker.
+action: a bounded log read remains a chunk. Invoke the declared download action
+with `--output` for the file. Download receipts retain bounded Broker metadata;
+imported command files are marked sensitive and may include declared warnings.
+That marker does not redact metadata. Local paths are never forwarded to the broker.
 
 ## Jira
 
@@ -383,8 +394,8 @@ Inspect the exact action's caller-filtered `contentFormat.enum` rather than
 inferring support from a Broker version; comment write actions may be absent
 when native ADF is disabled by operator configuration.
 
-For attachment upload/download, prefer `agent-access-cli-send` because it
-handles file descriptors and stream outputs explicitly.
+For attachment uploads, use `agent-access-cli-send` for file descriptors.
+For downloads, invoke the catalog action with `--output`, or use a send output sink.
 
 Jira JSON is the default result representation. Use `--output-format` only
 when the catalog advertises `responseFormats`.
@@ -967,9 +978,9 @@ grants for logs and triggers. Do not automatically retry a trigger whose result
 reports `retrySafe: false`; check job and queue state first. Build parameters are not
 supported.
 `build.log.download`, `build.tests.download`, and `build.artifact.download`
-transfer raw bytes. Console logs are plain text and detailed test reports are JSON. Use the typed CLI download
-wrapper or `agent-access send` with an output sink for those actions rather than
-the JSON `invoke` command. The artifact download
+transfer raw bytes. Console logs are plain text and detailed test reports are JSON.
+Use `invoke --output`, the typed CLI download wrapper, or `agent-access send`
+with an output sink. The artifact download
 `artifactPath` input is the archived path from
 `build.artifact.list`.
 

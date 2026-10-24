@@ -266,6 +266,15 @@ metadata. Sensitivity follows declared catalog output markers, not content
 inspection. `output: {"type":"stdout"}` emits the normal payload only unless a
 separate `metadataOutput` is requested.
 
+Imported command downloads use the same `responseMode: "stream"` and required
+local output sink as native downloads. Do not put an output path or encoding
+selector in `inputs`. Their receipts include computed size/SHA-256, filename,
+content type and bounded metadata or warnings under `result.upstreamCommand`;
+the saved file is marked sensitive. Metadata remains visible in the receipt.
+An explicit command error is an ordinary error, leaves the destination unchanged
+and produces no successful file receipt. A valid partial export can include
+warnings; an interrupted or truncated transfer fails.
+
 A file sink rejects the bare path `-`: use `{"type":"stdout"}` for stdout or
 `./-` for a file literally named `-`.
 

@@ -19,7 +19,9 @@ pub const COMMAND_DEFAULT_TIMEOUT: &str = "30s";
 pub const COMMAND_MAX_TIMEOUT_SECONDS: u64 = 10 * 60;
 /// Default stdout cap of one process.
 pub const COMMAND_DEFAULT_MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
-/// Default number of concurrent processes per command name.
+/// Maximum JSON overhead outside encoded file content in a download response.
+pub const COMMAND_DOWNLOAD_ENVELOPE_OVERHEAD_BYTES: u64 = 16 * 1024;
+/// Default number of concurrent processes or response workers per command name.
 pub const COMMAND_DEFAULT_MAX_CONCURRENT: u32 = 4;
 /// Default working directory of every process.
 pub const COMMAND_DEFAULT_WORKING_DIR: &str = "/";
@@ -68,8 +70,11 @@ pub struct CommandImportConfig {
     /// Stdout cap of one process, at most `limits.max_upstream_response_bytes`.
     #[serde(default = "default_max_output_bytes")]
     pub max_output_bytes: u64,
-    /// Concurrent processes of this command name, shared by every import of
-    /// it; at most `limits.max_concurrent_requests`.
+    /// Opt-in decoded file cap. Absence disables download actions.
+    #[serde(default)]
+    pub max_download_bytes: Option<u64>,
+    /// Concurrent processes or response workers of this command name, shared
+    /// by every import of it; at most `limits.max_concurrent_requests`.
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
     /// Absolute working directory of every process.
@@ -89,6 +94,16 @@ pub struct CommandImportConfig {
 }
 
 impl CommandImportConfig {
+    /// Encoded stdout cap for downloads: padded base64 plus bounded JSON overhead.
+    /// `None` means downloads are disabled or the arithmetic overflows.
+    pub fn download_output_bytes(&self) -> Option<u64> {
+        self.max_download_bytes?
+            .checked_add(2)?
+            .checked_div(3)?
+            .checked_mul(4)?
+            .checked_add(COMMAND_DOWNLOAD_ENVELOPE_OVERHEAD_BYTES)
+    }
+
     /// The validated `timeout`.
     pub fn timeout(&self) -> Option<Duration> {
         parse_timeout_seconds(&self.timeout).map(Duration::from_secs)
@@ -164,6 +179,36 @@ pub(crate) fn validate_command_imports(config: &BrokerConfig, errors: &mut Vec<S
             errors.push(format!(
                 "{label}.max_output_bytes must be between 1 and limits.max_upstream_response_bytes"
             ));
+        }
+        if let Some(decoded) = command.max_download_bytes {
+            if decoded == 0 || decoded > config.limits.max_download_bytes {
+                errors.push(format!(
+                    "{label}.max_download_bytes must be between 1 and limits.max_download_bytes"
+                ));
+            }
+            match command.download_output_bytes() {
+                Some(encoded) => {
+                    if encoded > config.limits.max_upstream_response_bytes {
+                        errors.push(format!(
+                            "{label}.max_download_bytes requires an encoded response exceeding limits.max_upstream_response_bytes"
+                        ));
+                    }
+                    // Capture and JSON scan scratch each permit up to 2E capacity;
+                    // decoded storage is at most D. Vec allocations must fit isize.
+                    let capacities_fit = isize::try_from(decoded).is_ok()
+                        && encoded
+                            .checked_mul(2)
+                            .is_some_and(|capacity| isize::try_from(capacity).is_ok());
+                    if !capacities_fit {
+                        errors.push(format!(
+                            "{label}.max_download_bytes requires allocations not representable on this platform"
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "{label}.max_download_bytes overflows the encoded response limit"
+                )),
+            }
         }
         if command.max_concurrent == 0
             || command.max_concurrent > config.limits.max_concurrent_requests
@@ -285,6 +330,8 @@ mod tests {
         let command = &config.command_imports["ticketing"];
         assert_eq!(command.timeout(), Some(Duration::from_secs(30)));
         assert_eq!(command.max_output_bytes, 1024 * 1024);
+        assert_eq!(command.max_download_bytes, None);
+        assert_eq!(command.download_output_bytes(), None);
         assert_eq!(command.max_concurrent, 4);
         assert_eq!(command.working_dir, "/");
         assert_eq!(command.network, CommandNetwork::Inherit);
@@ -293,6 +340,102 @@ mod tests {
         let mut errors = Vec::new();
         validate_command_imports(&config, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn download_caps_are_opt_in_and_fit_both_global_ceilings() {
+        let mut config = config(
+            r#"[command_imports.ticketing]
+path = "/bin/true"
+"#,
+        )
+        .unwrap();
+        let validate = |config: &BrokerConfig| {
+            let mut errors = Vec::new();
+            validate_command_imports(config, &mut errors);
+            errors
+        };
+        assert!(validate(&config).is_empty());
+        config
+            .command_imports
+            .get_mut("ticketing")
+            .unwrap()
+            .max_download_bytes = Some(1);
+        let encoded = COMMAND_DOWNLOAD_ENVELOPE_OVERHEAD_BYTES + 4;
+        assert_eq!(
+            config.command_imports["ticketing"].download_output_bytes(),
+            Some(encoded)
+        );
+        config.limits.max_download_bytes = 1;
+        config.limits.max_upstream_response_bytes = encoded;
+        config
+            .command_imports
+            .get_mut("ticketing")
+            .unwrap()
+            .max_output_bytes = 1;
+        assert!(validate(&config).is_empty());
+        config.limits.max_upstream_response_bytes = encoded - 1;
+        assert!(
+            validate(&config)
+                .iter()
+                .any(|error| error.contains("encoded response"))
+        );
+        config.limits.max_upstream_response_bytes = encoded;
+        config.limits.max_download_bytes = 0;
+        assert!(
+            validate(&config)
+                .iter()
+                .any(|error| error.contains("limits.max_download_bytes"))
+        );
+        config
+            .command_imports
+            .get_mut("ticketing")
+            .unwrap()
+            .max_download_bytes = Some(0);
+        assert!(
+            validate(&config)
+                .iter()
+                .any(|error| error.contains("between 1"))
+        );
+    }
+
+    #[test]
+    fn download_encoded_caps_include_padding_and_reject_arithmetic_or_platform_overflow() {
+        let mut config = config(
+            r#"[command_imports.ticketing]
+path = "/bin/true"
+"#,
+        )
+        .unwrap();
+        let command = config.command_imports.get_mut("ticketing").unwrap();
+        for (decoded, encoded) in [(1, 4), (2, 4), (3, 4), (4, 8), (8_388_608, 11_184_812)] {
+            command.max_download_bytes = Some(decoded);
+            assert_eq!(
+                command.download_output_bytes(),
+                Some(encoded + COMMAND_DOWNLOAD_ENVELOPE_OVERHEAD_BYTES)
+            );
+        }
+        command.max_download_bytes = Some(u64::MAX);
+        assert_eq!(command.download_output_bytes(), None);
+        config.limits.max_download_bytes = u64::MAX;
+        config.limits.max_upstream_response_bytes = u64::MAX;
+        let mut errors = Vec::new();
+        validate_command_imports(&config, &mut errors);
+        assert!(
+            errors.iter().any(|error| error.contains("overflows")),
+            "{errors:?}"
+        );
+        config
+            .command_imports
+            .get_mut("ticketing")
+            .unwrap()
+            .max_download_bytes = Some((isize::MAX as u64) / 2);
+        errors.clear();
+        validate_command_imports(&config, &mut errors);
+        assert!(
+            errors.iter().any(|error| error.contains("platform")),
+            "{errors:?}"
+        );
     }
 
     #[test]

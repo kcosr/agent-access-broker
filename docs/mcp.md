@@ -695,6 +695,16 @@ replacement handling. Denied or failed reads and incomplete transfers leave an
 existing destination intact. If parent-directory synchronization fails after
 replacement, the reported local error indicates that the file was replaced.
 
+Imported command downloads use this same contract: `outputPath` sits beside
+`inputs` or `requestFile` and never reaches the Broker or command. Their receipt
+includes computed size/SHA-256, filename, content type and bounded command
+metadata under `result.upstreamCommand`; the output is marked sensitive, which
+does not redact that metadata. A valid partial export may carry warnings; a
+truncated transfer fails with `isError: true`. Explicit mutation outcomes survive
+body or local save failures without replaying the command. Ordinary command
+errors also return `isError: true` without replacing the destination. HTTP MCP
+excludes these executable download tools but permits their action detail.
+
 CloudBees CI `job.list` takes `controller`, optional `folder`, `maxResults`, and
 `pageToken`, and returns a filtered JSON page of live jobs and containers. Continue
 `more` and `scan_budget` even when empty; `upstream_window` means terminal

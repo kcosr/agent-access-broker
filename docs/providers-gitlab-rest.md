@@ -502,8 +502,9 @@ To request the whole result through HTTP, send
 `application/json`; the Markdown is returned in
 `result = {"format":"markdown","value":"..."}`.
 
-For raw file and job-trace downloads, prefer `agent-access send` when using the
-CLI because it handles stream outputs and metadata files. Direct HTTP
+For raw file, MR-diff and job-trace downloads, use `agent-access invoke --output`,
+a typed download command, or `agent-access send` with an output sink. `send` also
+supports a separate metadata file. Direct HTTP
 raw-download negotiation is specified in [http-api.md](http-api.md). Native Git
 fetch/push examples are in [git-http-gateway.md](git-http-gateway.md).
 

@@ -26,6 +26,7 @@ use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::IntoResponse;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use bytes::Bytes;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -33,10 +34,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::path::Path as FsPath;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 pub(crate) const RAW_RESULT_MIME: &str = "application/octet-stream";
+const RAW_METADATA_HEADER_LIMIT: usize = 16_384;
+const RAW_METADATA_JSON_LIMIT: usize = RAW_METADATA_HEADER_LIMIT / 4 * 3;
 
 enum ParsedInvokeRequest {
     Json(InvokeRequest),
@@ -1164,7 +1168,9 @@ pub(crate) async fn invoke_admitted_json(
     request: InvokeRequest,
     control: agent_access_core::InvocationControl,
 ) -> agent_access_core::BrokerResponse<Value> {
-    crate::operations::invoke(state, admitted, request, control).await
+    crate::operations::invoke(state, admitted, request, control, false)
+        .await
+        .0
 }
 
 pub(crate) async fn invoke(
@@ -1248,6 +1254,25 @@ pub(crate) async fn invoke(
 
     let response = match parsed {
         ParsedInvokeRequest::Json(request) if raw_result_requested => {
+            if snapshot
+                .runtime
+                .command_provider(&context.operation.service)
+                .is_some()
+            {
+                let (response, permits) = crate::operations::invoke(
+                    &state,
+                    AdmittedInvocation {
+                        snapshot,
+                        context,
+                        permits,
+                    },
+                    request,
+                    agent_access_core::InvocationControl::default(),
+                    true,
+                )
+                .await;
+                return raw_result_response(response, permits, exports_secrets).await;
+            }
             snapshot
                 .runtime
                 .invoke_required_stream(context, request)
@@ -1272,7 +1297,7 @@ pub(crate) async fn invoke(
         }
     };
     if raw_result_requested {
-        return raw_result_response(response, Some(permits))
+        return raw_result_response(response, Some(permits), exports_secrets)
             .await
             .into_response();
     }
@@ -1694,19 +1719,118 @@ fn action_exports_secrets(action: Option<&agent_access_provider::ActionDescripto
     action.is_some_and(|action| !action.sensitive_output_pointers.is_empty())
 }
 
+/// Each yielded chunk can keep a whole decoded allocation alive. Its admission
+/// lease must therefore outlive the body if a transport still holds that chunk.
+struct AdmittedDownloadChunk {
+    bytes: Bytes,
+    _permits: Arc<RequestPermits>,
+}
+
+impl AsRef<[u8]> for AdmittedDownloadChunk {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+fn admitted_download_chunk(bytes: Bytes, permits: &Arc<RequestPermits>) -> Bytes {
+    Bytes::from_owner(AdmittedDownloadChunk {
+        bytes,
+        _permits: Arc::clone(permits),
+    })
+}
+
+struct BoundedMetadata {
+    bytes: Vec<u8>,
+    limit: usize,
+    attempted: usize,
+}
+
+impl std::io::Write for BoundedMetadata {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.attempted = self.bytes.len().saturating_add(bytes.len());
+        if self.attempted > self.limit {
+            return Err(std::io::Error::other("download metadata limit"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn bounded_metadata(value: &impl serde::Serialize, limit: usize) -> Result<Vec<u8>, usize> {
+    let mut output = BoundedMetadata {
+        bytes: Vec::with_capacity(limit),
+        limit,
+        attempted: 0,
+    };
+    serde_json::to_writer(&mut output, value).map_err(|_| output.attempted)?;
+    Ok(output.bytes)
+}
+
 async fn raw_result_response(
     mut response: BrokerResponse<Value>,
     permits: Option<RequestPermits>,
+    exports_secrets: bool,
 ) -> axum::response::Response {
     if response.status >= 400 {
-        return envelope_response(response).into_response();
+        return json_invoke_response(response, exports_secrets);
     }
     let Some(stream) = response.stream.take() else {
-        return envelope_response(missing_stream_envelope(response)).into_response();
+        return json_invoke_response(missing_stream_envelope(response), exports_secrets);
     };
-    let metadata = match serde_json::to_vec(&response.envelope) {
+    let metadata = match bounded_metadata(&response.envelope, RAW_METADATA_JSON_LIMIT) {
         Ok(metadata) => BASE64.encode(metadata),
-        Err(_) => return envelope_response(missing_stream_envelope(response)).into_response(),
+        Err(attempted) => {
+            let lower_bound = attempted.div_ceil(3).saturating_mul(4);
+            tracing::warn!(
+                event = "raw_download_metadata_refused",
+                category = "serialization_limit",
+                agentRequestId = %response.envelope.agent_request_id,
+                brokerRequestId = %response.envelope.broker_request_id,
+                service = %response.envelope.service,
+                action = %response.envelope.action,
+                headerCap = RAW_METADATA_HEADER_LIMIT,
+                encodedLengthLowerBound = lower_bound,
+                "download metadata could not be delivered"
+            );
+            // Dropping the unused stream records cancellation after its started
+            // audit. It must not be drained and reported as completed delivery.
+            return json_invoke_response(
+                raw_delivery_error(
+                    response,
+                    ReasonCode::OperationFailed,
+                    "download metadata exceeded the response header limit",
+                ),
+                exports_secrets,
+            );
+        }
+    };
+    let metadata_header = match HeaderValue::from_str(&metadata) {
+        Ok(header) => header,
+        Err(_) => {
+            tracing::warn!(
+                event = "raw_download_metadata_refused",
+                category = "invalid_header",
+                agentRequestId = %response.envelope.agent_request_id,
+                brokerRequestId = %response.envelope.broker_request_id,
+                service = %response.envelope.service,
+                action = %response.envelope.action,
+                headerCap = RAW_METADATA_HEADER_LIMIT,
+                encodedLength = metadata.len(),
+                "download metadata could not be delivered"
+            );
+            return json_invoke_response(
+                raw_delivery_error(
+                    response,
+                    ReasonCode::OperationFailed,
+                    "download metadata could not be delivered",
+                ),
+                exports_secrets,
+            );
+        }
     };
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -1714,21 +1838,29 @@ async fn raw_result_response(
         HeaderValue::from_str(&stream.content_type)
             .unwrap_or_else(|_| HeaderValue::from_static(RAW_RESULT_MIME)),
     );
-    headers.insert(
-        RESULT_METADATA_HEADER,
-        HeaderValue::from_str(&metadata).unwrap_or_else(|_| HeaderValue::from_static("")),
-    );
+    headers.insert(RESULT_METADATA_HEADER, metadata_header);
+    if exports_secrets {
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    let permits = permits.map(Arc::new);
     let body = match stream.source {
-        ProviderResultStreamSource::Memory(bytes) => Body::from(bytes),
+        ProviderResultStreamSource::Memory(bytes) => {
+            let bytes = Bytes::from(bytes);
+            Body::from(match permits {
+                Some(permits) => admitted_download_chunk(bytes, &permits),
+                None => bytes,
+            })
+        }
         ProviderResultStreamSource::Stream(stream) => {
             let Some(stream) = stream.lock().ok().and_then(|mut stream| stream.take()) else {
-                return envelope_response(missing_stream_envelope(response)).into_response();
+                return json_invoke_response(missing_stream_envelope(response), exports_secrets);
             };
             if let Some(permits) = permits {
-                Body::from_stream(stream.map(move |chunk| {
-                    let _permits = &permits;
-                    chunk
-                }))
+                Body::from_stream(
+                    stream.map(move |chunk| {
+                        chunk.map(|bytes| admitted_download_chunk(bytes, &permits))
+                    }),
+                )
             } else {
                 Body::from_stream(stream)
             }
@@ -1742,28 +1874,60 @@ async fn raw_result_response(
         .into_response()
 }
 
-fn missing_stream_envelope(response: BrokerResponse<Value>) -> BrokerResponse<Value> {
-    let reason_code = ReasonCode::UpstreamProtocolFailed;
-    BrokerResponse {
-        retry_after_seconds: None,
-        status: reason_code.http_status(),
-        envelope: ResponseEnvelope {
-            agent_request_id: response.envelope.agent_request_id,
-            broker_request_id: response.envelope.broker_request_id,
-            decision: agent_access_provider::Decision::Error,
-            service: response.envelope.service,
-            action: response.envelope.action,
-            resource_scopes: response.envelope.resource_scopes,
-            reason_code: Some(reason_code.into()),
-            reason: Some("provider result stream was not available".to_string()),
-            result: None,
-            error: Some(agent_access_core::ErrorBody {
-                message: "provider result stream was not available".to_string(),
-            }),
-        },
-        stream: None,
+fn retained_mutation_outcome(result: Option<&Value>) -> Option<Value> {
+    let result = result?;
+    let status = result.get("mutationStatus")?.as_str()?;
+    if !matches!(
+        status,
+        "applied" | "applied_verified" | "applied_unverified" | "unknown" | "not_applied"
+    ) {
+        return None;
     }
+    let mut retained = json!({"mutationStatus":status,"retrySafe":false});
+    if let Some(retry) = result.get("retrySafe").and_then(Value::as_bool) {
+        retained["retrySafe"] = json!(retry);
+    }
+    for (field, cap) in [("verificationStage", 256), ("safeLocators", 4096)] {
+        if let Some(value) = result.get(field)
+            && let Ok(encoded) = bounded_metadata(value, cap)
+            && let Ok(value) = serde_json::from_slice(&encoded)
+        {
+            retained[field] = value;
+        }
+    }
+    Some(retained)
 }
+
+fn raw_delivery_error(
+    mut response: BrokerResponse<Value>,
+    reason_code: ReasonCode,
+    message: &'static str,
+) -> BrokerResponse<Value> {
+    let result = retained_mutation_outcome(response.envelope.result.as_ref());
+    response.retry_after_seconds = None;
+    response.status = reason_code.http_status();
+    response.envelope.decision = Decision::Error;
+    response.envelope.reason_code = Some(reason_code.into());
+    response.envelope.reason = Some(message.into());
+    response.envelope.result = result;
+    response.envelope.error = Some(ErrorBody {
+        message: message.into(),
+    });
+    response.stream = None;
+    response
+}
+
+fn missing_stream_envelope(response: BrokerResponse<Value>) -> BrokerResponse<Value> {
+    raw_delivery_error(
+        response,
+        ReasonCode::UpstreamProtocolFailed,
+        "provider result stream was not available",
+    )
+}
+
+#[cfg(test)]
+#[path = "data/download_tests.rs"]
+mod download_tests;
 
 #[cfg(test)]
 mod tests {

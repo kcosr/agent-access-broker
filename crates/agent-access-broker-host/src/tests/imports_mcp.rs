@@ -76,6 +76,7 @@ impl Drop for Fixture {
 }
 fn action(read_only: bool) -> ImportedActionDefinition {
     ImportedActionDefinition {
+        download: false,
         action: if read_only { "inspect" } else { "update" }.into(),
         source: json!({"toolName":if read_only {"read_item"} else {"update_item"}}),
         label: None,

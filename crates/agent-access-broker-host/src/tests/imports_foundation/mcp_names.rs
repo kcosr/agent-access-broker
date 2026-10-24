@@ -59,6 +59,7 @@ fn accept(runtime: &BrokerRuntime, service: &str, name: &str) -> ImportedService
     record.status = ImportedServiceStatus::Enabled;
     record.actions.push(ImportedActionRecord {
         definition: agent_access_core::imports::ImportedActionDefinition {
+            download: false,
             action: name.into(),
             ..conformance_import_action()
         },

@@ -41,7 +41,7 @@ const DEFAULT_VERIFICATION_STAGE: &str = "command_response";
 
 /// A broken command contract, named by the category its log line reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Violation(&'static str);
+pub(crate) struct Violation(pub(crate) &'static str);
 
 impl Violation {
     pub(crate) fn category(self) -> &'static str {
@@ -341,6 +341,7 @@ mod tests {
     fn action(output: Option<Value>) -> CompiledAction {
         CompiledAction {
             read_only: false,
+            download: false,
             input: BoundedImportSchema::compile(&json!({"type": "object"})).unwrap(),
             output: output.map(|schema| BoundedImportSchema::compile(&schema).unwrap()),
             authority: ImportedActionAuthority::default(),

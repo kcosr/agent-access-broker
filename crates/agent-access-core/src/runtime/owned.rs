@@ -1,4 +1,4 @@
-//! Owned JSON invocation phases. Preparation never finalizes; finalization is
+//! Owned invocation phases. Preparation never finalizes; finalization is
 //! deliberately outside cancellation/deadline selection so an audit cannot be
 //! abandoned or repeated after its write has been queued.
 use super::*;
@@ -97,11 +97,13 @@ fn interrupted_error(
 impl BrokerRuntime {
     /// Run within a supervisor that owns this future independently of HTTP/SDK
     /// response delivery. Caller cancellation must use `control`, never drop it.
-    pub async fn invoke_owned_json(
+    /// With `require_stream = false`, providers may return JSON or a stream.
+    pub async fn invoke_owned(
         &self,
         context: GovernedOperationContext,
         request: InvokeRequest,
         control: InvocationControl,
+        require_stream: bool,
     ) -> BrokerResponse<Value> {
         let fallback = FinalizeContext {
             search_authorization: None,
@@ -150,6 +152,33 @@ impl BrokerRuntime {
                 Err(_) => Err(Box::new(PreparationFailure::new(fallback, Err(interrupted_error((ReasonCode::OperationFailed, "operation failed during preparation"), false))))),
             }
         };
+        // Reserve the stream's started record after preparation, before the
+        // provider can make changes. Its dedicated pool leaves ordinary audit
+        // capacity available throughout command waits and execution.
+        let mut started_permit = None;
+        let prepared = match prepared {
+            Ok(prepared) if require_stream => {
+                let reservation = tokio::select! {
+                    biased;
+                    message = control.interrupted(true) => Err(interrupted_error(message, false)),
+                    result = self.audit.reserve_stream_start() => result.map_err(|_| {
+                        ProviderError::error(ReasonCode::AuditUnavailable, "audit sink unavailable")
+                            .with_audit(json!({"executionState":"not_dispatched", "retrySafe":false}))
+                    }),
+                };
+                match reservation {
+                    Ok(permit) => {
+                        started_permit = Some(permit);
+                        Ok(prepared)
+                    }
+                    Err(error) => Err(Box::new(PreparationFailure::new(
+                        prepared.finalize_context,
+                        Err(error),
+                    ))),
+                }
+            }
+            prepared => prepared,
+        };
         let (finalize_context, result) = match prepared {
             Err(failure) => (failure.context, failure.result),
             Ok(mut prepared) => {
@@ -173,7 +202,7 @@ impl BrokerRuntime {
                     let execution =
                         AssertUnwindSafe(agent_access_provider::host::with_provider_finalization(
                             finalization.clone(),
-                            self.execute_prepared_invoke(prepared, body_parts, false),
+                            self.execute_prepared_invoke(prepared, body_parts, require_stream),
                         ))
                         .catch_unwind();
                     tokio::pin!(execution);
@@ -214,8 +243,8 @@ impl BrokerRuntime {
                 }
             }
         };
-        // No cancellation select around finalization: the reserved terminal append
-        // is acknowledged before success and cannot race a second outcome record.
+        // No cancellation select around finalization: the reserved required
+        // append is acknowledged before success and cannot race another outcome.
         let applied_unverified = result.as_ref().err().is_some_and(|error| {
             error.reason_code() == ReasonCode::MutationVerificationFailed
                 && error
@@ -229,7 +258,10 @@ impl BrokerRuntime {
             .finalize_with_append_mode(
                 finalize_context,
                 result,
-                AuditAppendMode::OwnedTerminal(permit),
+                AuditAppendMode::Owned {
+                    terminal: permit,
+                    started: started_permit,
+                },
             )
             .await;
         if response.envelope.reason_code == Some(ReasonCode::AuditUnavailable.into()) {
@@ -263,6 +295,7 @@ impl BrokerRuntime {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use futures_util::StreamExt;
     use std::sync::atomic::AtomicUsize;
     use tempfile::TempDir;
     use tokio::sync::Semaphore;
@@ -282,6 +315,8 @@ mod tests {
         complete: Semaphore,
         calls: AtomicUsize,
         panic_invoke: bool,
+        raw_write: bool,
+        preparation_audit: Mutex<Option<AuditSink>>,
         finalization: Option<FinalizationMode>,
         cleanup_started: Semaphore,
         cleanup_polls: AtomicUsize,
@@ -296,6 +331,8 @@ mod tests {
                 complete: Semaphore::new(0),
                 calls: AtomicUsize::new(0),
                 panic_invoke,
+                raw_write: false,
+                preparation_audit: Mutex::new(None),
                 finalization: None,
                 cleanup_started: Semaphore::new(0),
                 cleanup_polls: AtomicUsize::new(0),
@@ -309,10 +346,23 @@ mod tests {
             provider.complete.add_permits(1);
             provider
         }
+
+        fn raw_write(pause_lookup: bool) -> Arc<Self> {
+            let mut provider = Self::new(pause_lookup, false);
+            Arc::get_mut(&mut provider).unwrap().raw_write = true;
+            provider
+        }
     }
     impl agent_access_provider::test_support::DescribedProvider for ControlledProvider {
         fn descriptor(&self) -> ServiceDescriptor {
-            agent_access_fake::fake_descriptor()
+            let mut descriptor = agent_access_fake::fake_descriptor();
+            if self.raw_write {
+                for action in &mut descriptor.actions {
+                    action.read_only = false;
+                    action.io = raw_download_io();
+                }
+            }
+            descriptor
         }
     }
 
@@ -324,6 +374,10 @@ mod tests {
         ) -> Result<ScopeResolution, ProviderError> {
             self.lookup_started.add_permits(1);
             self.lookup_continue.acquire().await.unwrap().forget();
+            let preparation_audit = self.preparation_audit.lock().unwrap().clone();
+            if let Some(audit) = preparation_audit {
+                audit.check_writable().await.unwrap();
+            }
             agent_access_fake::FakeProvider
                 .echo_scopes(request.action(), request.inputs())
                 .map(ScopeResolution::resources)
@@ -336,7 +390,19 @@ mod tests {
             self.invoked.add_permits(1);
             assert!(!self.panic_invoke, "controlled provider panic");
             self.complete.acquire().await.unwrap().forget();
-            let outcome = if matches!(self.finalization, Some(FinalizationMode::Failure)) {
+            let outcome = if self.raw_write {
+                Ok(ProviderResult::new(json!({
+                    "size": 3,
+                    "mutationStatus": "applied_unverified",
+                    "retrySafe": false,
+                    "safeLocators": {"fileId": "file-17"},
+                }))
+                .with_audit(json!({"operation":"raw-write"}))
+                .with_stream(ProviderResultStream::from_stream(
+                    "application/octet-stream",
+                    futures_util::stream::iter([Ok(Bytes::from_static(b"raw"))]),
+                )))
+            } else if matches!(self.finalization, Some(FinalizationMode::Failure)) {
                 Err(
                     ProviderError::error(ReasonCode::UpstreamFailed, "known provider failure")
                         .with_result(json!({"knownOutcome":true}))
@@ -371,6 +437,13 @@ mod tests {
         }
     }
     fn fixture(provider: Arc<ControlledProvider>) -> (BrokerRuntime, TempDir) {
+        fixture_with_audit_capacity(provider, None)
+    }
+
+    fn fixture_with_audit_capacity(
+        provider: Arc<ControlledProvider>,
+        capacity: Option<u32>,
+    ) -> (BrokerRuntime, TempDir) {
         let dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         {
@@ -382,6 +455,13 @@ mod tests {
             crate::AuditStoreType::Jsonl,
             dir.path().join("audit.jsonl").display().to_string(),
         ));
+        if let Some(capacity) = capacity {
+            config.limits.max_concurrent_requests = capacity;
+            config.limits.max_concurrent_requests_per_principal = capacity;
+            let audit = config.audit.as_mut().unwrap();
+            audit.queue_capacity = capacity;
+            audit.terminal_queue_capacity = Some(capacity);
+        }
         config.limits.upload_spool_dir = dir.path().join("spool").display().to_string();
         (
             BrokerRuntime::with_providers(config, vec![provider]).unwrap(),
@@ -428,7 +508,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -455,7 +535,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -486,7 +566,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -510,7 +590,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -536,7 +616,7 @@ mod tests {
                 let control = control.clone();
                 tokio::spawn(async move {
                     runtime
-                        .invoke_owned_json(context(), request(), control)
+                        .invoke_owned(context(), request(), control, false)
                         .await
                 })
             };
@@ -585,7 +665,7 @@ mod tests {
                 let control = control.clone();
                 tokio::spawn(async move {
                     runtime
-                        .invoke_owned_json(context(), request(), control)
+                        .invoke_owned(context(), request(), control, false)
                         .await
                 })
             };
@@ -628,7 +708,7 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned_json(context(), request(), control)
+                    .invoke_owned(context(), request(), control, false)
                     .await
             })
         };
@@ -663,7 +743,7 @@ mod tests {
         let (runtime, dir) = fixture(provider.clone());
         runtime.local_state_readiness().await.unwrap();
         let response = runtime
-            .invoke_owned_json(context(), request(), InvocationControl::default())
+            .invoke_owned(context(), request(), InvocationControl::default(), false)
             .await;
         assert!(
             response.envelope.result.is_some(),
@@ -686,7 +766,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         let response = runtime
-            .invoke_owned_json(context(), request(), InvocationControl::default())
+            .invoke_owned(context(), request(), InvocationControl::default(), false)
             .await;
         assert_eq!(response.status, 503);
         assert_eq!(response.envelope.service, "broker");
@@ -707,7 +787,7 @@ mod tests {
         let (runtime, dir) = fixture(provider.clone());
         let operation = tokio::spawn(async move {
             runtime
-                .invoke_owned_json(context(), request(), InvocationControl::default())
+                .invoke_owned(context(), request(), InvocationControl::default(), false)
                 .await
         });
         entered(&provider.invoked).await;
@@ -725,5 +805,160 @@ mod tests {
         assert_eq!(result["executionState"], "completed");
         assert_eq!(result["retrySafe"], false);
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn raw_write_start_reservation_preserves_ordinary_audit_capacity() {
+        let provider = ControlledProvider::raw_write(true);
+        let (runtime, dir) = fixture_with_audit_capacity(provider.clone(), Some(1));
+        // Preparation can probe audit before the start reservation is acquired.
+        *provider.preparation_audit.lock().unwrap() = Some(runtime.audit.clone());
+        let control = InvocationControl::default();
+        let operation = {
+            let runtime = runtime.clone();
+            let control = control.clone();
+            tokio::spawn(async move {
+                runtime
+                    .invoke_owned(context(), request(), control, true)
+                    .await
+            })
+        };
+        entered(&provider.lookup_started).await;
+        let writer = runtime.audit.writer.as_ref().unwrap();
+        assert_eq!(writer.stream_start_capacity.available_permits(), 1);
+        provider.lookup_continue.add_permits(1);
+        entered(&provider.invoked).await;
+        assert_eq!(writer.stream_start_capacity.available_permits(), 0);
+        assert_eq!(writer.terminal_capacity.available_permits(), 0);
+        assert_eq!(writer.normal_capacity.available_permits(), 1);
+        // The raw write is still paused with every stream-start and terminal
+        // slot reserved. Unrelated readiness and required audit must progress.
+        tokio::time::timeout(Duration::from_secs(2), runtime.check_audit_writable())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut unrelated = super::super::tests::test_audit_record();
+        unrelated.broker_request_id = "unrelated-audit".into();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            runtime.append_audit_record(&unrelated),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!control.completed());
+        assert_eq!(writer.stream_start_capacity.available_permits(), 0);
+        // Also keep ordinary capacity exhausted during the response and body:
+        // neither of the reserved lifecycle records may depend on that pool.
+        let pressure = writer
+            .normal_capacity
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        provider.complete.add_permits(1);
+        let mut response = tokio::time::timeout(Duration::from_secs(10), operation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status, 200, "{:?}", response.envelope);
+        assert!(control.dispatched());
+        assert!(control.completed());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        let result = response.envelope.result.as_ref().unwrap();
+        assert_eq!(result["mutationStatus"], "applied_unverified");
+        assert_eq!(result["retrySafe"], false);
+        assert_eq!(result["safeLocators"], json!({"fileId":"file-17"}));
+        let ProviderResultStreamSource::Stream(source) = response.stream.take().unwrap().source
+        else {
+            panic!("raw write must preserve its response stream");
+        };
+        let mut stream = source.lock().unwrap().take().unwrap();
+        let body = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut body = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            body
+        })
+        .await
+        .unwrap();
+        assert_eq!(body, b"raw");
+        assert_eq!(writer.normal_capacity.available_permits(), 0);
+        runtime
+            .shutdown_audit(Duration::from_secs(2))
+            .await
+            .unwrap();
+        let records = crate::test_support::read_audit_records(
+            crate::AuditStoreType::Jsonl,
+            &dir.path().join("audit.jsonl"),
+        );
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0]["brokerRequestId"], "unrelated-audit");
+        assert_eq!(records[1]["providerAudit"]["streamPhase"], "started");
+        assert_eq!(records[2]["providerAudit"]["streamPhase"], "completed");
+        assert_eq!(records[2]["providerAudit"]["streamBytes"], 3);
+        assert_eq!(records[1]["brokerRequestId"], records[2]["brokerRequestId"]);
+        drop(pressure);
+    }
+
+    #[tokio::test]
+    async fn raw_write_start_capacity_failure_after_preparation_prevents_dispatch() {
+        let provider = ControlledProvider::raw_write(true);
+        let (runtime, dir) = fixture_with_audit_capacity(provider.clone(), Some(1));
+        let control = InvocationControl::default();
+        let operation = {
+            let runtime = runtime.clone();
+            let control = control.clone();
+            tokio::spawn(async move {
+                runtime
+                    .invoke_owned(context(), request(), control, true)
+                    .await
+            })
+        };
+        entered(&provider.lookup_started).await;
+        let writer = runtime.audit.writer.as_ref().unwrap();
+        // Initial audit admission has succeeded. Exhaust stream-start capacity
+        // while preparation is paused to exercise the dispatch reservation.
+        let pressure = writer
+            .stream_start_capacity
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        provider.complete.add_permits(1);
+        provider.lookup_continue.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(10), operation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!control.dispatched());
+        assert!(!control.completed());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(response.status, 503);
+        assert_eq!(response.envelope.service, "broker");
+        assert_eq!(response.envelope.action, "request.admit");
+        assert_eq!(
+            response.envelope.reason_code,
+            Some(ReasonCode::AuditUnavailable.into())
+        );
+        assert_eq!(
+            response.envelope.reason.as_deref(),
+            Some("audit sink unavailable")
+        );
+        assert_eq!(
+            response.envelope.error.as_ref().unwrap().message,
+            "audit sink unavailable"
+        );
+        let public = serde_json::to_string(&response.envelope).unwrap();
+        assert!(!public.contains(&dir.path().display().to_string()));
+        assert!(!public.contains("audit.jsonl"));
+        assert!(response.envelope.result.is_none());
+        assert!(response.stream.is_none());
+        let record = audit(&dir);
+        assert_eq!(record["reasonCode"], "audit_unavailable");
+        assert_eq!(record["providerAudit"]["executionState"], "not_dispatched");
+        assert_eq!(writer.terminal_capacity.available_permits(), 1);
+        drop(pressure);
     }
 }

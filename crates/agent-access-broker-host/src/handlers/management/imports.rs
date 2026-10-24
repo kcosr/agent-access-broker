@@ -282,7 +282,8 @@ fn mutation_request(
     }
 }
 fn source_changed(old: &ImportedActionDefinition, new: &ImportedActionDefinition) -> bool {
-    old.input_schema != new.input_schema
+    old.download != new.download
+        || old.input_schema != new.input_schema
         || old.output_schema != new.output_schema
         || behavioral_annotations(&old.annotations) != behavioral_annotations(&new.annotations)
 }
@@ -1183,6 +1184,20 @@ fn prepare_update(
                 if source.unsupported_reason.is_some() {
                     return Err(invalid("unsupported tools cannot be accepted"));
                 }
+                if source.definition.download {
+                    let download_enabled = record
+                        .definition
+                        .endpoint()
+                        .ok()
+                        .and_then(|endpoint| endpoint.command_name().map(str::to_owned))
+                        .and_then(|name| runtime.config().command_imports.get(&name))
+                        .is_some_and(|command| command.max_download_bytes.is_some());
+                    if !download_enabled {
+                        return Err(invalid(
+                            "download actions require command_imports max_download_bytes",
+                        ));
+                    }
+                }
                 let mut definition = source.definition.clone();
                 definition.action = selection.action;
                 definition.label = selection.label;
@@ -1542,6 +1557,19 @@ mod tests {
                 .iter()
                 .all(|tool| tool.unsupported_reason.is_none())
         );
+    }
+
+    #[test]
+    fn download_transitions_and_output_schemas_require_behavior_review() {
+        let old = crate::tests::conformance_import::conformance_import_action();
+        let mut new = old.clone();
+        new.download = true;
+        assert!(source_changed(&old, &new));
+        assert!(source_changed(&new, &old));
+        assert!(!source_changed(&new, &new));
+        new = old.clone();
+        new.output_schema = Some(json!({"type":"object"}));
+        assert!(source_changed(&old, &new));
     }
 
     #[test]

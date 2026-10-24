@@ -1603,6 +1603,7 @@ mod tests {
     fn action() -> ImportedActionWrite {
         ImportedActionWrite {
             definition: ImportedActionDefinition {
+                download: false,
                 action: "query".into(),
                 source: json!({"toolName":"upstream_query"}),
                 label: None,

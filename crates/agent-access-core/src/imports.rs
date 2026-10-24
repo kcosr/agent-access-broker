@@ -20,7 +20,7 @@ pub use authority::*;
 pub use command::*;
 pub use command_facts::{CommandProcessFacts, CommandProcessFactsSnapshot};
 pub use command_registry::{
-    CommandAcquireError, CommandPermit, CommandProcessControl, CommandRegistry,
+    CommandAcquireError, CommandBudgetLease, CommandPermit, CommandProcessControl, CommandRegistry,
     CommandRegistryClosed, LiveCommandProcess,
 };
 pub use command_request::CommandSecrets;

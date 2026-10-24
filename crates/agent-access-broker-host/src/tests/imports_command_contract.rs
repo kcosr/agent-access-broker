@@ -19,6 +19,8 @@ use agent_access_core::{
 };
 use std::os::unix::fs::PermissionsExt;
 
+mod downloads;
+
 const CONTRACT_COMMAND: &str = r#"#!/bin/sh
 echo "$1 $$" >> "$MARKER"
 if [ "$1" = describe ]; then cat "$MANIFEST"; exit 0; fi

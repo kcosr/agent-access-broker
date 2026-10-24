@@ -61,6 +61,7 @@ allowed_kinds = ["command"]          # add "mcp_http" or "openapi_http" when use
 path = "/opt/agent-commands/ticketing/bin/ticketing-command"
 timeout = "30s"
 max_output_bytes = 1048576
+max_download_bytes = 8388608         # optional: enable files up to 8 MiB
 max_concurrent = 4
 working_dir = "/var/lib/agent-commands/ticketing"
 network = "inherit"
@@ -75,9 +76,10 @@ LANG = "C.UTF-8"
 | --- | --- | --- |
 | Table name | Required | The command name, `^[a-z][a-z0-9_-]{0,62}$`. Administrators pick commands by this name; it is the import's identity. |
 | `path` | Required | Absolute path of the executable. |
-| `timeout` | `30s` | At most `10m`. It includes the wait for a concurrency permit. |
-| `max_output_bytes` | 1 MiB | Stdout limit; at most `limits.max_upstream_response_bytes`. |
-| `max_concurrent` | 4 | Processes running at once; at most `limits.max_concurrent_requests`. |
+| `timeout` | `30s` | At most `10m`. Includes the permit wait, process execution, and download validation, decoding and hashing. |
+| `max_output_bytes` | 1 MiB | Ordinary JSON and `verify` stdout limit; at most `limits.max_upstream_response_bytes`. |
+| `max_download_bytes` | Absent | Positive decoded file cap; omission disables downloads. Must fit both global ceilings described under [download bounds](#download-bounds). |
+| `max_concurrent` | 4 | Concurrent processes plus download response workers; at most `limits.max_concurrent_requests`. Download consumers use request capacity instead. |
 | `working_dir` | `/` | Absolute. |
 | `network` | `inherit` | `inherit` passes the Broker's egress settings; `none` passes none. See [network settings](#network-settings). |
 | `log_stderr` | `false` | Adds the command's stderr to failure log lines. See [audit and logs](#audit-and-logs). |
@@ -104,8 +106,14 @@ not started are rejected with `service_action_denied`.
 
 `max_concurrent` is one budget per command name. Every import of the command,
 and its `describe`, `invoke` and `verify` runs, draws from it. A reload that
-lowers it applies to new calls; running processes still count until they
-finish.
+lowers it applies to new calls; admitted processes and download response workers
+still count until they finish. A validated download releases the command slot
+before its bytes are delivered.
+
+Download actions require `max_download_bytes`. Without it, discovery marks them
+unsupported and acceptance refuses them; ordinary JSON actions remain eligible.
+Removing it on reload makes an import with enabled accepted downloads unavailable
+until the setting is restored or those actions are disabled or quarantined.
 
 ## Importing a command
 
@@ -119,9 +127,9 @@ finish.
    `<path> describe` and stores a 15-minute preview showing the command
    version; the credential kind, or none; each resource type with its proposed
    Broker type ID and any type changes; and each action with its proposed
-   action ID, read-only suggestion and **Resources checked by**. An invalid
-   action is listed as unsupported with a reason; an invalid manifest fails
-   discovery.
+   action ID, read-only suggestion, download behavior and **Resources checked by**.
+   An invalid action is listed as unsupported with a reason; an invalid manifest
+   fails discovery.
 3. Review the action IDs, Broker type IDs and the Read-only / Write-capable
    classification, accept the selection, then enable the service. Actions stay
    Write-capable until reviewed as Read-only, and the classification also limits
@@ -192,9 +200,10 @@ Refresh applies the [import rules](imported-services.md#administrative-workflow)
 new actions stay unselected; missing, unsupported or behaviorally changed
 actions are quarantined; grants are retained; and accepting a change that
 affects grants requires confirming them. An action's behavior is its input
-schema, output schema, and the resource declaration and credential modes the
-adapter records in its annotations. The manifest `version` and `verify` flag
-take effect on acceptance.
+schema, output schema, download behavior, and the resource declaration and
+credential modes the adapter records in its annotations. The manifest `version`
+and `verify` flag take effect on acceptance. An older Broker cannot load a service containing an
+accepted download definition; see [upgrade and rollback](operator-guide.md#upgrade-and-rollback).
 
 Accepting a refresh also checks the managed policy against the new
 definitions. If a retained grant would become invalid, for example because an
@@ -536,9 +545,10 @@ must:
 | `.name` | The action's source identity; proposes its action ID |
 | `.description` | At most 16 KiB |
 | `.inputSchema` | `type: object` in the import schema profile |
-| `.outputSchema` | Optional; `result` must validate against it |
+| `.outputSchema` | Optional; `result` must validate against it, including metadata on download actions |
 | `.readOnly` | A suggestion; the administrator classifies each action |
-| `.listingOf` | Optional declared source type ID, equal to `.resources.type`; requires a command-enforced collection without resource input pointers and administrator acceptance as read-only |
+| `.download` | Optional literal `true`; a successful call returns one file and bounded metadata. Omit for JSON actions; `false`, `null` and non-booleans are unsupported |
+| `.listingOf` | Optional declared source type ID, equal to `.resources.type`; requires a JSON command-enforced collection without resource input pointers and administrator acceptance as read-only; forbidden on downloads |
 | `.credentialModes` | Optional subset of `credential.modes`; absent without `credential` |
 | `.resources.type` | A declared type ID; an action has at most one resource type |
 | `.resources.inputs` | 1–4 JSON pointers to required string or string-array inputs; their presence makes the action Broker-enforced |
@@ -677,13 +687,14 @@ sequenceDiagram
     U-->>C: Upstream response
     Note over C: Command-enforced actions filter by grant here
     C-->>B: stdout: one response JSON, then exit 0
-    B->>B: Kill and reap the process group, drain pipes, release the permit
-    B->>B: Validate and map the result, error or receipt, then audit
+    B->>B: Kill and reap the process group, drain pipes
+    B->>B: Validate and map the result, error or receipt, then audit; release download worker permit
     B-->>G: Result or mapped error
 ```
 
 *One call. A client disconnect does not stop a running command: it finishes
-or reaches its deadline. The command's timeout includes the permit wait.*
+or reaches its deadline. The command's timeout includes the permit wait and
+download response validation.*
 
 ### The response
 
@@ -700,10 +711,117 @@ or reaches its deadline. The command's timeout includes the permit wait.*
   "receipt": { "mutationStatus": "not_applied" } }
 ```
 
-The Broker returns `result` to the caller as `result.upstreamCommand`. Results
-are JSON only. The whole payload is marked sensitive at
+The Broker returns `result` to the caller as `result.upstreamCommand`. Ordinary
+actions return JSON; actions declaring `download: true` use the file contract
+below. The command result is marked sensitive at
 `/result/upstreamCommand` on every surface, including reads, as other imported
 payloads are. With an `outputSchema`, `result` must validate against it.
+
+### Download responses
+
+An action declares `"download": true` in its manifest and always returns one
+file on success. Output kind is independent of read-only classification and
+cannot be selected through inputs, filenames or content types. The protocol
+remains `agent-access-command/1`; base64 is fixed, with no encoding selector.
+
+An exit-zero success requires `ok`, an object `result` containing metadata, and
+`download`. An optional `receipt` follows the [write rules](#receipts-for-writes):
+
+```json
+{
+  "ok": true,
+  "result": { "warnings": ["Only completed records are included."] },
+  "download": {
+    "content": "AAECAw==",
+    "filename": "report.bin",
+    "contentType": "application/octet-stream",
+    "size": 4
+  }
+}
+```
+
+`outputSchema` validates only `result`, never the file or transport envelope.
+An empty `{}` is valid unless the schema requires metadata. The download fields
+are:
+
+| Field | Contract |
+| --- | --- |
+| `content` | Required unescaped ASCII JSON string of strict standard RFC 4648 base64: required padding, zero unused pad bits, no whitespace or backslash escapes. Empty string means an empty file. |
+| `filename` | Required UTF-8 basename of 1–255 bytes, without controls, slash or backslash, and not `.` or `..`. Metadata only; never a local destination. |
+| `contentType` | Required ASCII media type of 1–255 bytes, with valid media-type and HTTP header syntax and no controls. Parameters are allowed. |
+| `size` | Optional non-null unsigned 64-bit integer equal to the decoded byte count. |
+| `sha256` | Optional non-null 64-character ASCII hexadecimal digest equal to the computed SHA-256, compared case-insensitively. |
+
+Unknown or duplicate fields in the envelope, download, error or receipt objects,
+trailing JSON documents, invalid base64, bad metadata, and mismatched size or hash
+are contract violations. A claimed success without a valid file also fails.
+The Broker computes size and SHA-256 even when the command omits them, and sends
+raw bytes with this result metadata:
+
+```json
+{
+  "filename": "report.bin",
+  "contentType": "application/octet-stream",
+  "size": 4,
+  "sha256": "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8",
+  "upstreamCommand": { "warnings": ["Only completed records are included."] }
+}
+```
+
+The Broker never adds `download.content` or its encoded response to metadata,
+receipts, diagnostics or audit. Write receipt fields retain their root result
+locations. The filename never overrides the caller's local destination.
+
+A normal exit-zero failure remains a supported response:
+
+```json
+{"ok": false, "error": {"code": "resource_not_found", "message": "The requested download was not found."}}
+```
+
+It maps to the ordinary HTTP 404 JSON envelope with `contractViolation: false`.
+`result` and `download` are forbidden on errors. Other existing error codes, retry metadata and write
+receipts keep their meanings. A nonzero exit is a generic process failure.
+No error produces a successful file receipt or replaces the local destination.
+
+A partial export can succeed with a complete, valid file and bounded warnings or
+a completeness flag in `result`, documented by its schema. An interrupted or
+truncated transfer fails. The Broker does not inspect file contents to prove
+semantic completeness or the command's resource filtering.
+
+### Download bounds
+
+For `D = command_imports.<name>.max_download_bytes`, the raw stdout cap is
+`E = 4 * ceil(D / 3) + 16384`. Both the decoded cap D and envelope cap E apply.
+Envelope overhead excluding the base64 characters is separately capped at
+16,384 bytes, including whitespace and all metadata. Configuration validation
+rejects D above `limits.max_download_bytes`, E above
+`limits.max_upstream_response_bytes`, arithmetic overflow, and values that
+cannot be represented on the target platform; it never clamps or raises limits.
+These checks apply only when the optional setting is present. The sample 8 MiB
+cap requires E = 11,201,196 bytes; 8 MiB is not a default.
+
+`result` is limited to 2,048 bytes both as raw JSON and after compact
+serialization, nesting depth 8, 256 total object members/array elements, and
+1,024 UTF-8 bytes per string. The complete Broker metadata envelope also has the
+shared [16,384-byte encoded HTTP header cap](http-api.md#raw-download-negotiation).
+Ordinary JSON and `verify` retain `max_output_bytes`; `describe` retains 16 MiB.
+
+The command budget covers capture and validation/decode/hash workers, whose
+conservative payload allocation budget is `4E + D` per active worker, plus
+bounded metadata. Encoded buffers are released before delivery. Validated files
+use at most D plus transport buffers while being sent; global and principal
+request permits remain held by the response and any outstanding byte chunks.
+Retained file buffers are bounded by
+`limits.max_concurrent_requests * limits.max_download_bytes`, separately from
+worker memory. Size aggregate memory across commands and allow for admitted
+calls keeping older caps after a reload lowers them.
+
+Use [generic invoke](cli.md#save-action-results-to-a-file) with `--output`, JSON
+`send` with `responseMode: "stream"` and an output sink, or local stdio MCP with
+an absolute `outputPath` beside `inputs`. Paths stay local to `agent-access`.
+HTTP MCP excludes executable downloads but permits their action detail.
+Receipts retain bounded metadata and mark command files sensitive; that marker
+does not redact metadata. Sensitive binary responses use `Cache-Control: no-store`.
 
 ### Error codes
 
@@ -766,11 +884,13 @@ optional `receipt`, which becomes the Broker's
 
 ### Secrets in responses
 
-Error messages, `verificationStage` and `safeLocators` keys and values leave
+Download filenames and content types, error messages, `verificationStage` and
+`safeLocators` keys and values leave
 the sensitive result, so none may contain a credential or proxy secret the
 request supplied. The Broker rejects such a response as a contract violation
 (`operation_failed`, logged as `secret_in_message`, `secret_in_receipt` for a
-verification stage, or `secret_in_locator`) when the text contains, anywhere:
+verification stage, `secret_in_locator`, or `secret_in_download_metadata`) when
+the text contains, anywhere:
 
 - Every supplied credential's token, or the Basic `username:token` form of a
   `username_token` credential.
@@ -822,18 +942,18 @@ with `upstreamStatus` `null`, since a command has no upstream status.
 flowchart TD
     Start([Call ended]) --> Spawned{"Did the process start?"}
     Spawned -->|"no: permit wait, fence, credential, request size or spawn failure"| Before["Failure with its own reason; write receipt not_applied"]
-    Spawned -->|yes| Deadline{"Killed at the command deadline?"}
+    Spawned -->|yes| Deadline{"Command deadline reached during execution or response processing?"}
     Deadline -->|yes| Timeout["upstream_timeout: The tool did not finish in time; write receipt unknown"]
     Deadline -->|no| Shutdown{"Killed at shutdown?"}
     Shutdown -->|yes| Cancelled["operation_cancelled: operation stopped during broker shutdown; write receipt unknown"]
-    Shutdown -->|no| Clean{"Exit status 0, stdout within max_output_bytes, pipes closed after the drain?"}
+    Shutdown -->|no| Clean{"Exit status 0, stdout within the action cap, pipes closed after the drain?"}
     Clean -->|no| Failed["operation_failed: The tool failed; write receipt unknown"]
     Clean -->|yes| Parse{"Exactly one JSON document of the response shape?"}
     Parse -->|no| Failed
     Parse -->|yes| Ok{"ok?"}
-    Ok -->|true| Valid{"Result matches outputSchema and the receipt is valid?"}
+    Ok -->|true| Valid{"Result matches outputSchema, any declared file and receipt are valid?"}
     Valid -->|no| Failed
-    Valid -->|yes| Success["Result as result.upstreamCommand; write receipt applied_unverified with locators"]
+    Valid -->|yes| Success["JSON result or validated file plus metadata; write receipt applied_unverified with locators"]
     Ok -->|false| Code{"Known code, valid message and valid receipt?"}
     Code -->|no| Failed
     Code -->|yes| Mapped["Mapped reason and status; write receipt from the response, else unknown"]
@@ -851,7 +971,7 @@ statuses or paths to callers.*
 | Shutdown killed the running process | `operation_cancelled` ("operation stopped during broker shutdown") | `unknown` |
 | HTTP MCP operation deadline or forced shutdown | The host's interrupted outcome | Its `executionState`, `retrySafe: false` |
 | Non-zero exit, crash or signal | `operation_failed` ("The tool failed.") | `unknown` |
-| Stdout over `max_output_bytes`; pipes still open after the post-exit drain | `operation_failed` | `unknown` |
+| Stdout over the action output cap; pipes still open after the post-exit drain; invalid download payload or metadata | `operation_failed` | `unknown` |
 | Empty, invalid or trailing JSON; wrong shape; unknown `code`; invalid `message`; invalid receipt or locator; output schema mismatch | `operation_failed` | `unknown` |
 | Valid error response | As [mapped](#error-codes) | As in [receipts](#receipts-for-writes) |
 | Stderr over 4 KiB | Not a failure; the excess is discarded | None |
@@ -902,10 +1022,10 @@ stateDiagram-v2
     Running --> Exited: leader exit observed, not yet reaped
     Running --> Exited: kill request while live sends SIGKILL to the group
     Exited --> Released: SIGKILL the group, mark released
-    Released --> [*]: reap, drain pipes for at most 1 s, release the permit
+    Released --> [*]: reap, drain pipes for at most 1 s; download worker retains budget
     note right of Running
         Four concurrent I/O branches:
-        stdin writer, stdout reader up to max_output_bytes,
+        stdin writer, stdout reader up to the action's cap,
         stderr reader keeping 4 KiB, exit watcher
     end note
 ```
@@ -930,17 +1050,25 @@ live, so a reused process ID is never signaled.*
 3. **Spawn and I/O.** One supervisor drives four branches concurrently so no
    pipe can block another: the stdin writer writes the request and closes
    stdin (a closed pipe is ignored); the stdout reader kills the group when
-   output exceeds `max_output_bytes`; the stderr reader keeps the first 4 KiB
+   output exceeds the action cap (`max_output_bytes` for JSON, E for downloads);
+   the stderr reader keeps the first 4 KiB
    and discards the rest; and the exit watcher waits for the process.
 4. **Exit.** When the process exits, the Broker kills its whole process group,
    reaps it and drains stdout and stderr for at most one second. Pipes still
    open after that mean a descendant left the group, which fails the call.
-5. **Release.** The permit is released only after the group is killed and
-   reaped and every I/O branch has finished.
+5. **Release.** The supervisor unregisters after the group is killed and reaped
+   and every I/O branch has finished. A download response worker retains the
+   same budget unit until validation, decoding and hashing finish, then releases
+   it before delivery. A slow download consumer holds request capacity, not a
+   command process slot; retained files do not count as unfinished processes.
 
 The deadline is the earlier of admission plus `timeout` and the host
 operation deadline, if any. At the deadline the Broker kills and reaps the
-group and reports `upstream_timeout`.
+group and reports `upstream_timeout`. Download response processing runs on a
+blocking worker within that same deadline. A process exiting at 29.9 seconds of
+a 30-second timeout can still time out during validation: no file is delivered,
+a write has an unknown outcome, and `contractViolation` is null. An abandoned
+worker cannot publish a late result and retains its budget unit until it exits.
 
 **Cancellation.** A queued or running command is not stopped by a client
 disconnect or MCP cancellation: it finishes or reaches its deadline, as other
@@ -948,6 +1076,9 @@ dispatched invocations do. Only the host abandoning the call, at the HTTP MCP
 operation deadline or a forced shutdown, and Broker shutdown (below) kill it;
 a call the host abandoned reports the host's interrupted outcome,
 conservatively `unknown`, even when it was still queued.
+Command downloads retain this independently owned execution through preparation
+and validation even if the HTTP waiter disconnects. Once execution completes,
+dropping the response body cancels delivery and records its terminal audit.
 
 **Shutdown.** After draining operations, shutdown stops new commands (a call
 that has not started fails with `operation_cancelled`), kills every running
@@ -959,9 +1090,10 @@ logged and reported as `unfinished_command_processes`; see the
 
 | Limit | Value |
 | --- | --- |
-| `timeout` | Default 30 s, at most 10 minutes, including the permit wait |
-| `max_output_bytes` | Default 1 MiB, at most `limits.max_upstream_response_bytes` |
-| `max_concurrent` | Default 4, at most `limits.max_concurrent_requests`; one budget per command name |
+| `timeout` | Default 30 s, at most 10 minutes, including the permit wait and download validation/decode/hash |
+| `max_output_bytes` | Default 1 MiB for JSON and `verify`, at most `limits.max_upstream_response_bytes` |
+| `max_download_bytes` | Optional with no default; decoded cap D with derived stdout cap E; see [download bounds](#download-bounds) |
+| `max_concurrent` | Default 4, at most `limits.max_concurrent_requests`; one process/response-worker budget per command name |
 | Request | 1 MiB |
 | Stderr kept | 4 KiB |
 | Error message | 1,024 bytes |
@@ -978,6 +1110,14 @@ revisions. `providerAudit.command` adds the process facts, for example:
 { "name": "ticketing", "spawned": true, "exitCode": 0, "signal": null, "durationMs": 184,
   "contractViolation": false, "operationDispatched": true }
 ```
+
+With audit enabled, command downloads reserve a dedicated stream-start audit
+slot after preparation and before provider dispatch. It covers the command's
+budget wait, execution and response validation until the required started
+record is acknowledged. The separate terminal reservation covers final delivery
+audit. The internal start pool is sized to the effective
+`audit.terminal_queue_capacity`, so command execution leaves ordinary
+`audit.queue_capacity` available for queued writer work.
 
 Calls also record `providerAudit.commandAuthorization`, the authorization
 the request carried, never attributes. A Broker-enforced call records
@@ -997,7 +1137,7 @@ Verification records the same facts under `providerAudit.verification.command`.
 
 | Value | When |
 | --- | --- |
-| `null` | No verdict: the process never started, the Broker stopped it before reading a response (command timeout, HTTP MCP deadline, shutdown), or its exit could not be observed |
+| `null` | No verdict: the process never started, the deadline or cancellation prevented a response verdict (including during download validation), or its exit could not be observed |
 | `false` | No violation: a response was read and kept the contract, or the process failed on its own with a non-zero exit or a signal |
 | `true` | A violation: oversized output, pipes held open after the drain, or a response that breaks the contract |
 
@@ -1010,12 +1150,16 @@ record keeps the process facts:
 | Category | Failure |
 | --- | --- |
 | `spawn_failed`, `shutdown_before_start`, `deadline_before_start` | The process never started |
-| `timeout`, `shutdown` | The Broker killed the process at the command deadline or at shutdown |
+| `timeout`, `shutdown` | The command deadline expired, including during download processing, or shutdown stopped the command |
 | `exit_status`, `signal`, `exit_unobserved` | The process failed on its own, or its exit could not be observed |
-| `output_limit`, `pipes_held_open` | Stdout exceeded `max_output_bytes`, or a pipe stayed open after the drain |
+| `output_limit`, `pipes_held_open` | Stdout exceeded the action output cap, or a pipe stayed open after the drain |
 | `empty_response`, `invalid_json`, `response_shape`, `unknown_code`, `invalid_message`, `invalid_retry_after`, `output_schema` | The response document breaks the contract |
 | `receipt_on_read`, `invalid_receipt`, `invalid_locator` | The receipt breaks the contract |
-| `secret_in_message`, `secret_in_receipt`, `secret_in_locator` | The response contains a supplied credential or proxy secret ([secrets in responses](#secrets-in-responses)) |
+| `download_content`, `download_base64`, `download_size`, `download_sha256` | Invalid payload token or encoding, or a size/hash mismatch |
+| `download_limit`, `download_envelope_limit`, `download_result_limit` | Decoded file, envelope overhead or metadata exceeds its cap |
+| `download_result_shape`, `download_filename`, `download_content_type` | Invalid result metadata, filename or media type |
+| `download_allocation` | The bounded decoded buffer could not be allocated |
+| `secret_in_message`, `secret_in_receipt`, `secret_in_locator`, `secret_in_download_metadata` | The response contains a supplied credential or proxy secret ([secrets in responses](#secrets-in-responses)) |
 
 Stderr is not logged by default, which keeps credentials a command might
 print out of the Broker's logs. To debug a command, an operator may set
@@ -1033,7 +1177,7 @@ not isolation. See [command imports in the security model](security-model.md#com
 
 | | Broker guarantees | The command must |
 | --- | --- | --- |
-| All actions | Authentication, context, token restrictions, grants, rate limits and audit; inputs valid against the accepted schema; final fence and credential checks before the process starts; no fallback from personal to service credentials; the deadline kill; output and concurrency caps; no command output in responses or default logs; sensitive-marked results; no supplied credential or proxy secret in messages, stages or locators | Not log, persist or forward credentials or private attributes; keep attributes it treats as secret out of messages, stages and locators; keep children in its process group; answer exactly once; put only identifiers in `safeLocators` |
+| All actions | Authentication, context, token restrictions, grants, rate limits and audit; inputs valid against the accepted schema; final fence and credential checks before the process starts; no fallback from personal to service credentials; the deadline kill; output and concurrency caps; no rejected stdout in responses or default logs; sensitive-marked results; no supplied credential or proxy secret in messages, stages, locators or download filename/content type | Not log, persist or forward credentials or private attributes; keep attributes it treats as secret out of messages, stages, locators and download metadata; keep children in its process group; answer exactly once; put only identifiers in `safeLocators` |
 | Broker-enforced | Every named resource is covered by a grant before the process starts; only that grant's credential is passed | Act only on the resources passed |
 | Command-enforced | Action-level authorization; one planner for invocation and discovery; only the credentials the passed grants use | Constrain queries and results to each grant, using that grant's credential, and answer `resource_forbidden` otherwise |
 
@@ -1043,7 +1187,7 @@ not isolation. See [command imports in the security model](security-model.md#com
   at most 16 KiB and otherwise ignored; the preview notes that the command
   declares OAuth, which this Broker does not support, and that static
   credentials still work.
-- File uploads and downloads, pagination and continuation tokens.
+- File uploads, pagination and continuation tokens.
 - Long-running or pre-started processes; every call starts a new one.
 - Broker-side filtering of results from command-enforced actions.
 - Sandboxing, checksums, version tracking or upgrade blocking.

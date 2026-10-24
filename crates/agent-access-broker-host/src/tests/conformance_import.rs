@@ -36,6 +36,7 @@ pub const INVALID_SETTINGS_DISCOVERY_TOKEN: &str = "import-invalid-settings";
 /// The fixture deliberately has a source identity unlike its grant action ID.
 pub fn conformance_import_action() -> ImportedActionDefinition {
     ImportedActionDefinition {
+        download: false,
         action: "inspect".into(),
         source: json!({"fixtureOperation":"upstream_inspect"}),
         label: None,

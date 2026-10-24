@@ -3263,7 +3263,8 @@ The broker scans every `Accept` value (each split on commas) and enables raw
 mode when an entry case-insensitively equals `application/octet-stream` and
 either carries no `q` parameter or has a `q` that parses as greater than 0.0.
 
-Raw mode is supported only for:
+Raw mode follows the catalog action's raw-download I/O declaration. Supported
+actions include accepted command actions declaring `download: true`, plus:
 
 - `service = "jira", action = "attachment.download"`
 - `service = "confluence", action = "attachment.download"`
@@ -3298,6 +3299,22 @@ On success the broker:
   `ResponseEnvelope` (so the metadata that would have been the body is still
   available), and
 - streams the raw download bytes as the response body.
+
+Catalog-marked sensitive downloads also carry `Cache-Control: no-store`.
+The encoded metadata header is limited to 16,384 bytes for every raw download,
+including native providers. Bounded serialization accepts at most 12,288 bytes
+of envelope JSON. Oversized or invalid header construction returns a normal JSON
+`operation_failed` response instead of an empty header or file. Validated explicit
+write outcomes are preserved. The unused stream records a canceled terminal
+audit after its started record; this transport refusal is not a command contract
+violation. A static `raw_download_metadata_refused` warning identifies the request,
+service/action, refusal category, cap and encoded length or a labeled lower
+bound without recording metadata contents.
+
+Command download metadata includes root `filename`, `contentType`, computed
+`size` and `sha256`, and bounded command metadata under `upstreamCommand`.
+The command's base64 payload never appears in the HTTP metadata or receipt.
+An explicit command error uses the ordinary JSON error envelope and status.
 
 If the broker would otherwise produce a status >= 400, it falls back to the JSON
 envelope instead of a raw stream. A response that should carry a stream but has

@@ -2049,6 +2049,14 @@ for acknowledgement. If finalization fails after execution, the error preserves
 safe completion evidence and explicitly denies retry safety. Streaming responses
 and credentialed gateway forwarding reserve terminal-audit queue capacity before the started audit record is accepted, so
 terminal records have bounded writer capacity even when shutdown begins.
+After preparation and before provider dispatch, command downloads also reserve
+a dedicated stream-start audit slot. That reservation spans command-budget
+waiting, process execution and response validation through acknowledgement of
+the required started record; the terminal reservation stays with delivery. The
+internal start pool equals the effective `audit.terminal_queue_capacity`, and
+the writer channel includes its capacity alongside ordinary and terminal work.
+Ordinary `audit.queue_capacity` covers queued work through acknowledgement and
+is not held through command execution.
 `audit.durability` controls whether records are ordinary page-cache-only writes,
 `sync_data`, or `sync_all`; `write` is not crash-durable across an OS or host
 failure. For JSONL the sync modes sync each record and also make rotation and
@@ -2373,6 +2381,20 @@ the committed 200 response ends without completing its body, and the stream's
 terminal audit record is `failed` with `decision = error`, the reason, and the
 delivered byte count and digest. The CLI and stdio MCP report such a download as
 failed and leave an existing destination unchanged.
+
+Accepted command actions with `download: true` use the same raw transport after
+the adapter validates a complete base64 JSON response and decodes it in memory.
+An explicit per-command `max_download_bytes` enables this capability and bounds
+decoded bytes; the derived envelope cap must also fit the global upstream limit.
+The shared command budget spans the process and response worker within the
+original deadline, then releases before delivery. Independently owned command
+invocations retain shutdown visibility if their HTTP waiter disconnects.
+Global/principal request permits remain held through the response body and each
+yielded byte owner, bounding retained files even if a chunk outlives the body.
+The common host path caps the complete encoded metadata header at 16,384 bytes,
+returns JSON on refusal and cancels the unused stream. These transport rules also
+apply to native downloads. See [command download bounds](command-imports.md#download-bounds)
+and [HTTP negotiation](http-api.md#raw-download-negotiation).
 
 All numeric limits must be non-zero; invocation limits accept 1 to 1,000,000
 requests and windows from `1s` to `1d`.

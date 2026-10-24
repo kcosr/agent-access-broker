@@ -36,6 +36,7 @@ fn command_metadata(kind: Option<ImportedCredentialKind>) -> ImportedServiceMeta
 fn command_action() -> ImportedActionWrite {
     ImportedActionWrite {
         definition: ImportedActionDefinition {
+            download: false,
             action: "issue.view".into(),
             source: json!({"name":"issue.view"}),
             label: None,

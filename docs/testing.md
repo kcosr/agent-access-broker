@@ -2227,6 +2227,32 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 
 Run it whenever the reference command or the contract it documents changes.
 
+Download coverage also runs in the standard Rust suites. The adapter's download
+module tests strict response parsing, metadata and byte limits, base64 and hash
+validation, ordinary errors, and worker cancellation. Core registry and host
+tests cover retained process/worker budgets, owned invocations and raw-response
+permit/header handling. The host's `tests/imports_command_contract/downloads.rs`
+exercises opt-in limits, persisted declarations, quarantine, dispatch fences,
+disconnects and undrained responses.
+
+`crates/agent-access/tests/command_import_smoke/downloads.rs` uses a synthetic
+local command through the real Broker and CLI for generic invoke, JSON `send`,
+direct HTTP and an actual stdio MCP subprocess. This is independent of the
+reference Python command. It checks the local file/receipt boundary and download
+errors; native generic-invoke regression coverage also lives in the CloudBees
+smoke. Run the adapter and host tests plus both client suites when changing
+download behavior:
+
+```bash
+cargo test --locked -p agent-access-command-import
+cargo test --locked -p agent-access-broker-host
+cargo test --locked -p agent-access --test command_import_smoke --test cloudbees_smoke
+```
+
+These fixtures require no live upstream service. Record actual test results and
+any skipped cases separately; a synthetic command does not validate the resource
+filtering or semantic completeness of an operator's own export command.
+
 The command manifest and core metadata tests cover the default-true
 `supportsExclusions` capability, strict boolean parsing and persisted opt-outs.
 Core resource-management tests reject unsupported exclusions without grant

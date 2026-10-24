@@ -59,6 +59,7 @@ fn action() -> ImportedActionDefinition {
         output_schema: Some(json!({"type":["object","null"]})),
         annotations: json!({}),
         read_only: false,
+        download: false,
     }
 }
 fn invocation(inputs: Value, token: &str) -> ProviderInvocation {
@@ -1121,4 +1122,17 @@ fn scoped_mcp_names_preserve_accepted_source_text_without_canonical_fallback() {
         assert!(McpAdapter.validate_action(&action).is_err());
         assert!(McpAdapter.scoped_mcp_name(&action).is_err());
     }
+}
+
+#[test]
+fn accepted_download_semantics_are_rejected_by_mcp() {
+    let mut definition = action();
+    definition.download = true;
+    assert!(
+        McpAdapter
+            .validate_action(&definition)
+            .unwrap_err()
+            .contains("download")
+    );
+    assert!(CompiledAction::new(&definition).is_err());
 }

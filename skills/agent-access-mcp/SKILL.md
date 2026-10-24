@@ -494,6 +494,15 @@ overwritten. Check `output.status` separately from the operation outcome: an
 error with `operationStatus:"succeeded"` and `output.status:"failed"` means the
 operation succeeded but saving failed. Never repeat a write to recover its output.
 
+For native and imported command downloads, the required absolute `outputPath`
+stays beside `inputs` and is local to the stdio process. The file is verified
+before atomic replacement; the adapter never embeds its file payload in MCP
+text or structured results. The receipt retains bounded Broker metadata, size/hash and sensitivity.
+Command metadata can contain partial-export warnings; a sensitive marker does
+not hide those fields. Ordinary errors or truncated transfers leave the destination
+unchanged and return `isError: true`; preserve any explicit mutation outcome and
+do not replay. HTTP MCP omits executable downloads while retaining action detail.
+
 Uploads additionally take top-level `files`, with the advertised role and local
 path, for example `[{"role":"attachment","path":"/home/me/work/report.pdf"}]`.
 The adapter generates file metadata; do not fabricate size or digest inputs.

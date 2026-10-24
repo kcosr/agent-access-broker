@@ -594,6 +594,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
                 .into_iter()
                 .map(|(action, name, read_only)| ImportedActionWrite {
                     definition: ImportedActionDefinition {
+                        download: false,
                         action: action.into(),
                         source: json!({"toolName":name}),
                         label: None,

@@ -146,6 +146,7 @@ mod tests {
                 .iter()
                 .map(|name| ImportedDiscoveredTool {
                     definition: ImportedActionDefinition {
+                        download: false,
                         action: "pending".into(),
                         source: json!({"toolName":name}),
                         label: None,
@@ -190,6 +191,7 @@ mod tests {
         assert_eq!(first.tools[4].definition.action, "valid.read");
         record.actions.push(ImportedActionRecord {
             definition: ImportedActionDefinition {
+                download: false,
                 action: "custom".into(),
                 ..first.tools[0].definition.clone()
             },

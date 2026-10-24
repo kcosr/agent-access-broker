@@ -45,6 +45,7 @@ impl CommandFixture {
         config.command_imports.insert(
             name.into(),
             CommandImportConfig {
+                max_download_bytes: None,
                 path: script.display().to_string(),
                 timeout: "10s".into(),
                 max_output_bytes: 1024 * 1024,

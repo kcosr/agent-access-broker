@@ -1876,7 +1876,11 @@ impl PreparedGatewayOperation {
 
 enum AuditAppendMode {
     Normal,
-    OwnedTerminal(TerminalAuditPermit),
+    StreamStart(StreamStartAuditPermit),
+    Owned {
+        terminal: TerminalAuditPermit,
+        started: Option<StreamStartAuditPermit>,
+    },
     GatewayTerminal(GatewayTerminalAuditGuard),
 }
 
@@ -6481,8 +6485,24 @@ impl BrokerRuntime {
         let stream_needs_terminal_audit = stream
             .as_ref()
             .is_some_and(ProviderResultStream::is_streaming);
+        let (append_mode, reserved_terminal) = match append_mode {
+            // Required-stream owners reserve both records before dispatch.
+            // Delivery retains terminal capacity while its started record uses
+            // the separate stream-start capacity reserved after preparation.
+            // An optional stream from an unrestricted invocation has no started
+            // reservation and uses the ordinary required-append path.
+            AuditAppendMode::Owned { terminal, started } if stream_needs_terminal_audit => (
+                started.map_or(AuditAppendMode::Normal, AuditAppendMode::StreamStart),
+                Some(terminal),
+            ),
+            append_mode => (append_mode, None),
+        };
         if stream_needs_terminal_audit {
-            match self.audit.reserve_terminal().await {
+            let reservation = match reserved_terminal {
+                Some(permit) => Ok(permit),
+                None => self.audit.reserve_terminal().await,
+            };
+            match reservation {
                 Ok(permit) => {
                     terminal_permit = Some(permit);
                     audit_record.provider_audit =
@@ -6509,10 +6529,16 @@ impl BrokerRuntime {
         }
 
         match append_mode {
-            AuditAppendMode::Normal | AuditAppendMode::OwnedTerminal(_) => {
+            AuditAppendMode::Normal
+            | AuditAppendMode::StreamStart(_)
+            | AuditAppendMode::Owned { .. } => {
                 let appended = match append_mode {
-                    AuditAppendMode::OwnedTerminal(permit) => {
+                    AuditAppendMode::StreamStart(permit) => {
                         permit.append_required(audit_record.clone()).await
+                    }
+                    AuditAppendMode::Owned { terminal, started } => {
+                        drop(started);
+                        terminal.append_required(audit_record.clone()).await
                     }
                     _ => self.audit.append_required(audit_record.clone()).await,
                 };
@@ -8920,6 +8946,13 @@ impl AuditSink {
         writer.reserve_terminal().await
     }
 
+    async fn reserve_stream_start(&self) -> Result<StreamStartAuditPermit, RuntimeError> {
+        let Some(writer) = &self.writer else {
+            return Ok(StreamStartAuditPermit::Noop);
+        };
+        writer.reserve_stream_start().await
+    }
+
     async fn shutdown_and_drain(&self, timeout: Duration) -> Result<(), RuntimeError> {
         let Some(writer) = &self.writer else {
             return Ok(());
@@ -9259,6 +9292,7 @@ struct AuditWriterHandle {
     sender: mpsc::Sender<AuditCommand>,
     normal_capacity: Arc<Semaphore>,
     terminal_capacity: Arc<Semaphore>,
+    stream_start_capacity: Arc<Semaphore>,
     config: Arc<AuditWriterConfig>,
     health: Arc<AuditWriterHealth>,
     join: Mutex<Option<thread::JoinHandle<()>>>,
@@ -9339,14 +9373,19 @@ fn emit_audit_writer_test_event(path: &str, kind: AuditWriterTestEventKind) {
 
 impl AuditWriterHandle {
     fn start(config: AuditWriterConfig, storage: Box<dyn AuditStorage>) -> Arc<Self> {
+        // Each ordinary, stream-start, and terminal reservation can enqueue one
+        // command. Stream starts share the terminal pool's validated size, but
+        // use an independent pool so long invocations cannot starve normal work.
         let total_capacity = config
             .queue_capacity
+            .saturating_add(config.terminal_queue_capacity)
             .saturating_add(config.terminal_queue_capacity);
         let (sender, receiver) = mpsc::channel(total_capacity);
         let config = Arc::new(config);
         let health = Arc::new(AuditWriterHealth::new(config.path_label.clone()));
         let normal_capacity = Arc::new(Semaphore::new(config.queue_capacity));
         let terminal_capacity = Arc::new(Semaphore::new(config.terminal_queue_capacity));
+        let stream_start_capacity = Arc::new(Semaphore::new(config.terminal_queue_capacity));
         let thread_config = Arc::clone(&config);
         let thread_health = Arc::clone(&health);
         // The writer logs to the subscriber in effect where it was started.
@@ -9363,6 +9402,7 @@ impl AuditWriterHandle {
             sender,
             normal_capacity,
             terminal_capacity,
+            stream_start_capacity,
             config,
             health,
             join: Mutex::new(Some(join)),
@@ -9493,6 +9533,37 @@ impl AuditWriterHandle {
                 )
             }
         }
+    }
+
+    async fn reserve_stream_start(
+        self: &Arc<Self>,
+    ) -> Result<StreamStartAuditPermit, RuntimeError> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(audit_runtime_error(
+                self.path_label(),
+                std::io::ErrorKind::BrokenPipe,
+                "audit writer is shutting down",
+            ));
+        }
+        let permit = tokio::time::timeout(
+            self.config.enqueue_timeout,
+            self.stream_start_capacity.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| {
+            audit_runtime_error(
+                self.path_label(),
+                std::io::ErrorKind::TimedOut,
+                "audit stream-start queue capacity timed out",
+            )
+        })?
+        .map_err(|source| {
+            audit_runtime_error(self.path_label(), std::io::ErrorKind::BrokenPipe, source)
+        })?;
+        Ok(StreamStartAuditPermit::Writer {
+            writer: Arc::clone(self),
+            permit,
+        })
     }
 
     async fn reserve_terminal(self: &Arc<Self>) -> Result<TerminalAuditPermit, RuntimeError> {
@@ -9739,6 +9810,23 @@ impl AuditWriterHealth {
             std::io::ErrorKind::Other,
             format!("audit writer has unrecovered failures: {classes}"),
         ))
+    }
+}
+
+enum StreamStartAuditPermit {
+    Noop,
+    Writer {
+        writer: Arc<AuditWriterHandle>,
+        permit: OwnedSemaphorePermit,
+    },
+}
+
+impl StreamStartAuditPermit {
+    async fn append_required(self, record: AuditRecord) -> Result<(), RuntimeError> {
+        match self {
+            Self::Noop => Ok(()),
+            Self::Writer { writer, permit } => writer.append_with_permit(record, permit).await,
+        }
     }
 }
 

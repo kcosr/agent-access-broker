@@ -199,6 +199,9 @@ fn source_tool_name(definition: &ImportedActionDefinition) -> Result<&str, Strin
 
 impl CompiledAction {
     fn new(definition: &ImportedActionDefinition) -> Result<Self, String> {
+        if definition.download {
+            return Err("MCP imports do not support download actions".into());
+        }
         if serde_json::to_vec(definition)
             .map_err(|_| "invalid tool definition")?
             .len()
@@ -658,6 +661,7 @@ fn discovered_tool(raw: &Value) -> Result<ImportedDiscoveredTool, ProviderError>
         annotations: json!({"toolAnnotations":raw.get("annotations").cloned().unwrap_or_else(|| json!({})),
             "execution":raw.get("execution").cloned().unwrap_or(Value::Null)}),
         read_only: false,
+        download: false,
     };
     let unsupported_reason =
         if serde_json::to_vec(raw).map_err(|_| protocol_error())?.len() > IMPORT_MAX_TOOL_BYTES {

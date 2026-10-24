@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Imported action API additions require consumer updates.**
+  `ImportedActionDefinition`, exposed through the host's `test-support` API,
+  gains the public `download: bool` field. Downstream struct literals must
+  supply it (`false` preserves existing JSON actions), and exhaustive
+  destructuring must include it or use `..`.
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
+
 - **Resource-access discovery replaces resource listing.** Use MCP
   `resource_access_describe`, CLI `resource-access describe`, HTTP
   `/v1/services/{service}/resource-access`, and send operation
@@ -50,6 +57,15 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Command file downloads and generic invocation.** Reviewed commands can
+  declare `download: true` when the operator sets an explicit `max_download_bytes`.
+  `invoke --output`, JSON `send` and local stdio MCP verify and atomically save
+  native and imported downloads with metadata receipts. HTTP MCP retains action
+  detail but excludes executable downloads. See [command downloads](docs/command-imports.md#download-responses).
+  Accepted download definitions require a compatible backup or removal through
+  the newer Broker before rollback; an older reader rejects the containing service.
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
 
 - **Live resource listing.** Separately grantable, read-only GitLab/Jira
   `project.list`, Confluence `space.list`, and CloudBees CI `job.list` actions
@@ -103,6 +119,14 @@ All notable changes to this project are documented in this file.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Changed
+
+- **Download limits and privacy.** Command downloads validate explicit decoded
+  and envelope limits within the command deadline, holding command capacity
+  through response processing and request capacity through delivery. All raw
+  downloads now cap their encoded metadata header at 16 KiB, report a bounded
+  refusal warning, and honor sensitive-output `no-store`. See
+  [download bounds](docs/command-imports.md#download-bounds).
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
 
 - **The portal Credentials list has no Permissions column.** An OAuth
   connection's permissions, scope evidence, connect availability and remote

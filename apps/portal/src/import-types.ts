@@ -36,6 +36,8 @@ export type ImportActionDefinition = {
   outputSchema?: unknown;
   annotations: unknown;
   readOnly: boolean;
+  /** Omitted on ordinary JSON actions. */
+  download?: boolean;
 };
 export type ImportActionRecord = {
   definition: ImportActionDefinition;
