@@ -35,6 +35,17 @@ impl InvocationControl {
             }),
         }
     }
+    /// The absolute deadline shared by admission and execution.
+    pub fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.inner.deadline
+    }
+
+    /// Observes explicit cancellation during host admission. Transport loss must
+    /// never cancel this token: admitted operation ownership is independent.
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.inner.cancel.clone()
+    }
+
     /// Explicit cancellation prevents dispatch only when it wins this atomic gate.
     pub fn cancel(&self) {
         let _ = self
@@ -106,6 +117,7 @@ impl BrokerRuntime {
         require_stream: bool,
     ) -> BrokerResponse<Value> {
         let fallback = FinalizeContext {
+            admission: context.admission,
             search_authorization: None,
             command: None,
             agent_request_id: context.operation.agent_request_id.clone(),
@@ -470,6 +482,7 @@ mod tests {
     }
     fn context() -> GovernedOperationContext {
         GovernedOperationContext {
+            admission: None,
             operation: OperationContext {
                 agent_request_id: "owned-test".into(),
                 broker_request_id: "owned-test-broker".into(),
@@ -500,6 +513,75 @@ mod tests {
             .forget();
     }
     #[tokio::test]
+    async fn admission_metadata_survives_owned_success_and_preparation_denial() {
+        for action in ["echo", "missing"] {
+            let provider = ControlledProvider::new(false, false);
+            provider.complete.add_permits(1);
+            let (runtime, dir) = fixture(provider);
+            let mut context = context();
+            context.operation.action = action.into();
+            context.admission = Some(InvocationAdmissionAudit::admitted(true, 19));
+            let response = runtime
+                .invoke_owned(context, request(), InvocationControl::default(), false)
+                .await;
+            assert_eq!(response.status, if action == "echo" { 200 } else { 403 });
+            assert_eq!(
+                audit(&dir)["providerAudit"]["admission"],
+                json!({
+                    "waited":true, "waitedMilliseconds":19, "outcome":"admitted"
+                })
+            );
+            assert!(
+                !serde_json::to_value(response.envelope)
+                    .unwrap()
+                    .to_string()
+                    .contains("waitedMilliseconds")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_admission_errors_keep_host_metadata_and_existing_envelopes() {
+        for (admission, reason, outcome) in [
+            (
+                InvocationAdmissionAudit::rejected(true, 23),
+                ReasonCode::RateLimited,
+                "rejected",
+            ),
+            (
+                InvocationAdmissionAudit::cancelled(true, 23),
+                ReasonCode::OperationCancelled,
+                "cancelled",
+            ),
+        ] {
+            let (runtime, dir) = fixture(ControlledProvider::new(false, false));
+            let mut context = context();
+            context.admission = Some(admission);
+            let response = runtime
+                .governed_admission_limit_error_response(
+                    context,
+                    ProviderError::error(reason, "host admission ended"),
+                )
+                .await;
+            assert_eq!(response.envelope.reason_code, Some(reason.into()));
+            assert_eq!(
+                response.envelope.service,
+                if reason == ReasonCode::RateLimited {
+                    "broker"
+                } else {
+                    "fake"
+                }
+            );
+            assert_eq!(
+                audit(&dir)["providerAudit"]["admission"],
+                json!({
+                    "waited":true, "waitedMilliseconds":23, "outcome":outcome
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn cancel_during_preparation_prevents_dispatch_and_finalizes_once() {
         let provider = ControlledProvider::new(true, false);
         let (runtime, dir) = fixture(provider.clone());
@@ -508,13 +590,27 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned(context(), request(), control, false)
+                    .invoke_owned(
+                        GovernedOperationContext {
+                            admission: Some(InvocationAdmissionAudit::admitted(true, 13)),
+                            ..context()
+                        },
+                        request(),
+                        control,
+                        false,
+                    )
                     .await
             })
         };
         entered(&provider.lookup_started).await;
         control.cancel();
         let response = operation.await.unwrap();
+        assert_eq!(
+            audit(&dir)["providerAudit"]["admission"],
+            json!({
+                "waited":true, "waitedMilliseconds":13, "outcome":"admitted"
+            })
+        );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(!control.dispatched());
         assert_eq!(
@@ -819,7 +915,15 @@ mod tests {
             let control = control.clone();
             tokio::spawn(async move {
                 runtime
-                    .invoke_owned(context(), request(), control, true)
+                    .invoke_owned(
+                        GovernedOperationContext {
+                            admission: Some(InvocationAdmissionAudit::admitted(true, 29)),
+                            ..context()
+                        },
+                        request(),
+                        control,
+                        true,
+                    )
                     .await
             })
         };
@@ -898,6 +1002,14 @@ mod tests {
         assert_eq!(records[1]["providerAudit"]["streamPhase"], "started");
         assert_eq!(records[2]["providerAudit"]["streamPhase"], "completed");
         assert_eq!(records[2]["providerAudit"]["streamBytes"], 3);
+        for record in &records[1..] {
+            assert_eq!(
+                record["providerAudit"]["admission"],
+                json!({
+                    "waited":true, "waitedMilliseconds":29, "outcome":"admitted"
+                })
+            );
+        }
         assert_eq!(records[1]["brokerRequestId"], records[2]["brokerRequestId"]);
         drop(pressure);
     }

@@ -132,6 +132,28 @@ actions and exposes typed wrappers for supported services.
   posture, provider semantics, operational workflows, or repository layout
   changes.
 
+## Invocation admission and discovery
+
+Keep one FIFO rate queue per principal/service across tokens and transports.
+Waiting retains existing request permits and charges quota only at admission;
+post-admission denials still count. Resolve `max_wait` from service, default,
+then zero independently of principal requests/window overrides. Validate the
+source TOML service names against the complete native/imported catalog after
+managed-store loading; catalog edits preserve TOML wait policy while imported
+managed rates override requests/window. Revalidate the
+original identity after a wait, never remap it, and preserve absolute request
+and operation deadlines. Observed pending cancellation and runtime publication
+remove tickets without dispatch; delivery loss after admission does not cancel
+owned operations. Client timeout alone cannot prove nonapplication.
+
+Expose live limits only in the caller-filtered single-service detail response
+and its existing CLI/MCP describe projections. Omit them for anonymous callers;
+keep service lists, SDK capabilities, action catalogs and `/v1/me.serviceLimits`
+static. Observation must not change limiter state or contact an upstream.
+Retain independent bounded detail capacity when invocation slots are full.
+Keep CLI/stdio `service.request_timeout_ms` separate from the download body's
+30-second idle timeout and report uncertain invocation outcomes on timeout.
+
 ## Managed access
 
 `docs/roles.md` defines exclusive account roles and independent self-service.

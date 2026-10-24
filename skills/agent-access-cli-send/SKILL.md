@@ -966,6 +966,21 @@ HTTP request files use `kind = "http"` and cataloged broker routes; inspect
 Preserve request IDs from JSON/metadata. If `decision: "deny"`, do not retry broader
 scope. Narrow the request or ask the user for the correct access.
 
+`agent-access services describe SERVICE` includes authenticated caller `limits`:
+rate/window, `maxWaitSeconds`, counted/queued requests, next unreserved admission
+and approximate shared request occupancy. These process-local observations reserve
+nothing; lists remain static. Optional Broker waiting holds the original request
+in FIFO order and uses existing request slots. Do not resubmit pending calls.
+
+CLI and local stdio MCP use `[service].request_timeout_ms` (default `30000`):
+allow configured waiting plus useful execution within proxy timeouts. Downloads
+retain a separate 30-second body idle timeout. A local timeout can leave the
+request queued or executing until the Broker detects abandonment; reconcile a
+mutation through authorized reads or audit before retrying it. Describe is
+optional guidance, not required before every invocation. A correlated
+pre-admission `operation_cancelled` with `executionState: "not_dispatched"` and
+`retrySafe: true` proves no dispatch; a local timeout alone does not.
+
 Rate limits exit 7 (HTTP 429). For `rate_limited` (a Broker limit) and
 `upstream_rate_limited` (the upstream service throttled the request), `send`
 also prints one stderr line, `rate limited: <message>`, naming the service and
@@ -982,7 +997,8 @@ that verifies a create) is never a rate limit: it returns
 `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
 `retrySafe: false`, `safeLocators`, and no retry wait. Inspect those objects;
 do not wait and repeat the write. On `concurrency_limited`, wait for your
-in-flight requests to finish.
+in-flight requests, including rate waiters, to release capacity. It has no
+`Retry-After`; rate-refusal retry timing already honors accepted FIFO waiters.
 
 A failed write can carry a mutation receipt in `result`, beside its ordinary
 reason. `mutationStatus: "not_applied"` with `retrySafe: true` means the Broker

@@ -889,7 +889,8 @@ a timeout before a result is ready, or forced shutdown after dispatch, reports a
 unknown outcome without claiming rollback or retry safety. Mutations are never
 automatically replayed.
 
-HTTP MCP adds its own overall `mcp.operation_timeout_ms` deadline. The existing
+HTTP MCP adds its own absolute `mcp.operation_timeout_ms` deadline shared by
+rate waiting and execution. The existing
 `limits.request_timeout_ms` still bounds individual upstream requests; HTTP request bodies, including multipart uploads, also have the independent
 `limits.request_body_timeout_ms` total receive deadline. Final audit
 acknowledgement is outside cancellation selection so a queued terminal append
@@ -938,8 +939,10 @@ sequenceDiagram
    malformed, duplicate, or unknown values fail closed without policy lookup or
    upstream work.
 2. **Invocation rate admission.** After identity resolution and ingress
-   concurrency admission, a request for a configured service is charged once to
-   the caller's `(principal, service)` rolling window (see
+   concurrency admission, a request for a configured service can wait in FIFO
+   order within `max_wait` and its absolute request deadline. It retains existing
+   request slots and is charged once only when admitted to the caller's
+   `(principal, service)` rolling window (see
    [operational limits](#operational-limits)). A rejection is `rate_limited`
    (429) with retry guidance and one audit record; it performs no policy,
    lookup, credential, or upstream work. Requests later denied by policy still
@@ -2290,7 +2293,7 @@ listener, format, authentication model, and cardinality policy.
 
 | Limit | Default |
 | --- | --- |
-| `invocations.default` | 100 requests per `1m` (built in) |
+| `invocations.default` | 100 requests per `1m`, `max_wait = "0s"` (built in) |
 | `auth_requests_per_principal_per_minute` | 100 |
 | `auth_requests_per_source_per_minute` | 300 |
 | `max_concurrent_requests` | 100 |
@@ -2315,7 +2318,7 @@ IO form, HTTP MCP action tool calls, and Git gateway pack POSTs, each charged
 once at admission. Every pack POST counts, including protocol v2 `ls-refs`
 POSTs, additional fetch negotiation rounds, and a push's probe POST, so one Git
 fetch or clone typically costs two or more and gateway limits need room for
-that (a limit of 1 makes v2 fetches impossible). Discovery, specs, `/v1/me`,
+that (a limit of 1 without waiting prevents v2 fetches). Discovery, specs, `/v1/me`,
 management, MCP protocol messages, and Git ref discovery (`GET .../info/refs`)
 are not counted. Service invocation limits are not keyed on the source address, because many
 principals commonly share one (for example behind a shared ingress proxy).
@@ -2325,14 +2328,41 @@ admitted request leaves the trailing window. It never admits more than
 `requests` in any trailing window, is conservative by at most `window / 60`,
 records only admitted requests, and keeps memory per key independent of
 `requests`. Idle keys are pruned by an amortized sweep; there is no global key
-capacity that could reject other principals. Limits apply to the next request
-after a reload or managed-store override change; history survives reloads and
-resets for a key only when its window length changes. Global administrators
+capacity that could reject other principals. History survives reloads and resets
+for a key only when its window length changes. Managed override changes reforecast
+pending requests without extending deadlines. Actual runtime publication cancels
+pending admission; already-admitted operations keep their snapshot semantics.
+Global administrators
 manage managed-store overrides through
 `/v1/admin/principals/{principal}/service-limits`, which reports each configured
 service's effective limit and whether an override supplies it; callers see
 their own effective limits, without that distinction, as `/v1/me`
 `serviceLimits`, filtered to the services `/v1/services` would show them.
+
+`max_wait` resolves from the service, then default, then zero independently of
+principal rate overrides. Positive waiting uses one FIFO queue per principal and
+service across tokens/transports, before policy or credential work. REST and Git
+wait before body parsing; HTTP MCP has already parsed its protocol message.
+Forecasts honor conservative bucket history and accepted waiters. Rate capacity
+must be due within the configured wait; timer latency may delay processing that
+opportunity, while actual body/operation deadlines remain strict. HTTP MCP keeps
+one absolute operation deadline across waiting and execution.
+
+Waiters retain existing global/per-principal request and MCP response slots.
+There is no new queue-count setting or aggregate service quota. Observed pending
+cancellation, abandonment, runtime publication or shutdown removes the ticket
+without a charge or dispatch; admission that wins the race keeps its charge.
+The original identity is revalidated after admission without remapping it.
+Detected connection loss affects pending admission only; unread bodies or proxies
+can delay detection, so a client timeout may leave a request queued or executing.
+Tracked admission owners retain terminal audit responsibility even after response
+abandonment, transferring it to normal invocation ownership only on handoff.
+
+Single-service detail adds caller-specific [live limits](http-api.md#live-service-limits)
+through HTTP, CLI and existing MCP describe. Observation never changes limiter
+state. REST detail has an independent bounded control pool with the configured
+request caps; HTTP MCP keeps its existing control pool. Other lists/specs remain
+static, anonymous detail omits limits, and no upstream quota is probed.
 
 A rejection is HTTP 429 `rate_limited` with a complete message, a
 `Retry-After` header, and the reserved `broker/request.admit` envelope without
@@ -2340,7 +2370,12 @@ a `result`. The correlated tuple establishes nonapplication; see
 [trusted callers](trusted-callers.md#http-failures-before-provider-dispatch).
 Other broker errors with `result.retryAfterSeconds` also carry `Retry-After`. The rejected
 request's audit record carries `providerAudit.rateLimit`, and the
-`request_limited` event carries the same detail plus the broker token ID.
+`request_limited` event carries the same detail plus the broker token ID. Retry
+timing honors accepted waiters, and queue deadline expiry uses the same 429
+contract. Proven pre-admission cancellation instead uses the original action's
+`operation_cancelled`, `executionState: "not_dispatched"`, `retrySafe: true`.
+Ordinary final audit/service events include bounded admission wait and outcome
+metadata; successful waiting creates no rejection record.
 
 **Authentication budgets.** Login, password changes, OIDC, unauthenticated
 calls, invalid-session traffic, and anonymous access use independent
@@ -2358,7 +2393,8 @@ local to the broker process; reloads retain it.
 
 **HTTP bodies.** Global concurrency admission precedes body extraction; handlers
 and supervised operations share the same lease. Health/readiness probes and
-bodiless portal assets bypass this lease. Anonymous control-plane body reads are
+bodiless portal assets bypass this lease; HTTP MCP and single-service detail
+use their independent bounded pools. Anonymous control-plane body reads are
 limited to a quarter of global capacity (minimum one) and a source slot; verified
 management identities instead use a separate per-principal body pool until
 extraction finishes, capped by `max_concurrent_requests_per_principal`. Bodiless writes skip body
@@ -2558,7 +2594,10 @@ Audit queries use the reader pool of the generation that admitted the request.
 
 On `SIGTERM` or `SIGINT`, the broker enters a single graceful shutdown path. The
 public listener stops accepting new connections, in-flight HTTP work drains
-within `--shutdown-timeout-ms`, and `SIGUSR2` reload handling exits. If listener
+within `--shutdown-timeout-ms`, and `SIGUSR2` reload handling exits. Pending rate
+admission closes at drain start: no further rate grants occur, queued tickets
+are removed without dispatch, and tracked admission owners finalize before the
+audit writer closes. Already-admitted operation draining is unchanged. If listener
 drain exceeds the timeout, open streaming downloads are marked canceled so their
 writer-backed terminal audit records are queued when the stream wrappers drop,
 and the connections still open are cut off: each listener cancels its connection
@@ -2566,8 +2605,9 @@ tasks and waits for them to end. The audit writer registry then receives the
 remaining shutdown budget to drain and join its writer threads; terminal audit
 durability after a forced timeout is best-effort if that final writer drain also
 expires.
-The JSON-operation supervisor preserves admission for requests accepted before
-shutdown while the listeners drain, including requests still reading their bodies.
+The JSON-operation supervisor preserves operation admission for requests already
+rate-admitted before shutdown while the listeners drain, including requests still
+reading their bodies.
 It closes operation admission after listener drain, or when the shutdown budget
 reaches its reserved final phase (the final quarter, capped at one second). That
 phase bounds forced-stop unknown-outcome finalization without extending the hard

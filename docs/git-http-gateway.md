@@ -361,17 +361,24 @@ counts, so one Git command usually costs more than one request:
 Size gateway limits for several POSTs per Git command. The built-in default
 (100 per `1m`) leaves room; when lowering it, allow at least three or four
 POSTs for each fetch, clone, or push expected in one window, plus more for
-repositories whose fetches need several negotiation rounds. A limit of 1 makes
-protocol v2 fetches impossible: the `ls-refs` POST spends the window before
-the fetch POST. Set a gateway-specific value with
+repositories whose fetches need several negotiation rounds. With no waiting,
+a limit of 1 prevents protocol v2 fetches: the `ls-refs` POST spends the window
+before the fetch POST. A positive `max_wait` can admit later POSTs after the
+window allows them, subject to client and ingress deadlines. Set a gateway-specific
+value with
 `[limits.invocations.services.<gateway>]`; see
-[configuration](configuration.md#service-invocation-limits). A limited pack
-POST returns HTTP 429 with `Retry-After` in whole seconds,
-`X-Agent-Access-Reason-Code: rate_limited`, and a plain-text body such as
-`Rate limit reached for service "gitlab_git": 30 requests per 1m. Retry after
-12s (at 2026-09-25T14:03:12Z). The request was not executed.` The rejection is
-audited with the resolved principal, the real gateway action, and
-`providerAudit.rateLimit`.
+[configuration](configuration.md#service-invocation-limits). Waiting occurs before
+consuming or forwarding the pack, retains existing request slots, and shares
+the original ingress body deadline. Observed pending cancellation removes the
+request without a charge or dispatch; delayed disconnect detection means a
+client timeout alone cannot prove a push was not applied.
+
+A refused or expired queued pack POST returns HTTP 429 with whole-second
+`Retry-After`, `X-Agent-Access-Reason-Code: rate_limited`, and a plain-text message
+identifying the effective rate, configured wait, limiting deadline, pending
+count and next unreserved admission. Retry timing honors accepted waiters; do
+not repeat still-pending calls. The rejection is audited with the resolved
+principal, the real gateway action, and `providerAudit.rateLimit`.
 
 Credentialed gateway forwarding is audit-gated with
 `providerAudit.gateway.phase = "started"` before upstream credentials are sent,

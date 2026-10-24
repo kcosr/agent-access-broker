@@ -6,6 +6,8 @@ mod imported_oauth;
 mod imports;
 #[path = "mcp_stdio/names.rs"]
 mod names;
+#[path = "mcp_stdio/rate_wait.rs"]
+mod rate_wait;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_fake::FAKE_PROJECT_RESOURCE;

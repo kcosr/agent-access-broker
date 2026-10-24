@@ -1,7 +1,7 @@
 use crate::ingress::guards::{IngressLimitError, IngressPermit, source_log_address};
 use crate::ingress::source::auth_source_key;
 use crate::observability;
-use crate::state::{AppState, RuntimeSnapshot};
+use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     BrokerResponse, GovernedOperationContext, IdentityContext, InvocationRateLimited,
     OperationContext, ResponseEnvelope, SourceContext, new_broker_request_id,
@@ -221,54 +221,80 @@ pub(crate) async fn acquire_caller_guard(
 /// structured retry guidance and returned as the error response.
 pub(crate) async fn admit_service_invocation(
     state: &AppState,
-    snapshot: &RuntimeSnapshot,
+    snapshot: &Arc<RuntimeSnapshot>,
     context: GovernedOperationContext,
-) -> Result<GovernedOperationContext, Box<BrokerResponse<Value>>> {
-    let operation = &context.operation;
+    permits: RequestPermits,
+    revalidate: crate::admission::AdmissionRevalidation,
+) -> Result<(GovernedOperationContext, RequestPermits), Box<BrokerResponse<Value>>> {
     if snapshot
         .runtime
-        .service_descriptor(&operation.service)
+        .service_descriptor(&context.operation.service)
         .is_none()
     {
-        return Ok(context);
+        return Ok((context, permits));
     }
-    let limit = match snapshot
-        .runtime
-        .effective_invocation_limit(&operation.identity.principal, &operation.service)
-        .await
-    {
-        Ok(limit) => limit.limit(),
-        Err(error) => {
-            return Err(Box::new(
-                snapshot
-                    .runtime
-                    .governed_operation_error_response(context, error)
-                    .await,
-            ));
-        }
-    };
-    match state.reloadable.shared_invocations.try_admit(
-        &operation.identity.principal,
-        &operation.service,
-        limit,
-    ) {
-        Ok(()) => Ok(context),
-        Err(rejection) => {
-            emit_invocation_limited(operation, &rejection);
-            Err(Box::new(
-                snapshot
-                    .runtime
-                    .governed_admission_limit_error_response(
-                        context,
-                        rejection.into_provider_error(),
-                    )
-                    .await,
-            ))
-        }
+    crate::admission::admit(state, snapshot, context, permits, revalidate).await
+}
+
+/// Rechecks the original identity inside the admission owner after its rate
+/// charge, so an abandoned caller cannot drop finalization or its permits.
+pub(crate) async fn revalidate_after_admission(
+    snapshot: &Arc<RuntimeSnapshot>,
+    context: GovernedOperationContext,
+    deadline: Option<crate::ingress::invocation_limits::AdmissionDeadline>,
+    guard: crate::admission::IdentityWorkGuard,
+    recheck: impl std::future::Future<
+        Output = Result<IdentityContext, agent_access_core::IdentityFailure>,
+    > + Send
+    + 'static,
+) -> Result<IdentityContext, Box<BrokerResponse<Value>>> {
+    let recheck = crate::admission::identity_work(guard, recheck);
+    let identity = match deadline {
+        Some(deadline) => match tokio::time::timeout_at(deadline.at, recheck).await {
+            Ok(identity) if tokio::time::Instant::now() < deadline.at => identity.unwrap_or(Err(agent_access_core::IdentityFailure::Invalid)),
+            _ => {
+                let error = match deadline.kind {
+                    agent_access_core::InvocationDeadlineKind::Operation => agent_access_provider::ProviderError::error(
+                        agent_access_provider::ReasonCode::OperationTimeout, "operation deadline exceeded",
+                    ).with_result(serde_json::json!({"executionState":"not_dispatched","retrySafe":false})),
+                    _ => agent_access_provider::ProviderError::deny(
+                        agent_access_provider::ReasonCode::BodyMalformed, "request body receive deadline exceeded",
+                    ),
+                };
+                return Err(Box::new(snapshot.runtime.governed_operation_error_response(context, error).await));
+            }
+        },
+        None => recheck.await.unwrap_or(Err(agent_access_core::IdentityFailure::Invalid)),
+    }.and_then(|identity| {
+        if identity.principal == context.operation.identity.principal { Ok(identity) }
+        else { Err(agent_access_core::IdentityFailure::Invalid) }
+    });
+    match identity {
+        Ok(identity) => Ok(identity),
+        Err(failure) => Err(Box::new(
+            snapshot
+                .runtime
+                .identity_error_response_for_operation(
+                    agent_access_core::GovernedIdentityFailureContext {
+                        agent_request_id: context.operation.agent_request_id,
+                        broker_request_id: context.operation.broker_request_id,
+                        service: context.operation.service,
+                        action: context.operation.action,
+                        source: context.operation.source,
+                        execution_context: context.execution_context,
+                        admission: context.admission,
+                    },
+                    failure,
+                )
+                .await,
+        )),
     }
 }
 
-fn emit_invocation_limited(operation: &OperationContext, rejection: &InvocationRateLimited) {
+pub(crate) fn emit_invocation_limited(
+    operation: &OperationContext,
+    rejection: &InvocationRateLimited,
+) {
     let reason_code = agent_access_provider::ReasonCode::RateLimited;
     let decision = agent_access_provider::Decision::Error;
     observability::record_decision(decision.as_str());
@@ -411,6 +437,23 @@ pub(crate) async fn resolve_identity_pending(
     PendingIdentity<agent_access_core::IdentityContext, agent_access_core::IdentityFailure>,
     agent_access_core::IdentityFailure,
 > {
+    resolve_identity_pending_pinned(state, snapshot, headers)
+        .await
+        .map(|(pending, _)| pending)
+}
+
+/// Keeps the original attested proof for revalidation after rate admission.
+pub(crate) async fn resolve_identity_pending_pinned(
+    state: &AppState,
+    snapshot: Arc<RuntimeSnapshot>,
+    headers: HeaderMap,
+) -> Result<
+    (
+        PendingIdentity<agent_access_core::IdentityContext, agent_access_core::IdentityFailure>,
+        Option<crate::mcp::IdentityPin>,
+    ),
+    agent_access_core::IdentityFailure,
+> {
     // Keep identity resolution in the request's span for log correlation.
     let span = tracing::Span::current();
     let resolver = snapshot.clone();
@@ -425,27 +468,23 @@ pub(crate) async fn resolve_identity_pending(
     .await
     .unwrap_or(Err(agent_access_core::IdentityFailure::Invalid))?;
     let reloadable = state.reloadable.clone();
-    let proof = admitted.proof;
+    let pin = admitted.proof.map(|proof| crate::mcp::IdentityPin {
+        caller_security_epoch: admission
+            .caller_id()
+            .map(|_| snapshot.caller_security_epoch),
+        admission,
+        proof: Some(proof),
+    });
+    let original_pin = pin.clone();
     let recheck = async move {
-        match proof {
-            Some(proof) => {
-                crate::mcp::IdentityPin {
-                    caller_security_epoch: admission
-                        .caller_id()
-                        .map(|_| snapshot.caller_security_epoch),
-                    admission,
-                    proof: Some(proof),
-                }
-                .revalidate(reloadable, snapshot, headers)
-                .await
-            }
+        match pin {
+            Some(pin) => pin.revalidate(reloadable, snapshot, headers).await,
             None => resolve_identity_without_renewal(snapshot, headers).await,
         }
     };
-    Ok(PendingIdentity::new(
-        admitted.identity,
-        admitted.membership_renewal,
-        recheck,
+    Ok((
+        PendingIdentity::new(admitted.identity, admitted.membership_renewal, recheck),
+        original_pin,
     ))
 }
 

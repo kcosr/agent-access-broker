@@ -2,7 +2,7 @@ use crate::handlers::common::{
     CallerAdmission, PendingIdentity, acquire_caller_guard, acquire_global_concurrency_guard,
     admit_service_invocation, check_auth_source_rate_guard, discovery_unavailable_envelope,
     envelope_response, input_error_envelope, not_found_envelope, request_id_from_headers,
-    resolve_identity_pending, resolve_request_identity_pending,
+    resolve_request_identity_pending,
 };
 use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
@@ -20,9 +20,9 @@ use agent_access_provider::{
 use axum::Json;
 use axum::body::Body;
 use axum::extract::multipart::{MultipartError, MultipartRejection};
-use axum::extract::{ConnectInfo, FromRequest, Multipart, Path, RawQuery, State};
+use axum::extract::{ConnectInfo, FromRequest, MatchedPath, Multipart, Path, RawQuery, State};
 use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -56,7 +56,7 @@ struct DiscoveryContext {
     snapshot: std::sync::Arc<RuntimeSnapshot>,
     identity: IdentityContext,
     execution_context: Option<ExecutionContext>,
-    _permits: RequestPermits,
+    _permits: Arc<RequestPermits>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -429,11 +429,15 @@ pub(crate) async fn service(
     State(state): State<AppState>,
     Path(service): Path<String>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    method: Method,
+    matched_path: MatchedPath,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let request_id = match request_id_from_headers(&headers, service.clone(), String::new()) {
         Ok(request_id) => request_id,
-        Err(response) => return envelope_response(*response).into_response(),
+        Err(response) => {
+            return service_detail_no_store(envelope_response(*response).into_response());
+        }
     };
     if !is_service_name(&service) {
         let response = input_error_envelope(
@@ -441,43 +445,207 @@ pub(crate) async fn service(
             new_broker_request_id(),
             "service name is invalid",
         );
-        return envelope_response(response).into_response();
+        return service_detail_no_store(envelope_response(response).into_response());
     }
-    match discovery_context(
+    let service_detail =
+        crate::ingress::body::is_service_detail_route(&method, Some(matched_path.as_str()));
+    let deadline = crate::ingress::request_lifetime::RequestLifetime::current()
+        .deadline()
+        .expect("service detail retains its transport body deadline")
+        .at;
+    let work = service_detail_response(
         &state,
+        service,
         remote_addr,
         headers,
         request_id.clone(),
-        service.clone(),
-        String::new(),
-        DiscoveryMode {
-            resolve_execution_context: true,
-        },
-    )
-    .await
-    {
-        Ok(context) => {
-            discovery_blocking(request_id.clone(), move || {
-                let _permits = context._permits;
-                match context.snapshot.runtime.service_capabilities(
-                    &context.identity,
-                    context
-                        .execution_context
-                        .as_ref()
-                        .expect("governed discovery resolves an execution context"),
-                    &service,
-                ) {
-                    Some(capabilities) => (StatusCode::OK, Json(capabilities)).into_response(),
-                    None => {
-                        let response =
-                            not_found_envelope(request_id, new_broker_request_id(), service);
-                        envelope_response(response).into_response()
-                    }
-                }
-            })
-            .await
+        service_detail,
+    );
+    let response = match tokio::time::timeout_at(deadline, work).await {
+        Ok(response) if tokio::time::Instant::now() < deadline => response,
+        Ok(_) | Err(_) => {
+            tracing::warn!(event = "discovery_unavailable", cause = "control_deadline");
+            envelope_response(discovery_unavailable_envelope(request_id)).into_response()
         }
-        Err(response) => *response,
+    };
+    service_detail_no_store(response)
+}
+
+fn service_detail_no_store(mut response: axum::response::Response) -> axum::response::Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn service_detail_response(
+    state: &AppState,
+    service: String,
+    remote_addr: SocketAddr,
+    headers: HeaderMap,
+    request_id: String,
+    service_detail: bool,
+) -> axum::response::Response {
+    use crate::ingress::guards::{REQUEST_PERMIT, SOURCE_RATE_CHARGED};
+
+    // Identity/context assembly can itself own a noncancelable store read.
+    // Its owner keeps the transport lease if the route deadline or client
+    // drops this receiver before DiscoveryContext has acquired its permits.
+    let transport_permit = REQUEST_PERMIT
+        .try_with(Clone::clone)
+        .expect("service detail retains its transport admission lease");
+    let source_rate_charged = SOURCE_RATE_CHARGED
+        .try_with(|charged| charged.borrow().clone())
+        .unwrap_or_default();
+    let lifetime = crate::ingress::request_lifetime::RequestLifetime::current();
+    let renewal = crate::membership_renewal::RenewalContext::current();
+    let context_state = state.clone();
+    let context_request_id = request_id.clone();
+    let context_service = service.clone();
+    let span = tracing::Span::current();
+    let context = tokio::spawn(tracing::Instrument::instrument(
+        async move {
+            renewal
+                .scope(lifetime.scope(REQUEST_PERMIT.scope(
+                    transport_permit,
+                    SOURCE_RATE_CHARGED.scope(
+                        std::cell::RefCell::new(source_rate_charged),
+                        async {
+                            #[cfg(test)]
+                            {
+                                let barrier = context_state
+                                    .reloadable
+                                    .service_detail_context_barrier
+                                    .lock()
+                                    .unwrap()
+                                    .clone();
+                                if let Some(barrier) = barrier {
+                                    let _ =
+                                        tokio::task::spawn_blocking(move || barrier.wait()).await;
+                                }
+                            }
+                            discovery_context_with_capacity(
+                                &context_state,
+                                remote_addr,
+                                headers,
+                                context_request_id,
+                                context_service,
+                                String::new(),
+                                DiscoveryMode {
+                                    resolve_execution_context: true,
+                                },
+                                service_detail,
+                            )
+                            .await
+                        },
+                    ),
+                )))
+                .await
+        },
+        span,
+    ))
+    .await;
+    let context = match context {
+        Ok(Ok(context)) => context,
+        Ok(Err(response)) => return *response,
+        Err(_) => {
+            tracing::warn!(event = "discovery_unavailable", cause = "context_worker");
+            return envelope_response(discovery_unavailable_envelope(request_id)).into_response();
+        }
+    };
+    // The worker owns a permit reference even when the deadline or request
+    // cancels its JoinHandle. It returns the admitted context with static data.
+    let permits = context._permits.clone();
+    let static_detail = tokio::task::spawn_blocking(move || {
+        let capabilities = context.snapshot.runtime.service_capabilities(
+            &context.identity,
+            context
+                .execution_context
+                .as_ref()
+                .expect("governed discovery resolves an execution context"),
+            &service,
+        );
+        (context, service, capabilities)
+    })
+    .await;
+    let response = match static_detail {
+        Ok((context, service, Some(capabilities))) => {
+            let state = state.clone();
+            // Managed limit reads also contain a noncancelable store worker.
+            // Keep the admitted context alive until that read finishes if the
+            // enclosing route deadline or client drops this result receiver.
+            let live_detail = tokio::spawn(async move {
+                let _permits = context._permits;
+                super::discovery_limits::service_detail(
+                    &state,
+                    &context.snapshot,
+                    &context.identity,
+                    capabilities,
+                )
+                .await
+            })
+            .await;
+            match live_detail {
+                Ok(Ok(detail)) => (StatusCode::OK, Json(detail)).into_response(),
+                Ok(Err(error)) => {
+                    let (cause, reason_code) = match error {
+                        crate::ingress::invocation_limits::InvocationObservationError::RuntimePublished => ("runtime_replaced", None),
+                        crate::ingress::invocation_limits::InvocationObservationError::Resolution(error) => (
+                            "effective_limit_read", Some(error.reason_code().as_str().to_owned()),
+                        ),
+                    };
+                    tracing::warn!(
+                        event = "discovery_unavailable",
+                        cause,
+                        reasonCode = reason_code.as_deref().unwrap_or(""),
+                        service
+                    );
+                    envelope_response(discovery_unavailable_envelope(request_id)).into_response()
+                }
+                Err(_) => {
+                    tracing::warn!(event = "discovery_unavailable", cause = "live_worker");
+                    envelope_response(discovery_unavailable_envelope(request_id)).into_response()
+                }
+            }
+        }
+        Ok((_, service, None)) => envelope_response(not_found_envelope(
+            request_id,
+            new_broker_request_id(),
+            service,
+        ))
+        .into_response(),
+        Err(_) => {
+            tracing::warn!(event = "discovery_unavailable", cause = "static_worker");
+            envelope_response(discovery_unavailable_envelope(request_id)).into_response()
+        }
+    };
+    // Delivery owns both control permits. Body middleware retains its copy of
+    // the same global lease; this does not acquire a second shared permit.
+    retain_discovery_permits(response, permits)
+}
+
+fn retain_discovery_permits(
+    response: axum::response::Response,
+    permits: Arc<RequestPermits>,
+) -> axum::response::Response {
+    let (parts, body) = response.into_parts();
+    let frames = futures_util::stream::unfold((body, permits), |(mut body, permits)| async move {
+        http_body_util::BodyExt::frame(&mut body)
+            .await
+            .map(|frame| (frame, (body, permits)))
+    });
+    axum::response::Response::from_parts(parts, Body::new(http_body_util::StreamBody::new(frames)))
+}
+
+fn retain_discovery_context_error(
+    response: Box<axum::response::Response>,
+    permits: &Arc<RequestPermits>,
+    service_detail: bool,
+) -> Box<axum::response::Response> {
+    if service_detail {
+        Box::new(retain_discovery_permits(*response, permits.clone()))
+    } else {
+        response
     }
 }
 
@@ -717,19 +885,55 @@ async fn discovery_context(
     action: String,
     mode: DiscoveryMode,
 ) -> Result<DiscoveryContext, Box<axum::response::Response>> {
+    discovery_context_with_capacity(
+        state,
+        remote_addr,
+        headers,
+        request_id,
+        service,
+        action,
+        mode,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn discovery_context_with_capacity(
+    state: &AppState,
+    remote_addr: SocketAddr,
+    headers: HeaderMap,
+    request_id: String,
+    service: String,
+    action: String,
+    mode: DiscoveryMode,
+    service_detail: bool,
+) -> Result<DiscoveryContext, Box<axum::response::Response>> {
     let snapshot = state.reloadable.current();
     let source = snapshot
         .source_resolver
         .source_context(remote_addr, &headers);
-    let global_permit = acquire_global_concurrency_guard(
-        state,
-        &snapshot,
-        &request_id,
-        service.clone(),
-        action.clone(),
-        &source,
-    )
-    .await
+    let global_permit = if service_detail {
+        super::discovery_limits::acquire_global_guard(
+            state,
+            &snapshot,
+            &request_id,
+            service.clone(),
+            action.clone(),
+            &source,
+        )
+        .await
+    } else {
+        acquire_global_concurrency_guard(
+            state,
+            &snapshot,
+            &request_id,
+            service.clone(),
+            action.clone(),
+            &source,
+        )
+        .await
+    }
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
     let execution_context = if mode.resolve_execution_context {
         Some(
@@ -780,26 +984,48 @@ async fn discovery_context(
         return Err(password_change_required(request_id, service, action));
     }
     // A membership renewal wait holds the caller's capacity.
-    let principal_permit = acquire_caller_guard(
-        state,
-        &snapshot,
-        &request_id,
-        service.clone(),
-        action.clone(),
-        &source,
-        CallerAdmission {
-            identity: &pending.value().identity,
-        },
-    )
-    .await
+    let caller = CallerAdmission {
+        identity: &pending.value().identity,
+    };
+    let principal_permit = if service_detail {
+        super::discovery_limits::acquire_caller_guard(
+            state,
+            &snapshot,
+            &request_id,
+            service.clone(),
+            action.clone(),
+            &source,
+            caller,
+        )
+        .await
+    } else {
+        acquire_caller_guard(
+            state,
+            &snapshot,
+            &request_id,
+            service.clone(),
+            action.clone(),
+            &source,
+            caller,
+        )
+        .await
+    }
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
+    let permits = Arc::new(RequestPermits {
+        _global: global_permit,
+        _principal: principal_permit,
+    });
     let identity = match pending.admit(state, &snapshot, &headers).await {
         Ok(resolved) if resolved.password_change_required => {
-            return Err(password_change_required(request_id, service, action));
+            return Err(retain_discovery_context_error(
+                password_change_required(request_id, service, action),
+                &permits,
+                service_detail,
+            ));
         }
         Ok(resolved) => resolved.identity,
         Err(failure) => {
-            return Err(discovery_identity_failure(
+            let response = discovery_identity_failure(
                 state,
                 &snapshot,
                 &request_id,
@@ -808,7 +1034,12 @@ async fn discovery_context(
                 &source,
                 failure,
             )
-            .await);
+            .await;
+            return Err(retain_discovery_context_error(
+                response,
+                &permits,
+                service_detail,
+            ));
         }
     };
     observability::record_principal(&identity.principal);
@@ -823,6 +1054,7 @@ async fn discovery_context(
             .runtime
             .context_authorization_error_response(
                 GovernedOperationContext {
+                    admission: None,
                     operation: OperationContext {
                         agent_request_id: request_id,
                         broker_request_id,
@@ -836,16 +1068,17 @@ async fn discovery_context(
                 error,
             )
             .await;
-        return Err(Box::new(envelope_response(response).into_response()));
+        return Err(retain_discovery_context_error(
+            Box::new(envelope_response(response).into_response()),
+            &permits,
+            service_detail,
+        ));
     }
     Ok(DiscoveryContext {
         snapshot,
         identity,
         execution_context,
-        _permits: RequestPermits {
-            _global: global_permit,
-            _principal: principal_permit,
-        },
+        _permits: permits,
     })
 }
 
@@ -973,6 +1206,79 @@ async fn admit_invoke_with_identity(
     action: String,
     identity_pin: Option<&crate::mcp::IdentityPin>,
 ) -> Result<AdmittedInvocation, Box<axum::response::Response>> {
+    let (context, permits, original_pin) = prepare_invocation_admission(
+        state,
+        snapshot.clone(),
+        remote_addr,
+        headers,
+        service,
+        action,
+        identity_pin,
+    )
+    .await?;
+    let lifetime = crate::ingress::request_lifetime::RequestLifetime::current();
+    lifetime.complete_initial_admission();
+    let recheck_snapshot = snapshot.clone();
+    let reloadable = state.reloadable.clone();
+    let recheck_headers = headers.clone();
+    let revalidate: crate::admission::AdmissionRevalidation = Box::new(move |context, guard| {
+        Box::pin(async move {
+            let work_snapshot = recheck_snapshot.clone();
+            let recheck = async move {
+                match original_pin {
+                    Some(pin) => {
+                        #[cfg(test)]
+                        reloadable.wait_mcp_admission_barrier().await;
+                        pin.revalidate(reloadable, work_snapshot.clone(), recheck_headers)
+                            .await
+                    }
+                    None => {
+                        super::common::resolve_identity_without_renewal(
+                            work_snapshot.clone(),
+                            recheck_headers,
+                        )
+                        .await
+                    }
+                }
+            };
+            super::common::revalidate_after_admission(
+                &recheck_snapshot,
+                context,
+                lifetime.deadline(),
+                guard,
+                recheck,
+            )
+            .await
+        })
+    });
+    let (context, permits) =
+        match admit_service_invocation(state, &snapshot, context, permits, revalidate).await {
+            Ok(admitted) => admitted,
+            Err(response) => return Err(Box::new(envelope_response(*response).into_response())),
+        };
+    Ok(AdmittedInvocation {
+        snapshot,
+        context,
+        permits,
+    })
+}
+
+async fn prepare_invocation_admission(
+    state: &AppState,
+    snapshot: std::sync::Arc<RuntimeSnapshot>,
+    remote_addr: SocketAddr,
+    headers: &HeaderMap,
+    service: String,
+    action: String,
+    identity_pin: Option<&crate::mcp::IdentityPin>,
+) -> Result<
+    (
+        GovernedOperationContext,
+        RequestPermits,
+        Option<crate::mcp::IdentityPin>,
+    ),
+    Box<axum::response::Response>,
+> {
     let source = snapshot
         .source_resolver
         .source_context(remote_addr, headers);
@@ -1054,11 +1360,13 @@ async fn admit_invoke_with_identity(
     let identity_result = if let Some(pin) = identity_pin {
         pin.revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
             .await
-            .map(PendingIdentity::admitted)
+            .map(|identity| (PendingIdentity::admitted(identity), Some(pin.clone())))
     } else {
-        resolve_identity_pending(state, snapshot.clone(), headers.clone()).await
+        super::common::resolve_identity_pending_pinned(state, snapshot.clone(), headers.clone())
+            .await
     };
     let failure_context = || GovernedIdentityFailureContext {
+        admission: None,
         agent_request_id: agent_request_id.clone(),
         broker_request_id: new_broker_request_id(),
         service: service.clone(),
@@ -1066,7 +1374,7 @@ async fn admit_invoke_with_identity(
         source: source.clone(),
         execution_context: execution_context.clone(),
     };
-    let pending = match identity_result {
+    let (pending, original_pin) = match identity_result {
         Ok(pending) => pending,
         Err(failure) => {
             return Err(
@@ -1104,6 +1412,7 @@ async fn admit_invoke_with_identity(
     let broker_request_id = new_broker_request_id();
     observability::record_broker_request_id(&broker_request_id);
     let context = GovernedOperationContext {
+        admission: None,
         operation: OperationContext {
             agent_request_id,
             broker_request_id,
@@ -1114,52 +1423,14 @@ async fn admit_invoke_with_identity(
         },
         execution_context,
     };
-    // Every IO form (JSON, raw download, upload) and HTTP MCP action tools
-    // admit here, so each request is charged exactly once.
-    let mut context = match admit_service_invocation(state, &snapshot, context).await {
-        Ok(context) => context,
-        Err(response) => return Err(Box::new(envelope_response(*response).into_response())),
-    };
-    if let Some(pin) = identity_pin {
-        #[cfg(test)]
-        state.reloadable.wait_mcp_admission_barrier().await;
-        // This authoritative proof comparison is the final identity admission
-        // point, after every queued limiter/store operation and before provider
-        // credentials or execution can be reached. Never rebind a stale request.
-        match pin
-            .revalidate(state.reloadable.clone(), snapshot.clone(), headers.clone())
-            .await
-        {
-            Ok(identity) => context.operation.identity = identity,
-            Err(failure) => {
-                let response = snapshot
-                    .runtime
-                    .identity_error_response_for_operation(
-                        GovernedIdentityFailureContext {
-                            agent_request_id: context.operation.agent_request_id,
-                            broker_request_id: context.operation.broker_request_id,
-                            service: context.operation.service,
-                            action: context.operation.action,
-                            source: context.operation.source,
-                            execution_context: context.execution_context,
-                        },
-                        failure,
-                    )
-                    .await;
-                return Err(Box::new(envelope_response(response).into_response()));
-            }
-        }
-    }
-    let permits = RequestPermits {
-        _global: global_permit,
-        _principal: principal_permit,
-    };
-
-    Ok(AdmittedInvocation {
-        snapshot,
+    Ok((
         context,
-        permits,
-    })
+        RequestPermits {
+            _global: global_permit,
+            _principal: principal_permit,
+        },
+        original_pin,
+    ))
 }
 
 pub(crate) async fn invoke_admitted_json(

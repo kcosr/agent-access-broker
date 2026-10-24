@@ -145,4 +145,5 @@ upload_spool_dir = "/var/lib/agent-access-broker/spool" # required; broker-owned
 # Service invocation limits apply per principal and service. Changing defaults
 # does not grant access; principals still need explicit action/resource grants.
 [limits.invocations]
-default = { requests = 100, window = "1m" }
+# max_wait defaults to 0s (immediate rejection). Waiting retains request slots.
+default = { requests = 100, window = "1m", max_wait = "0s" }

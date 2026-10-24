@@ -216,6 +216,7 @@ upstream_base_url = {:?}
 
 fn context(action: &str) -> GovernedOperationContext {
     GovernedOperationContext {
+        admission: None,
         operation: OperationContext {
             agent_request_id: format!("tls-{action}"),
             broker_request_id: format!("tls-{action}"),

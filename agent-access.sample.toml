@@ -2,6 +2,9 @@
 # MCP reloads configuration and token files for each tool-list/call request.
 [service]
 url = "http://127.0.0.1:8787"
+# Total JSON/upload timeout and download send/header timeout. Allow Broker rate
+# waiting plus useful execution time. Download body idle timeout remains 30s.
+request_timeout_ms = 30000
 
 [service.tls]
 verify_certificates = true

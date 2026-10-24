@@ -101,6 +101,7 @@ impl LimitFixture {
 
 pub(super) fn limit(requests: u64, window: &str) -> InvocationLimitConfig {
     InvocationLimitConfig {
+        max_wait: None,
         requests,
         window: window.into(),
     }

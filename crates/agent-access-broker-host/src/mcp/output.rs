@@ -251,6 +251,7 @@ upload_spool_dir={spool:?}
         )
         .unwrap();
         let context = GovernedOperationContext {
+            admission: None,
             operation: OperationContext {
                 agent_request_id: "output-test".into(),
                 broker_request_id: "output-test-broker".into(),

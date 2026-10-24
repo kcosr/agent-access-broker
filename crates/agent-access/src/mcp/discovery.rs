@@ -71,6 +71,12 @@ pub(super) async fn call(
         },
     };
     if !is_error
+        && name == "services_describe"
+        && let Some(selected) = view.service()
+    {
+        validate_scoped_service_detail(&value, selected)?;
+    }
+    if !is_error
         && name == "services_list"
         && let Some(selected) = view.service()
     {
@@ -86,4 +92,30 @@ pub(super) async fn call(
     Ok(serde_json::from_value(super::tools::envelope_result(
         status, value, is_error,
     )?)?)
+}
+
+fn validate_scoped_service_detail(value: &Value, selected: &str) -> Result<()> {
+    let parsed = agent_access_core::mcp::parse_discovery_service(value.clone())?;
+    let service = parsed.capabilities;
+    // The host omits limits for anonymous discovery. Scoped views require an
+    // authenticated caller, just as their catalog-based admission does.
+    let authenticated = value.get("limits").is_some_and(Value::is_object);
+    let mut actions = std::collections::BTreeSet::new();
+    if service.service != selected
+        || service.surface != "invoke"
+        || !authenticated
+        || value["scopedMcpReady"] != true
+        || (service.actions.is_empty()
+            && matches!(
+                value["availability"]["state"].as_str(),
+                Some("available" | "partial")
+            ))
+        || service
+            .actions
+            .iter()
+            .any(|action| !actions.insert(&action.action))
+    {
+        anyhow::bail!("service view is unavailable");
+    }
+    Ok(())
 }

@@ -134,6 +134,7 @@ fn runtime(outcomes: Outcomes, audit_path: Option<&Path>) -> BrokerRuntime {
 
 fn operation() -> GovernedOperationContext {
     GovernedOperationContext {
+        admission: None,
         operation: OperationContext {
             agent_request_id: "agent-provider-contract".to_string(),
             broker_request_id: "broker-provider-contract".to_string(),

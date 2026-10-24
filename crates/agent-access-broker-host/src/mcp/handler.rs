@@ -4,9 +4,10 @@ use crate::{
     state::AppState,
 };
 use agent_access_core::{
-    ApiCatalog, InvocationControl, InvokeRequest, ResourceAccessQuery,
+    ApiCatalog, DiscoveredService, InvocationControl, InvokeRequest, ResourceAccessQuery,
     mcp::{self, McpView, ProjectionMode, ToolRegistry, ToolTarget},
 };
+use axum::response::IntoResponse;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -40,6 +41,9 @@ pub(super) struct Handler {
 pub(super) enum PreparedDiscovery {
     List(Result<ListToolsResult, ErrorData>),
     Helper(Result<CallToolResult, ErrorData>),
+    /// Visibility was resolved in the bounded blocking identity worker. The
+    /// HTTP edge adds live state asynchronously before the SDK can dispatch it.
+    ServiceDetail(DiscoveredService),
 }
 impl Handler {
     pub fn new(endpoint: Endpoint, view: McpView) -> Self {
@@ -114,7 +118,7 @@ impl Handler {
                     .as_str()
                     .is_some_and(mcp::is_helper) =>
             {
-                let prepare = || {
+                let prepare = || -> Result<PreparedDiscovery, ErrorData> {
                     let params =
                         serde_json::from_value::<CallToolRequestParams>(message["params"].clone())
                             .map_err(|_| {
@@ -129,7 +133,32 @@ impl Handler {
                         ));
                     };
                     let limit = request.snapshot.runtime.config().mcp.max_response_bytes;
-                    Ok(match self.helper(request, &catalog, &registry, helper.as_str(), params.arguments.unwrap_or_default()) {
+                    let arguments = params.arguments.unwrap_or_default();
+                    if *helper == mcp::HelperKind::ServicesDescribe {
+                        let detail = || {
+                            mcp::validate_helper_arguments_for_view(
+                                helper.as_str(),
+                                &arguments,
+                                ProjectionMode::Http,
+                                &request.view,
+                            )
+                            .map_err(|_| "Invalid discovery helper arguments")?;
+                            let service = arguments
+                                .get("service")
+                                .and_then(Value::as_str)
+                                .ok_or("Service is required")?;
+                            request
+                                .snapshot
+                                .runtime
+                                .service_capabilities(&request.identity, &request.context, service)
+                                .ok_or("Service is not visible or does not exist")
+                        };
+                        return Ok(match detail() {
+                            Ok(service) => PreparedDiscovery::ServiceDetail(service),
+                            Err(message) => PreparedDiscovery::Helper(Ok(output::message(message))),
+                        });
+                    }
+                    Ok(PreparedDiscovery::Helper(Ok(match self.helper(request, &catalog, &registry, helper.as_str(), arguments) {
                         Ok(value) => output::result(value, false, limit).unwrap_or_else(|_| output::message(
                             if *helper == mcp::HelperKind::ResourceAccessDescribe {
                                 "Resource access result exceeds MCP response limit; use action or resourceType filters, or actions_list for known resources"
@@ -138,9 +167,9 @@ impl Handler {
                             },
                         )),
                         Err(message) => output::message(message),
-                    })
+                    })))
                 };
-                Some(PreparedDiscovery::Helper(prepare()))
+                Some(prepare().unwrap_or_else(|error| PreparedDiscovery::Helper(Err(error))))
             }
             _ => None,
         }
@@ -283,9 +312,6 @@ impl Handler {
             .service_capabilities(&request.identity, &request.context, service)
             .ok_or("Service is not visible or does not exist")?;
         match name {
-            "services_describe" => {
-                serde_json::to_value(capabilities).map_err(|_| "Cannot encode service capabilities")
-            }
             "resource_access_describe" => {
                 let discovery = runtime
                     .service_discovery(&request.identity, &request.context, service)
@@ -519,60 +545,146 @@ impl ServerHandler for Handler {
         let state = AppState {
             reloadable: self.endpoint.0.state.clone(),
         };
-        // Shared ingress can await identity/store work. Bound this phase before
-        // registering the operation owner; no provider work has started yet.
+        // Deliberate rate waiting shares the operation's absolute deadline;
+        // the smaller protocol deadline only bounds initial identity work.
+        let control = InvocationControl::new(Some(Duration::from_millis(
+            request.snapshot.runtime.config().mcp.operation_timeout_ms,
+        )));
+        request.cancellation.attach(control.clone());
+        let receiver_gone = tokio_util::sync::CancellationToken::new();
+        let receiver_guard = receiver_gone.clone().drop_guard();
+        let lifetime = request
+            .lifetime
+            .with_operation(
+                control
+                    .deadline()
+                    .expect("MCP operation deadline configured"),
+                control.cancellation_token(),
+            )
+            .with_abandonment(receiver_gone.clone())
+            .with_initial_admission_deadline(
+                tokio::time::Instant::now()
+                    + Duration::from_millis(
+                        request.snapshot.runtime.config().mcp.protocol_timeout_ms,
+                    ),
+            );
         let admission_state = state.clone();
+        let waiter_lifetime = lifetime.clone();
         let admission_request = request.clone();
         let admission_service = service.clone();
         let admission_action = action.action.clone();
+        let Some(registration) = state.reloadable.admission_owners.register() else {
+            *request.delivery_started.lock().unwrap() = Some(Instant::now());
+            return Ok(
+                output::message("Broker is shutting down before operation admission").into(),
+            );
+        };
+        let (send, mut receive) = tokio::sync::oneshot::channel();
+        let (accepted, acknowledgement) = tokio::sync::oneshot::channel();
         // Identity resolution may use spawn_blocking internally. The admission
         // task owns the response lease until that work actually ends, even if its
-        // protocol waiter times out. An abandoned result only drops permits; it
-        // cannot register or execute a provider operation.
-        let admission_task = tokio::spawn(
+        // protocol waiter disappears. Its transport token reaches the tracked
+        // admission owner; an abandoned result cannot start provider work.
+        tokio::spawn(
             async move {
-                let admitted = admit_mcp_invoke(
-                    &admission_state,
-                    admission_request.snapshot.clone(),
-                    admission_request.remote,
-                    &admission_request.headers,
-                    admission_service,
-                    admission_action,
-                    &admission_request.identity_pin,
-                )
-                .await;
+                let _registration = registration;
+                let admitted = lifetime
+                    .scope(admission_request.renewal.scope(admit_mcp_invoke(
+                        &admission_state,
+                        admission_request.snapshot.clone(),
+                        admission_request.remote,
+                        &admission_request.headers,
+                        admission_service,
+                        admission_action,
+                        &admission_request.identity_pin,
+                    )))
+                    .await;
                 let span = tracing::Span::current();
                 if let Err(response) = &admitted {
                     span.record("broker.statusCode", response.status().as_u16());
                 }
                 span.record("http.statusCode", 200_u16);
+                match admitted {
+                    Ok(admitted) => {
+                        if lifetime.cancellation().reason().is_some() {
+                            let response = admitted
+                                .snapshot
+                                .runtime
+                                .governed_operation_error_response(
+                                    admitted.context,
+                                    crate::admission::undispatched_error(
+                                        "MCP request abandoned before invocation handoff",
+                                    ),
+                                )
+                                .await;
+                            let _ = send.send(Err(Box::new(
+                                crate::handlers::common::envelope_response(response)
+                                    .into_response(),
+                            )));
+                        } else {
+                            let proof = admitted.context.clone();
+                            let snapshot = admitted.snapshot.clone();
+                            let _permits = admitted.permits.clone();
+                            // A successful send alone does not prove the SDK
+                            // waiter took finalization responsibility.
+                            if send.send(Ok(admitted)).is_err() || acknowledgement.await.is_err() {
+                                snapshot
+                                    .runtime
+                                    .governed_operation_error_response(
+                                        proof,
+                                        crate::admission::undispatched_error(
+                                            "MCP request abandoned before invocation handoff",
+                                        ),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    Err(response) => {
+                        let _ = send.send(Err(response));
+                    }
+                }
                 drop(admission_request);
-                admitted
             }
             .instrument(request.http_span.clone()),
         );
-        let admission = tokio::time::timeout(
-            Duration::from_millis(request.snapshot.runtime.config().mcp.protocol_timeout_ms),
-            admission_task,
-        );
-        let admission = tokio::select! {
-            biased;
-            _ = request.cancellation.cancelled() => {
-                *request.delivery_started.lock().unwrap() = Some(Instant::now());
-                return Ok(output::message("MCP request canceled before operation admission").into());
+        // Initial identity work can be blocking and must keep its leases even
+        // after the protocol deadline. End this timer at the explicit phase
+        // boundary; rate waiting has the owner's operation-deadline outcome.
+        let initial_result = if let Some(deadline) = waiter_lifetime.initial_admission_deadline() {
+            tokio::select! {
+                biased;
+                result = &mut receive => Some(result),
+                () = waiter_lifetime.initial_admission_complete() => None,
+                () = tokio::time::sleep_until(deadline) => {
+                    if !waiter_lifetime.initial_admission_is_complete() {
+                        receiver_gone.cancel();
+                        *request.delivery_started.lock().unwrap() = Some(Instant::now());
+                        return Ok(output::message("Broker operation admission deadline exceeded").into());
+                    }
+                    None
+                }
             }
-            admitted = admission => match admitted {
-                Ok(Ok(admitted)) => admitted,
-                Ok(Err(_)) => {
-                    *request.delivery_started.lock().unwrap() = Some(Instant::now());
-                    return Ok(output::message("Broker operation admission failed").into());
-                }
-                Err(_) => {
-                    *request.delivery_started.lock().unwrap() = Some(Instant::now());
-                    return Ok(output::message("Broker operation admission deadline exceeded").into());
-                }
+        } else {
+            None
+        };
+        // The admission owner produces the sole terminal outcome for queue
+        // cancellation/deadline; no separate execution timer races its audit.
+        let admission = match match initial_result {
+            Some(result) => result,
+            None => receive.await,
+        } {
+            Ok(Ok(admission)) => {
+                let _ = accepted.send(());
+                Ok(admission)
+            }
+            Ok(Err(response)) => Err(response),
+            Err(_) => {
+                *request.delivery_started.lock().unwrap() = Some(Instant::now());
+                return Ok(output::message("Broker operation admission failed").into());
             }
         };
+        drop(receiver_guard);
         let admitted = match admission {
             Ok(a) => a,
             Err(response) => {
@@ -582,18 +694,15 @@ impl ServerHandler for Handler {
                     .await
                     .map_err(|_| ErrorData::internal_error("Broker admission failed", None))?;
                 let value=serde_json::from_slice(&bytes).unwrap_or_else(|_|json!({"error":{"message":"Broker admission failed"},"status":status.as_u16()}));
+                *request.delivery_started.lock().unwrap() = Some(Instant::now());
                 return Ok(output::admission_failure(value, limit)
                     .unwrap_or_else(|_| output::message("Broker admission failed"))
                     .into());
             }
         };
-        let control = InvocationControl::new(Some(Duration::from_millis(
-            request.snapshot.runtime.config().mcp.operation_timeout_ms,
-        )));
         // Explicit cancellation is authenticated and registered at HTTP ingress,
         // independent of SDK session teardown. Keep that hook alive until the
         // supervised operation's final audit, even when the SDK waiter disappears.
-        request.cancellation.attach(control.clone());
         let cancellation = request.cancellation.clone();
         let owner_control = control.clone();
         let owner = tokio::spawn(

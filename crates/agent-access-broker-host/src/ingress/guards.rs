@@ -85,6 +85,19 @@ impl IngressLimitError {
     pub(crate) fn into_provider_error(self) -> ProviderError {
         self.error
     }
+
+    fn service_detail(mut self) -> Self {
+        if self.reason_code() == ReasonCode::ConcurrencyLimited {
+            self.error = ProviderError::error(
+                ReasonCode::ConcurrencyLimited,
+                format!(
+                    "service-detail request concurrency limit of {} reached",
+                    self.limit
+                ),
+            );
+        }
+        self
+    }
 }
 
 /// Concurrency safeguards and the fixed-window authentication budgets.
@@ -127,7 +140,7 @@ impl IngressGuards {
             return Err(limit_error(
                 IngressLimitKind::GlobalConcurrency,
                 limit,
-                concurrency_error(limit),
+                request_concurrency_error(limit, None),
             ));
         }
         *inflight += 1;
@@ -156,6 +169,36 @@ impl IngressGuards {
         })))
     }
 
+    /// Service detail uses a separate guard instance with the configured shared
+    /// caps. Its transport lease is reused by the handler just like ordinary
+    /// ingress, while saturation identifies the independently bounded pool.
+    pub(crate) fn try_service_detail_global_concurrency(
+        self: &Arc<Self>,
+        limit: u32,
+    ) -> Result<IngressPermit, IngressLimitError> {
+        self.try_global_concurrency(limit)
+            .map_err(IngressLimitError::service_detail)
+    }
+
+    pub(crate) fn try_service_detail_principal_concurrency(
+        self: &Arc<Self>,
+        principal: &str,
+        limit: u32,
+    ) -> Result<IngressPermit, IngressLimitError> {
+        self.try_principal_concurrency(principal, limit)
+            .map_err(IngressLimitError::service_detail)
+    }
+
+    /// A caller-only approximate observation. Does not create or prune keys.
+    pub(crate) fn principal_in_flight_requests(&self, principal: &str) -> u32 {
+        self.principal_inflight
+            .lock()
+            .unwrap()
+            .get(principal)
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn try_principal_concurrency(
         self: &Arc<Self>,
         principal: &str,
@@ -175,7 +218,7 @@ impl IngressGuards {
             return Err(limit_error(
                 IngressLimitKind::PrincipalConcurrency,
                 limit,
-                concurrency_error(limit),
+                request_concurrency_error(limit, Some(*count)),
             ));
         }
         *count += 1;
@@ -388,6 +431,21 @@ fn concurrency_error(limit: u32) -> ProviderError {
     )
 }
 
+fn request_concurrency_error(limit: u32, principal_inflight: Option<u32>) -> ProviderError {
+    let capacity = match principal_inflight {
+        Some(inflight) => format!(
+            "Your current request count is {inflight}; the per-principal concurrency limit is {limit}."
+        ),
+        None => format!("The shared request concurrency limit of {limit} has been reached."),
+    };
+    ProviderError::error(
+        ReasonCode::ConcurrencyLimited,
+        format!(
+            "This request was not queued or executed. {capacity} Existing requests, including any waiting for rate admission, remain in progress. Retry this request when capacity becomes available; do not resend pending requests."
+        ),
+    )
+}
+
 fn limiter_capacity_error() -> ProviderError {
     ProviderError::error(ReasonCode::RateLimited, "rate limiter capacity exceeded")
 }
@@ -404,4 +462,51 @@ pub(crate) fn source_log_address(source: &SourceContext) -> String {
         .parse::<SocketAddr>()
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|_| source.remote.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_capacity_rejection_distinguishes_rejected_and_pending_requests() {
+        let guards = Arc::new(IngressGuards::new());
+        let _global = guards.try_global_concurrency(1).unwrap();
+        let global = guards.try_global_concurrency(1).err().unwrap();
+        let message = &global.provider_error().message;
+        assert!(message.contains("This request was not queued or executed"));
+        assert!(message.contains("shared request concurrency limit of 1"));
+        assert!(message.contains("waiting for rate admission"));
+        assert!(message.contains("Retry this request when capacity becomes available"));
+        assert!(message.contains("do not resend pending requests"));
+        assert!(!message.contains("Your"));
+
+        let _alice = guards.try_principal_concurrency("alice", 1).unwrap();
+        let _bob = guards.try_principal_concurrency("bob", 1).unwrap();
+        let principal = guards.try_principal_concurrency("alice", 1).err().unwrap();
+        let message = &principal.provider_error().message;
+        assert!(message.contains("Your current request count is 1"));
+        assert!(message.contains("per-principal concurrency limit is 1"));
+        assert!(message.contains("This request was not queued or executed"));
+        assert!(message.contains("waiting for rate admission"));
+        assert!(message.contains("do not resend pending requests"));
+        assert!(!message.contains("bob"));
+        assert_eq!(principal.reason_code(), ReasonCode::ConcurrencyLimited);
+    }
+
+    #[test]
+    fn detail_capacity_rejection_keeps_its_control_pool_description() {
+        let guards = Arc::new(IngressGuards::new());
+        let _global = guards.try_service_detail_global_concurrency(1).unwrap();
+        let error = guards
+            .try_service_detail_global_concurrency(1)
+            .err()
+            .unwrap();
+        assert_eq!(error.reason_code(), ReasonCode::ConcurrencyLimited);
+        assert_eq!(
+            error.provider_error().message,
+            "service-detail request concurrency limit of 1 reached"
+        );
+        assert!(!error.provider_error().message.contains("rate admission"));
+    }
 }

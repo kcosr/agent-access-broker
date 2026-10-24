@@ -4,6 +4,7 @@ use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
 pub(super) mod names;
+mod rate_wait;
 mod trusted_user;
 
 const HOST: &str = "broker.example.test";
@@ -742,6 +743,7 @@ fn fake_invocation_limit(config: &mut BrokerConfig, requests: u64) {
     config.limits.invocations.services.insert(
         "fake".into(),
         agent_access_core::InvocationLimitConfig {
+            max_wait: None,
             requests,
             window: "1m".into(),
         },

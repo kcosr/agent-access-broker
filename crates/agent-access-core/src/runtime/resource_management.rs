@@ -560,6 +560,7 @@ mod tests {
         runtime
             .invoke(
                 GovernedOperationContext {
+                    admission: None,
                     operation: OperationContext {
                         agent_request_id: format!("agent-{project}"),
                         broker_request_id: format!("broker-{project}"),

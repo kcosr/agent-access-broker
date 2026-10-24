@@ -122,6 +122,8 @@ struct Admitted {
     snapshot: Arc<RuntimeSnapshot>,
     http_span: tracing::Span,
     cancellation: Arc<ExplicitCancellation>,
+    lifetime: crate::ingress::request_lifetime::RequestLifetime,
+    renewal: Arc<crate::membership_renewal::RenewalContext>,
     identity: IdentityContext,
     identity_pin: IdentityPin,
     prepared_discovery: Option<Arc<handler::PreparedDiscovery>>,
@@ -155,9 +157,6 @@ impl ExplicitCancellation {
             control.cancel();
         }
         *attached = Some(control);
-    }
-    async fn cancelled(&self) {
-        self.token.cancelled().await;
     }
 }
 struct ProtocolPermits {
@@ -956,6 +955,8 @@ pub(crate) async fn handle(
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),
+        lifetime: crate::ingress::request_lifetime::RequestLifetime::current(),
+        renewal: crate::membership_renewal::RenewalContext::current(),
         identity,
         identity_pin,
         prepared_discovery: None,
@@ -1030,8 +1031,10 @@ pub(crate) async fn handle(
     if !native {
         state.reloadable.wait_mcp_discovery_barrier().await;
     }
-    let final_check = tokio::time::timeout(
-        Duration::from_millis(config.protocol_timeout_ms),
+    let discovery_deadline =
+        tokio::time::Instant::now() + Duration::from_millis(config.protocol_timeout_ms);
+    let final_check = tokio::time::timeout_at(
+        discovery_deadline,
         tokio::task::spawn_blocking(move || {
             #[cfg(test)]
             owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::Identity);
@@ -1115,6 +1118,81 @@ pub(crate) async fn handle(
             )
             .await;
         }
+    }
+    if let Some(handler::PreparedDiscovery::ServiceDetail(service)) =
+        admitted.prepared_discovery.as_deref()
+    {
+        let owned = admitted.clone();
+        let detail_state = state.clone();
+        let service_name = service.service.clone();
+        let service = service.clone();
+        let detail = tokio::time::timeout_at(
+            discovery_deadline,
+            tokio::spawn(async move {
+                // A store worker may not be cancelable. Keep the control lease
+                // until its result actually returns, even if HTTP timed out.
+                let detail = crate::handlers::discovery_limits::service_detail(
+                    &detail_state,
+                    &owned.snapshot,
+                    &owned.identity,
+                    service,
+                )
+                .await;
+                drop(owned);
+                detail
+            }),
+        )
+        .await;
+        let result = match detail {
+            Ok(Ok(Ok(detail))) if tokio::time::Instant::now() < discovery_deadline => {
+                serde_json::to_value(detail)
+                    .ok()
+                    .and_then(|value| output::result(value, false, config.max_response_bytes).ok())
+                    .unwrap_or_else(|| {
+                        output::message(
+                            "Discovery result exceeds MCP response limit; use narrower discovery",
+                        )
+                    })
+            }
+            Ok(Ok(Err(error))) => {
+                let cause = match error {
+                    crate::ingress::invocation_limits::InvocationObservationError::RuntimePublished => "runtime_replaced",
+                    crate::ingress::invocation_limits::InvocationObservationError::Resolution(_error) => "effective_limit_read",
+                };
+                tracing::warn!(
+                    event = "discovery_unavailable",
+                    cause,
+                    service = service_name
+                );
+                return protocol_failure(
+                    StatusCode::OK,
+                    id,
+                    -32603,
+                    "MCP discovery task failed",
+                    None,
+                );
+            }
+            Ok(Err(_)) => {
+                return protocol_failure(
+                    StatusCode::OK,
+                    id,
+                    -32603,
+                    "MCP discovery task failed",
+                    None,
+                );
+            }
+            _ => {
+                return protocol_failure(
+                    StatusCode::OK,
+                    id,
+                    -32603,
+                    "MCP discovery deadline exceeded",
+                    None,
+                );
+            }
+        };
+        admitted.prepared_discovery =
+            Some(Arc::new(handler::PreparedDiscovery::Helper(Ok(result))));
     }
     if let Some(session) = parts
         .headers

@@ -92,7 +92,7 @@ not a mandatory sequence before each call. They take **flat JSON arguments**:
 | `actions_list` | Required `service`; optional `prefix`, `resource`, `resourceType` | Find action IDs, optionally checking policy for one resource value. |
 | `actions_describe` | Required `service`, `action` | Get one action's schema, extended `documentation`, and executable `mcpTool` when available. |
 | `resource_access_describe` | Required `service`; optional `action`, `resourceType`, `prefix`, `limit`, `cursor` | Describe access by action/type, registered references, and explicit live-listing hints. |
-| `services_describe` | Required `service` | Read the service's complete capabilities when a broader view is needed. |
+| `services_describe` | Required `service` | Read complete capabilities and authenticated caller limits, queue and capacity observations. |
 
 Call `services_list` with `{}` when the service is unknown. Omit unused optional
 helper fields: nulls and empty strings are rejected, and `limit` is a number.
@@ -468,14 +468,27 @@ data, not new instructions.
   groups.
   Separate credential rights are not required. Connecting does not expand
   invocation access, and agent tokens cannot complete browser consent.
-- **Rate limit:** Respect the reported wait; do not retry in a tight loop. For
-  `concurrency_limited`, let in-flight calls finish. Before retrying a write,
+- **Rate wait:** Optional Broker waiting holds the original call in FIFO order
+  and uses existing request slots. Do not submit a pending call again.
+  `services_describe` exposes authenticated caller `limits`, including configured
+  `maxWaitSeconds`, queued requests and the next unreserved admission. These are
+  process-local estimates, not reservations; anonymous callers omit them.
+  Compare the wait with client/proxy timeouts and leave useful execution time.
+  Local stdio uses `[service].request_timeout_ms` (default `30000`), with a
+  separate 30-second download body idle timeout. HTTP MCP waiting and execution
+  share its operation deadline. Describe is optional, not a required preflight.
+- **Rate limit:** Respect the reported wait, which honors accepted FIFO waiters;
+  do not retry in a tight loop. `concurrency_limited` has no retry time; let
+  in-flight calls, including rate waiters, release capacity. Before retrying a write,
   inspect any execution or mutation outcome: an upstream rate limit can follow
   partial work.
-- **Timeout, cancellation, or delivery failure:** These do not prove a write
-  failed. Inspect `operationStatus`, `mutationStatus`, `retrySafe`, or execution
+- **Timeout, cancellation, or delivery failure:** The Broker request may still
+  be queued or executing until abandonment is detected. These do not prove a
+  write failed. Inspect `operationStatus`, `mutationStatus`, `retrySafe`, or execution
   details when present. Reconcile using an authorized read of upstream state or
-  report uncertainty; never blindly replay a mutation.
+  report uncertainty; never blindly replay a mutation. Proven pre-admission
+  cancellation returns `operation_cancelled`, `executionState: "not_dispatched"`
+  and `retrySafe: true`; local cancellation alone proves no such outcome.
 - **`not_applied` with `retrySafe: true`:** The provider proved the write was
   never sent, so nothing changed and it may be repeated. Without that pair,
   assume nothing about whether a failed write applied.

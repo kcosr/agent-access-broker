@@ -542,7 +542,10 @@ the changed state; graceful draining permits admitted work to finish. Inspect
 audit and upstream state for operations whose completion is uncertain. Delegated
 OAuth and private-resource dispatch checks remain independently enforced.
 
-On `SIGTERM` or `SIGINT`, the broker stops accepting new public and gateway connections, lets in-flight work drain within `--shutdown-timeout-ms`,
+On `SIGTERM` or `SIGINT`, the broker closes pending rate admission, removes
+queued tickets without dispatch, and finalizes their outcomes before audit
+shutdown. It stops accepting new public and gateway connections and lets already
+admitted work drain within `--shutdown-timeout-ms`,
 then cuts off the connections still open. If the timeout is reached while
 streaming downloads are still open, those streams are canceled and their
 terminal audit records are queued through the audit writer before final writer
@@ -1220,9 +1223,9 @@ management, MCP protocol traffic, and Git ref discovery are not. Every Git pack
 POST counts, including protocol v2 `ls-refs` POSTs, extra fetch negotiation
 rounds, and a push's probe POST, so one fetch or clone typically costs two or
 more. Size Git gateway limits for several POSTs per command; a limit of 1
-makes protocol v2 fetches impossible (see
+without waiting prevents protocol v2 fetches (see
 [Git HTTP gateway](git-http-gateway.md)). Principals behind one ingress
-address, such as a shared ingress proxy, have independent windows. Set the service-wide
+address, such as a shared ingress proxy, have independent windows. Set the common
 default in `[limits.invocations]` and per-service values in
 `[limits.invocations.services.<service>]`; see
 [configuration](configuration.md#service-invocation-limits).
@@ -1255,9 +1258,34 @@ agent-access admin principals service-limits set alice jira --requests 10 --wind
 agent-access admin principals service-limits clear alice jira
 ```
 
-Config reloads and managed-store override changes take effect on the next
-request without a restart. Limiter history is process-local and survives
-reloads; changing only `requests` keeps it, and changing a key's window resets
+Set optional `max_wait` in the service limit or `limits.invocations.default` to
+hold calls in FIFO order; omission resolves to `0s`, immediate rate refusal.
+Principal overrides change requests/window only and inherit that waiting policy.
+Imported services use their stored service ID in the same TOML table; their
+managed rate setting overrides requests/window while the TOML wait survives
+catalog edits. See [import setup](imported-services.md#operator-setup).
+Waiting uses existing global/per-principal request slots (defaults 100/10), so it
+can block new invocations across services or principals through concurrency
+saturation. No aggregate service quota is enforced.
+
+Use `agent-access services describe SERVICE`, HTTP service detail or MCP
+`services_describe` for [live limits](http-api.md#live-service-limits): effective
+policy, counted/queued requests, the next unreserved admission and approximate
+principal occupancy. Describe has independent bounded capacity; lists and the
+Account page remain static. Observations are local to one Broker process and
+reserve no capacity.
+
+Allow waiting plus useful execution in client/proxy timeouts. CLI and local stdio
+MCP use `[service].request_timeout_ms` (default `30000`); download body idle timeout
+remains 30 seconds. The server's absolute body/operation deadline still applies.
+A client timeout may leave the request queued or executing until the Broker
+observes the disconnect; reconcile a mutation before resubmitting it.
+
+Managed override changes reforecast pending requests without extending deadlines.
+Runtime publication, including reload or imported-catalog replacement, cancels
+pending admission without dispatch; failed reloads change nothing. Already
+admitted operations keep their existing ownership. Limiter history is process-local
+and survives reloads; changing only `requests` keeps it, and changing a key's window resets
 that key. Size limits for the upstream service's own quotas: one admitted
 request may still make several upstream calls.
 
@@ -1596,6 +1624,10 @@ states and service log events.
 
 ## Common failures
 
+A rate refusal includes the limiting wait/body/operation budget and projected
+retry time after accepted FIFO waiters. A concurrency refusal has no retry time;
+waiters may be holding the shared slots. Do not resubmit calls still pending.
+Use service describe to inspect this principal's local queue and capacity.
 For HTTP 429 responses, distinguish `rate_limited` from `concurrency_limited`,
 and both from `upstream_rate_limited`, which means the upstream service or its
 OAuth authorization server throttled the request rather than a Broker limit.
@@ -1609,7 +1641,11 @@ The `request_limited` and `auth_request_limited` service events identify the
 invocation limit; its event also carries `limitScope`, `service`,
 `windowSeconds`, `retryAfterSeconds`, `principal`, and `tokenId` (for broker
 tokens), and the rejected request's audit record carries
-`providerAudit.rateLimit`. `auth_source_rate` and `auth_principal_rate` identify
+`providerAudit.rateLimit`. Final audit records add `providerAudit.admission`
+(`waited`, `waitedMilliseconds`, `outcome`); service events use `admissionWaited`,
+`admissionWaitedMilliseconds` and `admissionOutcome`. Admission remains `admitted`
+when a later phase fails, and stream/Git terminal records retain these facts.
+`auth_source_rate` and `auth_principal_rate` identify
 the independent authentication budgets used by login, anonymous traffic, and
 invalid credentials. Discovery, spec, session, management, and MCP protocol
 requests do not consume invocation budgets; all requests remain subject to

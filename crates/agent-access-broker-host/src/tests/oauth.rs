@@ -908,6 +908,7 @@ async fn dispatch_rechecks_access_lent_at_preparation() {
         .runtime
         .begin_invoke(
             GovernedOperationContext {
+                admission: None,
                 operation: OperationContext {
                     agent_request_id: "prepared-account".into(),
                     broker_request_id: "broker-prepared-account".into(),

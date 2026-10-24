@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Smallest accepted `requests` value.
 pub const INVOCATION_LIMIT_MIN_REQUESTS: u32 = 1;
@@ -55,6 +56,45 @@ pub struct InvocationLimitConfig {
     pub requests: u64,
     /// Broker duration syntax (`s`, `m`, `h`, `d`), from `1s` to `1d`.
     pub window: String,
+    /// Maximum FIFO rate-admission wait. Service values inherit the default.
+    #[serde(default)]
+    pub max_wait: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("max_wait must be a representable nonnegative whole-second duration using s, m, h, or d")]
+pub struct InvocationMaxWaitError;
+
+/// Parses a maximum wait without weakening the positive-only TTL parser.
+pub fn parse_invocation_max_wait(value: &str) -> Result<Duration, InvocationMaxWaitError> {
+    let (digits, suffix) = value
+        .split_at_checked(value.len().saturating_sub(1))
+        .ok_or(InvocationMaxWaitError)?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(InvocationMaxWaitError);
+    }
+    let multiplier = match suffix {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        _ => return Err(InvocationMaxWaitError),
+    };
+    let seconds = digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(multiplier))
+        .filter(|n| *n <= i64::MAX as u64 / 1_000)
+        .ok_or(InvocationMaxWaitError)?;
+    let duration = Duration::from_secs(seconds);
+    std::time::Instant::now()
+        .checked_add(duration)
+        .ok_or(InvocationMaxWaitError)?;
+    chrono::Duration::from_std(duration)
+        .ok()
+        .and_then(|delta| Utc::now().checked_add_signed(delta))
+        .ok_or(InvocationMaxWaitError)?;
+    Ok(duration)
 }
 
 /// `[[limits.invocations.principal_overrides]]`.
@@ -184,6 +224,8 @@ impl EffectiveInvocationLimit {
 pub struct ConfiguredInvocationLimits {
     default: InvocationLimit,
     services: BTreeMap<String, InvocationLimit>,
+    default_max_wait: Duration,
+    service_max_wait: BTreeMap<String, Duration>,
     /// principal -> service -> limit; populated only for TOML identity authority.
     principal_overrides: BTreeMap<String, BTreeMap<String, InvocationLimit>>,
 }
@@ -193,6 +235,8 @@ impl Default for ConfiguredInvocationLimits {
         Self {
             default: BUILT_IN_INVOCATION_LIMIT,
             services: BTreeMap::new(),
+            default_max_wait: Duration::ZERO,
+            service_max_wait: BTreeMap::new(),
             principal_overrides: BTreeMap::new(),
         }
     }
@@ -217,6 +261,23 @@ impl ConfiguredInvocationLimits {
                     .map(|limit| (service.clone(), limit))
             })
             .collect();
+        let default_max_wait = invocations
+            .default
+            .as_ref()
+            .and_then(|limit| limit.max_wait.as_deref())
+            .and_then(|value| parse_invocation_max_wait(value).ok())
+            .unwrap_or_default();
+        let service_max_wait = invocations
+            .services
+            .iter()
+            .filter_map(|(service, limit)| {
+                limit
+                    .max_wait
+                    .as_deref()
+                    .and_then(|value| parse_invocation_max_wait(value).ok())
+                    .map(|duration| (service.clone(), duration))
+            })
+            .collect();
         let mut principal_overrides: BTreeMap<String, BTreeMap<String, InvocationLimit>> =
             BTreeMap::new();
         if config.identity.authority == "toml" {
@@ -232,6 +293,8 @@ impl ConfiguredInvocationLimits {
         Self {
             default,
             services,
+            default_max_wait,
+            service_max_wait,
             principal_overrides,
         }
     }
@@ -240,6 +303,13 @@ impl ConfiguredInvocationLimits {
     /// principal overrides.
     pub fn service_limit(&self, service: &str) -> InvocationLimit {
         self.services.get(service).copied().unwrap_or(self.default)
+    }
+
+    pub fn max_wait(&self, service: &str) -> Duration {
+        self.service_max_wait
+            .get(service)
+            .copied()
+            .unwrap_or(self.default_max_wait)
     }
 
     /// The TOML principal override for a service, if any.
@@ -274,6 +344,30 @@ pub struct InvocationRateLimited {
     pub retry_after_seconds: u64,
     /// Instant after which a request would be admitted, whole seconds UTC.
     pub retry_at: DateTime<Utc>,
+    pub max_wait_seconds: u64,
+    pub queued_requests: u64,
+    pub deadline_kind: InvocationDeadlineKind,
+    pub waited_milliseconds: u64,
+    pub remaining_wait_milliseconds: u64,
+    pub was_queued: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationDeadlineKind {
+    RateWait,
+    Operation,
+    Body,
+}
+
+impl InvocationDeadlineKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RateWait => "configured rate-wait budget",
+            Self::Operation => "HTTP MCP operation deadline",
+            Self::Body => "HTTP body deadline",
+        }
+    }
 }
 
 impl InvocationRateLimited {
@@ -281,10 +375,21 @@ impl InvocationRateLimited {
     pub fn message(&self) -> String {
         let requests = self.limit.requests;
         let noun = if requests == 1 { "request" } else { "requests" };
+        let disposition = if self.was_queued {
+            "is no longer queued and was not executed"
+        } else {
+            "was not queued or executed"
+        };
         format!(
-            "Rate limit reached for service \"{}\": {requests} {noun} per {}. Retry after {}s (at {}). The request was not executed.",
+            "Rate limit reached for service \"{}\": {requests} {noun} per {}. This request {disposition}. Configured maximum wait: {}s; limiting bound: {}, with {}ms remaining after {}ms waiting. {} requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in {}s. Do not resubmit requests that are already pending. Retry after {}s (at {}).",
             self.service,
             self.limit.window_label(),
+            self.max_wait_seconds,
+            self.deadline_kind.label(),
+            self.remaining_wait_milliseconds,
+            self.waited_milliseconds,
+            self.queued_requests,
+            self.retry_after_seconds,
             self.retry_after_seconds,
             format_retry_at(self.retry_at),
         )
@@ -299,6 +404,11 @@ impl InvocationRateLimited {
             "windowSeconds": self.limit.window_seconds,
             "retryAfterSeconds": self.retry_after_seconds,
             "retryAt": format_retry_at(self.retry_at),
+            "maxWaitSeconds": self.max_wait_seconds,
+            "queuedRequests": self.queued_requests,
+            "deadlineKind": self.deadline_kind,
+            "waitedMilliseconds": self.waited_milliseconds,
+            "remainingWaitMilliseconds": self.remaining_wait_milliseconds,
             "executionState": "not_dispatched",
             "retrySafe": true,
         })
@@ -313,6 +423,11 @@ impl InvocationRateLimited {
                 "limit": self.limit.requests,
                 "windowSeconds": self.limit.window_seconds,
                 "retryAfterSeconds": self.retry_after_seconds,
+                "maxWaitSeconds": self.max_wait_seconds,
+                "queuedRequests": self.queued_requests,
+                "deadlineKind": self.deadline_kind,
+                "waitedMilliseconds": self.waited_milliseconds,
+                "remainingWaitMilliseconds": self.remaining_wait_milliseconds,
             }
         })
     }
@@ -345,7 +460,12 @@ pub(crate) fn validate_invocation_limits(
     for (service, limit) in &invocations.services {
         let label = format!("limits.invocations.services.{service}");
         validate_limit(&label, limit, errors);
-        if !services.contains_key(service) {
+        // Offline validation cannot see retained imports. Any configured store
+        // is loaded at startup/reload, even when imports are disabled; check
+        // deferred names against that complete catalog before publication.
+        if !is_service_name(service)
+            || (!services.contains_key(service) && config.managed_store.is_none())
+        {
             errors.push(format!("{label} references unknown service {service}"));
         }
     }
@@ -395,8 +515,29 @@ pub(crate) fn validate_invocation_limits(
     }
 }
 
+/// Resolve names deferred by offline validation against the complete runtime
+/// catalog, including retained disabled and retired imports.
+pub(crate) fn validate_invocation_limit_service_references(
+    config: &BrokerConfig,
+    services: &BTreeMap<String, Arc<ServiceDescriptor>>,
+    errors: &mut Vec<String>,
+) {
+    for service in config.limits.invocations.services.keys() {
+        if !services.contains_key(service) {
+            errors.push(format!(
+                "limits.invocations.services.{service} references unknown service {service}"
+            ));
+        }
+    }
+}
+
 fn validate_limit(label: &str, limit: &InvocationLimitConfig, errors: &mut Vec<String>) {
     if let Err(error) = InvocationLimit::from_config(limit) {
+        errors.push(format!("{label}: {error}"));
+    }
+    if let Some(value) = &limit.max_wait
+        && let Err(error) = parse_invocation_max_wait(value)
+    {
         errors.push(format!("{label}: {error}"));
     }
 }
@@ -470,16 +611,61 @@ mod tests {
     }
 
     #[test]
+    fn maximum_wait_accepts_zero_and_whole_units_without_a_ten_second_cap() {
+        for (value, seconds) in [
+            ("0s", 0),
+            ("10s", 10),
+            ("31s", 31),
+            ("2m", 120),
+            ("3h", 10_800),
+            ("2d", 172_800),
+        ] {
+            assert_eq!(
+                parse_invocation_max_wait(value).unwrap(),
+                Duration::from_secs(seconds)
+            );
+        }
+        for value in [
+            "",
+            "s",
+            "-1s",
+            "+1s",
+            "1.5s",
+            "1w",
+            "1",
+            " 1s",
+            "1 s",
+            "18446744073709551615d",
+            "999999999999999999999s",
+        ] {
+            assert!(parse_invocation_max_wait(value).is_err(), "{value}");
+        }
+        assert!(
+            parse_ttl_seconds("0s").is_none(),
+            "existing TTLs stay positive"
+        );
+        assert!(toml::from_str::<PrincipalInvocationLimitConfig>(
+            "principal = 'alice'\nservice = 'jira'\nrequests = 2\nwindow = '10s'\nmax_wait = '5s'"
+        ).is_err(), "principal overrides do not own wait policy");
+    }
+
+    #[test]
     fn rejection_message_result_and_audit_follow_the_contract() {
         let rejection = InvocationRateLimited {
             service: "jira".into(),
             limit: InvocationLimit::parse(20, "1m").unwrap(),
             retry_after_seconds: 12,
             retry_at: Utc.with_ymd_and_hms(2026, 9, 25, 14, 3, 12).unwrap(),
+            max_wait_seconds: 10,
+            queued_requests: 2,
+            deadline_kind: InvocationDeadlineKind::RateWait,
+            waited_milliseconds: 0,
+            remaining_wait_milliseconds: 10_000,
+            was_queued: false,
         };
         assert_eq!(
             rejection.message(),
-            "Rate limit reached for service \"jira\": 20 requests per 1m. Retry after 12s (at 2026-09-25T14:03:12Z). The request was not executed."
+            "Rate limit reached for service \"jira\": 20 requests per 1m. This request was not queued or executed. Configured maximum wait: 10s; limiting bound: configured rate-wait budget, with 10000ms remaining after 0ms waiting. 2 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z)."
         );
         assert_eq!(
             rejection.result(),
@@ -489,6 +675,11 @@ mod tests {
                 "limit": 20,
                 "windowSeconds": 60,
                 "retryAfterSeconds": 12,
+                "maxWaitSeconds": 10,
+                "queuedRequests": 2,
+                "deadlineKind": "rate_wait",
+                "waitedMilliseconds": 0,
+                "remainingWaitMilliseconds": 10000,
                 "retryAt": "2026-09-25T14:03:12Z",
                 "executionState": "not_dispatched",
                 "retrySafe": true
@@ -505,7 +696,12 @@ mod tests {
                 "service": "jira",
                 "limit": 20,
                 "windowSeconds": 60,
-                "retryAfterSeconds": 12
+                "retryAfterSeconds": 12,
+                "maxWaitSeconds": 10,
+                "queuedRequests": 2,
+                "deadlineKind": "rate_wait",
+                "waitedMilliseconds": 0,
+                "remainingWaitMilliseconds": 10000
             })
         );
         assert_eq!(

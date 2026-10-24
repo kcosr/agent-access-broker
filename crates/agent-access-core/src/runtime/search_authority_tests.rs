@@ -170,6 +170,7 @@ fn config() -> (BrokerConfig, Arc<AtomicUsize>) {
 
 fn operation(identity: IdentityContext) -> GovernedOperationContext {
     GovernedOperationContext {
+        admission: None,
         operation: OperationContext {
             agent_request_id: "namespace-search-test-agent".into(),
             broker_request_id: "namespace-search-test-broker".into(),

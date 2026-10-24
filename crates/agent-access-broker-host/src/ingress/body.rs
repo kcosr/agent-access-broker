@@ -1,12 +1,13 @@
 //! Transport admission precedes every ordinary body extractor.
 use super::guards::{REQUEST_PERMIT, SOURCE_RATE_CHARGED};
+use super::request_lifetime::RequestLifetime;
 use crate::handlers::common::{
     acquire_global_concurrency_guard, check_auth_source_rate_guard, emit_request_limited,
     envelope_response,
 };
 use crate::state::{AppState, ReloadableState};
 use axum::body::{Body, HttpBody};
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -81,11 +82,51 @@ pub(crate) async fn admit_gateway_body(
     admit_body(state, request, next, true).await
 }
 
+/// Only the real, matched single-service detail route receives the independent
+/// discovery capacity. Prefixes, method mismatches and fallback routes do not.
+pub(crate) fn is_service_detail_route(method: &Method, matched_path: Option<&str>) -> bool {
+    matches!(*method, Method::GET | Method::HEAD) && matched_path == Some("/v1/services/{service}")
+}
+
 async fn admit_body(
+    state: Arc<ReloadableState>,
+    request: Request,
+    next: Next,
+    gateway: bool,
+) -> Response {
+    let service_detail = !gateway
+        && is_service_detail_route(
+            request.method(),
+            request
+                .extensions()
+                .get::<MatchedPath>()
+                .map(MatchedPath::as_str),
+        );
+    // Keep the full ingress state machine out of both this response wrapper and
+    // its caller; nested upstream discovery already has a deep polling stack.
+    let mut response = Box::pin(admit_body_inner(
+        state,
+        request,
+        next,
+        gateway,
+        service_detail,
+    ))
+    .await;
+    if service_detail {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+    }
+    response
+}
+
+async fn admit_body_inner(
     state: Arc<ReloadableState>,
     mut request: Request,
     next: Next,
     gateway: bool,
+    service_detail: bool,
 ) -> Response {
     let admitted_at = Instant::now();
     let snapshot = state.current();
@@ -120,16 +161,28 @@ async fn admit_body(
     let app = AppState {
         reloadable: state.clone(),
     };
-    let permit = match acquire_global_concurrency_guard(
-        &app,
-        &snapshot,
-        &request_id,
-        "broker".into(),
-        "request.admit".into(),
-        &source,
-    )
-    .await
-    {
+    let global_admission = if service_detail {
+        crate::handlers::discovery_limits::acquire_global_guard(
+            &app,
+            &snapshot,
+            &request_id,
+            "broker".into(),
+            "request.admit".into(),
+            &source,
+        )
+        .await
+    } else {
+        acquire_global_concurrency_guard(
+            &app,
+            &snapshot,
+            &request_id,
+            "broker".into(),
+            "request.admit".into(),
+            &source,
+        )
+        .await
+    };
+    let permit = match global_admission {
         Ok(permit) => permit,
         Err(response) => {
             return if gateway {
@@ -257,6 +310,7 @@ async fn admit_body(
         configured_total
     };
     let deadline = admitted_at + total;
+    RequestLifetime::current().set_body_deadline(deadline);
     let timed_out = Arc::new(AtomicBool::new(false));
     let body_timed_out = timed_out.clone();
     let (parts, body) = request.into_parts();

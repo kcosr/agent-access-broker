@@ -58,6 +58,20 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Bounded invocation waiting and live limits.** Optional `max_wait` holds
+  service invocations in FIFO order within existing request capacity; existing
+  service describe interfaces expose caller-specific limits and process-local
+  observations. Principal overrides still change only requests/window. Runtime
+  publication cancels pending admission without dispatch. Imported service TOML
+  waits survive catalog edits alongside managed requests/window settings; startup
+  and reload validate their names against the retained catalog. See
+  [invocation limits](docs/configuration.md#service-invocation-limits).
+- **Configurable CLI and stdio MCP request timeout.** Set
+  `[service].request_timeout_ms` to allow waiting plus execution; the default
+  remains 30000 and download body idle timeout remains 30 seconds. Timeouts can
+  leave a request queued or executing, so reconcile mutations before retrying.
+  See [client timeouts](docs/cli.md#outbound-request-construction-and-timeouts).
+
 - **Jira project and search-field discovery.** The read-only `project.view`
   action and `jira project view` command describe an authorized project,
   its searchable fields and optional project metadata. Issue search accepts

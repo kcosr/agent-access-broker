@@ -59,6 +59,28 @@ Snapshot tests confirm prepared operations may finish after revocation while
 fresh requests fail; delegated OAuth/private-resource fences retain separate
 coverage.
 
+Rate-wait scheduler tests (`ingress::invocation_limits::scheduler::tests`) use a
+controlled clock to cover FIFO forecasts, actual admission charges, cancellation,
+deadlines, managed-limit changes, and runtime publication. Host `tests::rate_wait`,
+`tests::discovery_limits`, and `tests::mcp::rate_wait` exercise the production router
+with local provider fixtures: queued REST requests do not read bodies, and pending
+admission does not invoke providers; discovery remains available at invocation
+capacity, exposes only the
+caller's nonmutating snapshot, and fails closed on observation errors. Request
+lifetime tests cover handler and streaming-response drops. Real local connections
+verify HTTP/1 close detection and that resetting one HTTP/2 stream cancels only
+its request. These tests do not use live upstream services.
+Core import-limit tests use a real temporary managed store to verify startup,
+reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
+and retired imports, and rejection of unknown configured service names.
+
+CLI `request_timeout_tests` use local HTTP fixtures to check configuration,
+JSON/upload/header deadlines, download idle behavior, and timeout messages without
+automatic retries. The `mcp_stdio` integration test's `rate_wait` module runs the
+real CLI and both aggregate and scoped stdio subprocesses against an isolated
+Broker with a synthetic provider. It checks live describe calls while invocation
+capacity is full and mutation-uncertainty messages after short configured timeouts.
+
 The `git_http_gateway` integration test requires Git, including `git http-backend`.
 It drives real protocol-v2 clone, fetch, and push commands through an in-process
 Broker gateway to a disposable Git repository behind a local TLS origin. Both

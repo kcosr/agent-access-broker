@@ -751,6 +751,7 @@ impl From<ConfigOperationResponse> for ReloadOutcome {
 /// How [`RunningBroker::join`]'s shutdown drained.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShutdownReport {
+    unfinished_admissions: usize,
     unfinished_operations: usize,
     unfinished_command_processes: usize,
     forced: bool,
@@ -758,6 +759,12 @@ pub struct ShutdownReport {
 }
 
 impl ShutdownReport {
+    /// Pending admission owners or retained identity reads still running when
+    /// the admission drain ended.
+    pub fn unfinished_admissions(&self) -> usize {
+        self.unfinished_admissions
+    }
+
     /// Operations still unfinalized when the operation drain ended.
     pub fn unfinished_operations(&self) -> usize {
         self.unfinished_operations
@@ -784,6 +791,7 @@ impl ShutdownReport {
     /// permit returned, nothing was cut off and audit drained.
     pub fn is_clean(&self) -> bool {
         self.unfinished_operations == 0
+            && self.unfinished_admissions == 0
             && self.unfinished_command_processes == 0
             && !self.forced
             && self.audit_error.is_none()
@@ -793,6 +801,7 @@ impl ShutdownReport {
 impl From<DrainReport> for ShutdownReport {
     fn from(report: DrainReport) -> Self {
         Self {
+            unfinished_admissions: report.unfinished_admissions,
             unfinished_operations: report.unfinished_operations,
             unfinished_command_processes: report.unfinished_command_processes,
             forced: report.forced,
