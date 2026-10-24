@@ -51,6 +51,7 @@ impl Provider for OversizedNativeDownload {
 #[tokio::test]
 async fn native_metadata_header_refusal_records_started_then_canceled_without_consuming_bytes() {
     let directory = tempfile::tempdir().unwrap();
+    create_private_dir(directory.path());
     let audit = directory.path().join("audit.jsonl");
     let invocations = Arc::new(AtomicUsize::new(0));
     let polls = Arc::new(AtomicUsize::new(0));
