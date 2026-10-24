@@ -63,6 +63,7 @@ All notable changes to this project are documented in this file.
   its searchable fields and optional project metadata. Issue search accepts
   stable custom-field references such as `cf[12345]` with bounded operators,
   preserving project restrictions. See [project discovery](docs/providers-jira.md#project-details-and-searchable-fields).
+  ([#65](https://github.com/kcosr/agent-access-broker/pull/65))
 
 - **Command file downloads and generic invocation.** Reviewed commands can
   declare `download: true` when the operator sets an explicit `max_download_bytes`.
