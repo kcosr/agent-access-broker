@@ -52,6 +52,10 @@ Native integrations pair action permissions with the following resource controls
 | [Git HTTP gateway](docs/git-http-gateway.md) | Git fetch and push | Repositories and namespaces |
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
 
+Confluence space keys preserve their exact case across listing, resource grants,
+and content access, including mixed-case, digit-leading, and single-character
+ordinary keys as well as personal-space keys.
+
 Jira’s separately grantable [`project.list`](docs/providers-jira.md#live-project-listing)
 action lists visible live projects within effective project grants. It needs only
 pagination inputs, supports service and personal credentials including OAuth,

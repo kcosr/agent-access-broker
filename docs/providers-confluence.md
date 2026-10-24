@@ -690,11 +690,13 @@ do not carry a stable numeric content ID.
 ## Keys, locators, and page-to-space confirmation
 
 - **Page ID** matches `^[1-9][0-9]*$`.
-- **Space key** is 2–255 ASCII characters. Team-space keys match
-  `^[A-Z][A-Z0-9_-]{1,254}$`; personal-space keys match
+- **Space key** is 1–255 ASCII characters for ordinary spaces, or 2–255 for
+  personal spaces. Ordinary-space keys match
+  `^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$`, including mixed-case, digit-leading, and
+  single-character keys; personal-space keys match
   `^~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253}$`. Keys retain their exact spelling and
-  case. A bare `~`, whitespace, slashes, and percent-encoded spellings are
-  invalid.
+  case in listings, resources, grants, exclusions, lookups, and CQL. A bare `~`,
+  whitespace, slashes, and percent-encoded spellings are invalid.
 - **Space URL alias** matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$`. It is accepted
   only as the space segment of a browser link or URL locator, never as a `space`
   input or a resource.

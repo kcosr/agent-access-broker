@@ -2858,13 +2858,25 @@ fn validates_resource_selectors_and_rejects_retired_child_scope_types() {
     );
     validate_broker_config(&config).unwrap();
 
+    for key in ["eng", "TeamDocs", "7Ops", "A"] {
+        let mut config = sample_broker();
+        config.policy.grants[1].resources = select_resources(
+            &mut config,
+            agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+                .id()
+                .clone(),
+            &[exact(key)],
+        );
+        validate_broker_config(&config).unwrap();
+    }
+
     let mut config = sample_broker();
     config.policy.grants[1].resources = select_resources(
         &mut config,
         agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
             .id()
             .clone(),
-        &[exact("eng")],
+        &[exact("eng/ops")],
     );
     let errors = validation_errors(validate_broker_config(&config));
     assert_contains(&errors, "selector is invalid for confluence_space");

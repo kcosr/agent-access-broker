@@ -12,6 +12,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod personal_spaces;
 mod space_aliases;
+mod space_keys;
 
 #[test]
 fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
