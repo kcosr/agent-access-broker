@@ -8,6 +8,7 @@ mod config;
 mod continuation;
 mod cql;
 mod present;
+mod space_list;
 #[cfg(test)]
 mod tests;
 mod validation;
@@ -74,6 +75,7 @@ pub struct ConfluenceProvider {
     backend: Arc<dyn ConfluenceBackend>,
     /// Seals list and search continuations and draft handles.
     continuations: ConfluenceContinuations,
+    listing_signer: ContinuationSigner,
     attribution: ProviderAttributionConfig,
     /// The cloud ID of the site's gateway route, which delegated access is
     /// pinned to; `None` when the site has no gateway route (no valid
@@ -98,6 +100,7 @@ impl ConfluenceProvider {
     ) -> Self {
         let limits = host.limits().clone();
         Self {
+            listing_signer: ContinuationSigner::new(host.stable_signing_key().cloned()),
             continuations: ConfluenceContinuations::new(
                 &config,
                 &limits,
@@ -117,6 +120,7 @@ impl ConfluenceProvider {
         backend: Arc<dyn ConfluenceBackend>,
     ) -> Self {
         Self {
+            listing_signer: ContinuationSigner::new(None),
             continuations: ConfluenceContinuations::new(&config, &limits, None),
             gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
@@ -141,6 +145,7 @@ impl ConfluenceProvider {
         stable_signing_key: Arc<dyn StableSigningKey>,
     ) -> Self {
         Self {
+            listing_signer: ContinuationSigner::new(Some(stable_signing_key.clone())),
             continuations: ConfluenceContinuations::new(&config, &limits, Some(stable_signing_key)),
             gateway_cloud_id: config.site().gateway_cloud_id(),
             config,
@@ -431,6 +436,7 @@ pub mod test_support {
 /// configuration alone.
 pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescriptor {
     let mut actions = confluence_content_actions(config);
+    actions.push(space_list::descriptor(&config.listing));
     actions.extend(confluence_draft_actions(config));
     actions.extend(confluence_comment_actions(config));
     let descriptor = ServiceDescriptor::new("confluence", "Confluence")
@@ -1281,6 +1287,10 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
 impl ConfluenceProvider {
     fn local_scopes(&self, action: &str, inputs: &Value) -> Result<ResourceScopes, ProviderError> {
         match action {
+            "space.list" => {
+                space_list::parse_inputs(inputs, &self.config.listing, &self.limits)?;
+                Ok(ResourceScopes::new())
+            }
             "page.view" => {
                 // A URL's space segment may be the space's URL alias: only the
                 // page's looked-up space key is a scope.
@@ -1842,6 +1852,11 @@ impl Provider for ConfluenceProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
+        if request.action() == "space.list" {
+            return self
+                .local_scopes(request.action(), request.inputs())
+                .map(ScopeResolution::resources);
+        }
         if let Some((content_type, content_id, draft_handle)) =
             draft_handle_reference(request.action(), request.inputs())?
         {
@@ -1984,6 +1999,7 @@ impl Provider for ConfluenceProvider {
             return self.invoke_comment_action(request, comment_action).await;
         }
         match request.action() {
+            "space.list" => self.invoke_space_list(request).await,
             "page.view" => self.invoke_page_view(request).await,
             "search" => self.invoke_search(request).await,
             "page.create" => self.invoke_page_create(request).await,
@@ -12984,9 +13000,11 @@ fn attachment_id_re() -> &'static Regex {
 fn space_key_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // Personal keys are literal upstream identifiers, not Broker usernames.
-        // Keep both forms bounded to 255 ASCII bytes and safe as one URL segment.
-        Regex::new(r"^(?:[A-Z][A-Z0-9_-]{1,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$")
+        // Keys are literal, case-sensitive upstream identifiers. Ordinary keys
+        // may begin with a digit or consist of one character; personal keys
+        // are not Broker usernames. Bound both forms to 255 ASCII bytes and
+        // keep them safe as one URL segment.
+        Regex::new(r"^(?:[A-Za-z0-9][A-Za-z0-9_-]{0,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$")
             .expect("space key regex")
     })
 }

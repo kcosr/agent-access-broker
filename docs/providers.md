@@ -24,7 +24,7 @@ Built-in provider contracts:
 | [providers-gmail.md](providers-gmail.md) | Google account connections; mail reads, archive, Trash and restore. |
 | [providers-teams.md](providers-teams.md) | Notifications to managed, encrypted Teams Workflow destinations. |
 | [providers-jira.md](providers-jira.md) | Jira issue, search, comment, attachment, verification, URL locator, and attribution behavior. |
-| [providers-confluence.md](providers-confluence.md) | Confluence page, blog, draft, comment, attachment, CQL, URL locator, and attribution behavior. |
+| [providers-confluence.md](providers-confluence.md) | Confluence live space listing, page, blog, draft, comment, attachment, CQL, URL locator, and attribution behavior. |
 | [providers-gitlab-rest.md](providers-gitlab-rest.md) | GitLab repository discovery/content search, uploads, project, issue, merge-request review, repository/CI, and project-webhook behavior. |
 | [providers-cloudbees-ci.md](providers-cloudbees-ci.md) | CloudBees CI jobs, builds, Pipelines, logs, test reports, downloads, queue items, and parameterless triggers. |
 

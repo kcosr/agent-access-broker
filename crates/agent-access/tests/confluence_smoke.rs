@@ -1,3 +1,5 @@
+#[path = "confluence_smoke/space_list.rs"]
+mod space_listing;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -2739,6 +2741,19 @@ struct StubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for StubConfluenceBackend {
+    async fn space_list(
+        &self,
+        _request: agent_access_confluence::ConfluenceSpaceListRequest,
+        _credential: &agent_access_confluence::AtlassianCredential,
+    ) -> Result<
+        agent_access_confluence::ConfluenceBackendResponse<
+            agent_access_confluence::ConfluenceSpaceListPage,
+        >,
+        agent_access_confluence::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         page_id: &str,
@@ -2919,6 +2934,19 @@ impl WriteStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for WriteStubConfluenceBackend {
+    async fn space_list(
+        &self,
+        _request: agent_access_confluence::ConfluenceSpaceListRequest,
+        _credential: &agent_access_confluence::AtlassianCredential,
+    ) -> Result<
+        agent_access_confluence::ConfluenceBackendResponse<
+            agent_access_confluence::ConfluenceSpaceListPage,
+        >,
+        agent_access_confluence::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         page_id: &str,
@@ -4581,6 +4609,7 @@ path = {audit}
 
 fn confluence_provider_config(max_results: u32) -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
+        listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,
         egress_proxy: None,

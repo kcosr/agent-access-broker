@@ -385,6 +385,15 @@ Jira attachment delete is not currently exposed.
 
 ## Confluence
 
+Use `agent-access confluence space list --max-results 50`. Resume with
+`--page-token TOKEN`; `--output-format markdown` is supported.
+
+The separately granted `space.list` enumerates current spaces within effective
+space grants. Inputs accept only `maxResults` and optional `pageToken`. Continue
+`more` and `scan_budget` pages even when empty; `exhausted` ends the observed
+stream. Authorization uses canonical keys, including personal `~` keys, never
+URL aliases. Listing grants no content access and leaves local discovery unchanged.
+
 Personal spaces use their actual keys, such as `~alice`, with the same space
 inputs and grants as team spaces. Preserve the tilde and case, and quote shell
 arguments: `--space '~alice'`. In raw CQL, quote the key: `space = "~alice"`.
@@ -450,7 +459,7 @@ storage; malformed selected ADF fails rather than falling back. Draft/comment
 native `--body-format` selects the upstream representation and is separate from
 `--read-content-format`.
 
-Whole-result Markdown covers current page/blog view/search/verify, page/blog
+Whole-result Markdown covers space list, current page/blog view/search/verify, page/blog
 draft view/verify, current/draft attachment lists, and all page/blog
 footer/inline comment list/view/reply-list reads. Search and attachment lists
 stay body-free; comment/reply lists convert only returned bodies and make no

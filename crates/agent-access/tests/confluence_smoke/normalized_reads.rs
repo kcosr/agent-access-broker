@@ -14,6 +14,19 @@ impl NormalizedReadBackend {
 
 #[async_trait]
 impl ConfluenceBackend for NormalizedReadBackend {
+    async fn space_list(
+        &self,
+        _request: agent_access_confluence::ConfluenceSpaceListRequest,
+        _credential: &agent_access_confluence::AtlassianCredential,
+    ) -> Result<
+        agent_access_confluence::ConfluenceBackendResponse<
+            agent_access_confluence::ConfluenceSpaceListPage,
+        >,
+        agent_access_confluence::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn search(
         &self,
         _request: ConfluenceSearchRequest,

@@ -13883,6 +13883,7 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
     config
         .providers
         .insert(agent_access_confluence::ConfluenceProviderConfig {
+            listing: Default::default(),
             tenant_host: "example.atlassian.net".to_string(),
             cloud_id: None,
             egress_proxy: None,
@@ -16837,6 +16838,7 @@ async fn spec_token_fixture_with_restrictions(
         config
             .providers
             .insert(agent_access_confluence::ConfluenceProviderConfig {
+                listing: Default::default(),
                 tenant_host: "example.atlassian.net".to_string(),
                 cloud_id: None,
                 egress_proxy: None,
@@ -17926,6 +17928,7 @@ fn jira_capabilities_omit_content_writes_without_a_native_comment_target() {
 #[test]
 fn confluence_capabilities_advertise_only_effective_content_write_formats() {
     let config = agent_access_confluence::ConfluenceProviderConfig {
+        listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,
         egress_proxy: None,

@@ -429,6 +429,17 @@ body content is excluded from audit, tracing, error details, and identifiers.
 
 ## Confluence
 
+Use `POST /v1/invoke/confluence/space.list` with
+`{"inputs":{"maxResults":50}}`. Resume with `inputs.pageToken`; whole-result
+Markdown uses `responseFormat` beside `inputs`, for example
+`{"inputs":{"maxResults":50},"responseFormat":"markdown"}`.
+
+The separately granted `space.list` enumerates current spaces within effective
+space grants. Inputs accept only `maxResults` and optional `pageToken`. Continue
+`more` and `scan_budget` pages even when empty; `exhausted` ends the observed
+stream. Authorization uses canonical keys, including personal `~` keys, never
+URL aliases. Listing grants no content access and leaves local discovery unchanged.
+
 Personal spaces use their actual keys, such as `~alice`, with the same space
 inputs and grants as team spaces. Preserve the tilde and case; for search use
 `"spaces":["~alice"]`. In raw CQL, quote the key: `space = "~alice"`.
@@ -487,7 +498,7 @@ update, and every footer/inline reply add. It preserves the native storage/ADF
 body and adds `renderedBody` beside the owning `body`. Current pages select
 present ADF before storage and do not fall back when selected ADF is malformed.
 
-Confluence whole-result Markdown is advertised by current page/blog
+Confluence whole-result Markdown is advertised by `space.list`, current page/blog
 view/search/verify, page/blog draft view/verify, current/draft attachment
 lists, and every page/blog footer/inline comment list/view/reply-list read.
 Search and attachment results remain body-free; comment/reply lists convert

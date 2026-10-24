@@ -8850,6 +8850,7 @@ fn configure_lookup_trace_confluence(config: &mut BrokerConfig) {
     config
         .providers
         .insert(agent_access_confluence::ConfluenceProviderConfig {
+            listing: Default::default(),
             tenant_host: "example.atlassian.net".to_string(),
             cloud_id: None,
             egress_proxy: None,

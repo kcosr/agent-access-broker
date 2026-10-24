@@ -696,8 +696,11 @@ existence, ownership of a particular object, or an authorization outcome.
   advertise `responseFormats = [json, markdown]`: `project.list`, `issue_type.list`, `issue.view`, `search`,
   `comment.list`, `comment.view`, `comment.property.list`,
   `comment.property.get`, `attachment.list`, and `verify`.
-- **Confluence** (`confluence`) — page, blog, attachment, verification, and
-  comment actions. Page actions include `page.view`, `search`, `page.create`,
+- **Confluence** (`confluence`) — space listing, page, blog, attachment,
+  verification, and comment actions. The separately granted, read-only
+  `space.list` enumerates current spaces with the selected execution credential,
+  filters canonical keys through normalized space authority before projection,
+  and requires no lookup access. URL aliases affect validated links only. Page actions include `page.view`, `search`, `page.create`,
   `page.update`, the separately granted `page.move`, `attachment.add`,
   `attachment.download`, `attachment.list`, and `verify`; blog actions mirror
   them under `blog.*`; draft actions are
@@ -717,7 +720,11 @@ existence, ownership of a particular object, or an authorization outcome.
   direct-child order by readback. Create actions resolve
   the target space directly from inputs. Update actions are optimistic-concurrency.
   Search, blog search, attachment and comment list actions are cursor-paginated
-  with broker-signed continuation tokens that relay Confluence's cursor. Twenty
+  with broker-signed continuation tokens that relay Confluence's cursor. Space
+  listing uses bounded single-attempt requests and shared request/body budgets;
+  its confidential continuation preserves original expiry and binds current
+  authority, inputs, and route configuration on every resume. See
+  [space listing](providers-confluence.md#live-space-listing). Twenty
   current page/blog, draft, and comment mutations use canonical `content` plus
   explicit `contentFormat`. Markdown and
   plain text are converted to constrained storage HTML; native storage remains
@@ -726,9 +733,9 @@ existence, ownership of a particular object, or an authorization outcome.
   results declare storage or ADF bodies advertise embedded `native`,
   `markdown`, and `text`: current page/blog view, page/blog draft view, every
   page/blog footer/inline comment list/view/reply-list read, footer-comment
-  adds, footer/inline comment updates, and footer/inline reply adds. Twenty-six
+  adds, footer/inline comment updates, and footer/inline reply adds. Twenty-seven
   non-streaming retrieval actions advertise whole-result `json` and `markdown`:
-  current page/blog view/search/verify, page/blog draft view/verify, current and
+  space list, current page/blog view/search/verify, page/blog draft view/verify, current and
   draft attachment lists, and every page/blog footer/inline comment
   list/view/reply-list read. Body-free search and attachment results remain
   body-free, and formatting performs no additional provider call.

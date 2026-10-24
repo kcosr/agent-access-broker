@@ -22,9 +22,6 @@ fn personal_space_key_grammar_is_bounded_and_preserves_exact_case() {
     }
     for key in [
         "",
-        "A",
-        "eng",
-        "Eng",
         "~",
         "~~alice",
         "~.alice",

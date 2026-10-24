@@ -186,6 +186,7 @@ use classic scopes and its v2 calls granular ones:
 
 | Actions | Scopes |
 | --- | --- |
+| `space.list` | `read:space:confluence` |
 | `page.view`, `attachment.list`, `verify` | `read:confluence-content.all` |
 | `search`, `blog.search` | `search:confluence` |
 | `page.update` | `read:confluence-content.all`, `write:confluence-content` |
@@ -443,12 +444,70 @@ carry no receipt. Page create, page draft create and page move audit records
 keep `sideEffectPossible: true` for every mutation failure. Inspect the content
 before repeating a write with a `retrySafe: false` receipt.
 
+## Live space listing
+
+`space.list` and `agent-access confluence space list` enumerate current spaces
+visible to the selected execution credential. The action is separately grantable,
+read-only, and eligible for read-only trusted-identity paths. It needs no lookup
+credential. It grants no page/blog access and does not change local resource
+discovery or existing content searches.
+
+```bash
+agent-access confluence space list --max-results 50
+agent-access confluence space list --max-results 50 --page-token '<token>'
+agent-access confluence space list --output-format markdown
+```
+
+Inputs are only `maxResults` (default 50, bounded by `listing.max_results`, at
+most 100) and optional opaque `pageToken`. The typed flags are `--max-results`
+and `--page-token`; each invocation returns one page. Unknown fields and locator
+alternatives are rejected before upstream access.
+
+The provider calls v2 `/spaces` with `limit`, `status=current`, and an optional
+cursor, in default ascending-ID order. All current types are eligible, including
+`global`, `collaboration`, `knowledge_base`, `personal`, `system`, `onboarding`,
+and `xflow_sample_space`. Canonical keys, including personal `~` keys, are checked
+against this action's effective grants before any metadata is projected.
+Aliases never authorize a space. Results contain only `id`, `key`, `name`,
+`type`, `status`, and a validated tenant browser `webUrl`; names over 4096 UTF-8
+bytes are shortened with `previewTruncated: true`. No owner, description HTML,
+homepage, permission list, upstream total, or raw cursor is returned.
+
+The result has `items`, `count`, `maxResults`, `scanStatus`, and, when resumable,
+`nextPageToken`. Continue `more` or `scan_budget` pages even when empty; neither
+promises another authorized item. `exhausted` ends the observed stream, without
+an inventory or snapshot guarantee. Concurrent changes can cause omissions or
+duplicates across calls. Exact-only grants on a large tenant may require many
+empty pages before a matching space is reached.
+
+`providers.confluence.listing` defaults to 50 results, 4 candidate pages,
+8 HTTP attempts, and 16 MiB consumed bodies per invocation. Page, request, and
+byte budgets must be positive; result size must also fit the provider byte cap.
+There are no automatic HTTP retries. Each invocation reserves its one unused
+OAuth replay before a page: the first page needs two attempts with OAuth, and
+later pages stop at a resumable boundary when that reservation cannot fit.
+Every attempt and consumed response/error body counts. Oversized bodies or
+results fail explicitly; start a fresh listing with a smaller page size.
+
+Body and Link-header next cursors must agree. The provider validates their
+origin, collection path, query fields, and progress, then reconstructs the next
+request. It never follows upstream URLs. Repeated cursors and two-position
+cycles across resumes are rejected. Confidential tokens preserve a 15-minute
+absolute lifetime, use the stable Broker signing key when configured, and bind
+the caller, context, credential method, route, limits, page size, and effective
+scope. Changes reject an old token before HTTP; refreshing the same OAuth
+connection does not invalidate it. Without a stable key, reload/restart invalidates
+tokens. Their size is bounded by the provider response limit; cursors are never
+silently truncated. `space.list` requires `read:space:confluence`; existing
+connections are not broadened automatically.
+
 ## Actions and lookup requirements
 
-Thirty-seven actions:
+Thirty-eight page, blog, draft, attachment, and space actions; comment actions follow below:
 
 | Action | Required scope type | Pre-authorization metadata lookup |
 | --- | --- | --- |
+| `space.list` | `space` | no |
 | `page.view` | `space` | yes |
 | `search` | `space` | no |
 | `page.create` | `space` | lookup-backed; parent lookup when supplied |
@@ -487,7 +546,7 @@ Thirty-seven actions:
 | `blog.draft.attachment.list` | `space` | signed draft handle |
 | `blog.draft.attachment.download` | `space` | signed draft handle |
 
-`search` and `blog.search` do not require pre-authorization metadata lookup.
+`space.list`, `search`, and `blog.search` do not require pre-authorization metadata lookup.
 The action catalog statically classifies `page.create`, `page.draft.create`, and
 `page.move` as lookup-backed. `page.create` takes the requested space from
 inputs; when a parent is supplied, it resolves that page and requires its
@@ -631,11 +690,13 @@ do not carry a stable numeric content ID.
 ## Keys, locators, and page-to-space confirmation
 
 - **Page ID** matches `^[1-9][0-9]*$`.
-- **Space key** is 2–255 ASCII characters. Team-space keys match
-  `^[A-Z][A-Z0-9_-]{1,254}$`; personal-space keys match
+- **Space key** is 1–255 ASCII characters for ordinary spaces, or 2–255 for
+  personal spaces. Ordinary-space keys match
+  `^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$`, including mixed-case, digit-leading, and
+  single-character keys; personal-space keys match
   `^~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253}$`. Keys retain their exact spelling and
-  case. A bare `~`, whitespace, slashes, and percent-encoded spellings are
-  invalid.
+  case in listings, resources, grants, exclusions, lookups, and CQL. A bare `~`,
+  whitespace, slashes, and percent-encoded spellings are invalid.
 - **Space URL alias** matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$`. It is accepted
   only as the space segment of a browser link or URL locator, never as a `space`
   input or a resource.
@@ -892,8 +953,9 @@ unknown leaves use a fixed placeholder. The Broker never calls Atlassian's
 asynchronous content conversion endpoint.
 
 `responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly
-these 26 non-streaming retrievals advertise whole-result Markdown:
+these 27 non-streaming retrievals advertise whole-result Markdown:
 
+- `space.list`;
 - `page.view`, `search`, `verify`, `blog.view`, `blog.search`, and
   `blog.verify`;
 - `page.draft.view`, `page.draft.verify`, `blog.draft.view`, and

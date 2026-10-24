@@ -33,6 +33,17 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Live Confluence space listing.** The separately grantable, read-only
+  `space.list` action and `confluence space list` command enumerate current
+  spaces within effective space grants, including personal spaces. Bounded
+  scans, confidential continuations, and Markdown preserve filtered results
+  and completion status. New [`providers.confluence.listing` configuration](docs/configuration.md#providersconfluence)
+  bounds pages, HTTP attempts including the shared OAuth replay, and scanned bytes.
+  It is eligible for read-only trusted-identity paths
+  when separately granted. Existing content search and local discovery retain
+  their contracts. See [space listing](docs/providers-confluence.md#live-space-listing).
+  ([#59](https://github.com/kcosr/agent-access-broker/pull/59))
+
 - **Live Jira project listing.** The independently grantable, read-only
   `project.list` action and `jira project list` command enumerate visible live
   projects, filter current keys through effective grants, and support bounded
@@ -100,6 +111,13 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- **Confluence space key validation.** Live listing and content access accept
+  ordinary space keys with mixed case, a leading digit, or one character.
+  Listings no longer fail when they encounter these keys. Resource grants,
+  exclusions, lookups, and CQL preserve exact case. Rejected listing fields
+  produce fixed operator-only diagnostic codes without logging their values.
+  ([#63](https://github.com/kcosr/agent-access-broker/pull/63))
 
 - **Confluence paging through the Atlassian gateway.** Comment and reply lists
   and `page.move`'s order check follow Confluence's site-relative next links

@@ -33,6 +33,12 @@ Jira `project.list` lists live authorized projects with only `maxResults` and
 Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
 `exhausted`; issue search and local `resources_list` retain their own contracts.
 
+The separately grantable `confluence.space.list` action accepts `inputs` with
+only `maxResults` and optional `pageToken`. Results use canonical space grants,
+not URL aliases. Continue `more` and `scan_budget` pages even when empty.
+Local resource-discovery helpers keep their existing behavior. See
+[space listing](providers-confluence.md#live-space-listing).
+
 GitLab `project.list` lists live authorized repositories, including archived
 projects, and accepts only `maxResults` and `pageToken`. It is independently
 grantable from `project.search`, which adds optional project filters;

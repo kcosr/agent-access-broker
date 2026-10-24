@@ -350,6 +350,15 @@ when the catalog advertises `responseFormats`.
 
 ## Confluence
 
+Use `agent-access invoke confluence.space.list --input-json '{"maxResults":50}'`.
+Pass the returned token in `pageToken`; `--output-format markdown` is supported.
+
+The separately granted `space.list` enumerates current spaces within effective
+space grants. Inputs accept only `maxResults` and optional `pageToken`. Continue
+`more` and `scan_budget` pages even when empty; `exhausted` ends the observed
+stream. Authorization uses canonical keys, including personal `~` keys, never
+URL aliases. Listing grants no content access and leaves local discovery unchanged.
+
 Personal spaces use their actual keys, such as `~alice`, with the same space
 inputs and grants as team spaces. Preserve the tilde and case; for search use
 `"spaces":["~alice"]`. In raw CQL, quote the key: `space = "~alice"`.
@@ -410,7 +419,7 @@ update, and every footer/inline reply add. It preserves native storage/ADF and
 places `renderedBody` beside the owning `body`. A current page selects present
 ADF before storage; malformed selected ADF fails without storage fallback.
 
-Whole-result Markdown is advertised by current page/blog view/search/verify,
+Whole-result Markdown is advertised by `space.list`, current page/blog view/search/verify,
 page/blog draft view/verify, current/draft attachment lists, and every
 page/blog footer/inline comment list/view/reply-list read. Body-free searches
 and attachment lists remain body-free; comment/reply lists convert only their

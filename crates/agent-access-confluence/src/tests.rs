@@ -12,6 +12,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod personal_spaces;
 mod space_aliases;
+mod space_keys;
 
 #[test]
 fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
@@ -106,7 +107,10 @@ fn descriptor_declares_transfer_io_and_search_containment() {
         .filter(|action| action.native_search.is_some())
         .map(|action| action.action.as_str())
         .collect::<BTreeSet<_>>();
-    assert_eq!(contained, BTreeSet::from(["search", "blog.search"]));
+    assert_eq!(
+        contained,
+        BTreeSet::from(["search", "blog.search", "space.list"])
+    );
 }
 
 #[test]
@@ -115,7 +119,7 @@ fn descriptor_lookup_requirements_follow_scope_resolution_needs() {
     for action in &descriptor.actions {
         let name = action.action.as_str();
         let expected = match name {
-            "search" | "blog.search" => LookupRequirement::None,
+            "search" | "blog.search" | "space.list" => LookupRequirement::None,
             "page.draft.create" | "page.draft.stage" | "blog.draft.stage" => {
                 LookupRequirement::ScopeResolution
             }
@@ -1204,6 +1208,7 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
         config: confluence_config(),
         limits: ProviderLimits::default(),
         backend: backend.clone(),
+        listing_signer: ContinuationSigner::new(None),
         continuations: ConfluenceContinuations::new(
             &confluence_config(),
             &ProviderLimits::default(),
@@ -6770,6 +6775,17 @@ struct VerifyForbiddenBackend {
 
 #[async_trait]
 impl ConfluenceBackend for CommentStubConfluenceBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         page_id: &str,
@@ -7055,6 +7071,17 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for BlogViewBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         _page_id: &str,
@@ -7192,6 +7219,17 @@ impl ConfluenceBackend for BlogViewBackend {
 
 #[async_trait]
 impl ConfluenceBackend for AttachmentDownloadBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         _page_id: &str,
@@ -7296,6 +7334,17 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
 
 #[async_trait]
 impl ConfluenceBackend for AttachmentListBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         page_id: &str,
@@ -7448,6 +7497,17 @@ impl AttachmentListBackend {
 
 #[async_trait]
 impl ConfluenceBackend for AttributionStubConfluenceBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn draft_page(
         &self,
         _page_id: &str,
@@ -7754,6 +7814,17 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for VerifyForbiddenBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         _page_id: &str,
@@ -7874,6 +7945,17 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
 
 #[async_trait]
 impl ConfluenceBackend for PageMoveTestBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         page_id: &str,
@@ -8166,6 +8248,17 @@ impl ConfluenceBackend for PageMoveTestBackend {
 
 #[async_trait]
 impl ConfluenceBackend for StubConfluenceBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn current_user(
         &self,
         _credential: &AtlassianCredential,
@@ -8493,6 +8586,7 @@ fn confluence_attribution_provider(
     let attribution =
         ProviderAttributionConfig::from_patterns(&confluence_descriptor(&config), &patterns);
     ConfluenceProvider {
+        listing_signer: ContinuationSigner::new(None),
         continuations: ConfluenceContinuations::new(&config, &ProviderLimits::default(), None),
         gateway_cloud_id: config.site().gateway_cloud_id(),
         config,
@@ -8719,6 +8813,7 @@ fn key_only(key: &str) -> ConfluenceSpaceUrlNames<'_> {
 
 fn confluence_config() -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
+        listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: Some("00000000-0000-0000-0000-000000000000".to_string()),
         egress_proxy: None,
@@ -9445,6 +9540,17 @@ fn ok<T>(value: T) -> Result<ConfluenceBackendResponse<T>, ConfluenceBackendErro
 
 #[async_trait]
 impl ConfluenceBackend for DraftThrottleBackend {
+    async fn space_list(
+        &self,
+        _request: crate::ConfluenceSpaceListRequest,
+        _credential: &crate::AtlassianCredential,
+    ) -> Result<
+        crate::ConfluenceBackendResponse<crate::ConfluenceSpaceListPage>,
+        crate::ConfluenceBackendError,
+    > {
+        panic!("space listing not exercised by this fixture")
+    }
+
     async fn page_metadata(
         &self,
         _page_id: &str,

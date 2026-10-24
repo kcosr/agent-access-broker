@@ -45,12 +45,16 @@ Native integrations pair action permissions with the following resource controls
 | Integration | Supported operations | Resource controls |
 | --- | --- | --- |
 | [Jira](docs/providers-jira.md) | Live project listing, issues, search, comments, and attachments | Projects |
-| [Confluence](docs/providers-confluence.md) | Pages, blogs, drafts, comments, and attachments | Spaces, including personal spaces |
+| [Confluence](docs/providers-confluence.md) | Live space listing, pages, blogs, drafts, comments, and attachments | Spaces, including personal spaces |
 | [GitLab REST](docs/providers-gitlab-rest.md) | Repository discovery, content search, issues, merge requests, CI, uploads, and webhooks | Repositories and namespaces |
 | [CloudBees CI](docs/providers-cloudbees-ci.md) | Builds, Pipelines, logs, artifacts, queues, and triggers | Jobs, folders, and controllers |
 | [Teams Workflows](docs/providers-teams.md) | Notifications | Configured Workflow destinations |
 | [Git HTTP gateway](docs/git-http-gateway.md) | Git fetch and push | Repositories and namespaces |
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
+
+Confluence space keys preserve their exact case across listing, resource grants,
+and content access, including mixed-case, digit-leading, and single-character
+ordinary keys as well as personal-space keys.
 
 Jira’s separately grantable [`project.list`](docs/providers-jira.md#live-project-listing)
 action lists visible live projects within effective project grants. It needs only

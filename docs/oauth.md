@@ -554,6 +554,9 @@ list may be omitted.
 
 ### Atlassian scopes
 
+Confluence `space.list` needs `read:space:confluence`. Existing connections are
+not broadened automatically; missing upstream permission remains a denial.
+
 Scopes are deployment configuration: the integration's permissions allow them
 and the profile requests them. The registration above requests what every Jira
 and Confluence action needs:

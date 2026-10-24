@@ -1539,3 +1539,164 @@ async fn oauth_search_keeps_aliased_links_on_the_site_through_the_gateway() {
         [format!("GET {route} Bearer oauth-1")]
     );
 }
+
+fn space_listing_request(credential: &DelegatedCredential, input: Value) -> ProviderInvocation {
+    InvocationBuilder::new("confluence", "space.list")
+        .inputs(input)
+        .credential_mode(CredentialMode::PerUser)
+        .delegated(credential.clone())
+        .search(SearchAuthorization::new(
+            "space",
+            SearchAuthorizationScope::from_selectors(
+                vec![
+                    ResourceSelector::Exact {
+                        value: "ENG".into(),
+                    },
+                    ResourceSelector::Exact {
+                        value: "OPS".into(),
+                    },
+                ],
+                vec![],
+            ),
+        ))
+        .build()
+}
+
+#[tokio::test]
+async fn space_listing_reserves_and_counts_one_oauth_replay_for_the_whole_call() {
+    for attempts in [1, 2, 8] {
+        let server = MockServer::start().await;
+        let mut p = provider(&server);
+        p.config.listing.max_upstream_requests = attempts;
+        let lease = Lease::new(CLOUD_ID);
+        let credential = delegated_credential(lease.clone());
+        let route = format!("{GATEWAY}/api/v2/spaces");
+        Mock::given(path(&route))
+            .and(header("authorization", "Bearer oauth-1"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("PRIVATE_REJECTION"))
+            .mount(&server)
+            .await;
+        Mock::given(path(&route))
+            .and(header("authorization", "Bearer oauth-2"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"results":[],"_links":{"next":"/wiki/api/v2/spaces?cursor=A"}}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(path(&route))
+            .and(query_param("cursor", "A"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let result = p
+            .invoke(space_listing_request(&credential, json!({"maxResults":1})))
+            .await;
+        if attempts == 2 {
+            assert_eq!(result.unwrap().result["scanStatus"], "scan_budget");
+        } else {
+            assert_eq!(
+                result.unwrap_err().reason_code(),
+                if attempts == 1 {
+                    ReasonCode::UpstreamProtocolFailed
+                } else {
+                    ReasonCode::CredentialInvalid
+                }
+            );
+        }
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            match attempts {
+                1 => 0,
+                2 => 2,
+                _ => 3,
+            }
+        );
+        assert_eq!(
+            lease.recoveries.load(Ordering::SeqCst),
+            usize::from(attempts > 1)
+        );
+    }
+    let server = MockServer::start().await;
+    let mut p = provider(&server);
+    p.config.listing.max_upstream_requests = 2;
+    let lease = Lease::new(CLOUD_ID);
+    let credential = delegated_credential(lease.clone());
+    let route = format!("{GATEWAY}/api/v2/spaces");
+    Mock::given(path(&route))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"results":[],"_links":{"next":"?cursor=A"}})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path(&route))
+        .and(query_param("cursor", "A"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(0)
+        .mount(&server)
+        .await;
+    assert_eq!(
+        p.invoke(space_listing_request(&credential, json!({})))
+            .await
+            .unwrap()
+            .result["scanStatus"],
+        "scan_budget"
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn space_listing_marks_rejected_access_before_a_failed_body_read() {
+    let server = MockServer::start().await;
+    let mut p = provider(&server);
+    p.config.listing.max_scan_bytes = 1;
+    let lease = Lease::new(CLOUD_ID);
+    let credential = delegated_credential(lease.clone());
+    Mock::given(path(format!("{GATEWAY}/api/v2/spaces")))
+        .respond_with(ResponseTemplate::new(401).set_body_string("PRIVATE_REJECTION"))
+        .mount(&server)
+        .await;
+    assert!(
+        p.invoke(space_listing_request(&credential, json!({})))
+            .await
+            .is_err()
+    );
+    assert_eq!(lease.rejected(), vec!["v1"]);
+    assert_eq!(lease.recoveries.load(Ordering::SeqCst), 0);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn space_listing_continuation_survives_refresh_but_rejects_a_changed_credential_method() {
+    let server = MockServer::start().await;
+    let p = provider(&server);
+    let lease = Lease::new(CLOUD_ID);
+    let credential = delegated_credential(lease.clone());
+    let route = format!("{GATEWAY}/api/v2/spaces");
+    for (version, key, next) in [(1, "ENG", "A"), (2, "OPS", "B")] {
+        Mock::given(path(&route)).and(header("authorization",format!("Bearer oauth-{version}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results":[{"id":version.to_string(),"key":key,"name":key,"type":"global","status":"current"}],"_links":{"next":format!("?cursor={next}")}}))).mount(&server).await;
+    }
+    let first = p
+        .invoke(space_listing_request(&credential, json!({"maxResults":1})))
+        .await
+        .unwrap();
+    let resumed = space_listing_request(
+        &credential,
+        json!({"maxResults":1,"pageToken":first.result["nextPageToken"]}),
+    );
+    let changed = InvocationBuilder::from(resumed.clone())
+        .credential(bearer_credential("static"))
+        .build();
+    assert_eq!(
+        p.invoke(changed).await.unwrap_err().reason_code(),
+        ReasonCode::InputInvalid
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    lease.current.store(2, Ordering::SeqCst);
+    let result = p.invoke(resumed).await.unwrap();
+    assert_eq!(result.result["items"][0]["key"], "OPS");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}

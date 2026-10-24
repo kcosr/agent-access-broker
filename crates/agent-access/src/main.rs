@@ -2155,6 +2155,10 @@ enum JiraAttachmentCommand {
 
 #[derive(Debug, Subcommand)]
 enum ConfluenceCommand {
+    Space {
+        #[command(subcommand)]
+        command: ConfluenceSpaceCommand,
+    },
     Page {
         #[command(subcommand)]
         command: ConfluencePageCommand,
@@ -2162,6 +2166,18 @@ enum ConfluenceCommand {
     Blog {
         #[command(subcommand)]
         command: ConfluenceBlogCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfluenceSpaceCommand {
+    List {
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
+        max_results: Option<u32>,
+        #[arg(long)]
+        page_token: Option<String>,
+        #[arg(long, value_enum)]
+        output_format: Option<OutputFormatArg>,
     },
 }
 
@@ -5070,6 +5086,31 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
 
 async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceCommand) -> Result<()> {
     match command {
+        ConfluenceCommand::Space {
+            command:
+                ConfluenceSpaceCommand::List {
+                    max_results,
+                    page_token,
+                    output_format,
+                },
+        } => {
+            let mut inputs = serde_json::Map::new();
+            if let Some(max_results) = max_results {
+                inputs.insert("maxResults".to_string(), serde_json::json!(max_results));
+            }
+            if let Some(page_token) = page_token {
+                inputs.insert("pageToken".to_string(), serde_json::json!(page_token));
+            }
+            run_typed_invoke_value(
+                ctx,
+                "confluence.space.list",
+                inputs.into(),
+                None,
+                *output_format,
+            )
+            .await
+        }
+
         ConfluenceCommand::Page { command } => match command {
             ConfluencePageCommand::View {
                 page_id,
@@ -19078,6 +19119,7 @@ upload_spool_dir = "upload-spool"
         }
 
         let whole_result = [
+            &["confluence", "space", "list"][..],
             &["confluence", "page", "view"][..],
             &["confluence", "page", "search"][..],
             &["confluence", "page", "verify"][..],

@@ -1133,6 +1133,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
 
 fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
     let ConfluenceProviderConfig {
+        listing,
         tenant_host,
         cloud_id,
         egress_proxy,
@@ -1163,6 +1164,15 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
                 .put("blog_formats", strings(blog_formats))
                 .put("comment_formats", strings(comment_formats))
                 .int("max_body_bytes", *max_body_bytes)
+                .value(),
+        )
+        .put(
+            "listing",
+            Fields::default()
+                .int("max_results", listing.max_results)
+                .int("max_candidate_pages", listing.max_candidate_pages)
+                .int("max_upstream_requests", listing.max_upstream_requests)
+                .int("max_scan_bytes", listing.max_scan_bytes)
                 .value(),
         )
         .put("search", search_value(search))
