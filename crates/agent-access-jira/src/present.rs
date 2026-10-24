@@ -738,7 +738,16 @@ fn render_project_view(
             if let Some(category) = item.get("statusCategory") {
                 let category = as_object(category)?;
                 budget.charge_work(category.len())?;
-                field(out, "Status category", required_scalar(category, "name")?)?;
+                for (key, label) in [
+                    ("id", "Status category ID"),
+                    ("key", "Status category key"),
+                    ("name", "Status category"),
+                    ("previewTruncated", "Status category preview truncated"),
+                ] {
+                    if let Some(value) = optional_display(category, key)? {
+                        field(out, label, &value)?;
+                    }
+                }
             }
         }
     }
@@ -1179,6 +1188,8 @@ mod tests {
             "Issue types",
             "Statuses",
             "Status category",
+            "Status category ID",
+            "Status category key",
         ] {
             assert!(rendered.contains(expected), "{expected}: {rendered}");
         }
