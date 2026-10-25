@@ -909,6 +909,16 @@ async fn broker_exposes_gitlab_merge_request_review_reads_against_stubbed_backen
     assert_eq!(raw_diff_json["result"]["iid"], 5);
     assert_eq!(raw_diff_json["result"]["headShaAtPreflight"], TEST_SHA);
     assert_eq!(raw_diff_json["result"]["contentType"], "text/x-diff");
+    let diff_audit = gitlab_audit_for_response(
+        &broker,
+        &raw_diff_json,
+        "merge_request.diff.raw.download",
+        &[("iid", serde_json::json!(5))],
+    );
+    assert!(diff_audit.get("mergeRequestIid").is_none());
+    assert_eq!(diff_audit["headShaAtPreflight"], TEST_SHA);
+    assert_eq!(diff_audit["contentType"], "text/x-diff");
+    assert_eq!(diff_audit["size"], raw_diff_json["result"]["size"]);
 
     let audit = broker.audit().unwrap().text();
     for action in [
@@ -2137,6 +2147,32 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     assert_success("typed positioned draft body update", &positioned_update);
     let positioned_update: serde_json::Value =
         serde_json::from_slice(&positioned_update.stdout).unwrap();
+    let preserved_audit = gitlab_audit_for_response(
+        &broker,
+        &positioned_update,
+        "merge_request.draft_note.update",
+        &[
+            ("draftNoteId", serde_json::json!(805)),
+            ("content", serde_json::json!(30)),
+        ],
+    );
+    assert_eq!(preserved_audit["provenHeadSha"], TEST_SHA);
+    assert_eq!(preserved_audit["positionType"], "text");
+    assert_eq!(preserved_audit["newLine"], 34);
+    assert!(preserved_audit.get("expectedHeadSha").is_none());
+    let preserved_records = broker.audit().unwrap().require_request(
+        positioned_update["agentRequestId"].as_str().unwrap(),
+        "gitlab",
+        "merge_request.draft_note.update",
+    );
+    for record in preserved_records {
+        assert_eq!(request_field(&record, "expectedHeadSha")["state"], "absent");
+        for field in record["requestAudit"]["fields"].as_array().unwrap() {
+            if field["key"].as_str().unwrap().starts_with("position.") {
+                assert_eq!(field["state"], "absent", "{field}");
+            }
+        }
+    }
     assert_eq!(
         positioned_update["result"]["draftNote"]["body"],
         "edited positioned draft secret"
@@ -4192,6 +4228,14 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     std::fs::write(&content_path, "file secret content").unwrap();
 
     let backend = stub_backend();
+    backend
+        .files
+        .lock()
+        .unwrap()
+        .get_mut(&("main".into(), "README.md".into()))
+        .unwrap()
+        .content_sha256 =
+        Some("e1f88b55b87c0028cb817d546b9c1a013954b01f5a20dcbdf80c1d8cd4f11b1b".into());
     let broker = start_broker(
         &gitlab_document(),
         gitlab_service(gitlab_provider_config(2), backend.clone()),
@@ -4215,6 +4259,24 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .output()
         .unwrap();
     assert_success("branch create", &branch_create);
+    let branch_response: serde_json::Value = serde_json::from_slice(&branch_create.stdout).unwrap();
+    let branch_audit = gitlab_audit_for_response(
+        &broker,
+        &branch_response,
+        "branch.create",
+        &[
+            ("branch", serde_json::json!("work/docs")),
+            ("ref", serde_json::json!("main")),
+        ],
+    );
+    assert_eq!(
+        branch_audit["branchSafety"],
+        serde_json::json!({
+            "branch":"work/docs", "defaultBranch":"main", "targetBranchExists":false,
+            "existingBranchDefault":null, "existingBranchProtected":null, "matchedProtectedBranch":null
+        })
+    );
+    assert!(branch_audit.get("ref").is_none());
     let observed_branch = backend.last_branch_create.lock().unwrap().clone().unwrap();
     assert_eq!(observed_branch.branch, "work/docs");
     assert_eq!(observed_branch.ref_name, "main");
@@ -4340,6 +4402,20 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_eq!(raw_json["result"]["path"], "README.md");
     assert_eq!(raw_json["result"]["size"], 15);
     assert_eq!(raw_json["result"]["resolvedRef"], TEST_SHA);
+    let raw_audit = gitlab_audit_for_response(
+        &broker,
+        &raw_json,
+        "file.raw.download",
+        &[
+            ("path", serde_json::json!("README.md")),
+            ("ref", serde_json::json!("main")),
+        ],
+    );
+    assert!(raw_audit.get("ref").is_none());
+    for key in ["path", "resolvedRef", "contentType", "size", "sha256"] {
+        assert_eq!(raw_audit[key], raw_json["result"][key], "{key}");
+        assert!(!raw_audit[key].is_null(), "missing observed {key}");
+    }
 
     let file_raw_stdout = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -4415,6 +4491,32 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .output()
         .unwrap();
     assert_success("file update", &file_update);
+    let update_response: serde_json::Value = serde_json::from_slice(&file_update.stdout).unwrap();
+    let update_audit = gitlab_audit_for_response(
+        &broker,
+        &update_response,
+        "file.update",
+        &[
+            ("path", serde_json::json!("docs/existing.md")),
+            ("branch", serde_json::json!("feature/rest")),
+            ("content", serde_json::json!(19)),
+            ("commitMessage", serde_json::json!(11)),
+        ],
+    );
+    assert_eq!(
+        update_audit["branchSafety"],
+        serde_json::json!({
+            "branch":"feature/rest", "defaultBranch":"main", "targetBranchExists":true,
+            "existingBranchDefault":false, "existingBranchProtected":false, "matchedProtectedBranch":null
+        })
+    );
+    assert_eq!(
+        update_audit["contentProcessing"],
+        serde_json::json!({"decodedContentBytes":19})
+    );
+    for key in ["path", "branch", "content", "commitMessage"] {
+        assert!(update_audit.get(key).is_none(), "duplicate requested {key}");
+    }
     let observed_update = backend.last_file_update.lock().unwrap().clone().unwrap();
     assert_eq!(observed_update.path, "docs/existing.md");
     assert_eq!(observed_update.decoded_content_bytes, 19);
@@ -4473,8 +4575,60 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .output()
         .unwrap();
     assert_success("file create", &file_create);
+    let create_response: serde_json::Value = serde_json::from_slice(&file_create.stdout).unwrap();
+    let create_audit = gitlab_audit_for_response(
+        &broker,
+        &create_response,
+        "file.create",
+        &[
+            ("path", serde_json::json!("docs/new.md")),
+            ("branch", serde_json::json!("feature/rest")),
+            ("content", serde_json::json!(19)),
+        ],
+    );
+    assert_eq!(create_audit["branchSafety"], update_audit["branchSafety"]);
+    assert_eq!(
+        create_audit["contentProcessing"],
+        serde_json::json!({"decodedContentBytes":19})
+    );
     let observed_create = backend.last_file_create.lock().unwrap().clone().unwrap();
     assert_eq!(observed_create.path, "docs/new.md");
+
+    let file_delete = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+        .args([
+            "--url",
+            &base_url,
+            "--no-token",
+            "gitlab",
+            "file",
+            "delete",
+            "sip/service",
+            "--path",
+            "docs/new.md",
+            "--branch",
+            "feature/rest",
+            "--message",
+            "Delete docs",
+            "--last-commit-id",
+            TEST_SHA,
+        ])
+        .output()
+        .unwrap();
+    assert_success("file delete", &file_delete);
+    let delete_response: serde_json::Value = serde_json::from_slice(&file_delete.stdout).unwrap();
+    let delete_audit = gitlab_audit_for_response(
+        &broker,
+        &delete_response,
+        "file.delete",
+        &[
+            ("path", serde_json::json!("docs/new.md")),
+            ("branch", serde_json::json!("feature/rest")),
+            ("lastCommitId", serde_json::json!(TEST_SHA)),
+            ("commitMessage", serde_json::json!(11)),
+        ],
+    );
+    assert_eq!(delete_audit["branchSafety"], update_audit["branchSafety"]);
+    assert!(delete_audit.get("contentProcessing").is_none());
 
     std::fs::write(
         &actions_path,
@@ -4488,7 +4642,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
             {
                 "action": "create",
                 "filePath": "docs/commit-new.md",
-                "content": "new file"
+                "content": "bmV3IGZpbGU=",
+                "encoding": "base64"
             }
         ]))
         .unwrap(),
@@ -4513,6 +4668,38 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .output()
         .unwrap();
     assert_success("commit create", &commit_create);
+    let commit_response: serde_json::Value = serde_json::from_slice(&commit_create.stdout).unwrap();
+    let commit_audit = gitlab_audit_for_response(
+        &broker,
+        &commit_response,
+        "commit.create",
+        &[
+            ("branch", serde_json::json!("feature/rest")),
+            ("commitMessage", serde_json::json!(17)),
+        ],
+    );
+    assert_eq!(commit_audit["branchSafety"], update_audit["branchSafety"]);
+    assert_eq!(
+        commit_audit["contentProcessing"]["actions"],
+        serde_json::json!([
+            {"inputIndex":0,"decodedContentBytes":13}, {"inputIndex":1,"decodedContentBytes":8}
+        ])
+    );
+    let commit_records = broker.audit().unwrap().require_request(
+        commit_response["agentRequestId"].as_str().unwrap(),
+        "gitlab",
+        "commit.create",
+    );
+    let actions = request_field(&commit_records[0], "actions");
+    assert_eq!(actions["totalCount"], 2);
+    let rows = actions["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["index"], 0);
+    assert_eq!(rows[0]["cells"]["filePath"]["value"], "docs/existing.md");
+    assert_eq!(rows[0]["cells"]["content"]["value"], 13);
+    assert_eq!(rows[1]["index"], 1);
+    assert_eq!(rows[1]["cells"]["filePath"]["value"], "docs/commit-new.md");
+    assert_eq!(rows[1]["cells"]["content"]["value"], 12);
+    assert_eq!(rows[1]["cells"]["encoding"]["value"], "base64");
     let observed_commit = backend.last_commit_create.lock().unwrap().clone().unwrap();
     assert_eq!(observed_commit.actions.len(), 2);
 
@@ -4674,8 +4861,14 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"file.raw.download\""));
     assert!(audit.contains("\"action\":\"commit.create\""));
-    assert!(!audit.contains("file secret content"));
-    assert!(!audit.contains("readme contents"));
+    for content in [
+        "file secret content",
+        "readme contents",
+        "batch content",
+        "bmV3IGZpbGU=",
+    ] {
+        assert!(!audit.contains(content));
+    }
 
     stop(broker).await;
 }
@@ -4756,6 +4949,22 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         .output()
         .unwrap();
     assert_success("pipeline run", &pipeline_run);
+    let pipeline_response: serde_json::Value =
+        serde_json::from_slice(&pipeline_run.stdout).unwrap();
+    let pipeline_audit = gitlab_audit_for_response(
+        &broker,
+        &pipeline_response,
+        "pipeline.run",
+        &[("ref", serde_json::json!("feature/rest"))],
+    );
+    assert_eq!(
+        pipeline_audit["refSafety"],
+        serde_json::json!({
+            "ref":"feature/rest", "defaultBranch":"main", "existingBranchDefault":false,
+            "existingBranchProtected":false, "matchedProtectedBranch":null, "denialReason":null
+        })
+    );
+    assert!(pipeline_audit.get("ref").is_none());
     let observed_pipeline_run = backend.last_pipeline_run.lock().unwrap().clone().unwrap();
     assert_eq!(observed_pipeline_run.ref_name, "feature/rest");
 
@@ -4782,6 +4991,18 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     let pipeline_run_main_json: serde_json::Value =
         serde_json::from_slice(&pipeline_run_main.stdout).unwrap();
     assert_eq!(pipeline_run_main_json["reasonCode"], "git_ref_denied");
+    let denied_audit = gitlab_audit_for_response(
+        &broker,
+        &pipeline_run_main_json,
+        "pipeline.run",
+        &[("ref", serde_json::json!("main"))],
+    );
+    assert_eq!(denied_audit["refSafety"]["ref"], "main");
+    assert_eq!(denied_audit["refSafety"]["defaultBranch"], "main");
+    assert_eq!(
+        denied_audit["refSafety"]["denialReason"],
+        "project_default_branch"
+    );
 
     let pipeline_run_release = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -4944,6 +5165,27 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         .output()
         .unwrap();
     assert_success("job play", &job_play);
+    let job_response: serde_json::Value = serde_json::from_slice(&job_play.stdout).unwrap();
+    let job_audit = gitlab_audit_for_response(
+        &broker,
+        &job_response,
+        "job.play",
+        &[("jobId", serde_json::json!(9002))],
+    );
+    assert_eq!(job_audit["refSafety"], pipeline_audit["refSafety"]);
+    assert!(job_audit.get("ref").is_none());
+    let job_records = broker.audit().unwrap().require_request(
+        job_response["agentRequestId"].as_str().unwrap(),
+        "gitlab",
+        "job.play",
+    );
+    assert!(
+        job_records[0]["requestAudit"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|field| field["key"] != "ref")
+    );
 
     let job_play_main = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -4967,6 +5209,13 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     let job_play_main_json: serde_json::Value =
         serde_json::from_slice(&job_play_main.stdout).unwrap();
     assert_eq!(job_play_main_json["reasonCode"], "git_ref_denied");
+    let denied_job_audit = gitlab_audit_for_response(
+        &broker,
+        &job_play_main_json,
+        "job.play",
+        &[("jobId", serde_json::json!(9003))],
+    );
+    assert_eq!(denied_job_audit["refSafety"], denied_audit["refSafety"]);
 
     let job_play_mismatched_ref = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -5016,6 +5265,25 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     let job_play_release_json: serde_json::Value =
         serde_json::from_slice(&job_play_release.stdout).unwrap();
     assert_eq!(job_play_release_json["reasonCode"], "git_ref_denied");
+    for (response, action, key, value) in [
+        (
+            &pipeline_run_release_json,
+            "pipeline.run",
+            "ref",
+            serde_json::json!("release/next"),
+        ),
+        (
+            &job_play_release_json,
+            "job.play",
+            "jobId",
+            serde_json::json!(9005),
+        ),
+    ] {
+        let denied = gitlab_audit_for_response(&broker, response, action, &[(key, value)]);
+        assert_eq!(denied["refSafety"]["ref"], "release/next");
+        assert_eq!(denied["refSafety"]["matchedProtectedBranch"], "release/*");
+        assert_eq!(denied["refSafety"]["denialReason"], "protected_branch_rule");
+    }
 
     let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"action\":\"job.trace.download\""));
@@ -5226,6 +5494,35 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
     assert_success("merge request merge", &merge_request_merge);
     let merge_request_merge_json: serde_json::Value =
         serde_json::from_slice(&merge_request_merge.stdout).unwrap();
+    let merge_audit = gitlab_audit_for_response(
+        &broker,
+        &merge_request_merge_json,
+        "merge_request.merge",
+        &[
+            ("iid", serde_json::json!(5)),
+            ("sha", serde_json::json!(TEST_SHA)),
+            ("squash", serde_json::json!(true)),
+            ("mergeCommitMessage", serde_json::json!(20)),
+            ("squashCommitMessage", serde_json::json!(21)),
+        ],
+    );
+    assert_eq!(
+        merge_audit["merge"],
+        serde_json::json!({
+            "sourceBranch":"feature/rest", "targetBranch":"main", "currentMergeStatus":"can_be_merged",
+            "currentDetailedMergeStatus":"mergeable", "upstreamMergeStatus":"can_be_merged",
+            "upstreamDetailedMergeStatus":"merged", "mergeCommitSha":TEST_SHA
+        })
+    );
+    for key in [
+        "iid",
+        "sha",
+        "mergeRequestIid",
+        "mergeCommitMessage",
+        "squashCommitMessage",
+    ] {
+        assert!(merge_audit.get(key).is_none(), "duplicate requested {key}");
+    }
     assert_eq!(
         merge_request_merge_json["result"]["mergeRequest"]["state"],
         "merged"
@@ -5433,6 +5730,34 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(
         observed.request.description.as_deref(),
         Some("issue update literal \\@alice \\#12 \\<tag\\>")
+    );
+    let converted_response: serde_json::Value =
+        serde_json::from_slice(&issue_update.stdout).unwrap();
+    let converted_audit = gitlab_audit_for_response(
+        &broker,
+        &converted_response,
+        "issue.update",
+        &[
+            (
+                "content",
+                serde_json::json!("issue update literal @alice #12 <tag>".len()),
+            ),
+            ("contentFormat", serde_json::json!("plain_text")),
+        ],
+    );
+    let native = observed.request.description.as_ref().unwrap();
+    assert_eq!(converted_audit["nativeContentFormat"], "markdown");
+    assert_eq!(converted_audit["finalNativeContentBytes"], native.len());
+    assert_ne!(native.len(), "issue update literal @alice #12 <tag>".len());
+    for key in ["contentFormat", "sourceContentBytes", "content"] {
+        assert!(converted_audit.get(key).is_none());
+    }
+    assert!(
+        !broker
+            .audit()
+            .unwrap()
+            .text()
+            .contains(&serde_json::to_string(native).unwrap())
     );
 
     let issue_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -8934,7 +9259,7 @@ impl GitlabBackend for StubGitlabBackend {
         *self.last_file_create.lock().unwrap() = Some(request.clone());
         self.files.lock().unwrap().insert(
             (request.branch.clone(), request.path.clone()),
-            file_fixture(&request.path, &request.branch, "created-file-sha"),
+            file_fixture(&request.path, &request.branch, TEST_SHA),
         );
         Ok(GitlabBackendResponse {
             value: GitlabFileMutation {
@@ -9761,6 +10086,47 @@ fn assert_review_context(response: &serde_json::Value, mode: &str, binding: &str
             "upstreamActor": { "id": 3, "username": "carol" }
         })
     );
+}
+
+fn request_field<'a>(record: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    let fields = record["requestAudit"]["fields"].as_array().unwrap();
+    let matches = fields
+        .iter()
+        .filter(|field| field["key"] == key)
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "expected one request fact for {key}");
+    matches[0]
+}
+
+fn gitlab_audit_for_response(
+    broker: &RunningBroker,
+    response: &serde_json::Value,
+    action: &str,
+    requested: &[(&str, serde_json::Value)],
+) -> serde_json::Value {
+    let records = broker.audit().unwrap().require_request(
+        response["agentRequestId"].as_str().unwrap(),
+        "gitlab",
+        action,
+    );
+    // Downloads emit both started and terminal records. Each record carries
+    // one projection of the original request, with separate provider facts.
+    for record in &records {
+        for (key, value) in requested {
+            request_audit::assert_captured_values(
+                std::slice::from_ref(record),
+                key,
+                std::slice::from_ref(value),
+            );
+        }
+        let audit = &record["providerAudit"]["gitlab"];
+        assert!(
+            audit.is_object(),
+            "missing GitLab observations for {action}"
+        );
+        assert!(audit.get("requestBody").is_none(), "{action}: {audit}");
+    }
+    records.last().unwrap()["providerAudit"]["gitlab"].clone()
 }
 
 fn provider_gitlab_audit_for_action(broker: &RunningBroker, action: &str) -> serde_json::Value {

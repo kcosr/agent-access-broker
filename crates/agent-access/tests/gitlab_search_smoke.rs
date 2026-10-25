@@ -217,6 +217,17 @@ async fn project_collections_and_all_six_categories_use_selected_credentials_thr
             assert_eq!(response["result"]["engine"], "advanced");
             assert_eq!(response["result"]["scanStatus"], "exhausted");
             assert!(response["result"].get("nextPageToken").is_none());
+            let action = format!("search.{}", command.replace('-', "_"));
+            let records = fixture.broker.audit().unwrap().require_request(
+                response["agentRequestId"].as_str().unwrap(),
+                "gitlab",
+                &action,
+            );
+            request_audit::assert_captured_values(&records, "engine", &[json!("advanced")]);
+            let observed = &records[0]["providerAudit"]["gitlab"];
+            assert_eq!(observed["configuredEngine"], "advanced");
+            assert_eq!(observed["effectiveEngine"], "advanced");
+            assert!(observed.get("requestedEngine").is_none());
         }
         let rendered = fixture.cli(&[
             "gitlab",
@@ -515,16 +526,53 @@ async fn confidential_empty_pages_resume_without_losing_hits_and_reject_stale_au
     assert_eq!(status, StatusCode::OK);
     assert_projects(&fresh["result"], &[FIRST_PROJECT]);
     let audit = fixture.broker.audit().unwrap();
-    for response in [&first, &second, &final_page] {
-        request_audit::assert_captured_values(
-            &audit.require_request(
-                response["agentRequestId"].as_str().unwrap(),
-                "gitlab",
-                "search.issues",
-            ),
-            "search",
-            &[json!("empty-page-query")],
+    for (response, input_state, input_present, output_present, projects) in [
+        (&first, "absent", false, true, json!([])),
+        (
+            &second,
+            "captured",
+            true,
+            true,
+            json!([FIRST_PROJECT, SECOND_PROJECT]),
+        ),
+        (&final_page, "captured", true, false, json!([])),
+    ] {
+        let records = audit.require_request(
+            response["agentRequestId"].as_str().unwrap(),
+            "gitlab",
+            "search.issues",
         );
+        request_audit::assert_captured_values(&records, "search", &[json!("empty-page-query")]);
+        assert_eq!(records.len(), 1);
+        let fields = records[0]["requestAudit"]["fields"].as_array().unwrap();
+        let page_tokens = fields
+            .iter()
+            .filter(|field| field["key"] == "pageToken")
+            .collect::<Vec<_>>();
+        assert_eq!(page_tokens.len(), 1);
+        assert_eq!(page_tokens[0]["state"], input_state);
+        assert_eq!(page_tokens[0]["value"], input_present);
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field["key"] == "engine")
+                .unwrap()["state"],
+            "absent"
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field["key"] == "project")
+                .unwrap()["state"],
+            "absent"
+        );
+        let observed = &records[0]["providerAudit"]["gitlab"];
+        assert_eq!(observed["continuationPresent"], output_present);
+        assert_eq!(observed["projects"], projects);
+        assert_eq!(observed["configuredEngine"], "advanced");
+        assert_eq!(observed["effectiveEngine"], "advanced");
+        assert!(observed.get("requestedEngine").is_none());
+        assert!(observed.get("pageToken").is_none());
     }
     let audit = audit.text();
     assert_private(&audit);

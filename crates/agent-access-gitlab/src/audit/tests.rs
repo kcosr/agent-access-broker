@@ -72,7 +72,37 @@ fn rule_paths(rules: &[Value], prefix: &str, paths: &mut BTreeSet<String>) {
 fn canonical_inventory_rule(rule: &Value) -> Value {
     let mut rule = rule.clone();
     let object = rule.as_object_mut().unwrap();
-    object.remove("element");
+    // These IDs share the native inventory vocabulary. credential.secret
+    // describes supplied secret presence only; operation.records describes
+    // correlated, explicitly projected action/suggestion rows.
+    let element = object.remove("element").unwrap();
+    assert!(
+        matches!(
+            element.as_str().unwrap(),
+            "object.identity"
+                | "object.title"
+                | "search.query"
+                | "operation.control"
+                | "operation.flag"
+                | "operation.number"
+                | "operation.projection"
+                | "selection.identities"
+                | "operation.records"
+                | "content.body"
+                | "content.message"
+                | "content.format"
+                | "content.fingerprint"
+                | "credential.secret"
+                | "continuation.opaque"
+                | "locator.url"
+                | "attachment.metadata"
+                | "attachment.filename"
+                | "attachment.media_type"
+                | "attachment.size"
+                | "transport.multipart_field"
+        ),
+        "unknown semantic element: {element}"
+    );
     object.remove("reason");
     let kind = match object["capture"].as_str().unwrap() {
         "presence" => Some("boolean"),
@@ -134,23 +164,10 @@ fn every_published_property_has_a_reviewed_inventory_decision() {
             if action.action == "search.code" && name != "audit-inventory-maximal" {
                 expected.retain(|rule| rule["pointer"] != "/regex");
             }
-            let actual_by_pointer: BTreeMap<_, _> = actual
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|rule| (rule["pointer"].as_str().unwrap(), rule.clone()))
-                .collect();
-            let expected_by_pointer: BTreeMap<_, _> = expected
-                .iter()
-                .map(|rule| {
-                    (
-                        rule["pointer"].as_str().unwrap(),
-                        canonical_inventory_rule(rule),
-                    )
-                })
-                .collect();
+            let expected: Vec<_> = expected.iter().map(canonical_inventory_rule).collect();
             assert_eq!(
-                actual_by_pointer, expected_by_pointer,
+                actual,
+                json!(expected),
                 "{name} {} declaration drift",
                 action.action
             );

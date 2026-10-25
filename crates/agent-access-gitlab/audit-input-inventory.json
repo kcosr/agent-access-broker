@@ -6,7 +6,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -19,7 +19,7 @@
         },
         {
           "pointer": "/branch",
-          "element": "Requested branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "branch",
           "label": "Branch",
@@ -32,7 +32,7 @@
         },
         {
           "pointer": "/ref",
-          "element": "Requested ref",
+          "element": "object.identity",
           "capture": "value",
           "key": "ref",
           "label": "Ref",
@@ -50,7 +50,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -63,7 +63,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -76,7 +76,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -87,7 +87,7 @@
         },
         {
           "pointer": "/regex",
-          "element": "Branch regex expression",
+          "element": "search.query",
           "capture": "value",
           "key": "regex",
           "label": "Regex",
@@ -105,7 +105,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -118,7 +118,7 @@
         },
         {
           "pointer": "/branch",
-          "element": "Requested branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "branch",
           "label": "Branch",
@@ -136,7 +136,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -149,7 +149,7 @@
         },
         {
           "pointer": "/branch",
-          "element": "Requested branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "branch",
           "label": "Branch",
@@ -164,7 +164,7 @@
           "pointer": "/actions",
           "key": "actions",
           "label": "Actions",
-          "element": "correlated records",
+          "element": "operation.records",
           "capture": "records",
           "kind": "records",
           "role": "change",
@@ -172,7 +172,7 @@
           "fields": [
             {
               "pointer": "/action",
-              "element": "Requested file operation",
+              "element": "operation.control",
               "capture": "value",
               "key": "action",
               "label": "Action",
@@ -185,7 +185,7 @@
             },
             {
               "pointer": "/content",
-              "element": "Caller content body",
+              "element": "content.body",
               "capture": "utf8ByteCount",
               "key": "content",
               "label": "Content",
@@ -195,7 +195,7 @@
             },
             {
               "pointer": "/encoding",
-              "element": "Requested encoding",
+              "element": "operation.control",
               "capture": "value",
               "key": "encoding",
               "label": "Encoding",
@@ -208,7 +208,7 @@
             },
             {
               "pointer": "/executeFilemode",
-              "element": "Requested execute filemode",
+              "element": "operation.flag",
               "capture": "value",
               "key": "executeFilemode",
               "label": "Execute Filemode",
@@ -219,7 +219,7 @@
             },
             {
               "pointer": "/filePath",
-              "element": "Requested file path",
+              "element": "object.identity",
               "capture": "value",
               "key": "filePath",
               "label": "File Path",
@@ -232,7 +232,7 @@
             },
             {
               "pointer": "/lastCommitId",
-              "element": "Requested last commit id",
+              "element": "object.identity",
               "capture": "value",
               "key": "lastCommitId",
               "label": "Last Commit Id",
@@ -245,7 +245,7 @@
             },
             {
               "pointer": "/previousPath",
-              "element": "Previous file path",
+              "element": "object.identity",
               "capture": "value",
               "key": "previousPath",
               "label": "Previous Path",
@@ -260,7 +260,7 @@
         },
         {
           "pointer": "/authorEmail",
-          "element": "Requested commit author email",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorEmail",
           "label": "Author Email",
@@ -273,7 +273,7 @@
         },
         {
           "pointer": "/authorName",
-          "element": "Requested commit author name",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorName",
           "label": "Author Name",
@@ -286,7 +286,7 @@
         },
         {
           "pointer": "/commitMessage",
-          "element": "Requested commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "commitMessage",
           "label": "Commit Message",
@@ -296,7 +296,7 @@
         },
         {
           "pointer": "/startBranch",
-          "element": "Requested start branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "startBranch",
           "label": "Start Branch",
@@ -309,7 +309,7 @@
         },
         {
           "pointer": "/startSha",
-          "element": "Requested start sha",
+          "element": "object.identity",
           "capture": "value",
           "key": "startSha",
           "label": "Start Sha",
@@ -327,7 +327,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -340,7 +340,7 @@
         },
         {
           "pointer": "/path",
-          "element": "Requested path",
+          "element": "object.identity",
           "capture": "value",
           "key": "path",
           "label": "Path",
@@ -353,7 +353,7 @@
         },
         {
           "pointer": "/firstParent",
-          "element": "Requested first parent",
+          "element": "operation.flag",
           "capture": "value",
           "key": "firstParent",
           "label": "First Parent",
@@ -364,7 +364,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -375,7 +375,7 @@
         },
         {
           "pointer": "/refName",
-          "element": "Requested ref name",
+          "element": "object.identity",
           "capture": "value",
           "key": "refName",
           "label": "Ref Name",
@@ -388,7 +388,7 @@
         },
         {
           "pointer": "/since",
-          "element": "Requested since",
+          "element": "operation.control",
           "capture": "value",
           "key": "since",
           "label": "Since",
@@ -401,7 +401,7 @@
         },
         {
           "pointer": "/until",
-          "element": "Requested until",
+          "element": "operation.control",
           "capture": "value",
           "key": "until",
           "label": "Until",
@@ -419,7 +419,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -432,7 +432,7 @@
         },
         {
           "pointer": "/sha",
-          "element": "Requested sha",
+          "element": "object.identity",
           "capture": "value",
           "key": "sha",
           "label": "Sha",
@@ -450,7 +450,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -463,7 +463,7 @@
         },
         {
           "pointer": "/path",
-          "element": "Requested path",
+          "element": "object.identity",
           "capture": "value",
           "key": "path",
           "label": "Path",
@@ -476,7 +476,7 @@
         },
         {
           "pointer": "/branch",
-          "element": "Requested branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "branch",
           "label": "Branch",
@@ -489,7 +489,7 @@
         },
         {
           "pointer": "/authorEmail",
-          "element": "Requested commit author email",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorEmail",
           "label": "Author Email",
@@ -502,7 +502,7 @@
         },
         {
           "pointer": "/authorName",
-          "element": "Requested commit author name",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorName",
           "label": "Author Name",
@@ -515,7 +515,7 @@
         },
         {
           "pointer": "/commitMessage",
-          "element": "Requested commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "commitMessage",
           "label": "Commit Message",
@@ -525,7 +525,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -535,7 +535,7 @@
         },
         {
           "pointer": "/encoding",
-          "element": "Requested encoding",
+          "element": "operation.control",
           "capture": "value",
           "key": "encoding",
           "label": "Encoding",
@@ -548,7 +548,7 @@
         },
         {
           "pointer": "/executeFilemode",
-          "element": "Requested execute filemode",
+          "element": "operation.flag",
           "capture": "value",
           "key": "executeFilemode",
           "label": "Execute Filemode",
@@ -559,7 +559,7 @@
         },
         {
           "pointer": "/startBranch",
-          "element": "Requested start branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "startBranch",
           "label": "Start Branch",
@@ -577,7 +577,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -590,7 +590,7 @@
         },
         {
           "pointer": "/path",
-          "element": "Requested path",
+          "element": "object.identity",
           "capture": "value",
           "key": "path",
           "label": "Path",
@@ -603,7 +603,7 @@
         },
         {
           "pointer": "/branch",
-          "element": "Requested branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "branch",
           "label": "Branch",
@@ -616,7 +616,7 @@
         },
         {
           "pointer": "/authorEmail",
-          "element": "Requested commit author email",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorEmail",
           "label": "Author Email",
@@ -629,7 +629,7 @@
         },
         {
           "pointer": "/authorName",
-          "element": "Requested commit author name",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorName",
           "label": "Author Name",
@@ -642,7 +642,7 @@
         },
         {
           "pointer": "/commitMessage",
-          "element": "Requested commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "commitMessage",
           "label": "Commit Message",
@@ -652,7 +652,7 @@
         },
         {
           "pointer": "/lastCommitId",
-          "element": "Requested last commit id",
+          "element": "object.identity",
           "capture": "value",
           "key": "lastCommitId",
           "label": "Last Commit Id",
@@ -665,7 +665,7 @@
         },
         {
           "pointer": "/startBranch",
-          "element": "Requested start branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "startBranch",
           "label": "Start Branch",
@@ -683,7 +683,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -696,7 +696,7 @@
         },
         {
           "pointer": "/path",
-          "element": "Requested path",
+          "element": "object.identity",
           "capture": "value",
           "key": "path",
           "label": "Path",
@@ -709,7 +709,7 @@
         },
         {
           "pointer": "/ref",
-          "element": "Requested ref",
+          "element": "object.identity",
           "capture": "value",
           "key": "ref",
           "label": "Ref",
@@ -727,7 +727,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -740,7 +740,7 @@
         },
         {
           "pointer": "/path",
-          "element": "Requested path",
+          "element": "object.identity",
           "capture": "value",
           "key": "path",
           "label": "Path",
@@ -753,7 +753,7 @@
         },
         {
           "pointer": "/branch",
-          "element": "Requested branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "branch",
           "label": "Branch",
@@ -766,7 +766,7 @@
         },
         {
           "pointer": "/authorEmail",
-          "element": "Requested commit author email",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorEmail",
           "label": "Author Email",
@@ -779,7 +779,7 @@
         },
         {
           "pointer": "/authorName",
-          "element": "Requested commit author name",
+          "element": "object.identity",
           "capture": "value",
           "key": "authorName",
           "label": "Author Name",
@@ -792,7 +792,7 @@
         },
         {
           "pointer": "/commitMessage",
-          "element": "Requested commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "commitMessage",
           "label": "Commit Message",
@@ -802,7 +802,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -812,7 +812,7 @@
         },
         {
           "pointer": "/encoding",
-          "element": "Requested encoding",
+          "element": "operation.control",
           "capture": "value",
           "key": "encoding",
           "label": "Encoding",
@@ -825,7 +825,7 @@
         },
         {
           "pointer": "/executeFilemode",
-          "element": "Requested execute filemode",
+          "element": "operation.flag",
           "capture": "value",
           "key": "executeFilemode",
           "label": "Execute Filemode",
@@ -836,7 +836,7 @@
         },
         {
           "pointer": "/lastCommitId",
-          "element": "Requested last commit id",
+          "element": "object.identity",
           "capture": "value",
           "key": "lastCommitId",
           "label": "Last Commit Id",
@@ -849,7 +849,7 @@
         },
         {
           "pointer": "/startBranch",
-          "element": "Requested start branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "startBranch",
           "label": "Start Branch",
@@ -867,7 +867,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -880,7 +880,7 @@
         },
         {
           "pointer": "/path",
-          "element": "Requested path",
+          "element": "object.identity",
           "capture": "value",
           "key": "path",
           "label": "Path",
@@ -893,7 +893,7 @@
         },
         {
           "pointer": "/ref",
-          "element": "Requested ref",
+          "element": "object.identity",
           "capture": "value",
           "key": "ref",
           "label": "Ref",
@@ -911,7 +911,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -924,7 +924,7 @@
         },
         {
           "pointer": "/title",
-          "element": "Requested title",
+          "element": "object.title",
           "capture": "value",
           "key": "title",
           "label": "Title",
@@ -937,7 +937,7 @@
         },
         {
           "pointer": "/assignees",
-          "element": "Requested assignees",
+          "element": "selection.identities",
           "capture": "value",
           "key": "assignees",
           "label": "Assignees",
@@ -950,7 +950,7 @@
         },
         {
           "pointer": "/confidential",
-          "element": "Requested confidential",
+          "element": "operation.flag",
           "capture": "value",
           "key": "confidential",
           "label": "Confidential",
@@ -961,7 +961,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -971,7 +971,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -984,7 +984,7 @@
         },
         {
           "pointer": "/labels",
-          "element": "Requested labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "labels",
           "label": "Labels",
@@ -997,7 +997,7 @@
         },
         {
           "pointer": "/milestone",
-          "element": "Requested milestone",
+          "element": "object.identity",
           "capture": "value",
           "key": "milestone",
           "label": "Milestone",
@@ -1015,7 +1015,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1028,7 +1028,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1041,7 +1041,7 @@
         },
         {
           "pointer": "/confidential",
-          "element": "Requested confidential",
+          "element": "operation.flag",
           "capture": "value",
           "key": "confidential",
           "label": "Confidential",
@@ -1052,7 +1052,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -1062,7 +1062,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -1080,7 +1080,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1093,7 +1093,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1106,7 +1106,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -1124,7 +1124,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1137,7 +1137,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1150,7 +1150,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -1161,7 +1161,7 @@
         },
         {
           "pointer": "/orderBy",
-          "element": "Requested order by",
+          "element": "operation.control",
           "capture": "value",
           "key": "orderBy",
           "label": "Order By",
@@ -1174,7 +1174,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -1184,7 +1184,7 @@
         },
         {
           "pointer": "/projection",
-          "element": "Requested projection",
+          "element": "operation.projection",
           "capture": "value",
           "key": "projection",
           "label": "Projection",
@@ -1197,7 +1197,7 @@
         },
         {
           "pointer": "/sort",
-          "element": "Requested sort",
+          "element": "operation.control",
           "capture": "value",
           "key": "sort",
           "label": "Sort",
@@ -1215,7 +1215,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1228,7 +1228,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1241,7 +1241,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -1251,7 +1251,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -1264,7 +1264,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -1282,7 +1282,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1295,7 +1295,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1308,7 +1308,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -1326,7 +1326,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1339,7 +1339,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -1352,7 +1352,7 @@
         },
         {
           "pointer": "/assignee",
-          "element": "Requested assignee",
+          "element": "object.identity",
           "capture": "value",
           "key": "assignee",
           "label": "Assignee",
@@ -1365,7 +1365,7 @@
         },
         {
           "pointer": "/author",
-          "element": "Requested author",
+          "element": "object.identity",
           "capture": "value",
           "key": "author",
           "label": "Author",
@@ -1378,7 +1378,7 @@
         },
         {
           "pointer": "/createdAfter",
-          "element": "Requested created after",
+          "element": "operation.control",
           "capture": "value",
           "key": "createdAfter",
           "label": "Created After",
@@ -1391,7 +1391,7 @@
         },
         {
           "pointer": "/labels",
-          "element": "Requested labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "labels",
           "label": "Labels",
@@ -1404,7 +1404,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -1415,7 +1415,7 @@
         },
         {
           "pointer": "/milestone",
-          "element": "Requested milestone",
+          "element": "object.identity",
           "capture": "value",
           "key": "milestone",
           "label": "Milestone",
@@ -1428,7 +1428,7 @@
         },
         {
           "pointer": "/orderBy",
-          "element": "Requested order by",
+          "element": "operation.control",
           "capture": "value",
           "key": "orderBy",
           "label": "Order By",
@@ -1441,7 +1441,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -1451,7 +1451,7 @@
         },
         {
           "pointer": "/sort",
-          "element": "Requested sort",
+          "element": "operation.control",
           "capture": "value",
           "key": "sort",
           "label": "Sort",
@@ -1464,7 +1464,7 @@
         },
         {
           "pointer": "/state",
-          "element": "Requested state",
+          "element": "operation.control",
           "capture": "value",
           "key": "state",
           "label": "State",
@@ -1477,7 +1477,7 @@
         },
         {
           "pointer": "/updatedAfter",
-          "element": "Requested updated after",
+          "element": "operation.control",
           "capture": "value",
           "key": "updatedAfter",
           "label": "Updated After",
@@ -1495,7 +1495,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1508,7 +1508,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1521,7 +1521,7 @@
         },
         {
           "pointer": "/title",
-          "element": "Requested title",
+          "element": "object.title",
           "capture": "value",
           "key": "title",
           "label": "Title",
@@ -1534,7 +1534,7 @@
         },
         {
           "pointer": "/addLabels",
-          "element": "Requested add labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "addLabels",
           "label": "Add Labels",
@@ -1547,7 +1547,7 @@
         },
         {
           "pointer": "/assignees",
-          "element": "Requested assignees",
+          "element": "selection.identities",
           "capture": "value",
           "key": "assignees",
           "label": "Assignees",
@@ -1560,7 +1560,7 @@
         },
         {
           "pointer": "/confidential",
-          "element": "Requested confidential",
+          "element": "operation.flag",
           "capture": "value",
           "key": "confidential",
           "label": "Confidential",
@@ -1571,7 +1571,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -1581,7 +1581,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -1594,7 +1594,7 @@
         },
         {
           "pointer": "/labels",
-          "element": "Requested labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "labels",
           "label": "Labels",
@@ -1607,7 +1607,7 @@
         },
         {
           "pointer": "/milestone",
-          "element": "Requested milestone",
+          "element": "object.identity",
           "capture": "value",
           "key": "milestone",
           "label": "Milestone",
@@ -1620,7 +1620,7 @@
         },
         {
           "pointer": "/removeLabels",
-          "element": "Requested remove labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "removeLabels",
           "label": "Remove Labels",
@@ -1633,7 +1633,7 @@
         },
         {
           "pointer": "/stateEvent",
-          "element": "Requested state event",
+          "element": "operation.control",
           "capture": "value",
           "key": "stateEvent",
           "label": "State Event",
@@ -1651,7 +1651,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1664,7 +1664,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1677,7 +1677,7 @@
         },
         {
           "pointer": "/url",
-          "element": "Raw caller locator or destination URL",
+          "element": "locator.url",
           "capture": "presence",
           "key": "url",
           "label": "Url",
@@ -1692,7 +1692,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1705,7 +1705,7 @@
         },
         {
           "pointer": "/jobId",
-          "element": "Requested job id",
+          "element": "object.identity",
           "capture": "value",
           "key": "jobId",
           "label": "Job Id",
@@ -1723,7 +1723,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1736,7 +1736,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -1747,7 +1747,7 @@
         },
         {
           "pointer": "/pipelineId",
-          "element": "Requested pipeline id",
+          "element": "object.identity",
           "capture": "value",
           "key": "pipelineId",
           "label": "Pipeline Id",
@@ -1760,7 +1760,7 @@
         },
         {
           "pointer": "/scope",
-          "element": "Requested scope",
+          "element": "operation.control",
           "capture": "value",
           "key": "scope",
           "label": "Scope",
@@ -1778,7 +1778,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1791,7 +1791,7 @@
         },
         {
           "pointer": "/jobId",
-          "element": "Requested job id",
+          "element": "object.identity",
           "capture": "value",
           "key": "jobId",
           "label": "Job Id",
@@ -1809,7 +1809,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1822,7 +1822,7 @@
         },
         {
           "pointer": "/jobId",
-          "element": "Requested job id",
+          "element": "object.identity",
           "capture": "value",
           "key": "jobId",
           "label": "Job Id",
@@ -1840,7 +1840,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1853,7 +1853,7 @@
         },
         {
           "pointer": "/jobId",
-          "element": "Requested job id",
+          "element": "object.identity",
           "capture": "value",
           "key": "jobId",
           "label": "Job Id",
@@ -1871,7 +1871,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1884,7 +1884,7 @@
         },
         {
           "pointer": "/jobId",
-          "element": "Requested job id",
+          "element": "object.identity",
           "capture": "value",
           "key": "jobId",
           "label": "Job Id",
@@ -1902,7 +1902,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1915,7 +1915,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1933,7 +1933,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1946,7 +1946,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -1959,7 +1959,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -1970,7 +1970,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -1985,7 +1985,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -1998,7 +1998,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2011,7 +2011,7 @@
         },
         {
           "pointer": "/approvalRuleId",
-          "element": "Requested approval rule id",
+          "element": "object.identity",
           "capture": "value",
           "key": "approvalRuleId",
           "label": "Approval Rule Id",
@@ -2029,7 +2029,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2042,7 +2042,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2060,7 +2060,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2073,7 +2073,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2086,7 +2086,7 @@
         },
         {
           "pointer": "/headSha",
-          "element": "Requested approval head identity",
+          "element": "object.identity",
           "capture": "value",
           "key": "headSha",
           "label": "Head Sha",
@@ -2104,7 +2104,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2117,7 +2117,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2130,7 +2130,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -2141,7 +2141,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -2156,7 +2156,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2169,7 +2169,7 @@
         },
         {
           "pointer": "/title",
-          "element": "Requested title",
+          "element": "object.title",
           "capture": "value",
           "key": "title",
           "label": "Title",
@@ -2182,7 +2182,7 @@
         },
         {
           "pointer": "/assignees",
-          "element": "Requested assignees",
+          "element": "selection.identities",
           "capture": "value",
           "key": "assignees",
           "label": "Assignees",
@@ -2195,7 +2195,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -2205,7 +2205,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -2218,7 +2218,7 @@
         },
         {
           "pointer": "/draft",
-          "element": "Requested draft",
+          "element": "operation.flag",
           "capture": "value",
           "key": "draft",
           "label": "Draft",
@@ -2229,7 +2229,7 @@
         },
         {
           "pointer": "/labels",
-          "element": "Requested labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "labels",
           "label": "Labels",
@@ -2242,7 +2242,7 @@
         },
         {
           "pointer": "/removeSourceBranch",
-          "element": "Requested remove source branch",
+          "element": "operation.flag",
           "capture": "value",
           "key": "removeSourceBranch",
           "label": "Remove Source Branch",
@@ -2253,7 +2253,7 @@
         },
         {
           "pointer": "/reviewers",
-          "element": "Requested reviewers",
+          "element": "selection.identities",
           "capture": "value",
           "key": "reviewers",
           "label": "Reviewers",
@@ -2266,7 +2266,7 @@
         },
         {
           "pointer": "/sourceBranch",
-          "element": "Requested source branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "sourceBranch",
           "label": "Source Branch",
@@ -2279,7 +2279,7 @@
         },
         {
           "pointer": "/squash",
-          "element": "Requested squash",
+          "element": "operation.flag",
           "capture": "value",
           "key": "squash",
           "label": "Squash",
@@ -2290,7 +2290,7 @@
         },
         {
           "pointer": "/targetBranch",
-          "element": "Requested target branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "targetBranch",
           "label": "Target Branch",
@@ -2308,7 +2308,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2321,7 +2321,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2334,7 +2334,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -2345,7 +2345,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -2355,7 +2355,7 @@
         },
         {
           "pointer": "/unidiff",
-          "element": "Requested unidiff",
+          "element": "operation.flag",
           "capture": "value",
           "key": "unidiff",
           "label": "Unidiff",
@@ -2371,7 +2371,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2384,7 +2384,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2402,7 +2402,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2415,7 +2415,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2428,7 +2428,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -2439,7 +2439,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -2454,7 +2454,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2467,7 +2467,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2480,7 +2480,7 @@
         },
         {
           "pointer": "/diffVersionId",
-          "element": "Requested diff version id",
+          "element": "object.identity",
           "capture": "value",
           "key": "diffVersionId",
           "label": "Diff Version Id",
@@ -2493,7 +2493,7 @@
         },
         {
           "pointer": "/unidiff",
-          "element": "Requested unidiff",
+          "element": "operation.flag",
           "capture": "value",
           "key": "unidiff",
           "label": "Unidiff",
@@ -2509,7 +2509,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2522,7 +2522,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2535,7 +2535,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -2545,7 +2545,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -2563,7 +2563,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2576,7 +2576,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2589,7 +2589,7 @@
         },
         {
           "pointer": "/expectedHeadSha",
-          "element": "Expected merge request head identity",
+          "element": "object.identity",
           "capture": "value",
           "key": "expectedHeadSha",
           "label": "Expected Head Sha",
@@ -2602,7 +2602,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -2612,7 +2612,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -2625,7 +2625,7 @@
         },
         {
           "pointer": "/position/height",
-          "element": "Requested height",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.height",
           "label": "Height",
@@ -2636,7 +2636,7 @@
         },
         {
           "pointer": "/position/lineRange/end/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.end.newLine",
           "label": "New Line",
@@ -2647,7 +2647,7 @@
         },
         {
           "pointer": "/position/lineRange/end/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.end.oldLine",
           "label": "Old Line",
@@ -2658,7 +2658,7 @@
         },
         {
           "pointer": "/position/lineRange/start/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.start.newLine",
           "label": "New Line",
@@ -2669,7 +2669,7 @@
         },
         {
           "pointer": "/position/lineRange/start/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.start.oldLine",
           "label": "Old Line",
@@ -2680,7 +2680,7 @@
         },
         {
           "pointer": "/position/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.newLine",
           "label": "New Line",
@@ -2691,7 +2691,7 @@
         },
         {
           "pointer": "/position/newPath",
-          "element": "Requested new path",
+          "element": "object.identity",
           "capture": "value",
           "key": "position.newPath",
           "label": "New Path",
@@ -2704,7 +2704,7 @@
         },
         {
           "pointer": "/position/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.oldLine",
           "label": "Old Line",
@@ -2715,7 +2715,7 @@
         },
         {
           "pointer": "/position/oldPath",
-          "element": "Requested old path",
+          "element": "object.identity",
           "capture": "value",
           "key": "position.oldPath",
           "label": "Old Path",
@@ -2728,7 +2728,7 @@
         },
         {
           "pointer": "/position/positionType",
-          "element": "Requested position type",
+          "element": "operation.control",
           "capture": "value",
           "key": "position.positionType",
           "label": "Position Type",
@@ -2741,7 +2741,7 @@
         },
         {
           "pointer": "/position/width",
-          "element": "Requested width",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.width",
           "label": "Width",
@@ -2752,7 +2752,7 @@
         },
         {
           "pointer": "/position/x",
-          "element": "Requested x",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.x",
           "label": "X",
@@ -2763,7 +2763,7 @@
         },
         {
           "pointer": "/position/y",
-          "element": "Requested y",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.y",
           "label": "Y",
@@ -2779,7 +2779,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2792,7 +2792,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2805,7 +2805,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -2816,7 +2816,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -2826,7 +2826,7 @@
         },
         {
           "pointer": "/projection",
-          "element": "Requested projection",
+          "element": "operation.projection",
           "capture": "value",
           "key": "projection",
           "label": "Projection",
@@ -2844,7 +2844,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2857,7 +2857,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2870,7 +2870,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -2880,7 +2880,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -2893,7 +2893,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -2911,7 +2911,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2924,7 +2924,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2937,7 +2937,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -2950,7 +2950,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -2968,7 +2968,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -2981,7 +2981,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -2994,7 +2994,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -3004,7 +3004,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -3017,7 +3017,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -3030,7 +3030,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -3048,7 +3048,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3061,7 +3061,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3074,7 +3074,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -3092,7 +3092,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3105,7 +3105,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3118,7 +3118,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -3136,7 +3136,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3149,7 +3149,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3162,7 +3162,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -3180,7 +3180,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3193,7 +3193,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3206,7 +3206,7 @@
         },
         {
           "pointer": "/expectedHeadSha",
-          "element": "Expected merge request head identity",
+          "element": "object.identity",
           "capture": "value",
           "key": "expectedHeadSha",
           "label": "Expected Head Sha",
@@ -3219,7 +3219,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -3229,7 +3229,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -3242,7 +3242,7 @@
         },
         {
           "pointer": "/inReplyToDiscussionId",
-          "element": "Requested in reply to discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "inReplyToDiscussionId",
           "label": "In Reply To Discussion Id",
@@ -3255,7 +3255,7 @@
         },
         {
           "pointer": "/position/height",
-          "element": "Requested height",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.height",
           "label": "Height",
@@ -3266,7 +3266,7 @@
         },
         {
           "pointer": "/position/lineRange/end/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.end.newLine",
           "label": "New Line",
@@ -3277,7 +3277,7 @@
         },
         {
           "pointer": "/position/lineRange/end/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.end.oldLine",
           "label": "Old Line",
@@ -3288,7 +3288,7 @@
         },
         {
           "pointer": "/position/lineRange/start/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.start.newLine",
           "label": "New Line",
@@ -3299,7 +3299,7 @@
         },
         {
           "pointer": "/position/lineRange/start/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.start.oldLine",
           "label": "Old Line",
@@ -3310,7 +3310,7 @@
         },
         {
           "pointer": "/position/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.newLine",
           "label": "New Line",
@@ -3321,7 +3321,7 @@
         },
         {
           "pointer": "/position/newPath",
-          "element": "Requested new path",
+          "element": "object.identity",
           "capture": "value",
           "key": "position.newPath",
           "label": "New Path",
@@ -3334,7 +3334,7 @@
         },
         {
           "pointer": "/position/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.oldLine",
           "label": "Old Line",
@@ -3345,7 +3345,7 @@
         },
         {
           "pointer": "/position/oldPath",
-          "element": "Requested old path",
+          "element": "object.identity",
           "capture": "value",
           "key": "position.oldPath",
           "label": "Old Path",
@@ -3358,7 +3358,7 @@
         },
         {
           "pointer": "/position/positionType",
-          "element": "Requested position type",
+          "element": "operation.control",
           "capture": "value",
           "key": "position.positionType",
           "label": "Position Type",
@@ -3371,7 +3371,7 @@
         },
         {
           "pointer": "/position/width",
-          "element": "Requested width",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.width",
           "label": "Width",
@@ -3382,7 +3382,7 @@
         },
         {
           "pointer": "/position/x",
-          "element": "Requested x",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.x",
           "label": "X",
@@ -3393,7 +3393,7 @@
         },
         {
           "pointer": "/position/y",
-          "element": "Requested y",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.y",
           "label": "Y",
@@ -3404,7 +3404,7 @@
         },
         {
           "pointer": "/resolveDiscussion",
-          "element": "Requested resolve discussion",
+          "element": "operation.flag",
           "capture": "value",
           "key": "resolveDiscussion",
           "label": "Resolve Discussion",
@@ -3420,7 +3420,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3433,7 +3433,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3446,7 +3446,7 @@
         },
         {
           "pointer": "/draftNoteId",
-          "element": "Requested draft note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "draftNoteId",
           "label": "Draft Note Id",
@@ -3464,7 +3464,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3477,7 +3477,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3490,7 +3490,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -3501,7 +3501,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -3511,7 +3511,7 @@
         },
         {
           "pointer": "/projection",
-          "element": "Requested projection",
+          "element": "operation.projection",
           "capture": "value",
           "key": "projection",
           "label": "Projection",
@@ -3529,7 +3529,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3542,7 +3542,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3555,7 +3555,7 @@
         },
         {
           "pointer": "/draftNoteId",
-          "element": "Requested draft note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "draftNoteId",
           "label": "Draft Note Id",
@@ -3573,7 +3573,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3586,7 +3586,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3599,7 +3599,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -3609,7 +3609,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -3622,7 +3622,7 @@
         },
         {
           "pointer": "/internal",
-          "element": "Requested internal",
+          "element": "operation.flag",
           "capture": "value",
           "key": "internal",
           "label": "Internal",
@@ -3638,7 +3638,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3651,7 +3651,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3664,7 +3664,7 @@
         },
         {
           "pointer": "/expectedHeadSha",
-          "element": "Expected merge request head identity",
+          "element": "object.identity",
           "capture": "value",
           "key": "expectedHeadSha",
           "label": "Expected Head Sha",
@@ -3677,7 +3677,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -3687,7 +3687,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -3700,7 +3700,7 @@
         },
         {
           "pointer": "/draftNoteId",
-          "element": "Requested draft note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "draftNoteId",
           "label": "Draft Note Id",
@@ -3713,7 +3713,7 @@
         },
         {
           "pointer": "/position/height",
-          "element": "Requested height",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.height",
           "label": "Height",
@@ -3724,7 +3724,7 @@
         },
         {
           "pointer": "/position/lineRange/end/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.end.newLine",
           "label": "New Line",
@@ -3735,7 +3735,7 @@
         },
         {
           "pointer": "/position/lineRange/end/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.end.oldLine",
           "label": "Old Line",
@@ -3746,7 +3746,7 @@
         },
         {
           "pointer": "/position/lineRange/start/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.start.newLine",
           "label": "New Line",
@@ -3757,7 +3757,7 @@
         },
         {
           "pointer": "/position/lineRange/start/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.lineRange.start.oldLine",
           "label": "Old Line",
@@ -3768,7 +3768,7 @@
         },
         {
           "pointer": "/position/newLine",
-          "element": "Requested new line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.newLine",
           "label": "New Line",
@@ -3779,7 +3779,7 @@
         },
         {
           "pointer": "/position/newPath",
-          "element": "Requested new path",
+          "element": "object.identity",
           "capture": "value",
           "key": "position.newPath",
           "label": "New Path",
@@ -3792,7 +3792,7 @@
         },
         {
           "pointer": "/position/oldLine",
-          "element": "Requested old line",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.oldLine",
           "label": "Old Line",
@@ -3803,7 +3803,7 @@
         },
         {
           "pointer": "/position/oldPath",
-          "element": "Requested old path",
+          "element": "object.identity",
           "capture": "value",
           "key": "position.oldPath",
           "label": "Old Path",
@@ -3816,7 +3816,7 @@
         },
         {
           "pointer": "/position/positionType",
-          "element": "Requested position type",
+          "element": "operation.control",
           "capture": "value",
           "key": "position.positionType",
           "label": "Position Type",
@@ -3829,7 +3829,7 @@
         },
         {
           "pointer": "/position/width",
-          "element": "Requested width",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.width",
           "label": "Width",
@@ -3840,7 +3840,7 @@
         },
         {
           "pointer": "/position/x",
-          "element": "Requested x",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.x",
           "label": "X",
@@ -3851,7 +3851,7 @@
         },
         {
           "pointer": "/position/y",
-          "element": "Requested y",
+          "element": "operation.number",
           "capture": "value",
           "key": "position.y",
           "label": "Y",
@@ -3867,7 +3867,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3880,7 +3880,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3893,7 +3893,7 @@
         },
         {
           "pointer": "/draftNoteId",
-          "element": "Requested draft note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "draftNoteId",
           "label": "Draft Note Id",
@@ -3911,7 +3911,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -3924,7 +3924,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -3937,7 +3937,7 @@
         },
         {
           "pointer": "/sha",
-          "element": "Requested sha",
+          "element": "object.identity",
           "capture": "value",
           "key": "sha",
           "label": "Sha",
@@ -3950,7 +3950,7 @@
         },
         {
           "pointer": "/mergeCommitMessage",
-          "element": "Requested merge commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "mergeCommitMessage",
           "label": "Merge Commit Message",
@@ -3960,7 +3960,7 @@
         },
         {
           "pointer": "/shouldRemoveSourceBranch",
-          "element": "Requested should remove source branch",
+          "element": "operation.flag",
           "capture": "value",
           "key": "shouldRemoveSourceBranch",
           "label": "Should Remove Source Branch",
@@ -3971,7 +3971,7 @@
         },
         {
           "pointer": "/squash",
-          "element": "Requested squash",
+          "element": "operation.flag",
           "capture": "value",
           "key": "squash",
           "label": "Squash",
@@ -3982,7 +3982,7 @@
         },
         {
           "pointer": "/squashCommitMessage",
-          "element": "Requested squash commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "squashCommitMessage",
           "label": "Squash Commit Message",
@@ -3997,7 +3997,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4010,7 +4010,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4023,7 +4023,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -4033,7 +4033,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -4051,7 +4051,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4064,7 +4064,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4077,7 +4077,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -4095,7 +4095,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4108,7 +4108,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4121,7 +4121,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -4132,7 +4132,7 @@
         },
         {
           "pointer": "/orderBy",
-          "element": "Requested order by",
+          "element": "operation.control",
           "capture": "value",
           "key": "orderBy",
           "label": "Order By",
@@ -4145,7 +4145,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -4155,7 +4155,7 @@
         },
         {
           "pointer": "/projection",
-          "element": "Requested projection",
+          "element": "operation.projection",
           "capture": "value",
           "key": "projection",
           "label": "Projection",
@@ -4168,7 +4168,7 @@
         },
         {
           "pointer": "/sort",
-          "element": "Requested sort",
+          "element": "operation.control",
           "capture": "value",
           "key": "sort",
           "label": "Sort",
@@ -4186,7 +4186,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4199,7 +4199,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4212,7 +4212,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -4222,7 +4222,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -4235,7 +4235,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -4253,7 +4253,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4266,7 +4266,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4279,7 +4279,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -4297,7 +4297,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4310,7 +4310,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4323,7 +4323,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -4334,7 +4334,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -4349,7 +4349,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4362,7 +4362,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4375,7 +4375,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -4385,7 +4385,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -4398,7 +4398,7 @@
         },
         {
           "pointer": "/internal",
-          "element": "Requested internal",
+          "element": "operation.flag",
           "capture": "value",
           "key": "internal",
           "label": "Internal",
@@ -4409,7 +4409,7 @@
         },
         {
           "pointer": "/reviewerState",
-          "element": "Requested reviewer state",
+          "element": "operation.control",
           "capture": "value",
           "key": "reviewerState",
           "label": "Reviewer State",
@@ -4427,7 +4427,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4440,7 +4440,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4453,7 +4453,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -4464,7 +4464,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -4479,7 +4479,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4492,7 +4492,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -4505,7 +4505,7 @@
         },
         {
           "pointer": "/assignee",
-          "element": "Requested assignee",
+          "element": "object.identity",
           "capture": "value",
           "key": "assignee",
           "label": "Assignee",
@@ -4518,7 +4518,7 @@
         },
         {
           "pointer": "/author",
-          "element": "Requested author",
+          "element": "object.identity",
           "capture": "value",
           "key": "author",
           "label": "Author",
@@ -4531,7 +4531,7 @@
         },
         {
           "pointer": "/createdAfter",
-          "element": "Requested created after",
+          "element": "operation.control",
           "capture": "value",
           "key": "createdAfter",
           "label": "Created After",
@@ -4544,7 +4544,7 @@
         },
         {
           "pointer": "/labels",
-          "element": "Requested labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "labels",
           "label": "Labels",
@@ -4557,7 +4557,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -4568,7 +4568,7 @@
         },
         {
           "pointer": "/milestone",
-          "element": "Requested milestone",
+          "element": "object.identity",
           "capture": "value",
           "key": "milestone",
           "label": "Milestone",
@@ -4581,7 +4581,7 @@
         },
         {
           "pointer": "/orderBy",
-          "element": "Requested order by",
+          "element": "operation.control",
           "capture": "value",
           "key": "orderBy",
           "label": "Order By",
@@ -4594,7 +4594,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -4604,7 +4604,7 @@
         },
         {
           "pointer": "/reviewer",
-          "element": "Requested reviewer",
+          "element": "object.identity",
           "capture": "value",
           "key": "reviewer",
           "label": "Reviewer",
@@ -4617,7 +4617,7 @@
         },
         {
           "pointer": "/sort",
-          "element": "Requested sort",
+          "element": "operation.control",
           "capture": "value",
           "key": "sort",
           "label": "Sort",
@@ -4630,7 +4630,7 @@
         },
         {
           "pointer": "/sourceBranch",
-          "element": "Requested source branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "sourceBranch",
           "label": "Source Branch",
@@ -4643,7 +4643,7 @@
         },
         {
           "pointer": "/state",
-          "element": "Requested state",
+          "element": "operation.control",
           "capture": "value",
           "key": "state",
           "label": "State",
@@ -4656,7 +4656,7 @@
         },
         {
           "pointer": "/targetBranch",
-          "element": "Requested target branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "targetBranch",
           "label": "Target Branch",
@@ -4669,7 +4669,7 @@
         },
         {
           "pointer": "/updatedAfter",
-          "element": "Requested updated after",
+          "element": "operation.control",
           "capture": "value",
           "key": "updatedAfter",
           "label": "Updated After",
@@ -4687,7 +4687,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4700,7 +4700,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4713,7 +4713,7 @@
         },
         {
           "pointer": "/expectedHeadSha",
-          "element": "Expected merge request head identity",
+          "element": "object.identity",
           "capture": "value",
           "key": "expectedHeadSha",
           "label": "Expected Head Sha",
@@ -4726,7 +4726,7 @@
         },
         {
           "pointer": "/commitMessage",
-          "element": "Requested commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "commitMessage",
           "label": "Commit Message",
@@ -4736,7 +4736,7 @@
         },
         {
           "pointer": "/discussionId",
-          "element": "Requested discussion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "discussionId",
           "label": "Discussion Id",
@@ -4749,7 +4749,7 @@
         },
         {
           "pointer": "/noteId",
-          "element": "Requested note id",
+          "element": "object.identity",
           "capture": "value",
           "key": "noteId",
           "label": "Note Id",
@@ -4762,7 +4762,7 @@
         },
         {
           "pointer": "/suggestionId",
-          "element": "Requested suggestion id",
+          "element": "object.identity",
           "capture": "value",
           "key": "suggestionId",
           "label": "Suggestion Id",
@@ -4780,7 +4780,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4793,7 +4793,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4806,7 +4806,7 @@
         },
         {
           "pointer": "/expectedHeadSha",
-          "element": "Expected merge request head identity",
+          "element": "object.identity",
           "capture": "value",
           "key": "expectedHeadSha",
           "label": "Expected Head Sha",
@@ -4819,7 +4819,7 @@
         },
         {
           "pointer": "/commitMessage",
-          "element": "Requested commit message",
+          "element": "content.message",
           "capture": "utf8ByteCount",
           "key": "commitMessage",
           "label": "Commit Message",
@@ -4831,7 +4831,7 @@
           "pointer": "/suggestions",
           "key": "suggestions",
           "label": "Suggestions",
-          "element": "correlated records",
+          "element": "operation.records",
           "capture": "records",
           "kind": "records",
           "role": "fact",
@@ -4839,7 +4839,7 @@
           "fields": [
             {
               "pointer": "/discussionId",
-              "element": "Requested discussion id",
+              "element": "object.identity",
               "capture": "value",
               "key": "discussionId",
               "label": "Discussion Id",
@@ -4852,7 +4852,7 @@
             },
             {
               "pointer": "/noteId",
-              "element": "Requested note id",
+              "element": "object.identity",
               "capture": "value",
               "key": "noteId",
               "label": "Note Id",
@@ -4865,7 +4865,7 @@
             },
             {
               "pointer": "/suggestionId",
-              "element": "Requested suggestion id",
+              "element": "object.identity",
               "capture": "value",
               "key": "suggestionId",
               "label": "Suggestion Id",
@@ -4885,7 +4885,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4898,7 +4898,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4916,7 +4916,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -4929,7 +4929,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -4942,7 +4942,7 @@
         },
         {
           "pointer": "/title",
-          "element": "Requested title",
+          "element": "object.title",
           "capture": "value",
           "key": "title",
           "label": "Title",
@@ -4955,7 +4955,7 @@
         },
         {
           "pointer": "/addLabels",
-          "element": "Requested add labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "addLabels",
           "label": "Add Labels",
@@ -4968,7 +4968,7 @@
         },
         {
           "pointer": "/assignees",
-          "element": "Requested assignees",
+          "element": "selection.identities",
           "capture": "value",
           "key": "assignees",
           "label": "Assignees",
@@ -4981,7 +4981,7 @@
         },
         {
           "pointer": "/content",
-          "element": "Caller content body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "content",
           "label": "Content",
@@ -4991,7 +4991,7 @@
         },
         {
           "pointer": "/contentFormat",
-          "element": "Caller content representation",
+          "element": "content.format",
           "capture": "value",
           "key": "contentFormat",
           "label": "Content Format",
@@ -5004,7 +5004,7 @@
         },
         {
           "pointer": "/labels",
-          "element": "Requested labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "labels",
           "label": "Labels",
@@ -5017,7 +5017,7 @@
         },
         {
           "pointer": "/removeLabels",
-          "element": "Requested remove labels",
+          "element": "selection.identities",
           "capture": "value",
           "key": "removeLabels",
           "label": "Remove Labels",
@@ -5030,7 +5030,7 @@
         },
         {
           "pointer": "/removeSourceBranch",
-          "element": "Requested remove source branch",
+          "element": "operation.flag",
           "capture": "value",
           "key": "removeSourceBranch",
           "label": "Remove Source Branch",
@@ -5041,7 +5041,7 @@
         },
         {
           "pointer": "/reviewers",
-          "element": "Requested reviewers",
+          "element": "selection.identities",
           "capture": "value",
           "key": "reviewers",
           "label": "Reviewers",
@@ -5054,7 +5054,7 @@
         },
         {
           "pointer": "/squash",
-          "element": "Requested squash",
+          "element": "operation.flag",
           "capture": "value",
           "key": "squash",
           "label": "Squash",
@@ -5065,7 +5065,7 @@
         },
         {
           "pointer": "/stateEvent",
-          "element": "Requested state event",
+          "element": "operation.control",
           "capture": "value",
           "key": "stateEvent",
           "label": "State Event",
@@ -5078,7 +5078,7 @@
         },
         {
           "pointer": "/targetBranch",
-          "element": "Requested target branch",
+          "element": "object.identity",
           "capture": "value",
           "key": "targetBranch",
           "label": "Target Branch",
@@ -5096,7 +5096,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5109,7 +5109,7 @@
         },
         {
           "pointer": "/iid",
-          "element": "Parent issue or merge request number",
+          "element": "object.identity",
           "capture": "value",
           "key": "iid",
           "label": "Iid",
@@ -5122,7 +5122,7 @@
         },
         {
           "pointer": "/url",
-          "element": "Raw caller locator or destination URL",
+          "element": "locator.url",
           "capture": "presence",
           "key": "url",
           "label": "Url",
@@ -5137,7 +5137,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5150,7 +5150,7 @@
         },
         {
           "pointer": "/pipelineId",
-          "element": "Requested pipeline id",
+          "element": "object.identity",
           "capture": "value",
           "key": "pipelineId",
           "label": "Pipeline Id",
@@ -5168,7 +5168,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5181,7 +5181,7 @@
         },
         {
           "pointer": "/ref",
-          "element": "Requested ref",
+          "element": "object.identity",
           "capture": "value",
           "key": "ref",
           "label": "Ref",
@@ -5194,7 +5194,7 @@
         },
         {
           "pointer": "/sha",
-          "element": "Requested sha",
+          "element": "object.identity",
           "capture": "value",
           "key": "sha",
           "label": "Sha",
@@ -5207,7 +5207,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -5218,7 +5218,7 @@
         },
         {
           "pointer": "/source",
-          "element": "Requested source",
+          "element": "operation.control",
           "capture": "value",
           "key": "source",
           "label": "Source",
@@ -5231,7 +5231,7 @@
         },
         {
           "pointer": "/status",
-          "element": "Requested status",
+          "element": "operation.control",
           "capture": "value",
           "key": "status",
           "label": "Status",
@@ -5244,7 +5244,7 @@
         },
         {
           "pointer": "/updatedAfter",
-          "element": "Requested updated after",
+          "element": "operation.control",
           "capture": "value",
           "key": "updatedAfter",
           "label": "Updated After",
@@ -5257,7 +5257,7 @@
         },
         {
           "pointer": "/updatedBefore",
-          "element": "Requested updated before",
+          "element": "operation.control",
           "capture": "value",
           "key": "updatedBefore",
           "label": "Updated Before",
@@ -5275,7 +5275,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5288,7 +5288,7 @@
         },
         {
           "pointer": "/pipelineId",
-          "element": "Requested pipeline id",
+          "element": "object.identity",
           "capture": "value",
           "key": "pipelineId",
           "label": "Pipeline Id",
@@ -5306,7 +5306,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5319,7 +5319,7 @@
         },
         {
           "pointer": "/ref",
-          "element": "Requested ref",
+          "element": "object.identity",
           "capture": "value",
           "key": "ref",
           "label": "Ref",
@@ -5337,7 +5337,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5350,7 +5350,7 @@
         },
         {
           "pointer": "/pipelineId",
-          "element": "Requested pipeline id",
+          "element": "object.identity",
           "capture": "value",
           "key": "pipelineId",
           "label": "Pipeline Id",
@@ -5368,7 +5368,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5381,7 +5381,7 @@
         },
         {
           "pointer": "/accessLevel",
-          "element": "Requested project access level",
+          "element": "operation.number",
           "capture": "value",
           "key": "accessLevel",
           "label": "Access Level",
@@ -5392,7 +5392,7 @@
         },
         {
           "pointer": "/expiresAt",
-          "element": "Requested token expiry",
+          "element": "operation.control",
           "capture": "value",
           "key": "expiresAt",
           "label": "Expires At",
@@ -5405,7 +5405,7 @@
         },
         {
           "pointer": "/name",
-          "element": "Requested resource name",
+          "element": "object.identity",
           "capture": "value",
           "key": "name",
           "label": "Name",
@@ -5418,7 +5418,7 @@
         },
         {
           "pointer": "/scopes",
-          "element": "Requested token scopes",
+          "element": "selection.identities",
           "capture": "value",
           "key": "scopes",
           "label": "Scopes",
@@ -5436,7 +5436,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5449,7 +5449,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -5460,7 +5460,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -5475,7 +5475,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5488,7 +5488,7 @@
         },
         {
           "pointer": "/tokenId",
-          "element": "Requested token id",
+          "element": "object.identity",
           "capture": "value",
           "key": "tokenId",
           "label": "Token Id",
@@ -5506,7 +5506,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5519,7 +5519,7 @@
         },
         {
           "pointer": "/expiresAt",
-          "element": "Requested token expiry",
+          "element": "operation.control",
           "capture": "value",
           "key": "expiresAt",
           "label": "Expires At",
@@ -5532,7 +5532,7 @@
         },
         {
           "pointer": "/tokenId",
-          "element": "Requested token id",
+          "element": "object.identity",
           "capture": "value",
           "key": "tokenId",
           "label": "Token Id",
@@ -5550,7 +5550,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5563,7 +5563,7 @@
         },
         {
           "pointer": "/tokenId",
-          "element": "Requested token id",
+          "element": "object.identity",
           "capture": "value",
           "key": "tokenId",
           "label": "Token Id",
@@ -5581,7 +5581,7 @@
       "fields": [
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -5592,7 +5592,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -5607,7 +5607,7 @@
       "fields": [
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -5620,7 +5620,7 @@
         },
         {
           "pointer": "/archived",
-          "element": "Requested archived",
+          "element": "operation.flag",
           "capture": "value",
           "key": "archived",
           "label": "Archived",
@@ -5631,7 +5631,7 @@
         },
         {
           "pointer": "/includeNamespaces",
-          "element": "Requested include namespaces",
+          "element": "operation.flag",
           "capture": "value",
           "key": "includeNamespaces",
           "label": "Include Namespaces",
@@ -5642,7 +5642,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -5653,7 +5653,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -5668,7 +5668,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5683,7 +5683,7 @@
           "pointer": "/attachments",
           "key": "attachments",
           "label": "Attachments",
-          "element": "correlated records",
+          "element": "attachment.metadata",
           "capture": "records",
           "kind": "records",
           "role": "fact",
@@ -5691,7 +5691,7 @@
           "fields": [
             {
               "pointer": "/contentType",
-              "element": "Requested attachment media type",
+              "element": "attachment.media_type",
               "capture": "value",
               "key": "contentType",
               "label": "Content Type",
@@ -5704,14 +5704,14 @@
             },
             {
               "pointer": "/field",
-              "element": "Multipart transport field",
+              "element": "transport.multipart_field",
               "capture": "omit",
               "key": "field",
               "reason": "Multipart transport field"
             },
             {
               "pointer": "/filename",
-              "element": "Requested attachment filename",
+              "element": "attachment.filename",
               "capture": "value",
               "key": "filename",
               "label": "Filename",
@@ -5724,14 +5724,14 @@
             },
             {
               "pointer": "/sha256",
-              "element": "Requested upload checksum",
+              "element": "content.fingerprint",
               "capture": "omit",
               "key": "sha256",
               "reason": "Requested upload checksum is excluded"
             },
             {
               "pointer": "/size",
-              "element": "Requested attachment size",
+              "element": "attachment.size",
               "capture": "value",
               "key": "size",
               "label": "Size",
@@ -5744,7 +5744,7 @@
         },
         {
           "pointer": "/url",
-          "element": "Raw caller locator or destination URL",
+          "element": "locator.url",
           "capture": "presence",
           "key": "url",
           "label": "Url",
@@ -5759,7 +5759,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5772,7 +5772,7 @@
         },
         {
           "pointer": "/url",
-          "element": "Raw caller locator or destination URL",
+          "element": "locator.url",
           "capture": "presence",
           "key": "url",
           "label": "Url",
@@ -5787,7 +5787,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5800,7 +5800,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -5813,7 +5813,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -5829,7 +5829,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5842,7 +5842,7 @@
         },
         {
           "pointer": "/requiredPatterns",
-          "element": "Requested required patterns",
+          "element": "selection.identities",
           "capture": "value",
           "key": "requiredPatterns",
           "label": "Required Patterns",
@@ -5860,7 +5860,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5873,7 +5873,7 @@
         },
         {
           "pointer": "/branchOrWildcardName",
-          "element": "Requested branch or wildcard name",
+          "element": "object.identity",
           "capture": "value",
           "key": "branchOrWildcardName",
           "label": "Branch Or Wildcard Name",
@@ -5891,7 +5891,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5904,7 +5904,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -5917,7 +5917,7 @@
         },
         {
           "pointer": "/engine",
-          "element": "Requested engine",
+          "element": "operation.control",
           "capture": "value",
           "key": "engine",
           "label": "Engine",
@@ -5930,7 +5930,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -5941,7 +5941,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -5951,7 +5951,7 @@
         },
         {
           "pointer": "/regex",
-          "element": "Code regex flag",
+          "element": "operation.flag",
           "capture": "value",
           "key": "regex",
           "label": "Regex",
@@ -5967,7 +5967,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -5980,7 +5980,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -5993,7 +5993,7 @@
         },
         {
           "pointer": "/engine",
-          "element": "Requested engine",
+          "element": "operation.control",
           "capture": "value",
           "key": "engine",
           "label": "Engine",
@@ -6006,7 +6006,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6017,7 +6017,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6032,7 +6032,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6045,7 +6045,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -6058,7 +6058,7 @@
         },
         {
           "pointer": "/engine",
-          "element": "Requested engine",
+          "element": "operation.control",
           "capture": "value",
           "key": "engine",
           "label": "Engine",
@@ -6071,7 +6071,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6082,7 +6082,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6097,7 +6097,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6110,7 +6110,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -6123,7 +6123,7 @@
         },
         {
           "pointer": "/engine",
-          "element": "Requested engine",
+          "element": "operation.control",
           "capture": "value",
           "key": "engine",
           "label": "Engine",
@@ -6136,7 +6136,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6147,7 +6147,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6162,7 +6162,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6175,7 +6175,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -6188,7 +6188,7 @@
         },
         {
           "pointer": "/engine",
-          "element": "Requested engine",
+          "element": "operation.control",
           "capture": "value",
           "key": "engine",
           "label": "Engine",
@@ -6201,7 +6201,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6212,7 +6212,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6227,7 +6227,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6240,7 +6240,7 @@
         },
         {
           "pointer": "/search",
-          "element": "Caller search expression",
+          "element": "search.query",
           "capture": "value",
           "key": "search",
           "label": "Search",
@@ -6253,7 +6253,7 @@
         },
         {
           "pointer": "/engine",
-          "element": "Requested engine",
+          "element": "operation.control",
           "capture": "value",
           "key": "engine",
           "label": "Engine",
@@ -6266,7 +6266,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6277,7 +6277,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6292,7 +6292,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6305,7 +6305,7 @@
         },
         {
           "pointer": "/name",
-          "element": "Requested resource name",
+          "element": "object.identity",
           "capture": "value",
           "key": "name",
           "label": "Name",
@@ -6318,7 +6318,7 @@
         },
         {
           "pointer": "/username",
-          "element": "Requested automation username",
+          "element": "object.identity",
           "capture": "value",
           "key": "username",
           "label": "Username",
@@ -6336,7 +6336,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6349,7 +6349,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6367,7 +6367,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6380,7 +6380,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6391,7 +6391,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6406,7 +6406,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6419,7 +6419,7 @@
         },
         {
           "pointer": "/accessLevel",
-          "element": "Requested project access level",
+          "element": "operation.number",
           "capture": "value",
           "key": "accessLevel",
           "label": "Access Level",
@@ -6430,7 +6430,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6448,7 +6448,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6461,7 +6461,7 @@
         },
         {
           "pointer": "/expiresAt",
-          "element": "Requested token expiry",
+          "element": "operation.control",
           "capture": "value",
           "key": "expiresAt",
           "label": "Expires At",
@@ -6474,7 +6474,7 @@
         },
         {
           "pointer": "/name",
-          "element": "Requested resource name",
+          "element": "object.identity",
           "capture": "value",
           "key": "name",
           "label": "Name",
@@ -6487,7 +6487,7 @@
         },
         {
           "pointer": "/scopes",
-          "element": "Requested token scopes",
+          "element": "selection.identities",
           "capture": "value",
           "key": "scopes",
           "label": "Scopes",
@@ -6500,7 +6500,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6518,7 +6518,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6531,7 +6531,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6542,7 +6542,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6552,7 +6552,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6570,7 +6570,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6583,7 +6583,7 @@
         },
         {
           "pointer": "/tokenId",
-          "element": "Requested token id",
+          "element": "object.identity",
           "capture": "value",
           "key": "tokenId",
           "label": "Token Id",
@@ -6596,7 +6596,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6614,7 +6614,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6627,7 +6627,7 @@
         },
         {
           "pointer": "/expiresAt",
-          "element": "Requested token expiry",
+          "element": "operation.control",
           "capture": "value",
           "key": "expiresAt",
           "label": "Expires At",
@@ -6640,7 +6640,7 @@
         },
         {
           "pointer": "/tokenId",
-          "element": "Requested token id",
+          "element": "object.identity",
           "capture": "value",
           "key": "tokenId",
           "label": "Token Id",
@@ -6653,7 +6653,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6671,7 +6671,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6684,7 +6684,7 @@
         },
         {
           "pointer": "/userId",
-          "element": "Requested user id",
+          "element": "object.identity",
           "capture": "value",
           "key": "userId",
           "label": "User Id",
@@ -6702,7 +6702,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6715,7 +6715,7 @@
         },
         {
           "pointer": "/branchFilterStrategy",
-          "element": "Requested webhook branch filtering mode",
+          "element": "operation.control",
           "capture": "value",
           "key": "branchFilterStrategy",
           "label": "Branch Filter Strategy",
@@ -6728,7 +6728,7 @@
         },
         {
           "pointer": "/customWebhookTemplate",
-          "element": "Webhook template body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "customWebhookTemplate",
           "label": "Custom Webhook Template",
@@ -6738,7 +6738,7 @@
         },
         {
           "pointer": "/description",
-          "element": "Webhook description body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "description",
           "label": "Description",
@@ -6748,7 +6748,7 @@
         },
         {
           "pointer": "/enableSslVerification",
-          "element": "Requested webhook TLS verification",
+          "element": "operation.flag",
           "capture": "value",
           "key": "enableSslVerification",
           "label": "Enable Ssl Verification",
@@ -6759,7 +6759,7 @@
         },
         {
           "pointer": "/events",
-          "element": "Requested webhook events",
+          "element": "selection.identities",
           "capture": "value",
           "key": "events",
           "label": "Events",
@@ -6772,7 +6772,7 @@
         },
         {
           "pointer": "/name",
-          "element": "Requested resource name",
+          "element": "object.identity",
           "capture": "value",
           "key": "name",
           "label": "Name",
@@ -6785,7 +6785,7 @@
         },
         {
           "pointer": "/pushEventsBranchFilter",
-          "element": "Requested webhook branch filter expression",
+          "element": "search.query",
           "capture": "value",
           "key": "pushEventsBranchFilter",
           "label": "Push Events Branch Filter",
@@ -6798,7 +6798,7 @@
         },
         {
           "pointer": "/signingToken",
-          "element": "Webhook signing token",
+          "element": "credential.secret",
           "capture": "presence",
           "key": "signingToken",
           "label": "Signing Token",
@@ -6808,7 +6808,7 @@
         },
         {
           "pointer": "/token",
-          "element": "Webhook secret token",
+          "element": "credential.secret",
           "capture": "presence",
           "key": "token",
           "label": "Token",
@@ -6818,7 +6818,7 @@
         },
         {
           "pointer": "/url",
-          "element": "Raw caller locator or destination URL",
+          "element": "locator.url",
           "capture": "presence",
           "key": "url",
           "label": "Url",
@@ -6833,7 +6833,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6846,7 +6846,7 @@
         },
         {
           "pointer": "/key",
-          "element": "Custom header name",
+          "element": "object.identity",
           "capture": "value",
           "key": "key",
           "label": "Key",
@@ -6859,7 +6859,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -6877,7 +6877,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6890,7 +6890,7 @@
         },
         {
           "pointer": "/key",
-          "element": "Custom header name",
+          "element": "object.identity",
           "capture": "value",
           "key": "key",
           "label": "Key",
@@ -6903,7 +6903,7 @@
         },
         {
           "pointer": "/value",
-          "element": "Custom header secret value",
+          "element": "credential.secret",
           "capture": "presence",
           "key": "value",
           "label": "Value",
@@ -6913,7 +6913,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -6931,7 +6931,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6944,7 +6944,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -6962,7 +6962,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -6975,7 +6975,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -6986,7 +6986,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -6996,7 +6996,7 @@
         },
         {
           "pointer": "/status",
-          "element": "Requested status",
+          "element": "operation.control",
           "capture": "value",
           "key": "status",
           "label": "Status",
@@ -7009,7 +7009,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -7027,7 +7027,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -7040,7 +7040,7 @@
         },
         {
           "pointer": "/webhookEventId",
-          "element": "Requested webhook event id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookEventId",
           "label": "Webhook Event Id",
@@ -7053,7 +7053,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -7071,7 +7071,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -7084,7 +7084,7 @@
         },
         {
           "pointer": "/maxResults",
-          "element": "Requested max results",
+          "element": "operation.number",
           "capture": "value",
           "key": "maxResults",
           "label": "Max Results",
@@ -7095,7 +7095,7 @@
         },
         {
           "pointer": "/pageToken",
-          "element": "Opaque input continuation",
+          "element": "continuation.opaque",
           "capture": "presence",
           "key": "pageToken",
           "label": "Page Token",
@@ -7110,7 +7110,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -7123,7 +7123,7 @@
         },
         {
           "pointer": "/event",
-          "element": "Requested webhook test event",
+          "element": "operation.control",
           "capture": "value",
           "key": "event",
           "label": "Event",
@@ -7136,7 +7136,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -7154,7 +7154,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -7167,7 +7167,7 @@
         },
         {
           "pointer": "/branchFilterStrategy",
-          "element": "Requested webhook branch filtering mode",
+          "element": "operation.control",
           "capture": "value",
           "key": "branchFilterStrategy",
           "label": "Branch Filter Strategy",
@@ -7180,7 +7180,7 @@
         },
         {
           "pointer": "/clearToken",
-          "element": "Requested webhook token removal",
+          "element": "operation.flag",
           "capture": "value",
           "key": "clearToken",
           "label": "Clear Token",
@@ -7191,7 +7191,7 @@
         },
         {
           "pointer": "/confirmDestinationReset",
-          "element": "Requested webhook destination reset acknowledgement",
+          "element": "operation.flag",
           "capture": "value",
           "key": "confirmDestinationReset",
           "label": "Confirm Destination Reset",
@@ -7202,7 +7202,7 @@
         },
         {
           "pointer": "/customWebhookTemplate",
-          "element": "Webhook template body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "customWebhookTemplate",
           "label": "Custom Webhook Template",
@@ -7212,7 +7212,7 @@
         },
         {
           "pointer": "/description",
-          "element": "Webhook description body",
+          "element": "content.body",
           "capture": "utf8ByteCount",
           "key": "description",
           "label": "Description",
@@ -7222,7 +7222,7 @@
         },
         {
           "pointer": "/enableSslVerification",
-          "element": "Requested webhook TLS verification",
+          "element": "operation.flag",
           "capture": "value",
           "key": "enableSslVerification",
           "label": "Enable Ssl Verification",
@@ -7233,7 +7233,7 @@
         },
         {
           "pointer": "/events",
-          "element": "Requested webhook events",
+          "element": "selection.identities",
           "capture": "value",
           "key": "events",
           "label": "Events",
@@ -7246,7 +7246,7 @@
         },
         {
           "pointer": "/name",
-          "element": "Requested resource name",
+          "element": "object.identity",
           "capture": "value",
           "key": "name",
           "label": "Name",
@@ -7259,7 +7259,7 @@
         },
         {
           "pointer": "/pushEventsBranchFilter",
-          "element": "Requested webhook branch filter expression",
+          "element": "search.query",
           "capture": "value",
           "key": "pushEventsBranchFilter",
           "label": "Push Events Branch Filter",
@@ -7272,7 +7272,7 @@
         },
         {
           "pointer": "/signingToken",
-          "element": "Webhook signing token",
+          "element": "credential.secret",
           "capture": "presence",
           "key": "signingToken",
           "label": "Signing Token",
@@ -7282,7 +7282,7 @@
         },
         {
           "pointer": "/token",
-          "element": "Webhook secret token",
+          "element": "credential.secret",
           "capture": "presence",
           "key": "token",
           "label": "Token",
@@ -7292,7 +7292,7 @@
         },
         {
           "pointer": "/url",
-          "element": "Raw caller locator or destination URL",
+          "element": "locator.url",
           "capture": "presence",
           "key": "url",
           "label": "Url",
@@ -7302,7 +7302,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
@@ -7320,7 +7320,7 @@
       "fields": [
         {
           "pointer": "/project",
-          "element": "Caller project locator",
+          "element": "object.identity",
           "capture": "value",
           "key": "project",
           "label": "Project",
@@ -7333,7 +7333,7 @@
         },
         {
           "pointer": "/webhookId",
-          "element": "Requested webhook id",
+          "element": "object.identity",
           "capture": "value",
           "key": "webhookId",
           "label": "Webhook Id",
