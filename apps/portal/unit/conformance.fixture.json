@@ -40,6 +40,20 @@
     "actions": [
       {
         "action": "item.view",
+        "auditInputs": [
+          {
+            "capture": "value",
+            "display": "primary",
+            "key": "item",
+            "kind": "path",
+            "label": "Item",
+            "maxBytes": 1024,
+            "overflow": "omit",
+            "pointer": "/item",
+            "role": "target",
+            "shape": "scalar"
+          }
+        ],
         "available": true,
         "credentialModes": [
           "service",
@@ -67,6 +81,20 @@
       },
       {
         "action": "item.download",
+        "auditInputs": [
+          {
+            "capture": "value",
+            "display": "primary",
+            "key": "item",
+            "kind": "path",
+            "label": "Item",
+            "maxBytes": 1024,
+            "overflow": "omit",
+            "pointer": "/item",
+            "role": "target",
+            "shape": "scalar"
+          }
+        ],
         "available": true,
         "credentialModes": [
           "service",
@@ -94,6 +122,75 @@
       },
       {
         "action": "item.upload",
+        "auditInputs": [
+          {
+            "capture": "value",
+            "display": "primary",
+            "key": "item",
+            "kind": "path",
+            "label": "Item",
+            "maxBytes": 1024,
+            "overflow": "omit",
+            "pointer": "/item",
+            "role": "target",
+            "shape": "scalar"
+          },
+          {
+            "capture": "records",
+            "display": "primary",
+            "fields": [
+              {
+                "capture": "omit",
+                "key": "field",
+                "pointer": "/field"
+              },
+              {
+                "capture": "value",
+                "display": "primary",
+                "key": "filename",
+                "kind": "path",
+                "label": "Filename",
+                "maxBytes": 1024,
+                "overflow": "omit",
+                "pointer": "/filename",
+                "role": "target",
+                "shape": "scalar"
+              },
+              {
+                "capture": "value",
+                "display": "detail",
+                "key": "contentType",
+                "kind": "text",
+                "label": "Media type",
+                "maxBytes": 1024,
+                "overflow": "omit",
+                "pointer": "/contentType",
+                "role": "fact",
+                "shape": "scalar"
+              },
+              {
+                "capture": "value",
+                "display": "detail",
+                "key": "size",
+                "kind": "bytes",
+                "label": "Supplied size",
+                "pointer": "/size",
+                "role": "fact",
+                "shape": "scalar"
+              },
+              {
+                "capture": "omit",
+                "key": "sha256",
+                "pointer": "/sha256"
+              }
+            ],
+            "key": "attachments",
+            "kind": "records",
+            "label": "Attachments",
+            "pointer": "/attachments",
+            "role": "change"
+          }
+        ],
         "available": true,
         "credentialModes": [
           "service",

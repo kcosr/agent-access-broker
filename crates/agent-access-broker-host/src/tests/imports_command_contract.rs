@@ -951,6 +951,7 @@ async fn requests_carry_the_caller_authority_resources_and_credentials_on_stdin_
         .collect::<Vec<_>>();
     assert!(!actions.is_empty());
     for action in actions {
+        assert!(action.get("sensitiveInputPointers").is_none(), "{action}");
         assert_eq!(
             action["sensitiveOutputPointers"],
             json!(["/result/upstreamCommand"]),

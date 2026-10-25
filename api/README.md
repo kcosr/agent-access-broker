@@ -101,6 +101,12 @@ contracts section of each inventory shows the result per type.
   non-exhaustive and are built with constructors and `with_*` builders, so a
   downstream crate never writes a struct literal or an exhaustive
   destructuring pattern for them.
+- Host-produced audit snapshots (`RequestAudit`, `RequestAuditField`,
+  `AuditFieldMetadata`, `AuditCapturedValue`, `AuditValueItem` and
+  `AuditRecordRow`) are read-only outputs with non-exhaustive public fields and
+  no fabrication constructors. The host creates them by preparing a declaration
+  with `host::prepare_audit_inputs` and projecting original admitted inputs with
+  the returned plan. Providers cannot replace the host-owned `requestAudit`.
 - Extendable enums are non-exhaustive. A consumer matches them with a
   fallback arm that rejects what it does not support, failing closed: an
   unsupported credential kind, authority, egress route, I/O kind or OAuth

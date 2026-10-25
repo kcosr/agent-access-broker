@@ -357,6 +357,37 @@ impl Fixture {
 #[tokio::test]
 async fn imports_mcp_credentials_policy_context_and_audit_use_real_host_boundary() {
     let fixture = fixture(None).await;
+    let response = authed_context_json_request(
+        fixture.app.clone(),
+        Method::GET,
+        "/v1/spec/catalog",
+        "mcp-sensitive-inventory",
+        &fixture.tokens["alice"],
+        "internal",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let catalog = response_json(response).await;
+    let imported = catalog["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|service| matches!(service["service"].as_str(), Some("one" | "two")))
+        .collect::<Vec<_>>();
+    assert_eq!(imported.len(), 2);
+    for service in imported {
+        assert_eq!(service["actions"].as_array().unwrap().len(), 2);
+        for action in service["actions"].as_array().unwrap() {
+            assert!(action.get("sensitiveInputPointers").is_none());
+            assert_eq!(
+                action["sensitiveOutputPointers"],
+                json!(["/result/upstreamMcp"])
+            );
+            assert!(action.get("auditInputs").is_none());
+        }
+    }
+
     for (principal, service, action) in [
         ("alice", "one", "inspect"),
         ("alice", "two", "update"),

@@ -1,5 +1,7 @@
 use super::*;
 
+mod request_audit;
+
 #[test]
 fn explicit_resource_listing_metadata_flows_to_catalog_openapi_and_send() {
     let descriptor = ActionDescriptor::new("inventory", "List projects", json!({"type":"object"}))

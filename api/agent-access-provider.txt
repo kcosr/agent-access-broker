@@ -112,6 +112,21 @@ impl core::marker::Unpin for agent_access_provider::host::AdmittedRequestParts
 impl core::marker::UnsafeUnpin for agent_access_provider::host::AdmittedRequestParts
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::AdmittedRequestParts
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::AdmittedRequestParts
+pub struct agent_access_provider::host::AuditInputPlan
+impl agent_access_provider::host::AuditInputPlan
+pub fn agent_access_provider::host::AuditInputPlan::declaration_sha256(&self) -> &str
+pub fn agent_access_provider::host::AuditInputPlan::project(&self, &serde_json::value::Value) -> core::option::Option<agent_access_provider::RequestAudit>
+impl core::clone::Clone for agent_access_provider::host::AuditInputPlan
+pub fn agent_access_provider::host::AuditInputPlan::clone(&self) -> agent_access_provider::host::AuditInputPlan
+impl core::fmt::Debug for agent_access_provider::host::AuditInputPlan
+pub fn agent_access_provider::host::AuditInputPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::host::AuditInputPlan
+impl core::marker::Send for agent_access_provider::host::AuditInputPlan
+impl core::marker::Sync for agent_access_provider::host::AuditInputPlan
+impl core::marker::Unpin for agent_access_provider::host::AuditInputPlan
+impl core::marker::UnsafeUnpin for agent_access_provider::host::AuditInputPlan
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::AuditInputPlan
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::AuditInputPlan
 pub struct agent_access_provider::host::ClientTransportSpec<'a>
 impl<'a> agent_access_provider::host::ClientTransportSpec<'a>
 pub fn agent_access_provider::host::ClientTransportSpec<'a>::base(&self) -> &'a url::Url
@@ -218,6 +233,7 @@ pub fn agent_access_provider::host::delegated_credential(alloc::sync::Arc<dyn ag
 pub fn agent_access_provider::host::hook_context(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::HookPhase, &'static [&'static agent_access_provider::ProviderReasonDefinition]) -> agent_access_provider::host::HookContext
 pub fn agent_access_provider::host::invocation(agent_access_provider::AdmittedRequest, alloc::vec::Vec<agent_access_provider::BrokerBodyPart>, agent_access_provider::ResourceAttributes, core::option::Option<agent_access_provider::ProviderState>) -> agent_access_provider::ProviderInvocation
 pub fn agent_access_provider::host::port_failure(agent_access_provider::host::HostPort, agent_access_provider::ProviderError) -> agent_access_provider::ProviderError
+pub fn agent_access_provider::host::prepare_audit_inputs(&serde_json::value::Value, &agent_access_provider::AuditInputProjection) -> core::result::Result<agent_access_provider::host::AuditInputPlan, alloc::string::String>
 pub fn agent_access_provider::host::provider_finalization_context(core::option::Option<tokio::time::instant::Instant>) -> agent_access_provider::ProviderFinalizationContext
 pub fn agent_access_provider::host::scope_request(agent_access_provider::host::ScopeRequestParts<'_>) -> agent_access_provider::ScopeRequest<'_>
 pub fn agent_access_provider::host::service_signing_key(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>, &str) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
@@ -628,6 +644,207 @@ impl core::marker::Unpin for agent_access_provider::AttributionVerb
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionVerb
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionVerb
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionVerb
+#[non_exhaustive] pub enum agent_access_provider::AuditCapture
+pub agent_access_provider::AuditCapture::ItemCount
+pub agent_access_provider::AuditCapture::Omit
+pub agent_access_provider::AuditCapture::Presence
+pub agent_access_provider::AuditCapture::Records
+pub agent_access_provider::AuditCapture::Utf8ByteCount
+pub agent_access_provider::AuditCapture::Value
+impl core::clone::Clone for agent_access_provider::AuditCapture
+pub fn agent_access_provider::AuditCapture::clone(&self) -> agent_access_provider::AuditCapture
+impl core::cmp::Eq for agent_access_provider::AuditCapture
+impl core::cmp::PartialEq for agent_access_provider::AuditCapture
+pub fn agent_access_provider::AuditCapture::eq(&self, &agent_access_provider::AuditCapture) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditCapture
+pub fn agent_access_provider::AuditCapture::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditCapture
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditCapture
+impl serde_core::ser::Serialize for agent_access_provider::AuditCapture
+pub fn agent_access_provider::AuditCapture::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditCapture
+pub fn agent_access_provider::AuditCapture::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditCapture
+impl core::marker::Send for agent_access_provider::AuditCapture
+impl core::marker::Sync for agent_access_provider::AuditCapture
+impl core::marker::Unpin for agent_access_provider::AuditCapture
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditCapture
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditCapture
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditCapture
+#[non_exhaustive] pub enum agent_access_provider::AuditDisplay
+pub agent_access_provider::AuditDisplay::Detail
+pub agent_access_provider::AuditDisplay::Primary
+pub agent_access_provider::AuditDisplay::Raw
+impl core::clone::Clone for agent_access_provider::AuditDisplay
+pub fn agent_access_provider::AuditDisplay::clone(&self) -> agent_access_provider::AuditDisplay
+impl core::cmp::Eq for agent_access_provider::AuditDisplay
+impl core::cmp::PartialEq for agent_access_provider::AuditDisplay
+pub fn agent_access_provider::AuditDisplay::eq(&self, &agent_access_provider::AuditDisplay) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditDisplay
+pub fn agent_access_provider::AuditDisplay::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditDisplay
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditDisplay
+impl serde_core::ser::Serialize for agent_access_provider::AuditDisplay
+pub fn agent_access_provider::AuditDisplay::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditDisplay
+pub fn agent_access_provider::AuditDisplay::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditDisplay
+impl core::marker::Send for agent_access_provider::AuditDisplay
+impl core::marker::Sync for agent_access_provider::AuditDisplay
+impl core::marker::Unpin for agent_access_provider::AuditDisplay
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditDisplay
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditDisplay
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditDisplay
+#[non_exhaustive] pub enum agent_access_provider::AuditOverflow
+pub agent_access_provider::AuditOverflow::Omit
+pub agent_access_provider::AuditOverflow::Prefix
+impl core::clone::Clone for agent_access_provider::AuditOverflow
+pub fn agent_access_provider::AuditOverflow::clone(&self) -> agent_access_provider::AuditOverflow
+impl core::cmp::Eq for agent_access_provider::AuditOverflow
+impl core::cmp::PartialEq for agent_access_provider::AuditOverflow
+pub fn agent_access_provider::AuditOverflow::eq(&self, &agent_access_provider::AuditOverflow) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditOverflow
+pub fn agent_access_provider::AuditOverflow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditOverflow
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditOverflow
+impl serde_core::ser::Serialize for agent_access_provider::AuditOverflow
+pub fn agent_access_provider::AuditOverflow::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditOverflow
+pub fn agent_access_provider::AuditOverflow::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditOverflow
+impl core::marker::Send for agent_access_provider::AuditOverflow
+impl core::marker::Sync for agent_access_provider::AuditOverflow
+impl core::marker::Unpin for agent_access_provider::AuditOverflow
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditOverflow
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditOverflow
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditOverflow
+#[non_exhaustive] pub enum agent_access_provider::AuditRole
+pub agent_access_provider::AuditRole::Change
+pub agent_access_provider::AuditRole::Fact
+pub agent_access_provider::AuditRole::Target
+impl core::clone::Clone for agent_access_provider::AuditRole
+pub fn agent_access_provider::AuditRole::clone(&self) -> agent_access_provider::AuditRole
+impl core::cmp::Eq for agent_access_provider::AuditRole
+impl core::cmp::PartialEq for agent_access_provider::AuditRole
+pub fn agent_access_provider::AuditRole::eq(&self, &agent_access_provider::AuditRole) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditRole
+pub fn agent_access_provider::AuditRole::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditRole
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditRole
+impl serde_core::ser::Serialize for agent_access_provider::AuditRole
+pub fn agent_access_provider::AuditRole::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditRole
+pub fn agent_access_provider::AuditRole::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditRole
+impl core::marker::Send for agent_access_provider::AuditRole
+impl core::marker::Sync for agent_access_provider::AuditRole
+impl core::marker::Unpin for agent_access_provider::AuditRole
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditRole
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditRole
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditRole
+#[non_exhaustive] pub enum agent_access_provider::AuditValueEncoding
+pub agent_access_provider::AuditValueEncoding::DecimalInteger
+impl core::clone::Clone for agent_access_provider::AuditValueEncoding
+pub fn agent_access_provider::AuditValueEncoding::clone(&self) -> agent_access_provider::AuditValueEncoding
+impl core::cmp::Eq for agent_access_provider::AuditValueEncoding
+impl core::cmp::PartialEq for agent_access_provider::AuditValueEncoding
+pub fn agent_access_provider::AuditValueEncoding::eq(&self, &agent_access_provider::AuditValueEncoding) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditValueEncoding
+pub fn agent_access_provider::AuditValueEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditValueEncoding
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditValueEncoding
+impl serde_core::ser::Serialize for agent_access_provider::AuditValueEncoding
+pub fn agent_access_provider::AuditValueEncoding::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditValueEncoding
+pub fn agent_access_provider::AuditValueEncoding::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditValueEncoding
+impl core::marker::Send for agent_access_provider::AuditValueEncoding
+impl core::marker::Sync for agent_access_provider::AuditValueEncoding
+impl core::marker::Unpin for agent_access_provider::AuditValueEncoding
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditValueEncoding
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditValueEncoding
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditValueEncoding
+#[non_exhaustive] pub enum agent_access_provider::AuditValueKind
+pub agent_access_provider::AuditValueKind::Boolean
+pub agent_access_provider::AuditValueKind::Bytes
+pub agent_access_provider::AuditValueKind::Date
+pub agent_access_provider::AuditValueKind::Email
+pub agent_access_provider::AuditValueKind::Identifier
+pub agent_access_provider::AuditValueKind::Number
+pub agent_access_provider::AuditValueKind::Path
+pub agent_access_provider::AuditValueKind::Query
+pub agent_access_provider::AuditValueKind::Records
+pub agent_access_provider::AuditValueKind::Text
+impl core::clone::Clone for agent_access_provider::AuditValueKind
+pub fn agent_access_provider::AuditValueKind::clone(&self) -> agent_access_provider::AuditValueKind
+impl core::cmp::Eq for agent_access_provider::AuditValueKind
+impl core::cmp::PartialEq for agent_access_provider::AuditValueKind
+pub fn agent_access_provider::AuditValueKind::eq(&self, &agent_access_provider::AuditValueKind) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditValueKind
+pub fn agent_access_provider::AuditValueKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditValueKind
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditValueKind
+impl serde_core::ser::Serialize for agent_access_provider::AuditValueKind
+pub fn agent_access_provider::AuditValueKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditValueKind
+pub fn agent_access_provider::AuditValueKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditValueKind
+impl core::marker::Send for agent_access_provider::AuditValueKind
+impl core::marker::Sync for agent_access_provider::AuditValueKind
+impl core::marker::Unpin for agent_access_provider::AuditValueKind
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditValueKind
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditValueKind
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditValueKind
+#[non_exhaustive] pub enum agent_access_provider::AuditValueShape
+pub agent_access_provider::AuditValueShape::List
+pub agent_access_provider::AuditValueShape::Scalar
+impl core::clone::Clone for agent_access_provider::AuditValueShape
+pub fn agent_access_provider::AuditValueShape::clone(&self) -> agent_access_provider::AuditValueShape
+impl core::cmp::Eq for agent_access_provider::AuditValueShape
+impl core::cmp::PartialEq for agent_access_provider::AuditValueShape
+pub fn agent_access_provider::AuditValueShape::eq(&self, &agent_access_provider::AuditValueShape) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditValueShape
+pub fn agent_access_provider::AuditValueShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditValueShape
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditValueShape
+impl serde_core::ser::Serialize for agent_access_provider::AuditValueShape
+pub fn agent_access_provider::AuditValueShape::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditValueShape
+pub fn agent_access_provider::AuditValueShape::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditValueShape
+impl core::marker::Send for agent_access_provider::AuditValueShape
+impl core::marker::Sync for agent_access_provider::AuditValueShape
+impl core::marker::Unpin for agent_access_provider::AuditValueShape
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditValueShape
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditValueShape
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditValueShape
+#[non_exhaustive] pub enum agent_access_provider::AuditValueState
+pub agent_access_provider::AuditValueState::Absent
+pub agent_access_provider::AuditValueState::Budget
+pub agent_access_provider::AuditValueState::Captured
+pub agent_access_provider::AuditValueState::Invalid
+pub agent_access_provider::AuditValueState::Null
+pub agent_access_provider::AuditValueState::TooLarge
+impl core::clone::Clone for agent_access_provider::AuditValueState
+pub fn agent_access_provider::AuditValueState::clone(&self) -> agent_access_provider::AuditValueState
+impl core::cmp::Eq for agent_access_provider::AuditValueState
+impl core::cmp::PartialEq for agent_access_provider::AuditValueState
+pub fn agent_access_provider::AuditValueState::eq(&self, &agent_access_provider::AuditValueState) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditValueState
+pub fn agent_access_provider::AuditValueState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::AuditValueState
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditValueState
+impl serde_core::ser::Serialize for agent_access_provider::AuditValueState
+pub fn agent_access_provider::AuditValueState::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditValueState
+pub fn agent_access_provider::AuditValueState::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditValueState
+impl core::marker::Send for agent_access_provider::AuditValueState
+impl core::marker::Sync for agent_access_provider::AuditValueState
+impl core::marker::Unpin for agent_access_provider::AuditValueState
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditValueState
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditValueState
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditValueState
 #[non_exhaustive] pub enum agent_access_provider::AuthorityMismatch
 pub agent_access_provider::AuthorityMismatch::NotResources
 pub agent_access_provider::AuthorityMismatch::NotSearch
@@ -1582,6 +1799,52 @@ impl core::marker::Unpin for agent_access_provider::RefreshReplay
 impl core::marker::UnsafeUnpin for agent_access_provider::RefreshReplay
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RefreshReplay
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RefreshReplay
+#[non_exhaustive] pub enum agent_access_provider::RequestAuditFailure
+pub agent_access_provider::RequestAuditFailure::ProjectionFailed
+impl core::clone::Clone for agent_access_provider::RequestAuditFailure
+pub fn agent_access_provider::RequestAuditFailure::clone(&self) -> agent_access_provider::RequestAuditFailure
+impl core::cmp::Eq for agent_access_provider::RequestAuditFailure
+impl core::cmp::PartialEq for agent_access_provider::RequestAuditFailure
+pub fn agent_access_provider::RequestAuditFailure::eq(&self, &agent_access_provider::RequestAuditFailure) -> bool
+impl core::fmt::Debug for agent_access_provider::RequestAuditFailure
+pub fn agent_access_provider::RequestAuditFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::RequestAuditFailure
+impl core::marker::StructuralPartialEq for agent_access_provider::RequestAuditFailure
+impl serde_core::ser::Serialize for agent_access_provider::RequestAuditFailure
+pub fn agent_access_provider::RequestAuditFailure::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::RequestAuditFailure
+pub fn agent_access_provider::RequestAuditFailure::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::RequestAuditFailure
+impl core::marker::Send for agent_access_provider::RequestAuditFailure
+impl core::marker::Sync for agent_access_provider::RequestAuditFailure
+impl core::marker::Unpin for agent_access_provider::RequestAuditFailure
+impl core::marker::UnsafeUnpin for agent_access_provider::RequestAuditFailure
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RequestAuditFailure
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RequestAuditFailure
+#[non_exhaustive] pub enum agent_access_provider::RequestAuditStatus
+pub agent_access_provider::RequestAuditStatus::Complete
+pub agent_access_provider::RequestAuditStatus::Partial
+pub agent_access_provider::RequestAuditStatus::Unavailable
+impl core::clone::Clone for agent_access_provider::RequestAuditStatus
+pub fn agent_access_provider::RequestAuditStatus::clone(&self) -> agent_access_provider::RequestAuditStatus
+impl core::cmp::Eq for agent_access_provider::RequestAuditStatus
+impl core::cmp::PartialEq for agent_access_provider::RequestAuditStatus
+pub fn agent_access_provider::RequestAuditStatus::eq(&self, &agent_access_provider::RequestAuditStatus) -> bool
+impl core::fmt::Debug for agent_access_provider::RequestAuditStatus
+pub fn agent_access_provider::RequestAuditStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::RequestAuditStatus
+impl core::marker::StructuralPartialEq for agent_access_provider::RequestAuditStatus
+impl serde_core::ser::Serialize for agent_access_provider::RequestAuditStatus
+pub fn agent_access_provider::RequestAuditStatus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::RequestAuditStatus
+pub fn agent_access_provider::RequestAuditStatus::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::RequestAuditStatus
+impl core::marker::Send for agent_access_provider::RequestAuditStatus
+impl core::marker::Sync for agent_access_provider::RequestAuditStatus
+impl core::marker::Unpin for agent_access_provider::RequestAuditStatus
+impl core::marker::UnsafeUnpin for agent_access_provider::RequestAuditStatus
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RequestAuditStatus
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RequestAuditStatus
 #[non_exhaustive] pub enum agent_access_provider::ResourceSelector
 pub agent_access_provider::ResourceSelector::All
 pub agent_access_provider::ResourceSelector::Exact
@@ -1769,6 +2032,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Upstream
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamResourceOwnership
 #[non_exhaustive] pub struct agent_access_provider::ActionCapabilities
 pub agent_access_provider::ActionCapabilities::action: alloc::string::String
+pub agent_access_provider::ActionCapabilities::audit_inputs: core::option::Option<agent_access_provider::AuditInputProjection>
 pub agent_access_provider::ActionCapabilities::credential_modes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionCapabilities::description: alloc::string::String
 pub agent_access_provider::ActionCapabilities::documentation: core::option::Option<serde_json::value::Value>
@@ -1799,6 +2063,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionCapab
 #[non_exhaustive] pub struct agent_access_provider::ActionDescriptor
 pub agent_access_provider::ActionDescriptor::action: alloc::string::String
 pub agent_access_provider::ActionDescriptor::attribution: core::option::Option<agent_access_provider::AttributionCapability>
+pub agent_access_provider::ActionDescriptor::audit_inputs: core::option::Option<agent_access_provider::AuditInputProjection>
 pub agent_access_provider::ActionDescriptor::credential_modes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::description: alloc::string::String
 pub agent_access_provider::ActionDescriptor::documentation: core::option::Option<serde_json::value::Value>
@@ -1819,6 +2084,7 @@ pub agent_access_provider::ActionDescriptor::token_only: bool
 pub agent_access_provider::ActionDescriptor::upstream_resource_ownership: core::option::Option<agent_access_provider::UpstreamResourceOwnership>
 impl agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::attribution(self, agent_access_provider::AttributionCapability) -> Self
+pub fn agent_access_provider::ActionDescriptor::audit_inputs(self, agent_access_provider::AuditInputProjection) -> Self
 pub fn agent_access_provider::ActionDescriptor::capabilities(&self) -> agent_access_provider::ActionCapabilities
 pub fn agent_access_provider::ActionDescriptor::credential_modes<I, S>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::documentation(self, serde_json::value::Value) -> Self
@@ -1981,6 +2247,179 @@ impl core::marker::Unpin for agent_access_provider::AttributionMutation
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionMutation
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionMutation
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionMutation
+#[non_exhaustive] pub struct agent_access_provider::AuditCapturedValue
+pub agent_access_provider::AuditCapturedValue::budget_omitted_count: core::option::Option<u64>
+pub agent_access_provider::AuditCapturedValue::columns: core::option::Option<alloc::vec::Vec<agent_access_provider::AuditFieldMetadata>>
+pub agent_access_provider::AuditCapturedValue::encoding: core::option::Option<agent_access_provider::AuditValueEncoding>
+pub agent_access_provider::AuditCapturedValue::invalid_count: core::option::Option<u64>
+pub agent_access_provider::AuditCapturedValue::items: core::option::Option<alloc::vec::Vec<agent_access_provider::AuditValueItem>>
+pub agent_access_provider::AuditCapturedValue::limited_count: core::option::Option<u64>
+pub agent_access_provider::AuditCapturedValue::original_bytes: core::option::Option<u64>
+pub agent_access_provider::AuditCapturedValue::rows: core::option::Option<alloc::vec::Vec<agent_access_provider::AuditRecordRow>>
+pub agent_access_provider::AuditCapturedValue::state: agent_access_provider::AuditValueState
+pub agent_access_provider::AuditCapturedValue::supplied: core::option::Option<bool>
+pub agent_access_provider::AuditCapturedValue::total_count: core::option::Option<u64>
+pub agent_access_provider::AuditCapturedValue::truncated: core::option::Option<bool>
+pub agent_access_provider::AuditCapturedValue::value: core::option::Option<serde_json::value::Value>
+impl core::clone::Clone for agent_access_provider::AuditCapturedValue
+pub fn agent_access_provider::AuditCapturedValue::clone(&self) -> agent_access_provider::AuditCapturedValue
+impl core::cmp::PartialEq for agent_access_provider::AuditCapturedValue
+pub fn agent_access_provider::AuditCapturedValue::eq(&self, &agent_access_provider::AuditCapturedValue) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditCapturedValue
+pub fn agent_access_provider::AuditCapturedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditCapturedValue
+impl serde_core::ser::Serialize for agent_access_provider::AuditCapturedValue
+pub fn agent_access_provider::AuditCapturedValue::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditCapturedValue
+pub fn agent_access_provider::AuditCapturedValue::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditCapturedValue
+impl core::marker::Send for agent_access_provider::AuditCapturedValue
+impl core::marker::Sync for agent_access_provider::AuditCapturedValue
+impl core::marker::Unpin for agent_access_provider::AuditCapturedValue
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditCapturedValue
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditCapturedValue
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditCapturedValue
+#[non_exhaustive] pub struct agent_access_provider::AuditFieldMetadata
+pub agent_access_provider::AuditFieldMetadata::capture: agent_access_provider::AuditCapture
+pub agent_access_provider::AuditFieldMetadata::display: agent_access_provider::AuditDisplay
+pub agent_access_provider::AuditFieldMetadata::key: alloc::string::String
+pub agent_access_provider::AuditFieldMetadata::kind: agent_access_provider::AuditValueKind
+pub agent_access_provider::AuditFieldMetadata::label: alloc::string::String
+pub agent_access_provider::AuditFieldMetadata::role: agent_access_provider::AuditRole
+pub agent_access_provider::AuditFieldMetadata::shape: core::option::Option<agent_access_provider::AuditValueShape>
+impl core::clone::Clone for agent_access_provider::AuditFieldMetadata
+pub fn agent_access_provider::AuditFieldMetadata::clone(&self) -> agent_access_provider::AuditFieldMetadata
+impl core::cmp::Eq for agent_access_provider::AuditFieldMetadata
+impl core::cmp::PartialEq for agent_access_provider::AuditFieldMetadata
+pub fn agent_access_provider::AuditFieldMetadata::eq(&self, &agent_access_provider::AuditFieldMetadata) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditFieldMetadata
+pub fn agent_access_provider::AuditFieldMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditFieldMetadata
+impl serde_core::ser::Serialize for agent_access_provider::AuditFieldMetadata
+pub fn agent_access_provider::AuditFieldMetadata::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditFieldMetadata
+pub fn agent_access_provider::AuditFieldMetadata::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditFieldMetadata
+impl core::marker::Send for agent_access_provider::AuditFieldMetadata
+impl core::marker::Sync for agent_access_provider::AuditFieldMetadata
+impl core::marker::Unpin for agent_access_provider::AuditFieldMetadata
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditFieldMetadata
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditFieldMetadata
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditFieldMetadata
+pub struct agent_access_provider::AuditInputProjection(_)
+impl agent_access_provider::AuditInputProjection
+pub fn agent_access_provider::AuditInputProjection::new(impl core::iter::traits::collect::IntoIterator<Item = agent_access_provider::AuditInputRule>) -> Self
+pub fn agent_access_provider::AuditInputProjection::rules(&self) -> &[agent_access_provider::AuditInputRule]
+impl core::clone::Clone for agent_access_provider::AuditInputProjection
+pub fn agent_access_provider::AuditInputProjection::clone(&self) -> agent_access_provider::AuditInputProjection
+impl core::cmp::Eq for agent_access_provider::AuditInputProjection
+impl core::cmp::PartialEq for agent_access_provider::AuditInputProjection
+pub fn agent_access_provider::AuditInputProjection::eq(&self, &agent_access_provider::AuditInputProjection) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditInputProjection
+pub fn agent_access_provider::AuditInputProjection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditInputProjection
+impl serde_core::ser::Serialize for agent_access_provider::AuditInputProjection
+pub fn agent_access_provider::AuditInputProjection::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditInputProjection
+pub fn agent_access_provider::AuditInputProjection::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+impl core::marker::Freeze for agent_access_provider::AuditInputProjection
+impl core::marker::Send for agent_access_provider::AuditInputProjection
+impl core::marker::Sync for agent_access_provider::AuditInputProjection
+impl core::marker::Unpin for agent_access_provider::AuditInputProjection
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditInputProjection
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditInputProjection
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditInputProjection
+pub struct agent_access_provider::AuditInputRule
+impl agent_access_provider::AuditInputRule
+pub fn agent_access_provider::AuditInputRule::capture(&self) -> agent_access_provider::AuditCapture
+pub fn agent_access_provider::AuditInputRule::display(self, agent_access_provider::AuditDisplay) -> Self
+pub fn agent_access_provider::AuditInputRule::display_placement(&self) -> core::option::Option<agent_access_provider::AuditDisplay>
+pub fn agent_access_provider::AuditInputRule::fields(&self) -> &[agent_access_provider::AuditInputRule]
+pub fn agent_access_provider::AuditInputRule::item_count(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::AuditInputRule::key(&self) -> &str
+pub fn agent_access_provider::AuditInputRule::kind(self, agent_access_provider::AuditValueKind) -> Self
+pub fn agent_access_provider::AuditInputRule::label(&self) -> core::option::Option<&str>
+pub fn agent_access_provider::AuditInputRule::max_bytes(self, usize) -> Self
+pub fn agent_access_provider::AuditInputRule::max_string_bytes(&self) -> core::option::Option<usize>
+pub fn agent_access_provider::AuditInputRule::omit(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::AuditInputRule::overflow(self, agent_access_provider::AuditOverflow) -> Self
+pub fn agent_access_provider::AuditInputRule::overflow_behavior(&self) -> core::option::Option<agent_access_provider::AuditOverflow>
+pub fn agent_access_provider::AuditInputRule::pointer(&self) -> &str
+pub fn agent_access_provider::AuditInputRule::presence(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::AuditInputRule::records(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::iter::traits::collect::IntoIterator<Item = agent_access_provider::AuditInputRule>) -> Self
+pub fn agent_access_provider::AuditInputRule::role(self, agent_access_provider::AuditRole) -> Self
+pub fn agent_access_provider::AuditInputRule::utf8_byte_count(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::AuditInputRule::value(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::AuditInputRule::value_kind(&self) -> core::option::Option<agent_access_provider::AuditValueKind>
+pub fn agent_access_provider::AuditInputRule::value_role(&self) -> core::option::Option<agent_access_provider::AuditRole>
+pub fn agent_access_provider::AuditInputRule::value_shape(&self) -> core::option::Option<agent_access_provider::AuditValueShape>
+pub fn agent_access_provider::AuditInputRule::values(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::AuditInputRule
+pub fn agent_access_provider::AuditInputRule::clone(&self) -> agent_access_provider::AuditInputRule
+impl core::cmp::Eq for agent_access_provider::AuditInputRule
+impl core::cmp::PartialEq for agent_access_provider::AuditInputRule
+pub fn agent_access_provider::AuditInputRule::eq(&self, &agent_access_provider::AuditInputRule) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditInputRule
+pub fn agent_access_provider::AuditInputRule::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditInputRule
+impl serde_core::ser::Serialize for agent_access_provider::AuditInputRule
+pub fn agent_access_provider::AuditInputRule::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditInputRule
+pub fn agent_access_provider::AuditInputRule::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+impl core::marker::Freeze for agent_access_provider::AuditInputRule
+impl core::marker::Send for agent_access_provider::AuditInputRule
+impl core::marker::Sync for agent_access_provider::AuditInputRule
+impl core::marker::Unpin for agent_access_provider::AuditInputRule
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditInputRule
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditInputRule
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditInputRule
+#[non_exhaustive] pub struct agent_access_provider::AuditRecordRow
+pub agent_access_provider::AuditRecordRow::cells: core::option::Option<alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::AuditCapturedValue>>
+pub agent_access_provider::AuditRecordRow::index: u64
+pub agent_access_provider::AuditRecordRow::state: agent_access_provider::AuditValueState
+impl core::clone::Clone for agent_access_provider::AuditRecordRow
+pub fn agent_access_provider::AuditRecordRow::clone(&self) -> agent_access_provider::AuditRecordRow
+impl core::cmp::PartialEq for agent_access_provider::AuditRecordRow
+pub fn agent_access_provider::AuditRecordRow::eq(&self, &agent_access_provider::AuditRecordRow) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditRecordRow
+pub fn agent_access_provider::AuditRecordRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditRecordRow
+impl serde_core::ser::Serialize for agent_access_provider::AuditRecordRow
+pub fn agent_access_provider::AuditRecordRow::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditRecordRow
+pub fn agent_access_provider::AuditRecordRow::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditRecordRow
+impl core::marker::Send for agent_access_provider::AuditRecordRow
+impl core::marker::Sync for agent_access_provider::AuditRecordRow
+impl core::marker::Unpin for agent_access_provider::AuditRecordRow
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditRecordRow
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditRecordRow
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditRecordRow
+#[non_exhaustive] pub struct agent_access_provider::AuditValueItem
+pub agent_access_provider::AuditValueItem::encoding: core::option::Option<agent_access_provider::AuditValueEncoding>
+pub agent_access_provider::AuditValueItem::index: u64
+pub agent_access_provider::AuditValueItem::original_bytes: core::option::Option<u64>
+pub agent_access_provider::AuditValueItem::state: agent_access_provider::AuditValueState
+pub agent_access_provider::AuditValueItem::truncated: core::option::Option<bool>
+pub agent_access_provider::AuditValueItem::value: core::option::Option<serde_json::value::Value>
+impl core::clone::Clone for agent_access_provider::AuditValueItem
+pub fn agent_access_provider::AuditValueItem::clone(&self) -> agent_access_provider::AuditValueItem
+impl core::cmp::PartialEq for agent_access_provider::AuditValueItem
+pub fn agent_access_provider::AuditValueItem::eq(&self, &agent_access_provider::AuditValueItem) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditValueItem
+pub fn agent_access_provider::AuditValueItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditValueItem
+impl serde_core::ser::Serialize for agent_access_provider::AuditValueItem
+pub fn agent_access_provider::AuditValueItem::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::AuditValueItem
+pub fn agent_access_provider::AuditValueItem::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::AuditValueItem
+impl core::marker::Send for agent_access_provider::AuditValueItem
+impl core::marker::Sync for agent_access_provider::AuditValueItem
+impl core::marker::Unpin for agent_access_provider::AuditValueItem
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditValueItem
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditValueItem
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditValueItem
 #[non_exhaustive] pub struct agent_access_provider::AuthorizationRequest<'a>
 pub agent_access_provider::AuthorizationRequest::code_challenge_s256: &'a str
 pub agent_access_provider::AuthorizationRequest::state: &'a str
@@ -3363,6 +3802,53 @@ impl<'a> core::marker::Unpin for agent_access_provider::RedirectRules<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::RedirectRules<'a>
 impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RedirectRules<'a>
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::RedirectRules<'a>
+#[non_exhaustive] pub struct agent_access_provider::RequestAudit
+pub agent_access_provider::RequestAudit::absent_omitted_fields: u64
+pub agent_access_provider::RequestAudit::budget_omitted_fields: u64
+pub agent_access_provider::RequestAudit::declaration_sha256: core::option::Option<alloc::string::String>
+pub agent_access_provider::RequestAudit::fields: alloc::vec::Vec<agent_access_provider::RequestAuditField>
+pub agent_access_provider::RequestAudit::reason: core::option::Option<agent_access_provider::RequestAuditFailure>
+pub agent_access_provider::RequestAudit::status: agent_access_provider::RequestAuditStatus
+pub agent_access_provider::RequestAudit::version: u8
+impl core::clone::Clone for agent_access_provider::RequestAudit
+pub fn agent_access_provider::RequestAudit::clone(&self) -> agent_access_provider::RequestAudit
+impl core::cmp::PartialEq for agent_access_provider::RequestAudit
+pub fn agent_access_provider::RequestAudit::eq(&self, &agent_access_provider::RequestAudit) -> bool
+impl core::fmt::Debug for agent_access_provider::RequestAudit
+pub fn agent_access_provider::RequestAudit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::RequestAudit
+impl serde_core::ser::Serialize for agent_access_provider::RequestAudit
+pub fn agent_access_provider::RequestAudit::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::RequestAudit
+pub fn agent_access_provider::RequestAudit::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::RequestAudit
+impl core::marker::Send for agent_access_provider::RequestAudit
+impl core::marker::Sync for agent_access_provider::RequestAudit
+impl core::marker::Unpin for agent_access_provider::RequestAudit
+impl core::marker::UnsafeUnpin for agent_access_provider::RequestAudit
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RequestAudit
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RequestAudit
+#[non_exhaustive] pub struct agent_access_provider::RequestAuditField
+pub agent_access_provider::RequestAuditField::data: agent_access_provider::AuditCapturedValue
+pub agent_access_provider::RequestAuditField::metadata: agent_access_provider::AuditFieldMetadata
+impl core::clone::Clone for agent_access_provider::RequestAuditField
+pub fn agent_access_provider::RequestAuditField::clone(&self) -> agent_access_provider::RequestAuditField
+impl core::cmp::PartialEq for agent_access_provider::RequestAuditField
+pub fn agent_access_provider::RequestAuditField::eq(&self, &agent_access_provider::RequestAuditField) -> bool
+impl core::fmt::Debug for agent_access_provider::RequestAuditField
+pub fn agent_access_provider::RequestAuditField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::RequestAuditField
+impl serde_core::ser::Serialize for agent_access_provider::RequestAuditField
+pub fn agent_access_provider::RequestAuditField::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::RequestAuditField
+pub fn agent_access_provider::RequestAuditField::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::RequestAuditField
+impl core::marker::Send for agent_access_provider::RequestAuditField
+impl core::marker::Sync for agent_access_provider::RequestAuditField
+impl core::marker::Unpin for agent_access_provider::RequestAuditField
+impl core::marker::UnsafeUnpin for agent_access_provider::RequestAuditField
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RequestAuditField
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RequestAuditField
 #[non_exhaustive] pub struct agent_access_provider::ResourceAttributeDescriptor
 impl agent_access_provider::ResourceAttributeDescriptor
 pub fn agent_access_provider::ResourceAttributeDescriptor::declared(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, bool, core::option::Option<agent_access_provider::ResourcePattern>) -> Self
@@ -4301,6 +4787,14 @@ pub trait agent_access_provider::continuation::sealed::Stage
 enum agent_access_provider::ActionIo: non-exhaustive
 enum agent_access_provider::AttributionRepresentation: non-exhaustive
 enum agent_access_provider::AttributionVerb: non-exhaustive
+enum agent_access_provider::AuditCapture: non-exhaustive
+enum agent_access_provider::AuditDisplay: non-exhaustive
+enum agent_access_provider::AuditOverflow: non-exhaustive
+enum agent_access_provider::AuditRole: non-exhaustive
+enum agent_access_provider::AuditValueEncoding: non-exhaustive
+enum agent_access_provider::AuditValueKind: non-exhaustive
+enum agent_access_provider::AuditValueShape: non-exhaustive
+enum agent_access_provider::AuditValueState: non-exhaustive
 enum agent_access_provider::AuthorityMismatch: non-exhaustive
 enum agent_access_provider::BodyReadError: non-exhaustive
 enum agent_access_provider::ClientProfile: non-exhaustive
@@ -4336,6 +4830,8 @@ enum agent_access_provider::ProviderResultStreamSource: exhaustive
 enum agent_access_provider::ProviderStateError: non-exhaustive
 enum agent_access_provider::ReasonCode: non-exhaustive
 enum agent_access_provider::RefreshReplay: exhaustive
+enum agent_access_provider::RequestAuditFailure: non-exhaustive
+enum agent_access_provider::RequestAuditStatus: non-exhaustive
 enum agent_access_provider::ResourceSelector: non-exhaustive
 enum agent_access_provider::RevocationOutcome: non-exhaustive
 enum agent_access_provider::ScopedMcpNameSource: non-exhaustive
@@ -4358,6 +4854,12 @@ struct agent_access_provider::AdmittedRequest: named fields, private fields
 struct agent_access_provider::AttachmentLimitsConfig: named fields
 struct agent_access_provider::AttributionCapability: named fields, non-exhaustive
 struct agent_access_provider::AttributionMutation: named fields, non-exhaustive
+struct agent_access_provider::AuditCapturedValue: named fields, non-exhaustive
+struct agent_access_provider::AuditFieldMetadata: named fields, non-exhaustive
+struct agent_access_provider::AuditInputProjection: tuple fields, private fields
+struct agent_access_provider::AuditInputRule: named fields, private fields
+struct agent_access_provider::AuditRecordRow: named fields, non-exhaustive
+struct agent_access_provider::AuditValueItem: named fields, non-exhaustive
 struct agent_access_provider::AuthorizationRequest: named fields, non-exhaustive
 struct agent_access_provider::BackendRegistration: named fields, private fields, non-exhaustive
 struct agent_access_provider::BodyAdmission: named fields, private fields
@@ -4421,6 +4923,8 @@ struct agent_access_provider::ProviderState: tuple fields, private fields
 struct agent_access_provider::ProviderStreamError: named fields, non-exhaustive
 struct agent_access_provider::ReasonCodeId: tuple fields, private fields
 struct agent_access_provider::RedirectRules: named fields, private fields, non-exhaustive
+struct agent_access_provider::RequestAudit: named fields, non-exhaustive
+struct agent_access_provider::RequestAuditField: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributeDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::ResourceAttributeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributes: tuple fields, private fields
@@ -4458,6 +4962,7 @@ struct agent_access_provider::UpstreamTrace: named fields, non-exhaustive
 struct agent_access_provider::UrlPatternPolicy: named fields, private fields, non-exhaustive
 struct agent_access_provider::ValidationContext: named fields, non-exhaustive
 struct agent_access_provider::host::AdmittedRequestParts: named fields
+struct agent_access_provider::host::AuditInputPlan: named fields, private fields
 struct agent_access_provider::host::ClientTransportSpec: named fields, private fields
 struct agent_access_provider::host::HookContext: named fields, private fields
 struct agent_access_provider::host::ScopeRequestParts: named fields

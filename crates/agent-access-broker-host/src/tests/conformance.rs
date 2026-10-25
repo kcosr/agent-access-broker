@@ -1468,3 +1468,151 @@ async fn conformance_private_attributes_reach_only_the_authorized_invocation() {
         assert!(!contains(&persisted, key), "{key} persisted in plaintext");
     }
 }
+
+#[test]
+fn native_audit_declarations_preserve_sensitive_pointer_inventory_and_transports() {
+    use agent_access_core::mcp::{McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry};
+    use agent_access_core::{
+        RenderAuthMode, api_service_spec, empty_catalog, openapi_from_catalog,
+        send_schema_from_catalog,
+    };
+
+    let linked = registry();
+    let config = parse_broker_config_raw(
+        "native audit sensitivity fixture",
+        r#"
+[identity]
+mode = "required"
+authority = "toml"
+[policy]
+authority = "toml"
+[limits]
+upload_spool_dir = "/nonexistent/native-audit-spool"
+[providers.jira]
+tenant_host = "atlassian.example.test"
+[providers.jira.content]
+comment_formats = ["adf"]
+[providers.confluence]
+tenant_host = "atlassian.example.test"
+[providers.confluence.content]
+page_formats = ["storage", "atlas_doc_format"]
+blog_formats = ["storage"]
+comment_formats = ["storage"]
+[providers.gitlab]
+api_base_url = "https://gitlab.example.test/api/v4"
+web_base_url = "https://gitlab.example.test"
+[providers.gitlab.provisioning]
+enabled = true
+allowed_token_scopes = ["api", "read_api", "read_repository", "write_repository", "read_registry", "write_registry", "self_rotate"]
+[providers.cloudbees_ci]
+controllers = { main = { base_url = "https://ci.example.test" } }
+[providers.gmail]
+[providers.teams]
+allowed_upstream_hosts = ["https://teams.example.test/**"]
+[providers.fake]
+[providers.oauth_stub]
+base_url = "http://127.0.0.1:1"
+[providers.conformance]
+endpoints = true
+base_url = "https://conformance.example.test"
+allowed_upstream_hosts = ["https://conformance.example.test/**"]
+"#,
+        &linked,
+    )
+    .unwrap();
+    let mut catalog = empty_catalog(json!({}));
+    for provider in config.providers.iter() {
+        let descriptor = provider.descriptor();
+        let service = api_service_spec(&descriptor, true).unwrap();
+        for action in &service.actions {
+            let capability = descriptor
+                .capabilities()
+                .actions
+                .into_iter()
+                .find(|candidate| candidate.action == action.action)
+                .unwrap();
+            assert_eq!(action.audit_inputs, capability.audit_inputs);
+        }
+        catalog.services.push(service);
+    }
+    assert_eq!(catalog.services.len(), 9);
+    let nonempty_pointers = |input: bool| {
+        let mut inventory = BTreeMap::new();
+        for service in &catalog.services {
+            for action in &service.actions {
+                let pointers = if input {
+                    &action.sensitive_input_pointers
+                } else {
+                    &action.sensitive_output_pointers
+                };
+                if !pointers.is_empty() {
+                    inventory.insert(
+                        format!("{}.{}", service.service, action.action),
+                        json!(pointers),
+                    );
+                }
+            }
+        }
+        inventory
+    };
+    // All other actions explicitly freeze an empty pointer list. Audit declarations
+    // never make reviewed business inputs sensitive or remove existing secrets.
+    assert_eq!(
+        json!(nonempty_pointers(true)),
+        json!({
+            "gitlab.webhook.create":["/inputs/signingToken","/inputs/token"],
+            "gitlab.webhook.update":["/inputs/signingToken","/inputs/token"],
+            "gitlab.webhook.custom_header.set":["/inputs/value"]
+        })
+    );
+    assert_eq!(
+        json!(nonempty_pointers(false)),
+        json!({
+            "cloudbees_ci.job.list":["/result/items","/result/nextPageToken"],
+            "confluence.space.list":["/result/items","/result/nextPageToken"],
+            "jira.project.list":["/result/items","/result/nextPageToken"],
+            "jira.project.view":["/result/project/name","/result/project/description","/result/fields/items","/result/versions/items","/result/components/items","/result/issueTypes/items","/result/statuses/items"],
+            "gitlab.project.list":["/result/items","/result/nextPageToken"],
+            "gitlab.project.search":["/result/items","/result/nextPageToken"],
+            "gitlab.search.code":["/result/items","/result/nextPageToken"],
+            "gitlab.search.comments":["/result/items","/result/nextPageToken"],
+            "gitlab.search.commits":["/result/items","/result/nextPageToken"],
+            "gitlab.search.issues":["/result/items","/result/nextPageToken"],
+            "gitlab.search.merge_requests":["/result/items","/result/nextPageToken"],
+            "gitlab.search.wiki":["/result/items","/result/nextPageToken"],
+            "gitlab.project.access_token.create":["/result/issuedToken"],
+            "gitlab.project.access_token.rotate":["/result/issuedToken"],
+            "gitlab.service_account.token.create":["/result/issuedToken"],
+            "gitlab.service_account.token.rotate":["/result/issuedToken"]
+        })
+    );
+    let mut without_audit = catalog.clone();
+    for service in &mut without_audit.services {
+        for action in &mut service.actions {
+            action.audit_inputs = None;
+        }
+    }
+    assert_eq!(
+        openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "session"),
+        openapi_from_catalog(&without_audit, RenderAuthMode::Omit, &[], "session")
+    );
+    assert_eq!(
+        send_schema_from_catalog(&catalog),
+        send_schema_from_catalog(&without_audit)
+    );
+    for view in std::iter::once(McpView::Aggregate).chain(
+        catalog
+            .services
+            .iter()
+            .map(|service| McpView::Service(service.service.clone())),
+    ) {
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            let project = |catalog| {
+                ToolRegistry::build(catalog, &view, mode, STDIO_MAX_CATALOG_BYTES)
+                    .unwrap()
+                    .definitions()
+            };
+            assert_eq!(project(&catalog), project(&without_audit));
+        }
+    }
+}
