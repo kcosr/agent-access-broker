@@ -1958,6 +1958,47 @@ fn gitlab_webhook_actions_do_not_advertise_content_attribution() {
 }
 
 #[test]
+fn draft_note_object_schemas_require_exactly_what_their_parser_reads() {
+    let descriptor = gitlab_descriptor(&config());
+    let input = json!({"project": "sip/service", "iid": 5, "draftNoteId": 801});
+    let supplied: BTreeSet<&str> = input
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    for action in [
+        "merge_request.draft_note.view",
+        "merge_request.draft_note.delete",
+        "merge_request.draft_note.publish",
+    ] {
+        let schema = &descriptor.action(action).unwrap().input_schema;
+        let names = |key: &str| -> BTreeSet<&str> {
+            match &schema[key] {
+                Value::Object(properties) => properties.keys().map(String::as_str).collect(),
+                Value::Array(required) => required.iter().filter_map(Value::as_str).collect(),
+                _ => BTreeSet::new(),
+            }
+        };
+        assert_eq!(names("properties"), supplied, "{action}");
+        assert_eq!(names("required"), supplied, "{action}");
+        assert_eq!(schema["additionalProperties"], false, "{action}");
+    }
+    assert!(parse_draft_note_object_inputs(&input).is_ok());
+    for missing in &supplied {
+        let mut partial = input.clone();
+        partial.as_object_mut().unwrap().remove(*missing);
+        assert!(
+            parse_draft_note_object_inputs(&partial).is_err(),
+            "{missing}"
+        );
+    }
+    let mut extra = input.clone();
+    extra["discussionId"] = json!("abc");
+    assert!(parse_draft_note_object_inputs(&extra).is_err());
+}
+
+#[test]
 fn audit_inputs_record_targets_and_never_content_or_secrets() {
     let mut config = config();
     // Zoekt adds search.code's regex flag, so every declaration is validated.

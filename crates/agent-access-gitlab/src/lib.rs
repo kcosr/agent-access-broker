@@ -6917,6 +6917,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             draft_note_object_schema(),
         )
         .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
@@ -6944,6 +6945,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             draft_note_object_schema(),
         )
         .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
@@ -6952,6 +6954,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             draft_note_object_schema(),
         )
         .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
@@ -7978,8 +7981,18 @@ fn draft_note_list_schema(max_results: u32) -> Value {
     })
 }
 
+/// One draft note, addressed under its merge request.
 fn draft_note_object_schema() -> Value {
-    numeric_object_schema("draftNoteId")
+    json!({
+        "type": "object",
+        "required": ["project", "iid", "draftNoteId"],
+        "properties": {
+            "project": { "type": "string" },
+            "iid": { "type": ["integer", "string"] },
+            "draftNoteId": { "type": ["integer", "string"] }
+        },
+        "additionalProperties": false
+    })
 }
 
 fn draft_note_add_schema() -> Value {
