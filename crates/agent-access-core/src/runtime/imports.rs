@@ -259,10 +259,7 @@ pub(super) fn descriptor_with_contract(
     // A retained invalid service still has its identities, scopes and grants.
     // Its provider is unavailable: both build_providers and managed preparation
     // consume this same fallible resolver before enabling any execution.
-    let audit_inputs = match resolve_audit_inputs(config, record) {
-        Ok(declarations) => declarations,
-        Err(_) => BTreeMap::new(),
-    };
+    let audit_inputs = resolve_audit_inputs(config, record).unwrap_or_default();
     // Arbitrary upstream content may contain private data or credentials.
     let sensitive_output_pointers: Vec<String> = config
         .providers
