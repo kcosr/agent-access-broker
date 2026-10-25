@@ -1903,8 +1903,7 @@ fn audit_inputs() -> Value {
         "maxBytes":4096,"overflow":"prefix"}])
 }
 
-#[tokio::test]
-async fn command_audit_snapshot_survives_credential_resolution_after_preparation() {
+fn audit_runtime() -> (BrokerRuntime, tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
@@ -1953,6 +1952,12 @@ async fn command_audit_snapshot_survives_credential_resolution_after_preparation
     runtime
         .policy_snapshot
         .store(Arc::new(PolicySnapshot::from_config(&config, 2)));
+    (runtime, directory, audit_path)
+}
+
+#[tokio::test]
+async fn command_audit_snapshot_survives_credential_resolution_after_preparation() {
+    let (runtime, _directory, audit_path) = audit_runtime();
     let prepared = prepare(
         &runtime,
         &identity(None),
@@ -1973,6 +1978,53 @@ async fn command_audit_snapshot_survives_credential_resolution_after_preparation
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["requestAudit"], snapshot);
     assert_eq!(records[0]["providerAudit"]["command"]["spawned"], false);
+}
+
+#[tokio::test(start_paused = true)]
+async fn command_budget_wait_timeout_retains_the_prepared_audit_snapshot() {
+    use futures_util::FutureExt;
+
+    let (runtime, _directory, audit_path) = audit_runtime();
+    let held = runtime
+        .command_registry
+        .acquire(
+            SERVICE,
+            1,
+            tokio::time::Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    let prepared = prepare(
+        &runtime,
+        &identity(None),
+        "issue.stats",
+        json!({"query":"requested before budget wait"}),
+    )
+    .await
+    .unwrap();
+    let snapshot = serde_json::to_value(&prepared.finalize_context.request_audit).unwrap();
+    assert_eq!(
+        snapshot["fields"][0]["value"],
+        "requested before budget wait"
+    );
+    let mut execution = Box::pin(runtime.finish_prepared_invoke(prepared, vec![]));
+    assert!(execution.as_mut().now_or_never().is_none());
+    assert_eq!(runtime.command_registry.waiting(SERVICE), 1);
+    tokio::time::advance(Duration::from_secs(11)).await;
+    let response = execution.await;
+    assert_eq!(
+        response.envelope.reason_code,
+        Some(ReasonCode::UpstreamTimeout.into())
+    );
+    let records =
+        crate::test_support::read_audit_records(crate::AuditStoreType::Jsonl, &audit_path);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["requestAudit"], snapshot);
+    assert_eq!(records[0]["providerAudit"]["command"]["spawned"], false);
+    assert_eq!(runtime.command_registry.waiting(SERVICE), 0);
+    assert_eq!(runtime.command_registry.in_use(SERVICE), 1);
+    drop(held);
+    assert_eq!(runtime.command_registry.in_use(SERVICE), 0);
 }
 
 #[test]

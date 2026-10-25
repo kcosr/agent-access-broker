@@ -213,13 +213,14 @@ fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
         .collect()
 }
 
-/// Resolve reviewed declarations through the adapter port, without interpreting
-/// protocol annotations in core. Every executable publication uses this gate.
-fn resolve_audit_inputs(
+/// Resolve one reviewed declaration through the adapter port, without
+/// interpreting protocol annotations in core. Both execution and retained
+/// metadata use the same endpoint and compilation checks.
+fn resolve_action_audit_inputs(
     config: &BrokerConfig,
     record: &ImportedServiceRecord,
-) -> Result<BTreeMap<String, agent_access_provider::AuditInputProjection>, String> {
-    let mut declarations = BTreeMap::new();
+    action: &ImportedActionDefinition,
+) -> Result<Option<agent_access_provider::AuditInputProjection>, String> {
     let Some(adapter) = config
         .providers
         .registry()
@@ -227,20 +228,35 @@ fn resolve_audit_inputs(
     else {
         // Retained identities remain readable when their adapter is unlinked.
         // destination_allowed separately prevents execution in this case.
-        return Ok(declarations);
+        return Ok(None);
     };
-    for action in &record.actions {
-        if let Some(declaration) = adapter.action_audit_inputs(&action.definition)? {
-            if adapter.endpoint_form() != ImportEndpointForm::Command
-                || record.definition.endpoint()?.form() != ImportEndpointForm::Command
-            {
-                return Err("audit input declarations require a command endpoint".into());
-            }
-            agent_access_provider::host::prepare_audit_inputs(
-                &action.definition.input_schema,
-                &declaration,
-            )
+    let declaration = adapter.action_audit_inputs(action)?;
+    if let Some(declaration) = &declaration {
+        if adapter.endpoint_form() != ImportEndpointForm::Command
+            || record.definition.endpoint()?.form() != ImportEndpointForm::Command
+        {
+            return Err("audit input declarations require a command endpoint".into());
+        }
+        agent_access_provider::host::prepare_audit_inputs(&action.input_schema, declaration)
             .map_err(|_| "invalid imported audit input declaration".to_owned())?;
+    }
+    Ok(declaration)
+}
+
+/// Every executable publication gates only the actions it will build. Disabled
+/// and quarantined definitions remain reviewable without blocking other actions.
+fn resolve_audit_inputs(
+    config: &BrokerConfig,
+    record: &ImportedServiceRecord,
+) -> Result<BTreeMap<String, agent_access_provider::AuditInputProjection>, String> {
+    let mut declarations = BTreeMap::new();
+    for action in record
+        .actions
+        .iter()
+        .filter(|action| action.status == ImportedActionStatus::Enabled)
+    {
+        if let Some(declaration) = resolve_action_audit_inputs(config, record, &action.definition)?
+        {
             declarations.insert(action.definition.action.clone(), declaration);
         }
     }
@@ -256,10 +272,6 @@ pub(super) fn descriptor_with_contract(
     contract: Option<&ImportedCredentialContract>,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
-    // A retained invalid service still has its identities, scopes and grants.
-    // Its provider is unavailable: both build_providers and managed preparation
-    // consume this same fallible resolver before enabling any execution.
-    let audit_inputs = resolve_audit_inputs(config, record).unwrap_or_default();
     // Arbitrary upstream content may contain private data or credentials.
     let sensitive_output_pointers: Vec<String> = config
         .providers
@@ -288,8 +300,10 @@ pub(super) fn descriptor_with_contract(
                 definition.input_schema.clone(),
             )
             .credential_modes(shape.credential_modes);
-            if let Some(declaration) = audit_inputs.get(&definition.action) {
-                action = action.audit_inputs(declaration.clone());
+            // Preserve valid metadata even beside a bad retained definition or
+            // while disabled. Execution independently gates every enabled action.
+            if let Ok(Some(declaration)) = resolve_action_audit_inputs(config, record, definition) {
+                action = action.audit_inputs(declaration);
             }
             action.listing_of = shape.listing_of;
             if let Some(scope) = shape.scope {
@@ -1308,7 +1322,6 @@ impl BrokerRuntime {
         record: &ImportedServiceRecord,
         transport_override: Option<Option<String>>,
     ) -> Result<PreparedImportedProviders, ManagedStoreError> {
-        resolve_audit_inputs(&self.config, record).map_err(ManagedStoreError::InputInvalid)?;
         let mut providers = self
             .imported_catalog
             .services
@@ -1427,6 +1440,27 @@ impl BrokerRuntime {
             .filter(|action| action.status == ImportedActionStatus::Enabled)
             .map(|action| action.definition.clone())
             .collect::<Vec<_>>();
+        if let Err(error) = resolve_audit_inputs(&self.config, record) {
+            // An unavailable retained contract must not trap its credentials.
+            // A pure slot removal cannot publish a provider or change authority.
+            let removes_only_slots = !self.providers.contains_key(&definition.service)
+                && self
+                    .imported_catalog
+                    .service(&definition.service)
+                    .is_some_and(|old| {
+                        let mut without_removed_slots = old.clone();
+                        without_removed_slots.slot_versions = record.slot_versions.clone();
+                        without_removed_slots == *record
+                            && record.slot_versions.len() < old.slot_versions.len()
+                            && record.slot_versions.iter().all(|(purpose, version)| {
+                                old.slot_versions.get(purpose) == Some(version)
+                            })
+                    });
+            if removes_only_slots {
+                return Ok(prepared);
+            }
+            return Err(ManagedStoreError::InputInvalid(error));
+        }
         for action in &actions {
             adapter
                 .validate_action(action)

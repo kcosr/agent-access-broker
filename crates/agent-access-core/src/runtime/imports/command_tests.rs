@@ -64,7 +64,7 @@ fn command_record(
     }
 }
 
-/// A descriptor-only double of the command adapter.
+/// A command adapter double that deliberately does not validate action inputs.
 #[derive(Debug)]
 struct CommandForm(ImportEndpointForm);
 static COMMAND_FORM: CommandForm = CommandForm(ImportEndpointForm::Command);
@@ -120,7 +120,7 @@ impl crate::imports::ImportedAdapter for CommandForm {
         _: &ImportedAdapterContext<'_>,
         _: &BuildContext<'_>,
     ) -> Result<ImportedProvider, ProviderBuildError> {
-        unreachable!("descriptor tests never build providers")
+        Ok(ImportedProvider::Command(Arc::new(CommandFixture)))
     }
     async fn discover(
         &self,
@@ -134,6 +134,37 @@ impl crate::imports::ImportedAdapter for CommandForm {
     }
 }
 
+struct CommandFixture;
+
+#[async_trait::async_trait]
+impl Provider for CommandFixture {
+    async fn resolve_scopes(
+        &self,
+        _: agent_access_provider::ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        Ok(ScopeResolution::resources(BTreeMap::new()))
+    }
+    async fn invoke(&self, _: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        unreachable!("command invocation uses its dedicated hook")
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::imports::CommandProvider for CommandFixture {
+    async fn invoke_command(
+        &self,
+        _: crate::imports::CommandInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        Ok(ProviderResult::new(json!({"dispatched":true})))
+    }
+    async fn verify_command(
+        &self,
+        _: crate::imports::CommandVerification,
+    ) -> Result<ProviderCredentialVerification, ProviderError> {
+        unreachable!("audit contract tests do not verify credentials")
+    }
+}
+
 fn config() -> BrokerConfig {
     config_with_adapter(&COMMAND_FORM)
 }
@@ -141,14 +172,19 @@ fn config() -> BrokerConfig {
 fn config_with_adapter(adapter: &'static CommandForm) -> BrokerConfig {
     let mut config = crate::runtime::tests::base_fake_config();
     config.providers = crate::ProvidersConfig::new(Arc::new(
-        crate::BackendRegistry::empty()
+        crate::BackendRegistry::new([&agent_access_fake::FAKE_BACKEND])
+            .unwrap()
             .with_imported_adapters([crate::imports::imported_adapter_registration(
                 agent_access_provider::module_metadata!(),
                 adapter,
                 None,
             )])
             .unwrap(),
-    ));
+    ))
+    .with(agent_access_fake::FakeProviderConfig::default());
+    config.policy.resources.retain(|resource| {
+        resource.resource_type == *agent_access_fake::FAKE_PROJECT_RESOURCE.id()
+    });
     config
 }
 
@@ -211,6 +247,520 @@ fn catalog(record: ImportedServiceRecord) -> ImportedCatalog {
     ImportedCatalog {
         revision: 1,
         services: vec![record],
+    }
+}
+
+fn audited_action(name: &str, valid: bool, status: ImportedActionStatus) -> ImportedActionRecord {
+    let mut action = command_record(&[], None).actions.remove(0);
+    action.definition.action = name.into();
+    action.definition.source = json!({"name":name});
+    action.definition.input_schema =
+        json!({"type":"object", "properties":{"issue":{"type":"string"}}});
+    action.definition.annotations["fixtureAudit"] = if valid {
+        audit_declaration()
+    } else {
+        json!("reject")
+    };
+    action.status = status;
+    action
+}
+
+fn change_request(
+    catalog: &ImportedCatalog,
+    record: &ImportedServiceRecord,
+) -> crate::ImportedServiceUpdateRequest {
+    crate::ImportedServiceUpdateRequest {
+        discovery_source: crate::imports::ImportedDiscoverySource::Remote,
+        definition: record.definition.clone(),
+        status: record.status,
+        actions: record
+            .actions
+            .iter()
+            .map(|action| crate::ImportedActionWrite {
+                definition: action.definition.clone(),
+                status: action.status,
+            })
+            .collect(),
+        expected_version: record.version,
+        expected_catalog_revision: catalog.revision,
+        accepted_preview: None,
+        actor: "admin".into(),
+    }
+}
+
+/// Seed accepted records independently of this binary's runtime compiler, as a
+/// prior version can leave definitions that the current audit hook rejects.
+fn stored_command(record: ImportedServiceRecord) -> (tempfile::TempDir, BrokerConfig) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = config();
+    config.identity.authority = "managed".into();
+    config.identity.groups.clear();
+    config.policy.authority = "managed".into();
+    config.policy.grants.clear();
+    config.policy.resources.clear();
+    config.policy.resource_groups.clear();
+    config.management.enabled = true;
+    config.managed_store = Some(crate::ManagedStoreConfig {
+        kind: "sqlite".into(),
+        path: directory
+            .path()
+            .join("store/store.sqlite")
+            .display()
+            .to_string(),
+        require_registered_principal_for_invocation: false,
+        auto_migrate: true,
+    });
+    config.limits.upload_spool_dir = directory.path().join("spool").display().to_string();
+    config.imports.enabled = true;
+    config.imports.allowed_kinds = vec!["command".into()];
+    config.command_imports.insert(
+        "ticketing".into(),
+        crate::CommandImportConfig {
+            path: "/usr/bin/true".into(),
+            timeout: "10s".into(),
+            max_output_bytes: 1024,
+            max_download_bytes: None,
+            max_concurrent: 1,
+            working_dir: "/".into(),
+            network: Default::default(),
+            log_stderr: false,
+            env: BTreeMap::new(),
+        },
+    );
+    let initial = BrokerRuntime::new(config.clone()).unwrap();
+    let store = initial.managed_store().unwrap();
+    store
+        .create_principal(crate::PrincipalWriteRequest {
+            principal_id: "admin".into(),
+            kind: "user".into(),
+            role: crate::PrincipalRole::Admin,
+            self_service_enabled: None,
+            display_name: None,
+            email: None,
+            external_subject: None,
+            created_by: "fixture".into(),
+        })
+        .unwrap();
+    let mut draft_definition = record.definition.clone();
+    draft_definition.discovery = ImportedDiscoveryCredential::Anonymous;
+    let draft = store
+        .create_imported_service(draft_definition, "admin", |_| Ok(()))
+        .unwrap()
+        .catalog;
+    let observed = store
+        .write_imported_preview(
+            crate::ImportedPreviewWriteRequest {
+                service: "ticketing".into(),
+                expected_version: draft.services[0].version,
+                expected_catalog_revision: draft.revision,
+                config_revision: "fixture".into(),
+                credential_versions: BTreeMap::new(),
+                manifest: json!({"tools":[]}),
+                quarantine_actions: vec![],
+                actor: "admin".into(),
+            },
+            |_| Ok(()),
+        )
+        .unwrap()
+        .catalog;
+    let preview = store.imported_preview("ticketing").unwrap().unwrap();
+    let mut accepted = record;
+    accepted.version = observed.services[0].version;
+    let mut request = change_request(&observed, &accepted);
+    request.accepted_preview = Some(crate::ImportedPreviewAcceptance {
+        manifest_hash: preview.manifest_hash,
+        config_revision: preview.config_revision,
+        credential_versions: preview.credential_versions,
+        accepted_metadata: accepted.accepted_metadata,
+    });
+    store.update_imported_service(request, |_| Ok(())).unwrap();
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    runtime
+        .create_managed_resource(crate::CreateResourceRequest {
+            id: Some("fake-project-TEST".into()),
+            display_name: None,
+            resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
+            selector: crate::ResourceSelector::Exact {
+                value: "TEST".into(),
+            },
+            allowed_execution_contexts: vec![DEFAULT_EXECUTION_CONTEXT.into()],
+            enabled: true,
+            attributes: Default::default(),
+            created_by: "admin".into(),
+        })
+        .unwrap();
+    for (service, action, resources) in [
+        ("fake", "echo", vec!["fake-project-TEST".into()]),
+        ("ticketing", "issue.view", vec![]),
+    ] {
+        // These grants predate this binary's stricter audit contract too.
+        store
+            .create_policy_grant(
+                crate::ManagedPolicyGrantCreateRequest {
+                    grant_id: Some(format!("grant-{service}")),
+                    subjects: vec!["user:admin".into()],
+                    service: service.into(),
+                    actions: vec![action.into()],
+                    resources: ResourceSelection {
+                        resource_ids: resources,
+                        resource_group_ids: vec![],
+                    },
+                    execution_contexts: vec![DEFAULT_EXECUTION_CONTEXT.into()],
+                    credential_mode: "service".into(),
+                    priority: None,
+                    status: None,
+                    description: None,
+                    created_by: "admin".into(),
+                },
+                |_, _, _, _| Ok(()),
+            )
+            .unwrap();
+    }
+    (directory, config)
+}
+
+async fn invoke_fixture(
+    runtime: &BrokerRuntime,
+    service: &str,
+    action: &str,
+) -> BrokerResponse<Value> {
+    let mut identity = IdentityContext::anonymous();
+    identity.principal = "admin".into();
+    identity.principal_subject = Some("admin".into());
+    identity.principal_kind = Some(crate::PrincipalKind::User);
+    identity.authenticated = true;
+    let inputs = if service == "fake" {
+        json!({"project":"TEST", "message":"fixture"})
+    } else {
+        json!({"issue":"OPS-1"})
+    };
+    runtime
+        .invoke(
+            GovernedOperationContext {
+                admission: None,
+                operation: OperationContext {
+                    agent_request_id: "audit-gate-test".into(),
+                    broker_request_id: "audit-gate-test-broker".into(),
+                    identity,
+                    service: service.into(),
+                    action: action.into(),
+                    source: SourceContext::unknown(),
+                },
+                execution_context: ExecutionContext::new(DEFAULT_EXECUTION_CONTEXT).unwrap(),
+            },
+            InvokeRequest::new(inputs),
+        )
+        .await
+}
+
+async fn assert_invocable(runtime: &BrokerRuntime, service: &str, action: &str) {
+    let response = invoke_fixture(runtime, service, action).await;
+    assert_eq!(
+        response.envelope.decision,
+        Decision::Allow,
+        "{:?}",
+        response.envelope
+    );
+    assert!(response.envelope.error.is_none());
+    assert!(response.envelope.result.is_some());
+}
+
+#[tokio::test]
+async fn inactive_invalid_actions_do_not_block_enabled_actions_or_hide_valid_metadata() {
+    for status in [
+        ImportedActionStatus::Disabled,
+        ImportedActionStatus::Quarantined,
+        ImportedActionStatus::Retired,
+    ] {
+        let mut record = command_record(&[], None);
+        record.actions = vec![
+            audited_action("issue.view", true, ImportedActionStatus::Enabled),
+            audited_action("issue.old", false, status),
+            audited_action("issue.disabled", true, ImportedActionStatus::Disabled),
+        ];
+        let (_directory, config) = stored_command(record);
+        let runtime = BrokerRuntime::new(config.clone()).unwrap();
+        assert!(runtime.command_providers.contains_key("ticketing"));
+        let descriptor = &runtime.services["ticketing"];
+        assert!(
+            descriptor
+                .actions
+                .iter()
+                .find(|a| a.action == "issue.view")
+                .unwrap()
+                .audit_inputs
+                .is_some()
+        );
+        assert!(
+            descriptor
+                .actions
+                .iter()
+                .find(|a| a.action == "issue.old")
+                .unwrap()
+                .audit_inputs
+                .is_none()
+        );
+        assert!(
+            descriptor
+                .actions
+                .iter()
+                .find(|a| a.action == "issue.disabled")
+                .unwrap()
+                .audit_inputs
+                .is_some()
+        );
+        assert_invocable(&runtime, "ticketing", "issue.view").await;
+        let reloaded = BrokerRuntime::new_for_reload(config, &runtime).unwrap();
+        assert_invocable(&reloaded, "ticketing", "issue.view").await;
+        let retained = reloaded.imported_catalog.service("ticketing").unwrap();
+        let prepared = reloaded
+            .prepare_imported_service_change(retained, None)
+            .unwrap();
+        assert!(prepared.providers.contains_key("ticketing"));
+    }
+}
+
+#[tokio::test]
+async fn invalid_enabled_contract_is_unavailable_at_startup_reload_and_managed_publication() {
+    let mut record = command_record(&[], None);
+    record.actions = vec![audited_action(
+        "issue.view",
+        false,
+        ImportedActionStatus::Enabled,
+    )];
+    let (_directory, config) = stored_command(record);
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let before = runtime.imported_catalog.clone();
+    assert!(!runtime.providers.contains_key("ticketing"));
+    assert!(
+        runtime
+            .imported_service_unavailable_reason("ticketing")
+            .is_some()
+    );
+    assert_eq!(
+        runtime.services["ticketing"].actions[0].action,
+        "issue.view"
+    );
+    assert_eq!(
+        before.services[0].actions[0].definition.annotations["fixtureAudit"],
+        "reject"
+    );
+    assert!(
+        runtime
+            .policy_snapshot()
+            .grants
+            .iter()
+            .any(|grant| grant.service == "ticketing")
+    );
+    assert_eq!(
+        invoke_fixture(&runtime, "ticketing", "issue.view")
+            .await
+            .envelope
+            .reason_code,
+        Some(ReasonCode::ServiceActionDenied.into())
+    );
+    assert_invocable(&runtime, "fake", "echo").await;
+    let reloaded = BrokerRuntime::new_for_reload(config, &runtime).unwrap();
+    assert!(!reloaded.providers.contains_key("ticketing"));
+    assert_invocable(&reloaded, "fake", "echo").await;
+    assert!(matches!(
+        reloaded.prepare_imported_service_change(&before.services[0], None),
+        Err(ManagedStoreError::InputInvalid(_))
+    ));
+    // A preparation for a repaired action cannot publish the invalid definition.
+    let mut repaired = before.services[0].clone();
+    repaired.actions[0].definition.annotations["fixtureAudit"] = audit_declaration();
+    let prepared = reloaded
+        .prepare_imported_service_change(&repaired, None)
+        .unwrap();
+    let store = reloaded.managed_store().unwrap();
+    let result = store
+        .update_imported_service(change_request(&before, &before.services[0]), |catalog| {
+            reloaded.with_imported_catalog(catalog.clone(), prepared)
+        });
+    assert!(matches!(result, Err(ManagedStoreError::InputInvalid(_))));
+    assert_eq!(store.imported_catalog().unwrap(), *before);
+    assert_eq!(*reloaded.imported_catalog, *before);
+    assert_invocable(&reloaded, "fake", "echo").await;
+}
+
+#[tokio::test]
+async fn invalid_retained_contract_can_be_disabled_or_retired_with_metadata_preserved() {
+    for status in [
+        ImportedServiceStatus::Disabled,
+        ImportedServiceStatus::Retired,
+    ] {
+        let mut record = command_record(&[], None);
+        record.actions = vec![
+            audited_action("issue.view", false, ImportedActionStatus::Enabled),
+            audited_action("issue.detail", true, ImportedActionStatus::Disabled),
+        ];
+        let (_directory, config) = stored_command(record);
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let catalog = runtime.imported_catalog();
+        let mut candidate = catalog.services[0].clone();
+        candidate.status = status;
+        let prepared = runtime
+            .prepare_imported_service_change(&candidate, None)
+            .unwrap();
+        let next = runtime
+            .managed_store()
+            .unwrap()
+            .update_imported_service(change_request(catalog, &candidate), |catalog| {
+                runtime.with_imported_catalog(catalog.clone(), prepared)
+            })
+            .unwrap()
+            .value;
+        assert_eq!(next.imported_catalog.services[0].status, status);
+        assert!(!next.providers.contains_key("ticketing"));
+        assert!(
+            next.services["ticketing"]
+                .actions
+                .iter()
+                .find(|a| a.action == "issue.detail")
+                .unwrap()
+                .audit_inputs
+                .is_some()
+        );
+        assert_invocable(&next, "fake", "echo").await;
+        candidate.status = ImportedServiceStatus::Enabled;
+        assert!(matches!(
+            next.prepare_imported_service_change(&candidate, None),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+    }
+}
+
+#[test]
+fn operator_disabled_destination_does_not_validate_an_unexecutable_audit_contract() {
+    let mut record = command_record(&[], None);
+    record.actions = vec![audited_action(
+        "issue.view",
+        false,
+        ImportedActionStatus::Enabled,
+    )];
+    let (_directory, mut config) = stored_command(record);
+    config.imports.disabled_services.push("ticketing".into());
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let prepared = runtime
+        .prepare_imported_service_change(&runtime.imported_catalog.services[0], None)
+        .unwrap();
+    assert!(!prepared.providers.contains_key("ticketing"));
+}
+
+#[tokio::test]
+async fn invalid_unavailable_contract_allows_only_pure_credential_removal() {
+    let mut record = command_record(
+        &[ImportedCredentialMode::Service],
+        Some(ImportedCredentialKind::Token),
+    );
+    record.definition.discovery = ImportedDiscoveryCredential::Slot;
+    record.actions = vec![audited_action(
+        "issue.view",
+        false,
+        ImportedActionStatus::Enabled,
+    )];
+    let (_directory, config) = stored_command(record);
+    let initial = BrokerRuntime::new(config.clone()).unwrap();
+    let store = initial.managed_store().unwrap();
+    for purpose in [
+        ImportedCredentialPurpose::Execution,
+        ImportedCredentialPurpose::Discovery,
+    ] {
+        let catalog = store.imported_catalog().unwrap();
+        store
+            .write_imported_secret(
+                crate::ImportedSecretWriteRequest {
+                    service: "ticketing".into(),
+                    purpose,
+                    expected_version: catalog.services[0].version,
+                    expected_catalog_revision: catalog.revision,
+                    token: "fixture-credential".into(),
+                    username: None,
+                    actor: "admin".into(),
+                },
+                initial.credential_key_ring().unwrap(),
+                &crate::PreparedImportedCredentialContract::for_test(
+                    catalog,
+                    "ticketing",
+                    purpose,
+                    false,
+                )
+                .unwrap(),
+                |_, _| Ok(()),
+            )
+            .unwrap();
+    }
+    let mut runtime = BrokerRuntime::new_for_reload(config, &initial).unwrap();
+    for purpose in [
+        ImportedCredentialPurpose::Execution,
+        ImportedCredentialPurpose::Discovery,
+    ] {
+        let before = runtime.imported_catalog.clone();
+        let mut candidate = before.services[0].clone();
+        candidate.slot_versions.remove(&purpose);
+        // Even an identical retained definition cannot use this exception if
+        // the admitted generation still has an executable provider for it.
+        let mut available = runtime.clone();
+        Arc::make_mut(&mut available.providers)
+            .insert("ticketing".into(), Arc::new(CommandFixture));
+        assert!(matches!(
+            available.prepare_imported_service_change(&candidate, None),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+        let mut changed = candidate.clone();
+        changed.actions[0]
+            .definition
+            .description
+            .push_str(" changed");
+        assert!(matches!(
+            runtime.prepare_imported_service_change(&changed, None),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+        let mut changed = candidate.clone();
+        changed.accepted_metadata.as_mut().unwrap().version = "2.0.0".into();
+        assert!(matches!(
+            runtime.prepare_imported_service_change(&changed, None),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+        let mut changed = candidate.clone();
+        changed
+            .slot_versions
+            .insert(purpose, "replacement-version".into());
+        assert!(matches!(
+            runtime.prepare_imported_service_change(&changed, None),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+        let prepared = runtime
+            .prepare_imported_service_change(&candidate, None)
+            .unwrap();
+        assert!(!prepared.providers.contains_key("ticketing"));
+        runtime = runtime
+            .managed_store()
+            .unwrap()
+            .delete_imported_secret(
+                crate::ImportedSecretDeleteRequest {
+                    service: "ticketing".into(),
+                    purpose,
+                    expected_version: before.services[0].version,
+                    expected_catalog_revision: before.revision,
+                    actor: "admin".into(),
+                },
+                |catalog| runtime.with_imported_catalog(catalog.clone(), prepared),
+            )
+            .unwrap()
+            .value;
+        assert!(!runtime.providers.contains_key("ticketing"));
+        assert!(
+            !runtime.imported_catalog.services[0]
+                .slot_versions
+                .contains_key(&purpose)
+        );
+        assert_eq!(
+            runtime.imported_catalog.services[0].actions,
+            before.services[0].actions
+        );
+        assert_invocable(&runtime, "fake", "echo").await;
     }
 }
 
