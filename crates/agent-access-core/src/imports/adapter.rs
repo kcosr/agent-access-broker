@@ -214,6 +214,16 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         &["/result"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String>;
+    /// Reviewed request-input capture for an accepted command action. The host
+    /// checks endpoint eligibility and prepares this declaration independently
+    /// of invocation validation. Invalid accepted metadata is an error, never
+    /// an implicit opt-out. HTTP adapters do not support this capability.
+    fn action_audit_inputs(
+        &self,
+        _action: &ImportedActionDefinition,
+    ) -> Result<Option<agent_access_provider::AuditInputProjection>, String> {
+        Ok(None)
+    }
     /// The resources an accepted action names and the credential modes it
     /// supports, read offline from its definition; core maps them onto the
     /// action's descriptor. The default declares neither: the action is
