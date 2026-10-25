@@ -259,6 +259,7 @@ fn synthetic(id: &str, seconds: i64, principal: &str, service: &str, action: &st
         identity_source: None,
         source: SourceContext::unknown(),
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: None,
     }
 }

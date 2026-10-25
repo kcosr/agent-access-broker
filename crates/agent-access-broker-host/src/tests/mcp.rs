@@ -1028,6 +1028,8 @@ impl agent_access_provider::test_support::DescribedProvider for CatalogProvider 
         // without inventing actions outside the Broker's canonical catalog.
         descriptor.actions[0].description = "x".repeat(55_600);
         descriptor.actions[0].input_schema = json!({"type":"object"});
+        // The replaced schema no longer has the declared audit input.
+        descriptor.actions[0].audit_inputs.clear();
         descriptor.credentials = CredentialDescriptor::default();
         descriptor
     }

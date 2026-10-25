@@ -5,11 +5,15 @@ import { canViewAdmin } from "../../lib/capabilities";
 // The audit record drawer: one record of a broker request (Summary), every
 // record of that request (Timeline), and the stored JSON (Raw).
 import { useState, type ReactNode } from "react";
-import type { AuditRecord } from "../../types";
+import type { AuditInputValue, AuditRecord } from "../../types";
 import {
+  auditDisplayText,
   auditGitRefUpdates,
   auditGrantName,
   auditGrantRef,
+  auditInputDisplay,
+  auditInputPreview,
+  auditInputs,
   auditManagement,
   auditRecordPath,
   auditRecordPhase,
@@ -81,6 +85,28 @@ function compactJson(value: unknown) {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+/**
+ * A captured input value: an escaped preview of each display line (a search
+ * query's language as a badge), and the full escaped stored text (compact JSON
+ * for non-strings) on hover.
+ */
+function InputValue({ entry }: { entry: AuditInputValue }) {
+  const display = auditInputDisplay(entry.value);
+  return (
+    <span className="pt-audit-stack">
+      <span className={cx("pt-audit-stack", display.json && "wb-mono")} title={auditDisplayText(compactJson(entry.value))}>
+        {display.lines.map((line, index) => (
+          <span key={index}>
+            {display.badge ? <><Badge variant="outline">{auditInputPreview(display.badge)}</Badge> </> : null}
+            {auditInputPreview(line)}
+          </span>
+        ))}
+      </span>
+      {entry.truncated ? <span className="wb-muted wb-small">Truncated in record</span> : null}
+    </span>
+  );
+}
+
 function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenGrant }: {
   record: AuditRecord;
   principalNames: Map<string, string>;
@@ -101,6 +127,7 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
   const management = auditManagement(record);
   const scopes = Object.entries(record.resourceScopes ?? {});
   const refUpdates = auditGitRefUpdates(record);
+  const inputs = auditInputs(record);
   const principalName = principalNames.get(record.principal);
   const grantExtra = grant
     ? [
@@ -237,6 +264,14 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
           ]}
         />
       </DrawerSection>
+      {inputs.length ? (
+        <DrawerSection title="Inputs">
+          <KeyValue
+            labelWidth={132}
+            items={inputs.map((entry, index) => ({ key: `${index}:${entry.input}`, label: auditDisplayText(entry.label), value: <InputValue entry={entry} /> }))}
+          />
+        </DrawerSection>
+      ) : null}
       {refUpdates.length ? (
         <DrawerSection title="Git ref updates" count={refUpdates.length}>
           <ul className="pt-audit-refs">

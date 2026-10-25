@@ -134,6 +134,12 @@ impl BrokerRuntime {
             execution_context: Some(context.execution_context.clone()),
             redact_error_resource_scopes: false,
             personal_lookup_connection: None,
+            // Preparation consumes the request, so an interruption before it
+            // returns records the inputs captured here.
+            audit_inputs: self
+                .served_action_descriptor(&context.operation.service, &context.operation.action)
+                .map(|descriptor| capture_audit_inputs(&descriptor.audit_inputs, &request.inputs))
+                .unwrap_or_default(),
             started: Instant::now(),
         };
         // Reserve terminal capacity before provider preparation/dispatch. A health
@@ -497,6 +503,10 @@ mod tests {
     fn request() -> InvokeRequest {
         serde_json::from_value(json!({"inputs":{"project":"TEST","message":"hello"}})).unwrap()
     }
+    /// The fake echo action's declared input, as [`request`] supplies it.
+    fn audit_inputs() -> Value {
+        json!([{"input": "project", "label": "Project", "value": "TEST"}])
+    }
     fn audit(dir: &TempDir) -> Value {
         let mut records = crate::test_support::read_audit_records(
             crate::AuditStoreType::Jsonl,
@@ -525,6 +535,11 @@ mod tests {
                 .invoke_owned(context, request(), InvocationControl::default(), false)
                 .await;
             assert_eq!(response.status, if action == "echo" { 200 } else { 403 });
+            // An unserved action has no descriptor declaring inputs.
+            assert_eq!(
+                audit(&dir).get("auditInputs"),
+                (action == "echo").then(audit_inputs).as_ref()
+            );
             assert_eq!(
                 audit(&dir)["providerAudit"]["admission"],
                 json!({
@@ -605,6 +620,8 @@ mod tests {
         entered(&provider.lookup_started).await;
         control.cancel();
         let response = operation.await.unwrap();
+        // Preparation had consumed the request: the fallback captured them.
+        assert_eq!(audit(&dir)["auditInputs"], audit_inputs());
         assert_eq!(
             audit(&dir)["providerAudit"]["admission"],
             json!({
@@ -652,6 +669,7 @@ mod tests {
             audit(&dir)["providerAudit"]["executionState"],
             "not_dispatched"
         );
+        assert_eq!(audit(&dir)["auditInputs"], audit_inputs());
     }
     #[tokio::test]
     async fn cancellation_after_dispatch_preserves_completion_and_terminal_audit() {
@@ -700,6 +718,7 @@ mod tests {
             "unknown"
         );
         assert_eq!(audit(&dir)["providerAudit"]["retrySafe"], false);
+        assert_eq!(audit(&dir)["auditInputs"], audit_inputs());
     }
 
     #[tokio::test]
@@ -732,6 +751,7 @@ mod tests {
                     .is_finalizing()
             );
             let record = audit(&dir);
+            assert_eq!(record["auditInputs"], audit_inputs());
             if matches!(mode, FinalizationMode::Success) {
                 assert_eq!(response.status, 200);
                 assert_eq!(response.envelope.result.unwrap()["message"], "hello");

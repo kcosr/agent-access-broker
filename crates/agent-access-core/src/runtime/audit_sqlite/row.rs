@@ -263,6 +263,11 @@ fn fts_text(record: &AuditRecord) -> String {
             }
         }
     }
+    // Before provider audit, which the cap cuts first.
+    for captured in &record.audit_inputs {
+        text.push(&captured.label);
+        text.push_leaves(&captured.value, false);
+    }
     if let Some(provider_audit) = &record.provider_audit {
         text.push_leaves(provider_audit, false);
     }
@@ -422,6 +427,27 @@ mod tests {
         }
         assert!(!text.contains("clauses"));
         assert!(!text.contains("included"));
+    }
+
+    #[test]
+    fn audit_inputs_index_labels_and_string_leaves_before_provider_audit() {
+        let mut record = crate::runtime::tests::test_audit_record();
+        record.audit_inputs = vec![crate::runtime::AuditInputValue {
+            input: "query".into(),
+            label: "Search".into(),
+            value: serde_json::json!({"terms": ["zephyr"], "limit": 424242}),
+            truncated: false,
+        }];
+        record.provider_audit = Some(serde_json::json!({"note": "providerfact"}));
+        let text = fts_text(&record);
+        let label = text.find("Search").unwrap();
+        let value = text.find("zephyr").unwrap();
+        let provider = text.find("providerfact").unwrap();
+        assert!(label < value && value < provider, "{text}");
+        // Neither input names, object keys nor numbers are terms.
+        for absent in ["query", "terms", "424242"] {
+            assert!(!text.contains(absent), "{absent}: {text}");
+        }
     }
 
     #[test]

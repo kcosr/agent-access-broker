@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { AuditRecord, Session } from "../src/types";
 import { canViewActivity, canViewAudit } from "../src/lib/helpers";
 import {
+  AUDIT_INPUT_PREVIEW_CHARS,
   AUDIT_PAGE_SIZE,
   DEFAULT_AUDIT_FILTERS,
   auditActionAfterServiceChange,
@@ -9,11 +10,15 @@ import {
   auditActiveFilterCount,
   auditContinuationParams,
   auditDayGroups,
+  auditDisplayText,
   auditFiltersProblem,
   auditFiltersSearch,
   auditGitRefUpdates,
   auditGrantName,
   auditGrantRef,
+  auditInputDisplay,
+  auditInputPreview,
+  auditInputs,
   auditInstantToLocalInput,
   auditListParams,
   auditListPath,
@@ -38,6 +43,7 @@ import {
   showAuditNodeColumn,
   type AuditFilters,
 } from "../src/lib/audit";
+import { ADVERSARIAL_SEARCH, GITLAB_ISSUE_SEARCH, GITLAB_ISSUE_VIEW, JIRA_COMMENT_VIEW, JIRA_ISSUE_CREATE, JIRA_PROJECT_LIST, JIRA_SEARCH, TRUNCATED_SUMMARY } from "./audit-inputs.fixture";
 
 const admin: Session = { role: "admin", selfServiceEnabled: true, authenticated: true, principal: "admin",  auditQueryable: true };
 const manager: Session = { role: "service_policy_manager", selfServiceEnabled: true, authenticated: true, principal: "owner", policyManagementServices: ["jira"], auditQueryable: true };
@@ -346,5 +352,100 @@ describe("audit record presentation", () => {
     expect(isAuditRequestId("5f0c2c3e-6a4b-4a8e-9a55-0d4c8e1f2a3b")).toBe(true);
     expect(isAuditRequestId("5f0c2c3e6a4b4a8e9a550d4c8e1f2a3b")).toBe(true);
     expect(isAuditRequestId("not-a-uuid")).toBe(false);
+  });
+});
+
+describe("audit inputs", () => {
+  const withInputs = (entries: unknown) => record({ auditInputs: entries as AuditRecord["auditInputs"] });
+
+  test("each action's captured inputs keep declaration order and their stored JSON values", () => {
+    expect(auditInputs(JIRA_SEARCH)).toEqual([
+      { input: "query", label: "Query", value: { type: "jql", value: 'project = OPS AND status = "In Progress"' }, truncated: false },
+      { input: "projects", label: "Projects", value: ["OPS"], truncated: false },
+    ]);
+    expect(auditInputs(JIRA_ISSUE_CREATE)).toEqual([
+      { input: "project", label: "Project", value: "OPS", truncated: false },
+      { input: "summary", label: "Summary", value: TRUNCATED_SUMMARY, truncated: true },
+    ]);
+    expect(new TextEncoder().encode(TRUNCATED_SUMMARY).byteLength).toBe(1024);
+    expect(auditInputs(JIRA_COMMENT_VIEW).map((entry) => [entry.label, entry.value])).toEqual([["Issue", "OPS-42"], ["Comment ID", "18446744073709551615"]]);
+    expect(auditInputs(GITLAB_ISSUE_SEARCH).map((entry) => [entry.label, entry.value])).toEqual([["Project", "platform/api"], ["Search", ADVERSARIAL_SEARCH], ["State", "opened"], ["Milestone", null]]);
+    // The record's two malformed entries are skipped.
+    expect(auditInputs(GITLAB_ISSUE_VIEW)).toEqual([
+      { input: "project", label: "Project", value: "platform/api", truncated: false },
+      { input: "iid", label: "Issue", value: 42, truncated: false },
+    ]);
+    expect(auditInputs(JIRA_PROJECT_LIST)).toEqual([]);
+  });
+
+  test("records without inputs, or with malformed ones, show none", () => {
+    expect(auditInputs(record())).toEqual([]);
+    expect(auditInputs(withInputs({ input: "project", label: "Project", value: "OPS" }))).toEqual([]);
+    expect(auditInputs(withInputs([
+      null, "project", 7, ["project", "Project", "OPS"],
+      { label: "Project", value: "OPS" },
+      { input: "", label: "Project", value: "OPS" },
+      { input: 1, label: "Project", value: "OPS" },
+      { input: "project", value: "OPS" },
+      { input: "project", label: "", value: "OPS" },
+      { input: "project", label: ["Project"], value: "OPS" },
+      { input: "project", label: "Project" },
+    ]))).toEqual([]);
+  });
+
+  test("only a literal true marks a value truncated", () => {
+    const flags = auditInputs(withInputs([true, "true", 1, null].map((truncated, index) => ({ input: `field${index}`, label: "Field", value: "x", truncated }))));
+    expect(flags.map((entry) => entry.truncated)).toEqual([true, false, false, false]);
+  });
+
+  test("search queries show their value, with the language as a badge except for text", () => {
+    expect(auditInputDisplay({ type: "jql", value: 'project = OPS AND status = "In Progress"' })).toEqual({ badge: "JQL", lines: ['project = OPS AND status = "In Progress"'], json: false });
+    expect(auditInputDisplay({ type: "cql", value: 'space = DOCS AND title ~ "runbook"' })).toEqual({ badge: "CQL", lines: ['space = DOCS AND title ~ "runbook"'], json: false });
+    expect(auditInputDisplay({ type: "text", value: "checkout timeout" })).toEqual({ badge: null, lines: ["checkout timeout"], json: false });
+    expect(auditInputDisplay({ value: "project = OPS", type: "jql" })).toEqual({ badge: "JQL", lines: ["project = OPS"], json: false });
+    expect(auditInputDisplay({ type: "", value: "checkout timeout" }).badge).toBeNull();
+  });
+
+  test("other flat objects show one key: value line per key, strings literal; nested values fall back to compact JSON", () => {
+    expect(auditInputDisplay({ type: "jql", value: "project = OPS", validate: true })).toEqual({ badge: null, lines: ["type: jql", "value: project = OPS", "validate: true"], json: false });
+    expect(auditInputDisplay({ type: "jql", value: 42 })).toEqual({ badge: null, lines: ["type: jql", "value: 42"], json: false });
+    expect(auditInputDisplay({ state: "opened", count: 3, confidential: false, milestone: null, title: 'Fix "login"' }).lines).toEqual(["state: opened", "count: 3", "confidential: false", "milestone: null", 'title: Fix "login"']);
+    expect(auditInputDisplay({ summary: "x".repeat(120), state: "opened" }).lines.map(auditInputPreview)).toEqual([`summary: ${"x".repeat(90)}…`, "state: opened"]);
+    expect(auditInputDisplay({ type: "jql", filter: { project: "OPS" } })).toEqual({ badge: null, lines: ['{"type":"jql","filter":{"project":"OPS"}}'], json: true });
+    expect(auditInputDisplay({ type: "jql", value: ["OPS"] }).lines).toEqual(['{"type":"jql","value":["OPS"]}']);
+    expect(auditInputDisplay({}).lines).toEqual(["{}"]);
+  });
+
+  test("arrays of strings, numbers and booleans read as lists; empty arrays as (none); others as compact JSON", () => {
+    expect(auditInputDisplay(["OPS", "SEC"])).toEqual({ badge: null, lines: ["OPS, SEC"], json: false });
+    expect(auditInputDisplay(["OPS", 42, true, false]).lines).toEqual(["OPS, 42, true, false"]);
+    expect(auditInputDisplay([])).toEqual({ badge: null, lines: ["(none)"], json: false });
+    expect(auditInputDisplay(["OPS", { key: "SEC" }])).toEqual({ badge: null, lines: ['["OPS",{"key":"SEC"}]'], json: true });
+    expect(auditInputDisplay(["OPS", ["SEC"]]).lines).toEqual(['["OPS",["SEC"]]']);
+    expect(auditInputDisplay(["OPS", null]).lines).toEqual(['["OPS",null]']);
+  });
+
+  test("strings stay as stored; numbers, booleans and null read as JSON", () => {
+    expect(auditInputDisplay('status = "In Progress"')).toEqual({ badge: null, lines: ['status = "In Progress"'], json: false });
+    expect(auditInputDisplay(42)).toEqual({ badge: null, lines: ["42"], json: true });
+    expect(auditInputDisplay(false).lines).toEqual(["false"]);
+    expect(auditInputDisplay(null)).toEqual({ badge: null, lines: ["null"], json: true });
+  });
+
+  test("display text shows controls, bidi overrides and separators as escapes, keeping newlines", () => {
+    expect(auditDisplayText(ADVERSARIAL_SEARCH)).toBe(`login timeout\n<script>alert("never")</script>\\u{1}\\u{202E}${"é".repeat(220)}`);
+    expect(auditDisplayText("a\tb\r\u200Dc\u2028d\u2029e\u0000")).toBe("a\\u{9}b\\u{D}\\u{200D}c\\u{2028}d\\u{2029}e\\u{0}");
+    expect(auditDisplayText("OPS-42 · ünïcödé 😀")).toBe("OPS-42 · ünïcödé 😀");
+  });
+
+  test("previews are one line of at most 100 code points, cut with an ellipsis", () => {
+    expect(auditInputPreview("OPS")).toBe("OPS");
+    expect(auditInputPreview("first line\n\n  second\tline\r\nthird")).toBe("first line second line third");
+    expect(auditInputPreview("x".repeat(AUDIT_INPUT_PREVIEW_CHARS))).toBe("x".repeat(AUDIT_INPUT_PREVIEW_CHARS));
+    expect(auditInputPreview("x".repeat(AUDIT_INPUT_PREVIEW_CHARS + 1))).toBe(`${"x".repeat(AUDIT_INPUT_PREVIEW_CHARS - 1)}…`);
+    const emoji = auditInputPreview("😀".repeat(150));
+    expect(emoji).toBe(`${"😀".repeat(AUDIT_INPUT_PREVIEW_CHARS - 1)}…`);
+    expect(Array.from(emoji)).toHaveLength(AUDIT_INPUT_PREVIEW_CHARS);
+    expect(auditInputPreview(ADVERSARIAL_SEARCH)).toBe(`login timeout <script>alert("never")</script>\\u{1}\\u{202E}${"é".repeat(41)}…`);
   });
 });

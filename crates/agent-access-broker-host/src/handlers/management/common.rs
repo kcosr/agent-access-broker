@@ -1762,6 +1762,7 @@ async fn append_management_audit_with_details(
         identity_source: identity.source.clone(),
         source: source.clone(),
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: Some(Value::Object(provider_audit)),
     };
     snapshot.runtime.append_audit_record(&record).await

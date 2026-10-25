@@ -786,6 +786,16 @@ export type PrincipalIdentityBindingsResponse = {
   }[];
 };
 
+/** One action input the broker copied into an audit record. `value` is the
+ * supplied JSON (integers beyond ±(2^53−1) as decimal strings); `truncated`
+ * marks a value the broker cut to its 1 KiB storage bound. */
+export type AuditInputValue = {
+  input: string;
+  label: string;
+  value: unknown;
+  truncated?: boolean;
+};
+
 /** One stored audit record, exactly as the broker wrote it. Only the fields
  * the viewer reads are typed; everything else stays reachable as JSON. */
 export type AuditRecord = {
@@ -827,6 +837,8 @@ export type AuditRecord = {
   } | null;
   source?: { listener?: string; remote?: string; proxyChain?: string[]; [key: string]: unknown } | null;
   executionContext?: string | null;
+  /** Inputs the action opts into audit, in declaration order; absent when none. Read through `auditInputs()`. */
+  auditInputs?: AuditInputValue[];
   providerAudit?: Record<string, unknown> | null;
   configGeneration?: number | null;
   policyGeneration?: number | null;

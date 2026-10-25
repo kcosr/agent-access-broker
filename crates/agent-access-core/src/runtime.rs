@@ -11,6 +11,11 @@ use admission_audit::{
     admission_outcome, admission_waited, admission_waited_milliseconds, attach_admission_audit,
     preserve_admission_audit,
 };
+mod audit_inputs;
+pub use audit_inputs::AuditInputValue;
+use audit_inputs::capture_audit_inputs;
+#[cfg(test)]
+mod audit_input_tests;
 mod audit_jsonl;
 mod audit_sqlite;
 mod availability;
@@ -1953,6 +1958,9 @@ struct FinalizeContext {
     /// policy used, which the audit names even when the call ends before a
     /// credential mode is selected.
     personal_lookup_connection: Option<String>,
+    /// The declared inputs' supplied values, captured once the action's
+    /// descriptor is resolved; empty before that and on gateway paths.
+    audit_inputs: Vec<AuditInputValue>,
     started: Instant,
 }
 
@@ -3227,6 +3235,7 @@ impl BrokerRuntime {
                 execution_context: None,
                 redact_error_resource_scopes: false,
                 personal_lookup_connection: None,
+                audit_inputs: Vec::new(),
                 started: Instant::now(),
             },
             Err(error),
@@ -3279,6 +3288,7 @@ impl BrokerRuntime {
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: false,
                 personal_lookup_connection: None,
+                audit_inputs: Vec::new(),
                 started: Instant::now(),
             },
             Err(error),
@@ -3913,6 +3923,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3944,6 +3955,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(ProviderError::deny(
@@ -3976,6 +3988,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(ProviderError::deny(
@@ -4008,6 +4021,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(error),
@@ -4046,6 +4060,7 @@ impl BrokerRuntime {
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
                             personal_lookup_connection: None,
+                            audit_inputs: Vec::new(),
                             started,
                         },
                         Err(error),
@@ -4084,6 +4099,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(ProviderError::deny(
@@ -4123,6 +4139,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(error),
@@ -4161,6 +4178,7 @@ impl BrokerRuntime {
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
                             personal_lookup_connection: None,
+                            audit_inputs: Vec::new(),
                             started,
                         },
                         Err(error),
@@ -4194,6 +4212,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(policy_planning_drift_error()),
@@ -4228,6 +4247,7 @@ impl BrokerRuntime {
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: false,
                 personal_lookup_connection: None,
+                audit_inputs: Vec::new(),
                 started,
             },
         })
@@ -4282,6 +4302,7 @@ impl BrokerRuntime {
             caller_id: identity.caller_id.clone(),
             source: context.source.clone(),
             execution_context: context.execution_context.clone(),
+            audit_inputs: Vec::new(),
             provider_audit: attach_admission_audit(
                 Some(gateway_started_audit_value(audit)),
                 context.admission,
@@ -4770,6 +4791,7 @@ impl BrokerRuntime {
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
                     personal_lookup_connection: None,
+                    audit_inputs: Vec::new(),
                     started,
                 },
                 Err(ProviderError::deny(
@@ -4798,6 +4820,7 @@ impl BrokerRuntime {
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
                     personal_lookup_connection: None,
+                    audit_inputs: Vec::new(),
                     started,
                 },
                 Err(error),
@@ -4833,6 +4856,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: false,
                         personal_lookup_connection: None,
+                        audit_inputs: Vec::new(),
                         started,
                     },
                     Err(error),
@@ -4863,6 +4887,7 @@ impl BrokerRuntime {
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
                     personal_lookup_connection: None,
+                    audit_inputs: Vec::new(),
                     started,
                 },
                 Err(ProviderError::deny(
@@ -4871,6 +4896,8 @@ impl BrokerRuntime {
                 )),
             )));
         };
+        // Every later outcome records the declared inputs' supplied values.
+        let audit_inputs = capture_audit_inputs(&action_descriptor.audit_inputs, &request.inputs);
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
         if response_options != agent_access_provider::presentation::ResponseOptions::default()
             && let Err(error) = agent_access_provider::presentation::validate_response_options(
@@ -4897,6 +4924,7 @@ impl BrokerRuntime {
                     execution_context: Some(execution_context.clone()),
                     redact_error_resource_scopes: false,
                     personal_lookup_connection: None,
+                    audit_inputs: audit_inputs.clone(),
                     started,
                 },
                 Err(error),
@@ -4938,6 +4966,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
                         personal_lookup_connection: None,
+                        audit_inputs: audit_inputs.clone(),
                         started,
                     },
                     Err(error),
@@ -4995,6 +5024,7 @@ impl BrokerRuntime {
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: false,
                                 personal_lookup_connection: personal_lookup_connection.clone(),
+                                audit_inputs: audit_inputs.clone(),
                                 started,
                             },
                             Err(error),
@@ -5030,6 +5060,7 @@ impl BrokerRuntime {
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: false,
                                 personal_lookup_connection: personal_lookup_connection.clone(),
+                                audit_inputs: audit_inputs.clone(),
                                 started,
                             },
                             Err(error),
@@ -5063,6 +5094,7 @@ impl BrokerRuntime {
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: false,
                             personal_lookup_connection: personal_lookup_connection.clone(),
+                            audit_inputs: audit_inputs.clone(),
                             started,
                         },
                         Err(error),
@@ -5131,6 +5163,7 @@ impl BrokerRuntime {
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: lookup_scopes_before_policy,
                                 personal_lookup_connection: personal_lookup_connection.clone(),
+                                audit_inputs: audit_inputs.clone(),
                                 started,
                             },
                             Err(if lookup_scopes_before_policy {
@@ -5177,6 +5210,7 @@ impl BrokerRuntime {
                             execution_context: Some(execution_context.clone()),
                             redact_error_resource_scopes: lookup_scopes_before_policy,
                             personal_lookup_connection: personal_lookup_connection.clone(),
+                            audit_inputs: audit_inputs.clone(),
                             started,
                         },
                         Err(error),
@@ -5212,6 +5246,7 @@ impl BrokerRuntime {
                                 execution_context: Some(execution_context.clone()),
                                 redact_error_resource_scopes: lookup_scopes_before_policy,
                                 personal_lookup_connection: personal_lookup_connection.clone(),
+                                audit_inputs: audit_inputs.clone(),
                                 started,
                             },
                             Err(if lookup_scopes_before_policy {
@@ -5294,6 +5329,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
                         personal_lookup_connection: personal_lookup_connection.clone(),
+                        audit_inputs: audit_inputs.clone(),
                         started,
                     },
                     Err(error),
@@ -5343,6 +5379,7 @@ impl BrokerRuntime {
                         execution_context: Some(execution_context.clone()),
                         redact_error_resource_scopes: lookup_scopes_before_policy,
                         personal_lookup_connection: personal_lookup_connection.clone(),
+                        audit_inputs: audit_inputs.clone(),
                         started,
                     },
                     Err(error),
@@ -5431,6 +5468,7 @@ impl BrokerRuntime {
                 execution_context: Some(execution_context),
                 redact_error_resource_scopes: lookup_scopes_before_policy,
                 personal_lookup_connection: personal_lookup_connection.clone(),
+                audit_inputs,
                 started,
             },
         })
@@ -6445,6 +6483,7 @@ impl BrokerRuntime {
             execution_context,
             redact_error_resource_scopes,
             personal_lookup_connection,
+            audit_inputs,
             started,
         } = context;
         let upstream_resource_ownership = upstream_resource_ownership
@@ -6586,6 +6625,7 @@ impl BrokerRuntime {
             caller_id: identity.caller_id,
             source,
             execution_context,
+            audit_inputs,
             provider_audit,
         };
         let stream =
@@ -8843,6 +8883,10 @@ pub struct AuditRecord {
     pub source: SourceContext,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_context: Option<ExecutionContext>,
+    /// The supplied values of the inputs the action declares for audit,
+    /// captured once its descriptor is resolved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audit_inputs: Vec<AuditInputValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_audit: Option<Value>,
 }

@@ -1803,6 +1803,7 @@ async fn append_auth_audit(
         identity_source: identity.source.clone(),
         source: source.clone(),
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: Some(json!({ "auth": auth_audit })),
     };
     snapshot.runtime.append_audit_record(&record).await

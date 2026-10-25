@@ -1,7 +1,7 @@
 // Pure helpers for the Audit and Activity views: filter and drawer URL state,
 // paging session ranges, suggestions, and presentation of stored audit records
 // (no JSX).
-import type { AuditOptions, AuditRecord, BrokerTokenRecord } from "../types";
+import type { AuditInputValue, AuditOptions, AuditRecord, BrokerTokenRecord } from "../types";
 import { formatBytes, uniqueSortedOptions } from "./helpers";
 
 /** `admin` reads `/v1/admin/audit/*` (Audit); `self` reads `/v1/audit/*` (Activity). */
@@ -375,6 +375,82 @@ export function auditManagement(record: Pick<AuditRecord, "providerAudit">) {
     target: objectField(management, "target") ?? null,
     targetService: stringField(management, "targetService")
   };
+}
+
+/**
+ * The record's captured action inputs, in declaration order. Entries that are
+ * not objects, lack a non-empty `input` or `label`, or have no `value` key are
+ * skipped; `truncated` holds only when the record says `true`.
+ */
+export function auditInputs(record: Pick<AuditRecord, "auditInputs">): AuditInputValue[] {
+  const entries: unknown = record.auditInputs;
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry: unknown) => {
+    const input = stringField(entry, "input");
+    const label = stringField(entry, "label");
+    if (!input || !label || !Object.hasOwn(entry as object, "value")) return [];
+    const { value, truncated } = entry as Record<string, unknown>;
+    return [{ input, label, value, truncated: truncated === true }];
+  });
+}
+
+/** Visible notation for control, format (bidi) and line/paragraph separator characters, except newlines. */
+export function auditDisplayText(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (char) => (char === "\n" ? char : `\\u{${char.codePointAt(0)!.toString(16).toUpperCase()}}`));
+}
+
+function isFlatScalar(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+/** How the Summary shows an audit input value; the hover text stays the stored compact JSON. */
+export type AuditInputDisplay = {
+  /** A `{type, value}` search query's language in upper case ("JQL"); null for `text` queries and other values. */
+  badge: string | null;
+  /** The text to preview: one line, or one `key: value` line per key of a flat object. */
+  lines: string[];
+  /** The line is compact JSON: a number, boolean, null or nested value. */
+  json: boolean;
+};
+
+/**
+ * An audit input value for the Summary. Strings show as is. A `{type, value}`
+ * search query (both strings, no other keys) shows its value, with its type as
+ * a badge unless it is `text`. Other non-empty objects of strings, numbers,
+ * booleans and null show one `key: value` line per key, in key order, strings
+ * literal. Arrays of strings, numbers and booleans are joined with ", "
+ * ("(none)" when empty). Everything else is compact JSON.
+ */
+export function auditInputDisplay(value: unknown): AuditInputDisplay {
+  const line = (text: string, json = false): AuditInputDisplay => ({ badge: null, lines: [text], json });
+  if (typeof value === "string") return line(value);
+  if (Array.isArray(value)) {
+    if (!value.length) return line("(none)");
+    if (value.every(isFlatScalar)) return line(value.map(String).join(", "));
+  } else if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    const { type, value: query } = value as Record<string, unknown>;
+    if (entries.length === 2 && typeof type === "string" && typeof query === "string") {
+      return { badge: type && type !== "text" ? type.toUpperCase() : null, lines: [query], json: false };
+    }
+    if (entries.length && entries.every(([, item]) => item === null || isFlatScalar(item))) {
+      return { badge: null, lines: entries.map(([key, item]) => `${key}: ${String(item)}`), json: false };
+    }
+  }
+  return line(JSON.stringify(value), true);
+}
+
+/** Code points in an audit input's one-line preview, including the trailing ellipsis when cut. */
+export const AUDIT_INPUT_PREVIEW_CHARS = 100;
+
+/**
+ * An audit input's one-line preview: whitespace runs (newlines included)
+ * become one space, controls are escaped, and longer text is cut by code
+ * point with a trailing "…".
+ */
+export function auditInputPreview(text: string): string {
+  const chars = Array.from(auditDisplayText(text.replace(/\s+/g, " ")));
+  return chars.length > AUDIT_INPUT_PREVIEW_CHARS ? `${chars.slice(0, AUDIT_INPUT_PREVIEW_CHARS - 1).join("")}…` : chars.join("");
 }
 
 /**
