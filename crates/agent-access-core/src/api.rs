@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod imports;
+mod request_audit;
 mod schema_refs;
 pub(crate) use schema_refs::relocate_local_schema_refs;
 
@@ -83,6 +84,9 @@ pub struct ApiActionSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_resource_ownership: Option<agent_access_provider::UpstreamResourceOwnership>,
     pub input_schema: Value,
+    /// Reviewed host request-audit projection; not part of the invocation input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_inputs: Option<agent_access_provider::AuditInputProjection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive_input_pointers: Vec<String>,
     /// JSON pointers into sensitive values, including secret exports and opaque imported payloads.
@@ -351,6 +355,7 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         lookup_required: action.lookup.credential_required(),
         upstream_resource_ownership: action.upstream_resource_ownership,
         input_schema: action.input_schema.clone(),
+        audit_inputs: action.audit_inputs.clone(),
         sensitive_input_pointers,
         sensitive_output_pointers: action.sensitive_output_pointers.clone(),
         io,
@@ -1321,6 +1326,7 @@ fn audit_record_schema() -> Value {
             "upstreamDurationMs": { "type": "integer" },
             "identitySource": { "type": "object" },
             "source": { "type": "object" },
+            "requestAudit": request_audit::schema(),
             "providerAudit": { "type": "object" }
         }
     })

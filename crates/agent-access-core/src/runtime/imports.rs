@@ -213,6 +213,40 @@ fn declared_modes(definition: &ImportedServiceDefinition) -> Vec<&'static str> {
         .collect()
 }
 
+/// Resolve reviewed declarations through the adapter port, without interpreting
+/// protocol annotations in core. Every executable publication uses this gate.
+fn resolve_audit_inputs(
+    config: &BrokerConfig,
+    record: &ImportedServiceRecord,
+) -> Result<BTreeMap<String, agent_access_provider::AuditInputProjection>, String> {
+    let mut declarations = BTreeMap::new();
+    let Some(adapter) = config
+        .providers
+        .registry()
+        .imported_adapter(&record.definition.adapter_kind)
+    else {
+        // Retained identities remain readable when their adapter is unlinked.
+        // destination_allowed separately prevents execution in this case.
+        return Ok(declarations);
+    };
+    for action in &record.actions {
+        if let Some(declaration) = adapter.action_audit_inputs(&action.definition)? {
+            if adapter.endpoint_form() != ImportEndpointForm::Command
+                || record.definition.endpoint()?.form() != ImportEndpointForm::Command
+            {
+                return Err("audit input declarations require a command endpoint".into());
+            }
+            agent_access_provider::host::prepare_audit_inputs(
+                &action.definition.input_schema,
+                &declaration,
+            )
+            .map_err(|_| "invalid imported audit input declaration".to_owned())?;
+            declarations.insert(action.definition.action.clone(), declaration);
+        }
+    }
+    Ok(declarations)
+}
+
 /// The service descriptor of `record`, whose scopes bind the Broker types
 /// the generation's `resource_types` registers.
 pub(super) fn descriptor_with_contract(
@@ -222,6 +256,13 @@ pub(super) fn descriptor_with_contract(
     contract: Option<&ImportedCredentialContract>,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
+    // A retained invalid service still has its identities, scopes and grants.
+    // Its provider is unavailable: both build_providers and managed preparation
+    // consume this same fallible resolver before enabling any execution.
+    let audit_inputs = match resolve_audit_inputs(config, record) {
+        Ok(declarations) => declarations,
+        Err(_) => BTreeMap::new(),
+    };
     // Arbitrary upstream content may contain private data or credentials.
     let sensitive_output_pointers: Vec<String> = config
         .providers
@@ -250,6 +291,9 @@ pub(super) fn descriptor_with_contract(
                 definition.input_schema.clone(),
             )
             .credential_modes(shape.credential_modes);
+            if let Some(declaration) = audit_inputs.get(&definition.action) {
+                action = action.audit_inputs(declaration.clone());
+            }
             action.listing_of = shape.listing_of;
             if let Some(scope) = shape.scope {
                 action = action.scope(scope.name.clone());
@@ -925,6 +969,9 @@ impl BrokerRuntime {
         next.effective_credentials = Arc::new(config.credentials.clone());
         next.invocation_limits = Arc::new(crate::ConfiguredInvocationLimits::from_config(&config));
         next.resource_types = resource_types;
+        next.audit_input_plans = Arc::new(
+            request_audit::prepare_plans(&services).map_err(ManagedStoreError::InputInvalid)?,
+        );
         next.services = Arc::new(services);
         next.providers = Arc::new(providers);
         next.command_providers = Arc::new(command_providers);
@@ -1069,6 +1116,7 @@ pub(super) fn build_providers(
             continue;
         }
         if definition.validate().is_err()
+            || resolve_audit_inputs(config, record).is_err()
             || descriptor_with_contract(
                 record,
                 config,
@@ -1263,6 +1311,7 @@ impl BrokerRuntime {
         record: &ImportedServiceRecord,
         transport_override: Option<Option<String>>,
     ) -> Result<PreparedImportedProviders, ManagedStoreError> {
+        resolve_audit_inputs(&self.config, record).map_err(ManagedStoreError::InputInvalid)?;
         let mut providers = self
             .imported_catalog
             .services

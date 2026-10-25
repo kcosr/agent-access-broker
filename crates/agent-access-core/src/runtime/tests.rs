@@ -407,6 +407,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         providers: Arc::clone(&runtime.providers),
         command_providers: Arc::clone(&runtime.command_providers),
         services: Arc::clone(&runtime.services),
+        audit_input_plans: runtime.audit_input_plans.clone(),
         resource_types: Arc::clone(&runtime.resource_types),
         policy_snapshot,
         policy_mutation_lock: Arc::clone(&runtime.policy_mutation_lock),
@@ -1414,6 +1415,7 @@ fn runtime_exposes_its_audit_store_type_path_and_database_id() {
 /// instants would differ in serialized size.
 pub(super) fn test_audit_record() -> AuditRecord {
     AuditRecord {
+        request_audit: None,
         caller_id: None,
         search_authorization: None,
         timestamp: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false),
@@ -7962,6 +7964,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         providers: runtime.providers.clone(),
         command_providers: runtime.command_providers.clone(),
         services: runtime.services.clone(),
+        audit_input_plans: runtime.audit_input_plans.clone(),
         resource_types: runtime.resource_types.clone(),
         policy_snapshot,
         policy_mutation_lock: runtime.policy_mutation_lock.clone(),

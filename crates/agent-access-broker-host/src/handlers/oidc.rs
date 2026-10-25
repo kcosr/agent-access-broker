@@ -1305,6 +1305,7 @@ async fn append_oidc_audit(
     details: Value,
 ) -> Result<(), ()> {
     let record = AuditRecord {
+        request_audit: None,
         caller_id: identity.caller_id.clone(),
         search_authorization: None,
         timestamp: Utc::now().to_rfc3339(),

@@ -235,6 +235,7 @@ impl AuditFixture {
 
 fn synthetic(id: &str, seconds: i64, principal: &str, service: &str, action: &str) -> AuditRecord {
     AuditRecord {
+        request_audit: None,
         caller_id: None,
         search_authorization: None,
         timestamp: timestamp(seconds),

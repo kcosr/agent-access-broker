@@ -117,6 +117,7 @@ impl BrokerRuntime {
         require_stream: bool,
     ) -> BrokerResponse<Value> {
         let fallback = FinalizeContext {
+            request_audit: None,
             admission: context.admission,
             search_authorization: None,
             command: None,
@@ -368,6 +369,18 @@ mod tests {
     impl agent_access_provider::test_support::DescribedProvider for ControlledProvider {
         fn descriptor(&self) -> ServiceDescriptor {
             let mut descriptor = agent_access_fake::fake_descriptor();
+            descriptor.actions[0].audit_inputs =
+                Some(agent_access_provider::AuditInputProjection::new([
+                    agent_access_provider::AuditInputRule::value("project", "Project", "/project")
+                        .kind(agent_access_provider::AuditValueKind::Identifier)
+                        .max_bytes(1024)
+                        .overflow(agent_access_provider::AuditOverflow::Omit),
+                    agent_access_provider::AuditInputRule::presence(
+                        "message",
+                        "Message supplied",
+                        "/message",
+                    ),
+                ]));
             if self.raw_write {
                 for action in &mut descriptor.actions {
                     action.read_only = false;
@@ -613,6 +626,7 @@ mod tests {
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(!control.dispatched());
+        assert!(audit(&dir).get("requestAudit").is_none());
         assert_eq!(
             response.envelope.result.unwrap()["executionState"],
             "not_dispatched"
@@ -676,6 +690,7 @@ mod tests {
         assert!(control.completed());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         assert_eq!(audit(&dir)["decision"], "allow");
+        assert_eq!(audit(&dir)["requestAudit"]["fields"][0]["value"], "TEST");
     }
     #[tokio::test]
     async fn deadline_after_dispatch_reports_unknown_and_audits_once() {
@@ -700,6 +715,12 @@ mod tests {
             "unknown"
         );
         assert_eq!(audit(&dir)["providerAudit"]["retrySafe"], false);
+        assert_eq!(audit(&dir)["requestAudit"]["fields"][0]["value"], "TEST");
+        assert!(
+            audit(&dir)["requestAudit"]["fields"][1]
+                .get("value")
+                .is_some_and(|value| value == true)
+        );
     }
 
     #[tokio::test]

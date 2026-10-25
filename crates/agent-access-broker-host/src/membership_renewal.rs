@@ -1066,6 +1066,7 @@ fn audit_record(
         })
     };
     AuditRecord {
+        request_audit: None,
         caller_id: None,
         search_authorization: None,
         timestamp: Utc::now().to_rfc3339(),

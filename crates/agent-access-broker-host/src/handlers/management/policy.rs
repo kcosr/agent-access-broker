@@ -125,6 +125,8 @@ struct PolicyActionCatalog {
     credential_modes: Vec<String>,
     lookup_required: bool,
     input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audit_inputs: Option<agent_access_provider::AuditInputProjection>,
     /// For a command import's action, who checks its resources.
     #[serde(skip_serializing_if = "Option::is_none")]
     resources_checked_by: Option<agent_access_core::ResourcesCheckedBy>,
@@ -1757,6 +1759,7 @@ fn action_catalog(action: ActionCapabilities) -> PolicyActionCatalog {
         credential_modes: action.credential_modes,
         lookup_required: action.lookup_required,
         input_schema: action.input_schema,
+        audit_inputs: action.audit_inputs,
         resources_checked_by: None,
     }
 }

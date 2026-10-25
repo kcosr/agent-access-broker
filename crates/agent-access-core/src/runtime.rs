@@ -30,6 +30,7 @@ mod import_control;
 mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
+mod request_audit;
 pub use imports::{PreparedImportedCredentialContract, PreparedImportedDocumentUpload};
 mod lookup_access;
 mod mcp_views;
@@ -1743,6 +1744,7 @@ pub struct BrokerRuntime {
     scoped_mcp: Arc<BTreeMap<String, crate::mcp::ScopedMcpReadiness>>,
     /// Validated descriptors for providers and gateways, fixed per generation.
     services: Arc<BTreeMap<String, Arc<ServiceDescriptor>>>,
+    audit_input_plans: Arc<request_audit::AuditInputPlans>,
     /// `[limits.invocations]` resolved for this generation.
     invocation_limits: Arc<crate::ConfiguredInvocationLimits>,
     /// This generation's resource types and their owners.
@@ -1860,6 +1862,8 @@ pub struct PreparedInvocation {
     response_options: agent_access_provider::presentation::ResponseOptions,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
+    // Present only until multipart body metadata admission succeeds.
+    deferred_audit_plan: Option<Arc<agent_access_provider::host::AuditInputPlan>>,
 }
 
 pub struct PreparedGatewayOperation {
@@ -1930,6 +1934,7 @@ enum AuditAppendMode {
 
 #[derive(Clone)]
 struct FinalizeContext {
+    request_audit: Option<agent_access_provider::RequestAudit>,
     admission: Option<InvocationAdmissionAudit>,
     search_authorization: Option<SearchAuthorizationPlan>,
     /// A command-import call from admission on: its authority, the resources
@@ -2332,7 +2337,13 @@ impl BrokerRuntime {
             &trusted_callers,
             &identity_sources,
         )?;
+        let audit_input_plans = request_audit::prepare_plans(&services).map_err(|message| {
+            RuntimeError::Config(ConfigError::Invalid {
+                errors: vec![message],
+            })
+        })?;
         let mut runtime = Self {
+            audit_input_plans: Arc::new(audit_input_plans),
             identity_sources: Arc::new(identity_sources),
             audit,
             effective_credentials: Arc::new(config.credentials.clone()),
@@ -3210,6 +3221,7 @@ impl BrokerRuntime {
         let policy_generation = self.policy_generation();
         self.finalize(
             FinalizeContext {
+                request_audit: None,
                 admission: None,
                 search_authorization: None,
                 command: None,
@@ -3262,6 +3274,7 @@ impl BrokerRuntime {
         } = context;
         self.finalize(
             FinalizeContext {
+                request_audit: None,
                 admission: admission_audit,
                 search_authorization: None,
                 command: None,
@@ -3896,6 +3909,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -3927,6 +3941,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -3959,6 +3974,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -3991,6 +4007,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -4029,6 +4046,7 @@ impl BrokerRuntime {
                 return Err(Box::new(
                     self.finalize_pre_dispatch(
                         FinalizeContext {
+                            request_audit: None,
                             admission: admission_audit,
                             search_authorization: None,
                             command: None,
@@ -4067,6 +4085,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -4106,6 +4125,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -4144,6 +4164,7 @@ impl BrokerRuntime {
                 return Err(Box::new(
                     self.finalize_pre_dispatch(
                         FinalizeContext {
+                            request_audit: None,
                             admission: admission_audit,
                             search_authorization: None,
                             command: None,
@@ -4177,6 +4198,7 @@ impl BrokerRuntime {
             return Err(Box::new(
                 self.finalize_pre_dispatch(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -4211,6 +4233,7 @@ impl BrokerRuntime {
             credential_mode: policy.credential_mode.clone(),
             matched_grant: policy.matched_grant.clone(),
             finalize_context: FinalizeContext {
+                request_audit: None,
                 admission: admission_audit,
                 search_authorization: None,
                 command: None,
@@ -4253,6 +4276,7 @@ impl BrokerRuntime {
         let context = &prepared.finalize_context;
         let identity = &context.identity;
         let audit_record = AuditRecord {
+            request_audit: None,
             search_authorization: None,
             timestamp: Utc::now().to_rfc3339(),
             agent_request_id: context.agent_request_id.clone(),
@@ -4753,6 +4777,7 @@ impl BrokerRuntime {
         let Some(provider) = self.providers.get(&service).cloned() else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    request_audit: None,
                     admission: admission_audit,
                     search_authorization: None,
                     command: None,
@@ -4781,6 +4806,7 @@ impl BrokerRuntime {
         if let Err(error) = self.enforce_invocation_identity_admission(&identity).await {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    request_audit: None,
                     admission: admission_audit,
                     search_authorization: None,
                     command: None,
@@ -4816,6 +4842,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -4846,6 +4873,7 @@ impl BrokerRuntime {
         else {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    request_audit: None,
                     admission: admission_audit,
                     search_authorization: None,
                     command: None,
@@ -4880,6 +4908,7 @@ impl BrokerRuntime {
         {
             return Err(Box::new(owned::PreparationFailure::new(
                 FinalizeContext {
+                    request_audit: None,
                     admission: admission_audit,
                     search_authorization: None,
                     command: None,
@@ -4921,6 +4950,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: None,
                         command: None,
@@ -4978,6 +5008,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                request_audit: None,
                                 admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
@@ -5013,6 +5044,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                request_audit: None,
                                 admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
@@ -5046,6 +5078,7 @@ impl BrokerRuntime {
                 ) {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
+                            request_audit: None,
                             admission: admission_audit,
                             search_authorization: None,
                             command: None,
@@ -5114,6 +5147,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                request_audit: None,
                                 admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
@@ -5160,6 +5194,7 @@ impl BrokerRuntime {
                     };
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
+                            request_audit: None,
                             admission: admission_audit,
                             search_authorization: None,
                             command: None,
@@ -5195,6 +5230,7 @@ impl BrokerRuntime {
                     Err(error) => {
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
+                                request_audit: None,
                                 admission: admission_audit,
                                 search_authorization: None,
                                 command: None,
@@ -5277,6 +5313,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: audit_search_authorization,
                         command,
@@ -5326,6 +5363,7 @@ impl BrokerRuntime {
             Err(error) => {
                 return Err(Box::new(owned::PreparationFailure::new(
                     FinalizeContext {
+                        request_audit: None,
                         admission: admission_audit,
                         search_authorization: audit_search_authorization,
                         command,
@@ -5404,7 +5442,19 @@ impl BrokerRuntime {
                 lookup_access,
             },
         );
+        let plan = self.audit_input_plan(&service, &action);
+        let (request_audit, deferred_audit_plan) =
+            if matches!(action_descriptor.io, ActionIo::MultipartUpload { .. }) {
+                (None, plan)
+            } else {
+                (
+                    plan.as_ref()
+                        .and_then(|plan| plan.project(admitted.inputs())),
+                    None,
+                )
+            };
         Ok(PreparedInvocation {
+            deferred_audit_plan,
             resource_binding,
             provider,
             domain_reasons,
@@ -5414,6 +5464,7 @@ impl BrokerRuntime {
             response_options,
             body_part_specs: Vec::new(),
             finalize_context: FinalizeContext {
+                request_audit,
                 admission: admission_audit,
                 search_authorization: audit_search_authorization,
                 command,
@@ -5463,6 +5514,10 @@ impl BrokerRuntime {
                 let (body_part_specs, disposition) = admission.into_parts();
                 prepared.state = disposition.apply(prepared.state.take());
                 prepared.body_part_specs = body_part_specs;
+                if let Some(plan) = prepared.deferred_audit_plan.take() {
+                    prepared.finalize_context.request_audit =
+                        plan.project(prepared.request.inputs());
+                }
                 Ok(prepared)
             }
             Err(error) => Err(Box::new(
@@ -5507,6 +5562,7 @@ impl BrokerRuntime {
         require_stream: bool,
     ) -> (FinalizeContext, Result<ProviderResult, ProviderError>) {
         let PreparedInvocation {
+            deferred_audit_plan: _,
             resource_binding,
             provider,
             domain_reasons,
@@ -6428,6 +6484,7 @@ impl BrokerRuntime {
         append_mode: AuditAppendMode,
     ) -> BrokerResponse<Value> {
         let FinalizeContext {
+            request_audit,
             admission: admission_audit,
             search_authorization,
             command,
@@ -6562,6 +6619,7 @@ impl BrokerRuntime {
             personal_lookup_connection,
         );
         let mut audit_record = AuditRecord {
+            request_audit,
             search_authorization,
             timestamp: Utc::now().to_rfc3339(),
             agent_request_id: agent_request_id.clone(),
@@ -8802,6 +8860,9 @@ pub struct BrokerResponse<T> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditRecord {
+    /// Bounded original-input facts captured by the host after preparation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_audit: Option<agent_access_provider::RequestAudit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_authorization: Option<SearchAuthorizationPlan>,
     pub timestamp: String,

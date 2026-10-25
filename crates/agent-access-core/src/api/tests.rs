@@ -738,6 +738,7 @@ fn generated_send_schema_uses_required_version() {
 #[test]
 fn invoke_formats_project_into_openapi_and_send_schema() {
     let action = ApiActionSpec {
+        audit_inputs: None,
         listing_of: None,
         scoped_mcp_name: None,
         documentation: None,
@@ -806,6 +807,7 @@ fn invoke_formats_project_into_openapi_and_send_schema() {
 #[test]
 fn non_advertising_actions_accept_only_explicit_default_response_formats() {
     let base = ApiActionSpec {
+        audit_inputs: None,
         listing_of: None,
         scoped_mcp_name: None,
         documentation: None,
@@ -897,6 +899,7 @@ fn assert_default_invoke_formats(schema: &Value) {
 #[test]
 fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_actions() {
     let action = ApiActionSpec {
+        audit_inputs: None,
         listing_of: None,
         scoped_mcp_name: None,
         documentation: None,
@@ -995,6 +998,7 @@ fn generated_specs_describe_multipart_uploads() {
         scope_types: vec!["space".to_string()],
         resource_scopes: BTreeMap::new(),
         actions: vec![ApiActionSpec {
+            audit_inputs: None,
             listing_of: None,
             scoped_mcp_name: None,
             documentation: None,
@@ -1096,6 +1100,7 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
         scope_types: vec!["file".to_string()],
         resource_scopes: BTreeMap::new(),
         actions: vec![ApiActionSpec {
+            audit_inputs: None,
             listing_of: None,
             scoped_mcp_name: None,
             documentation: None,
@@ -1146,6 +1151,7 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
         scope_types: vec!["file".to_string()],
         resource_scopes: BTreeMap::new(),
         actions: vec![ApiActionSpec {
+            audit_inputs: None,
             listing_of: None,
             scoped_mcp_name: None,
             documentation: None,

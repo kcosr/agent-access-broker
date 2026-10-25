@@ -263,6 +263,9 @@ fn fts_text(record: &AuditRecord) -> String {
             }
         }
     }
+    if let Some(request_audit) = &record.request_audit {
+        text.push_request_audit(request_audit);
+    }
     if let Some(provider_audit) = &record.provider_audit {
         text.push_leaves(provider_audit, false);
     }
@@ -276,6 +279,86 @@ struct FtsText {
 }
 
 impl FtsText {
+    /// Index only approved captured values, after identity/authority and before
+    /// verbose provider facts. Metadata, summaries and omitted text are not terms.
+    fn push_request_audit(&mut self, audit: &agent_access_provider::RequestAudit) {
+        use agent_access_provider::{AuditDisplay, RequestAuditStatus};
+        if audit.version != 1 || audit.status == RequestAuditStatus::Unavailable {
+            return;
+        }
+        for display in [
+            AuditDisplay::Primary,
+            AuditDisplay::Detail,
+            AuditDisplay::Raw,
+        ] {
+            for field in audit
+                .fields
+                .iter()
+                .filter(|field| field.metadata.display == display)
+            {
+                self.push_request_field(&field.metadata, &field.data);
+            }
+        }
+    }
+
+    fn push_request_field(
+        &mut self,
+        metadata: &agent_access_provider::AuditFieldMetadata,
+        data: &agent_access_provider::AuditCapturedValue,
+    ) {
+        use agent_access_provider::{AuditCapture, AuditValueState};
+        if self.is_full() || data.state != AuditValueState::Captured {
+            return;
+        }
+        match metadata.capture {
+            AuditCapture::Value => {
+                if let Some(value) = &data.value {
+                    self.push_request_value(metadata.kind, value);
+                }
+                for item in data.items.iter().flatten() {
+                    if item.state == AuditValueState::Captured
+                        && let Some(value) = &item.value
+                    {
+                        self.push_request_value(metadata.kind, value);
+                    }
+                }
+            }
+            AuditCapture::Records => {
+                for row in data.rows.iter().flatten() {
+                    if row.state == AuditValueState::Captured
+                        && let Some(cells) = &row.cells
+                    {
+                        for column in data.columns.iter().flatten() {
+                            if let Some(cell) = cells.get(&column.key) {
+                                self.push_request_field(column, cell);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn push_request_value(&mut self, kind: agent_access_provider::AuditValueKind, value: &Value) {
+        use agent_access_provider::AuditValueKind;
+        match kind {
+            AuditValueKind::Text
+            | AuditValueKind::Query
+            | AuditValueKind::Path
+            | AuditValueKind::Email
+            | AuditValueKind::Date
+            | AuditValueKind::Identifier => {
+                if let Some(value) = value.as_str() {
+                    self.push(value);
+                } else if kind == AuditValueKind::Identifier && value.is_number() {
+                    self.push(&value.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn is_full(&self) -> bool {
         self.text.len() > FTS_TEXT_MAX_BYTES
     }
@@ -356,6 +439,87 @@ fn cap_at_token_boundary(mut text: String, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn request_search_indexes_only_captured_text_and_identifiers_before_provider_facts() {
+        use agent_access_provider::{
+            AuditDisplay, AuditInputProjection, AuditInputRule, AuditOverflow, AuditValueKind,
+        };
+        let rules = AuditInputProjection::new([
+            AuditInputRule::value("query", "LABEL_NOT_SEARCHABLE", "/query")
+                .kind(AuditValueKind::Query)
+                .max_bytes(4096)
+                .overflow(AuditOverflow::Prefix)
+                .display(AuditDisplay::Primary),
+            AuditInputRule::value("id", "Identifier", "/id")
+                .kind(AuditValueKind::Identifier)
+                .max_bytes(1024)
+                .overflow(AuditOverflow::Omit)
+                .display(AuditDisplay::Raw),
+            AuditInputRule::value("limit", "Limit", "/limit").kind(AuditValueKind::Number),
+            AuditInputRule::value("flag", "Flag", "/flag").kind(AuditValueKind::Boolean),
+            AuditInputRule::utf8_byte_count("body", "Body bytes", "/body"),
+            AuditInputRule::omit("token", "/token"),
+        ]);
+        let schema = json!({"type":"object","properties":{
+            "query":{"type":"string"},"id":{"type":"integer"},"limit":{"type":"integer"},
+            "flag":{"type":"boolean"},"body":{"type":"string"},"token":{"type":"string"}
+        }});
+        let plan = agent_access_provider::host::prepare_audit_inputs(&schema, &rules).unwrap();
+        let mut record = crate::runtime::tests::test_audit_record();
+        record.request_audit = plan.project(&json!({"query":"café near βeta","id":18446744073709551615u64,
+            "limit":987654321,"flag":false,"body":"BODY_CANARY_NO_INDEX","token":"TOKEN_CANARY_NO_INDEX"}));
+        record.provider_audit = Some(json!({"verbose":"providerword ".repeat(5000)}));
+        let text = fts_text(&record);
+        assert!(text.contains("café near βeta"));
+        assert!(text.contains("18446744073709551615"));
+        for excluded in [
+            "LABEL_NOT_SEARCHABLE",
+            "BODY_CANARY_NO_INDEX",
+            "TOKEN_CANARY_NO_INDEX",
+            "987654321",
+            "decimalInteger",
+        ] {
+            assert!(
+                !text.contains(excluded),
+                "unexpected search term: {excluded}"
+            );
+        }
+        assert!(text.len() <= FTS_TEXT_MAX_BYTES);
+        let snapshot = record.request_audit.as_ref().unwrap();
+        assert!(!text.contains(snapshot.declaration_sha256.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn request_search_keeps_record_associations_and_does_not_index_summary_counts() {
+        use agent_access_provider::{
+            AuditInputProjection, AuditInputRule, AuditOverflow, AuditValueKind,
+        };
+        let rules = AuditInputProjection::new([AuditInputRule::records(
+            "changes",
+            "Changes",
+            "/changes",
+            [
+                AuditInputRule::value("path", "Path", "/path")
+                    .kind(AuditValueKind::Path)
+                    .max_bytes(1024)
+                    .overflow(AuditOverflow::Omit),
+                AuditInputRule::presence("content", "Content supplied", "/content"),
+            ],
+        )]);
+        let schema = json!({"properties":{"changes":{"type":"array","items":{"properties":{
+            "path":{"type":"string"},"content":{"type":"string","x-agent-access-sensitive":true}
+        }}}}});
+        let mut record = crate::runtime::tests::test_audit_record();
+        record.request_audit = agent_access_provider::host::prepare_audit_inputs(&schema, &rules)
+            .unwrap()
+            .project(&json!({"changes":[{"path":"src/report.rs","content":"NESTED_BODY_CANARY"}]}));
+        let text = fts_text(&record);
+        assert!(text.contains("src/report.rs"));
+        assert!(!text.contains("NESTED_BODY_CANARY"));
+        assert!(!text.contains("Content supplied"));
+    }
 
     #[test]
     fn prepared_auth_rows_expose_write_phase_without_changing_record_json() {

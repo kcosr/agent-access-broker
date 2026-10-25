@@ -1734,6 +1734,7 @@ async fn append_management_audit_with_details(
         provider_audit.insert("verification".to_string(), verification.audit.clone());
     }
     let record = AuditRecord {
+        request_audit: None,
         caller_id: identity.caller_id.clone(),
         search_authorization: None,
         timestamp: Utc::now().to_rfc3339(),

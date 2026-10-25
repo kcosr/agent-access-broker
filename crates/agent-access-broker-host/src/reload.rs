@@ -530,6 +530,7 @@ fn admin_audit_record(snapshot: &RuntimeSnapshot, input: &AdminAuditInput<'_>) -
         }
     });
     AuditRecord {
+        request_audit: None,
         caller_id: None,
         search_authorization: None,
         timestamp: Utc::now().to_rfc3339(),

@@ -66,8 +66,9 @@ fn command_record(
 
 /// A descriptor-only double of the command adapter.
 #[derive(Debug)]
-struct CommandForm;
-static COMMAND_FORM: CommandForm = CommandForm;
+struct CommandForm(ImportEndpointForm);
+static COMMAND_FORM: CommandForm = CommandForm(ImportEndpointForm::Command);
+static HTTP_FORM: CommandForm = CommandForm(ImportEndpointForm::Http);
 
 #[async_trait::async_trait]
 impl crate::imports::ImportedAdapter for CommandForm {
@@ -88,13 +89,25 @@ impl crate::imports::ImportedAdapter for CommandForm {
         false
     }
     fn endpoint_form(&self) -> ImportEndpointForm {
-        ImportEndpointForm::Command
+        self.0
     }
     fn sensitive_output_pointers(&self) -> &'static [&'static str] {
         &["/result/upstreamCommand"]
     }
     fn validate_action(&self, _: &ImportedActionDefinition) -> Result<(), String> {
         Ok(())
+    }
+    fn action_audit_inputs(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<Option<agent_access_provider::AuditInputProjection>, String> {
+        match action.annotations.get("fixtureAudit") {
+            None => Ok(None),
+            Some(Value::String(_)) => Err("fixture audit contract rejected".into()),
+            Some(value) => serde_json::from_value(value.clone())
+                .map(Some)
+                .map_err(|_| "fixture audit contract invalid".into()),
+        }
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         Ok(action.action.replace('.', "_"))
@@ -122,17 +135,76 @@ impl crate::imports::ImportedAdapter for CommandForm {
 }
 
 fn config() -> BrokerConfig {
+    config_with_adapter(&COMMAND_FORM)
+}
+
+fn config_with_adapter(adapter: &'static CommandForm) -> BrokerConfig {
     let mut config = crate::runtime::tests::base_fake_config();
     config.providers = crate::ProvidersConfig::new(Arc::new(
         crate::BackendRegistry::empty()
             .with_imported_adapters([crate::imports::imported_adapter_registration(
                 agent_access_provider::module_metadata!(),
-                &COMMAND_FORM,
+                adapter,
                 None,
             )])
             .unwrap(),
     ));
     config
+}
+
+fn audit_declaration() -> Value {
+    json!([{"key":"issue","pointer":"/issue","capture":"value","shape":"scalar","label":"Issue",
+        "display":"primary","role":"target","kind":"identifier","maxBytes":1024,"overflow":"omit"}])
+}
+
+#[test]
+fn audit_hook_is_independent_of_adapter_validate_action_and_is_never_silently_accepted() {
+    let config = config();
+    let mut record = command_record(&[], None);
+    record.actions[0].definition.input_schema = json!({"properties":{"issue":{"type":"string"}}});
+    record.actions[0].definition.annotations["fixtureAudit"] = audit_declaration();
+    let resolved = resolve_audit_inputs(&config, &record).unwrap();
+    assert_eq!(resolved.len(), 1);
+    let published = descriptor(
+        &record,
+        &config,
+        config.providers.registry().resource_types(),
+    );
+    assert!(published.actions[0].audit_inputs.is_some());
+    // The adapter claims validate_action succeeded, but the separate hook fails.
+    record.actions[0].definition.annotations["fixtureAudit"] = json!("reject");
+    assert!(
+        crate::imports::ImportedAdapter::validate_action(
+            &COMMAND_FORM,
+            &record.actions[0].definition
+        )
+        .is_ok()
+    );
+    assert!(resolve_audit_inputs(&config, &record).is_err());
+    let retained = descriptor(
+        &record,
+        &config,
+        config.providers.registry().resource_types(),
+    );
+    assert_eq!(retained.actions[0].action, "issue.view");
+    assert!(retained.actions[0].audit_inputs.is_none());
+    // Structurally valid declarations still cannot capture sensitive values.
+    record.actions[0].definition.annotations["fixtureAudit"] = audit_declaration();
+    record.actions[0].definition.input_schema["properties"]["issue"]["x-agent-access-sensitive"] =
+        json!(true);
+    assert!(resolve_audit_inputs(&config, &record).is_err());
+}
+
+#[test]
+fn http_adapter_cannot_approve_audit_capture_even_with_command_shaped_metadata() {
+    let config = config_with_adapter(&HTTP_FORM);
+    let mut record = command_record(&[], None);
+    record.definition.endpoint = "https://api.example.test/tools".into();
+    record.actions[0].definition.input_schema = json!({"properties":{"issue":{"type":"string"}}});
+    record.actions[0].definition.annotations["fixtureAudit"] = audit_declaration();
+    assert!(resolve_audit_inputs(&config, &record).is_err());
+    // A typed command adapter also cannot attach capture to an HTTP definition.
+    assert!(resolve_audit_inputs(&config_with_adapter(&COMMAND_FORM), &record).is_err());
 }
 
 fn catalog(record: ImportedServiceRecord) -> ImportedCatalog {

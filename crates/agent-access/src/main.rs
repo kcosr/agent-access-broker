@@ -19199,6 +19199,7 @@ mod tests {
         response_formats: &[&str],
     ) -> ApiActionSpec {
         ApiActionSpec {
+            audit_inputs: None,
             scoped_mcp_name: Some("issue.view".to_owned()),
             documentation: None,
             listing_of: None,
@@ -22916,6 +22917,7 @@ upload_spool_dir = "upload-spool"
                 scope_types: vec!["endpoint".to_string()],
                 resource_scopes: BTreeMap::new(),
                 actions: vec![ApiActionSpec {
+                    audit_inputs: None,
                     scoped_mcp_name: Some("call".to_owned()),
                     documentation: None,
                     listing_of: None,

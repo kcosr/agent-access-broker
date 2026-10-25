@@ -1779,6 +1779,7 @@ async fn append_auth_audit(
         auth_audit["phase"] = json!(phase);
     }
     let record = AuditRecord {
+        request_audit: None,
         caller_id: identity.caller_id.clone(),
         search_authorization: None,
         timestamp: Utc::now().to_rfc3339(),
