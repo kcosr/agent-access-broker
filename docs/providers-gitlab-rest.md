@@ -345,10 +345,12 @@ reach retrieval ceilings before finding every eligible match. Progress and timin
 can disclose coarse search density; authorized free text may mention other
 repositories. The feature does not redact those references.
 
-Search audit records retain admitted authority, selected mode, engines, route
-class, returned count, status, continuation presence, and distinct released
-project paths. They omit query text, previews, denied candidates, scan counts,
-and cursor bytes. Sensitive-output/no-store handling applies before all JSON,
+Search audit records retain admitted authority, selected mode, configured and
+effective engines, route class, returned count, status, output-continuation
+presence, and distinct released project paths. The separate `requestAudit`
+snapshot retains bounded original query text and the caller's supplied engine,
+project and controls. Previews, denied candidates, scan counts and cursor bytes
+are excluded. Sensitive-output/no-store handling applies before all JSON,
 Markdown, CLI, and MCP delivery.
 
 ## Project uploads
@@ -738,7 +740,9 @@ exposed because substitution could bypass destination authorization.
 ### Secrets, deliveries, and recovery
 
 Legacy tokens, signing tokens, and custom-header values are sensitive. They are
-forwarded but never returned, audited, traced, or placed in errors. Typed
+forwarded but their values are never returned, audited, traced, or placed in
+errors. Input audit records only whether each secret was supplied; a custom
+header's supplied `key` is an approved identifier. Typed
 commands accept them only from environment, file, or stdin. JSON `send` callers
 should use `secretSources`; generic `invoke` callers should use `--input-file`
 or `--input-stdin`, not literal arguments. Direct HTTP necessarily carries
@@ -1128,6 +1132,10 @@ Draft Notes are the current upstream credential owner's unpublished review:
   then optionally creates a general summary note. Optional `internal` is valid
   only with that summary.
 
+The `draft_note.view`, `draft_note.delete` and `draft_note.publish` input schemas
+require `project`, parent merge-request `iid` and `draftNoteId`, matching their
+invocation contract.
+
 Every successful draft-note action and `merge_request.review.submit` includes
 `reviewContext`. Its `credentialMode` is `service` or `per_user`,
 `credentialBinding` is respectively `shared` or `principal`, and
@@ -1478,8 +1486,8 @@ truncation.
 Malformed or oversized upstream content, complexity exhaustion, or rendered
 output overflow fails atomically as sanitized
 `upstream_protocol_failed`/502—there is no native or partial fallback. Native
-bodies, rendered bodies, whole-result Markdown, file base64, arbitrary literal
-values, and pagination tokens are excluded from audit records, tracing, logs,
+bodies, rendered bodies, whole-result Markdown, file base64, unselected output
+values, and pagination token values are excluded from audit records, tracing, logs,
 errors, metric labels, and object identifiers.
 
 ## Merge, repository, and CI action contracts
@@ -1581,16 +1589,40 @@ path on each issue or merge request. Paginated searches and collection reads
 include `count`, effective `maxResults`, `isLast`, and the opaque
 `nextPageToken` or `null` as declared by the action.
 
-Audit records include provider operation, upstream status, object identifiers,
-credential mode, egress proxy state, and redacted request-body metadata for
-write operations, such as JSON field names, text byte counts, and list counts.
-They do not include issue descriptions, note or draft bodies, review summaries,
-discussion bodies, merge-request descriptions, titles, merge messages, patches,
-native line codes, continuation tokens, commit messages, or other returned
-content. Merge audit records include safe source branch, target branch,
-expected SHA, merge option flags, and upstream merge status.
-Review audit may include bounded position type and numeric-line metadata,
-expected/proven head SHA, reviewer state, resolution flag, and safe object IDs.
+Audit records include provider operation, upstream status, resolved object
+identifiers, credential mode and egress proxy state. After successful invocation
+preparation, `requestAudit` captures only explicitly declared original inputs.
+Titles, names, query expressions, author email, project and object identifiers,
+refs, paths, assignments, labels and controls are requested facts; they do not
+assert validation, authorization or application. String fields can contain
+arbitrary caller text. Queries retain up to 4,096 UTF-8 bytes; ordinary text and
+identity strings normally retain up to 1,024 bytes. Text/query truncation is
+explicit, while oversized identities are omitted whole. Enum-like controls use
+smaller caps. The complete snapshot has a 16 KiB encoded limit.
+
+Scalar collections and correlated records sample the first 20 source positions
+and retain the original total and indices. Commit-action rows preserve action,
+file path, previous path, encoding, file mode and last commit identity together;
+suggestion rows preserve discussion, note and suggestion identities together.
+Upload rows retain requested filename, media type and size, excluding multipart
+field names and requested checksums. Sampling, whole-identity limits and the
+snapshot budget can retain less request metadata than the former provider
+request-body fields. Omission states distinguish these limits from absent input.
+
+Content bodies, commit/merge messages, webhook descriptions and templates retain
+only source UTF-8 byte counts. Raw URLs, continuation tokens and webhook/header
+secret values retain only supplied state, with no value, length or fingerprint.
+Response bodies, patches and native line codes are excluded from input capture.
+
+`providerAudit.gitlab` retains execution and observed facts separately: confirmed
+project identities, released counts, verified review outcomes and proven diff
+positions. `branchSafety` and `refSafety` hold the existing branch/ref checks;
+`contentProcessing.decodedContentBytes` and its indexed `actions` rows describe
+decoded file sizes; `merge` holds observed source/target branches, merge statuses
+and resulting commit identity. Content conversion retains `nativeContentFormat`
+and `finalNativeContentBytes`. Existing observed download metadata and checksums
+remain transfer facts. Initial credential-preparation failures have no request
+snapshot; the existing failure audit is unchanged.
 
 ### Unsent and unanswered writes
 

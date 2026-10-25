@@ -3131,19 +3131,6 @@ fn note_mutation_validation_accepts_scoped_metadata_gaps_and_rejects_contradicti
     );
 }
 
-#[test]
-fn note_update_audit_records_body_shape_without_text() {
-    let audit = request_body_audit_for_note_update(&GitlabNoteUpdateRequest {
-        iid: 7,
-        note_id: 701,
-        body: "secret updated body".to_string(),
-    });
-    let audit_json = serde_json::to_string(&audit).unwrap();
-    assert!(audit_json.contains("textByteCounts"));
-    assert!(audit_json.contains("body"));
-    assert!(!audit_json.contains("secret updated body"));
-}
-
 #[tokio::test]
 async fn provider_issue_note_add_applies_configured_attribution_footer() {
     let server = MockServer::start().await;
@@ -3219,7 +3206,7 @@ async fn provider_issue_note_add_applies_configured_attribution_footer() {
     assert_eq!(audit["attribution"]["applied"], true);
     assert_eq!(audit["attribution"]["representation"], "markdown");
     assert_eq!(
-        audit["gitlab"]["requestBody"]["textByteCounts"]["body"],
+        audit["gitlab"]["finalNativeContentBytes"],
         attributed_body.len() as u64
     );
     assert!(!audit.to_string().contains("note before attribution"));
@@ -3295,7 +3282,7 @@ async fn provider_issue_create_applies_attribution_to_supplied_description() {
     assert_eq!(audit["attribution"]["applied"], true);
     assert_eq!(audit["attribution"]["target"], "description");
     assert_eq!(
-        audit["gitlab"]["requestBody"]["textByteCounts"]["description"],
+        audit["gitlab"]["finalNativeContentBytes"],
         attributed_description.len() as u64
     );
     assert!(!audit.to_string().contains("description before attribution"));
@@ -3374,13 +3361,8 @@ async fn provider_issue_update_records_target_absent_when_description_is_omitted
     let audit = result.audit.as_ref().unwrap();
     assert_eq!(audit["attribution"]["applied"], false);
     assert_eq!(audit["attribution"]["skipReason"], "target_absent");
-    assert!(
-        audit["gitlab"]["requestBody"]["jsonFields"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("title"))
-    );
-    assert!(audit["gitlab"]["requestBody"]["textByteCounts"]["description"].is_null());
+    assert!(audit["gitlab"].get("requestBody").is_none());
+    assert!(audit["gitlab"].get("finalNativeContentBytes").is_none());
 }
 
 #[tokio::test]

@@ -177,8 +177,13 @@ fn parse_inputs(
 }
 
 pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor> {
-    let common = |action: &str, description: &str, schema: Value, documentation: Value| {
+    let common = |action: &str,
+                  description: &str,
+                  schema: Value,
+                  documentation: Value,
+                  audit: AuditInputProjection| {
         ActionDescriptor::new(action, description, schema)
+            .audit_inputs(audit)
             .scope("repository")
             .credential_modes(["service", "per_user"])
             .native_search(NativeSearchEnforcement::ResultFiltered)
@@ -211,6 +216,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
         "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are absent from resource_access_describe registeredResources.items",
         discovery,
         json!({"query":"Omit search to browse. A supplied query must contain 1–512 UTF-8 bytes after trimming; GitLab matches name, path, description and optionally ancestor namespaces. * has no special Broker meaning. Current upstream projects, including new namespace descendants, supply the inventory.","ordering":"Ascending project ID with keyset pagination; no snapshot isolation.","pagination":pagination,"previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."}),
+        audit::projection("project.search"),
     )];
     let mut listing = base();
     listing["properties"]
@@ -228,6 +234,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
             "limits":"Shares the configured GitLab search result, candidate-page, HTTP-attempt and byte limits.",
             "previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."
         }),
+        audit::projection("project.list"),
     ).listing_of(GIT_REPOSITORY_RESOURCE.id().clone()));
     for category in CATEGORIES {
         let engines = search.enabled_engines(category);
@@ -242,6 +249,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
             "type":"string","enum":engines,"default":search.default_engine,
             "description":"Omit engine to use the service's configured default."
         });
+        let mut audit_rules = audit::projection(&action).rules().to_vec();
         let mut conditions = Vec::new();
         for engine in &engines {
             let selected = if *engine == search.default_engine {
@@ -258,6 +266,12 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
         }
         if *category == "code" && engines.contains(&"zoekt") {
             schema["properties"]["regex"] = json!({"type":"boolean","default":false});
+            audit_rules.push(
+                AuditInputRule::value("regex", "Regex", "/regex")
+                    .kind(AuditValueKind::Boolean)
+                    .role(AuditRole::Fact)
+                    .display(AuditDisplay::Detail),
+            );
             let regex_engine = if search.default_engine == "zoekt" {
                 json!({"properties":{"engine":{"const":"zoekt"}}})
             } else {
@@ -292,6 +306,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
             &format!("Native full-text search of GitLab {category} across authorized repositories or one explicit project"),
             schema,
             documentation,
+            AuditInputProjection::new(audit_rules),
         ));
     }
     actions
@@ -754,7 +769,7 @@ impl GitlabProvider {
             .iter()
             .filter_map(|item| item.get("project").and_then(Value::as_str))
             .collect();
-        let audit = json!({"gitlab":{"operation":action,"configuredEngine":self.config.search.default_engine,"requestedEngine":request.inputs().get("engine"),"effectiveEngine":input.engine,"routeClass":match route {1=>"projects",2=>"instance",_=>"project"},"returnedCount":items.len(),"scanStatus":status,"continuationPresent":token.is_some(),"projects":released_projects}});
+        let audit = json!({"gitlab":{"operation":action,"configuredEngine":self.config.search.default_engine,"effectiveEngine":input.engine,"routeClass":match route {1=>"projects",2=>"instance",_=>"project"},"returnedCount":items.len(),"scanStatus":status,"continuationPresent":token.is_some(),"projects":released_projects}});
         let mut result = json!({"items":items,"count":items.len(),"maxResults":input.max_results,"scanStatus":status});
         if let Some(engine) = input.engine {
             result["engine"] = json!(engine);

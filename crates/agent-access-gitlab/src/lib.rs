@@ -3,6 +3,7 @@
 //! against the GitLab REST API, authorized against `git_repository`
 //! resources, and the `gitlab` OAuth dialect ([`GITLAB_OAUTH_DIALECT`]).
 mod access;
+mod audit;
 mod backend;
 mod config;
 mod oauth;
@@ -977,16 +978,16 @@ impl GitlabProvider {
             .map_err(|error| write.unverified(error))?;
         ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)
             .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "issue.create",
             &project,
             Some(
                 json!({ "issue": format!("{}#{}", project.path_with_namespace, response.value.iid) }),
             ),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "issue": response.value.with_project(&project) }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_issue_create(&inputs),
         );
         add_gitlab_content_write_audit(
             &mut result,
@@ -1037,16 +1038,16 @@ impl GitlabProvider {
             .map_err(|error| write.unverified(error))?;
         ensure_issue_description_within_cap(&response.value, self.config.content.max_body_bytes)
             .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "issue.update",
             &project,
             Some(
                 json!({ "issue": format!("{}#{}", project.path_with_namespace, response.value.iid) }),
             ),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "issue": response.value.with_project(&project) }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_issue_update(&inputs),
         );
         add_gitlab_content_write_audit(
             &mut result,
@@ -1167,17 +1168,17 @@ impl GitlabProvider {
             .map_err(|error| write.failed(error))?;
         ensure_note_target_issue(&response.value, inputs.iid)
             .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "issue.note.add",
             &project,
             Some(json!({
                 "issue": format!("{}#{}", project.path_with_namespace, issue.value.iid),
                 "note": response.value.id
             })),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "note": response.value }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_issue_note_create(&inputs),
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
@@ -1261,24 +1262,17 @@ impl GitlabProvider {
             inputs.note_id,
         )
         .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "issue.note.update",
             &project,
             Some(json!({
                 "issue": format!("{}#{}", project.path_with_namespace, issue.value.iid),
                 "note": response.value.id
             })),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "note": response.value }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_note_update(&inputs),
-        );
-        add_gitlab_audit_fields(
-            &mut result,
-            vec![
-                ("issueIid", json!(inputs.iid)),
-                ("noteId", json!(inputs.note_id)),
-            ],
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         Ok(result)
@@ -1318,7 +1312,7 @@ impl GitlabProvider {
             .delete_issue_note(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        let mut result = gitlab_result(
+        let result = gitlab_result(
             "issue.note.delete",
             &project,
             Some(json!({
@@ -1334,13 +1328,6 @@ impl GitlabProvider {
                 "noteId": inputs.note_id
             }),
             self.backend.egress_proxy_audit(credential),
-        );
-        add_gitlab_audit_fields(
-            &mut result,
-            vec![
-                ("issueIid", json!(inputs.iid)),
-                ("noteId", json!(inputs.note_id)),
-            ],
         );
         Ok(result)
     }
@@ -1499,16 +1486,16 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
         )
         .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "merge_request.create",
             &project,
             Some(
                 json!({ "mergeRequest": format!("{}!{}", project.path_with_namespace, response.value.iid) }),
             ),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "mergeRequest": response.value.with_project(&project) }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_merge_request_create(&inputs),
         );
         add_gitlab_content_write_audit(
             &mut result,
@@ -1570,16 +1557,16 @@ impl GitlabProvider {
             self.config.content.max_body_bytes,
         )
         .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "merge_request.update",
             &project,
             Some(
                 json!({ "mergeRequest": format!("{}!{}", project.path_with_namespace, response.value.iid) }),
             ),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "mergeRequest": response.value.with_project(&project) }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_merge_request_update(&inputs),
         );
         add_gitlab_content_write_audit(
             &mut result,
@@ -1700,17 +1687,17 @@ impl GitlabProvider {
             .map_err(|error| write.failed(error))?;
         ensure_note_target_merge_request(&response.value, inputs.iid)
             .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "merge_request.note.add",
             &project,
             Some(json!({
                 "mergeRequest": format!("{}!{}", project.path_with_namespace, merge_request.value.iid),
                 "note": response.value.id
             })),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "note": response.value }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_note_create(&inputs),
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
@@ -1794,24 +1781,17 @@ impl GitlabProvider {
             inputs.note_id,
         )
         .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "merge_request.note.update",
             &project,
             Some(json!({
                 "mergeRequest": format!("{}!{}", project.path_with_namespace, merge_request.value.iid),
                 "note": response.value.id
             })),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "note": response.value }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_note_update(&inputs),
-        );
-        add_gitlab_audit_fields(
-            &mut result,
-            vec![
-                ("mergeRequestIid", json!(inputs.iid)),
-                ("noteId", json!(inputs.note_id)),
-            ],
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         Ok(result)
@@ -1851,7 +1831,7 @@ impl GitlabProvider {
             .delete_merge_request_note(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        let mut result = gitlab_result(
+        let result = gitlab_result(
             "merge_request.note.delete",
             &project,
             Some(json!({
@@ -1867,13 +1847,6 @@ impl GitlabProvider {
                 "noteId": inputs.note_id
             }),
             self.backend.egress_proxy_audit(credential),
-        );
-        add_gitlab_audit_fields(
-            &mut result,
-            vec![
-                ("mergeRequestIid", json!(inputs.iid)),
-                ("noteId", json!(inputs.note_id)),
-            ],
         );
         Ok(result)
     }
@@ -2079,11 +2052,10 @@ impl GitlabProvider {
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
-        let mut fields =
-            review_position_audit_fields(Some(&inputs.expected_head_sha), Some(&position));
+        let mut fields = review_position_audit_fields(Some(&position));
         fields.push(("discussionId", json!(discussion_id)));
         fields.push(("noteId", json!(note_id)));
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         Ok(result)
     }
 
@@ -2201,15 +2173,7 @@ impl GitlabProvider {
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
-        add_gitlab_review_mutation_audit(
-            &mut result,
-            inputs.iid,
-            actor_id,
-            vec![
-                ("discussionId", json!(inputs.discussion_id)),
-                ("noteId", json!(note_id)),
-            ],
-        );
+        add_gitlab_review_mutation_audit(&mut result, actor_id, vec![("noteId", json!(note_id))]);
         Ok(result)
     }
 
@@ -2446,15 +2410,9 @@ impl GitlabProvider {
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
-        let mut fields = review_position_audit_fields(
-            inputs.expected_head_sha.as_deref(),
-            readback.value.position.as_ref(),
-        );
+        let mut fields = review_position_audit_fields(readback.value.position.as_ref());
         fields.push(("draftNoteId", json!(draft_id)));
-        if let Some(discussion_id) = &inputs.in_reply_to_discussion_id {
-            fields.push(("discussionId", json!(discussion_id)));
-        }
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
         Ok(result)
     }
@@ -2592,12 +2550,8 @@ impl GitlabProvider {
             }),
             self.backend.egress_proxy_audit(credential),
         );
-        let mut fields = review_position_audit_fields(
-            inputs.expected_head_sha.as_deref(),
-            readback.value.position.as_ref(),
-        );
-        fields.push(("draftNoteId", json!(inputs.draft_note_id)));
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        let fields = review_position_audit_fields(readback.value.position.as_ref());
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
         Ok(result)
     }
@@ -2775,11 +2729,10 @@ impl GitlabProvider {
             json!({ "mutationStatus": "applied", "retrySafe": false, "draftNoteId": inputs.draft_note_id, "published": true, "discussionId": identity.discussion_id, "noteId": identity.note_id }),
             self.backend.egress_proxy_audit(credential),
         );
-        let mut fields = review_position_audit_fields(None, existing.position.as_ref());
-        fields.push(("draftNoteId", json!(inputs.draft_note_id)));
+        let mut fields = review_position_audit_fields(existing.position.as_ref());
         fields.push(("discussionId", json!(identity.discussion_id)));
         fields.push(("noteId", json!(identity.note_id)));
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
         Ok(result)
     }
@@ -2844,12 +2797,11 @@ impl GitlabProvider {
             json!({ "mutationStatus": "applied", "retrySafe": false, "draftNoteId": inputs.draft_note_id, "deleted": true }),
             self.backend.egress_proxy_audit(credential),
         );
-        let mut fields = review_position_audit_fields(None, existing.position.as_ref());
-        fields.push(("draftNoteId", json!(inputs.draft_note_id)));
+        let mut fields = review_position_audit_fields(existing.position.as_ref());
         if let Some(discussion_id) = &existing.discussion_id {
             fields.push(("discussionId", json!(discussion_id)));
         }
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
         Ok(result)
     }
@@ -3093,7 +3045,7 @@ impl GitlabProvider {
             ));
         }
 
-        if review_submit {
+        let verified_reviewer_state = if review_submit {
             let observed = self
                 .acting_reviewer_state(project.id, inputs.iid, actor_id, credential)
                 .await
@@ -3109,7 +3061,10 @@ impl GitlabProvider {
                     safe,
                 ));
             }
-        }
+            Some(observed)
+        } else {
+            None
+        };
 
         let summary_note_id = if let Some(summary) = &inputs.summary {
             let note = self
@@ -3196,20 +3151,18 @@ impl GitlabProvider {
         if let Some(note_id) = summary_note_id {
             fields.push(("summaryNoteId", json!(note_id)));
         }
-        if review_submit {
+        if let Some(observed) = verified_reviewer_state {
             fields.push((
                 "reviewerState",
-                json!(
-                    if inputs.reviewer_state.as_deref() == Some("requested_changes") {
-                        "requestedChanges"
-                    } else {
-                        "reviewed"
-                    }
-                ),
+                json!(if observed == "requested_changes" {
+                    "requestedChanges"
+                } else {
+                    "reviewed"
+                }),
             ));
             fields.push(("provenHeadSha", json!(merge_request.sha)));
         }
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
         Ok(result)
     }
@@ -3584,17 +3537,13 @@ impl GitlabProvider {
         );
         let mut fields = vec![("approved", json!(expected))];
         if approve {
-            fields.push((
-                "expectedHeadSha",
-                json!(inputs.head_sha.as_deref().expect("approve sha")),
-            ));
             fields.push(("provenHeadSha", json!(merge_request.sha)));
             fields.push((
                 "diffVersionId",
                 json!(approval_diff_version_id.expect("approve diff version")),
             ));
         }
-        add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
+        add_gitlab_review_mutation_audit(&mut result, actor_id, fields);
         Ok(result)
     }
 
@@ -3774,9 +3723,7 @@ impl GitlabProvider {
         add_gitlab_audit_fields(
             &mut result,
             vec![
-                ("mergeRequest", json!(inputs.iid)),
                 ("sourceProjectId", json!(source_project.id)),
-                ("expectedHeadSha", json!(inputs.expected_head_sha)),
                 ("provenHeadSha", json!(merge_request.sha)),
             ],
         );
@@ -4399,17 +4346,17 @@ impl GitlabProvider {
             .map_err(|error| write.failed(error))?;
         ensure_discussion_target_merge_request(&response.value, inputs.iid)
             .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "merge_request.discussion.add",
             &project,
             Some(json!({
                 "mergeRequest": format!("{}!{}", project.path_with_namespace, merge_request.value.iid),
                 "discussion": response.value.id
             })),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "discussion": response.value }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_note_create(&inputs),
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
@@ -4469,7 +4416,7 @@ impl GitlabProvider {
             inputs.note_id,
         )
         .map_err(|error| write.unverified(error))?;
-        let mut result = gitlab_result_with_request_body_audit(
+        let mut result = gitlab_result(
             "merge_request.discussion.note.update",
             &project,
             Some(json!({
@@ -4477,18 +4424,10 @@ impl GitlabProvider {
                 "discussion": inputs.discussion_id,
                 "note": response.value.id
             })),
-            (response.status, response.duration_ms),
+            response.status,
+            response.duration_ms,
             json!({ "note": response.value }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit_for_discussion_note_update(&inputs),
-        );
-        add_gitlab_audit_fields(
-            &mut result,
-            vec![
-                ("mergeRequestIid", json!(inputs.iid)),
-                ("discussionId", json!(inputs.discussion_id)),
-                ("noteId", json!(inputs.note_id)),
-            ],
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         Ok(result)
@@ -4530,7 +4469,7 @@ impl GitlabProvider {
             .delete_merge_request_discussion_note(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        let mut result = gitlab_result(
+        let result = gitlab_result(
             "merge_request.discussion.note.delete",
             &project,
             Some(json!({
@@ -4548,14 +4487,6 @@ impl GitlabProvider {
                 "noteId": inputs.note_id
             }),
             self.backend.egress_proxy_audit(credential),
-        );
-        add_gitlab_audit_fields(
-            &mut result,
-            vec![
-                ("mergeRequestIid", json!(inputs.iid)),
-                ("discussionId", json!(inputs.discussion_id)),
-                ("noteId", json!(inputs.note_id)),
-            ],
         );
         Ok(result)
     }
@@ -4608,11 +4539,7 @@ impl GitlabProvider {
         );
         add_gitlab_audit_fields(
             &mut result,
-            vec![
-                ("mergeRequestIid", json!(inputs.iid)),
-                ("discussionId", json!(inputs.discussion_id)),
-                ("resolved", json!(inputs.change.resolved())),
-            ],
+            vec![("resolved", json!(inputs.change.resolved()))],
         );
         Ok(result)
     }
@@ -4645,10 +4572,9 @@ impl GitlabProvider {
         let mut merged = response.value;
         ensure_merge_request_in_project(&project, &merged)
             .map_err(|error| write.unverified(error))?;
-        let request_body_audit =
-            request_body_audit_for_merge_request_merge(&inputs, &existing, &merged);
+        let observations = merge_observation_audit(&existing, &merged);
         merged.description = None;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "merge_request.merge",
             &project,
             Some(
@@ -4657,7 +4583,7 @@ impl GitlabProvider {
             (response.status, response.duration_ms),
             json!({ "mergeRequest": merged.with_project(&project) }),
             self.backend.egress_proxy_audit(credential),
-            request_body_audit,
+            observations,
         ))
     }
 
@@ -4748,7 +4674,7 @@ impl GitlabProvider {
             .create_branch(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "branch.create",
             &project,
             Some(json!({
@@ -4757,7 +4683,7 @@ impl GitlabProvider {
             (response.status, response.duration_ms),
             json!({ "branch": response.value }),
             self.backend.egress_proxy_audit(credential),
-            branch_write_audit(&inputs.branch, Some(&inputs.ref_name), &safety),
+            branch_write_audit(&safety),
         ))
     }
 
@@ -5020,7 +4946,7 @@ impl GitlabProvider {
             .create_file(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "file.create",
             &project,
             Some(json!({
@@ -5080,7 +5006,7 @@ impl GitlabProvider {
             .update_file(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "file.update",
             &project,
             Some(json!({
@@ -5137,7 +5063,7 @@ impl GitlabProvider {
             .delete_file(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "file.delete",
             &project,
             Some(json!({
@@ -5146,7 +5072,7 @@ impl GitlabProvider {
             (response.status, response.duration_ms),
             json!({ "file": response.value }),
             self.backend.egress_proxy_audit(credential),
-            file_delete_audit(&inputs, &safety),
+            branch_write_audit(&safety),
         ))
     }
 
@@ -5259,7 +5185,7 @@ impl GitlabProvider {
             .create_commit(project.id, inputs.clone(), credential)
             .await
             .map_err(|error| write.failed(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "commit.create",
             &project,
             Some(json!({
@@ -5356,14 +5282,14 @@ impl GitlabProvider {
             .map_err(|error| write.failed(error))?;
         ensure_pipeline_in_project(&project, &response.value)
             .map_err(|error| write.unverified(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "pipeline.run",
             &project,
             Some(json!({ "pipeline": gitlab_pipeline_object_id(&project, response.value.id) })),
             (response.status, response.duration_ms),
             json!({ "pipeline": response.value }),
             self.backend.egress_proxy_audit(credential),
-            ci_ref_audit(&inputs.ref_name, &safety),
+            ci_ref_audit(&safety),
         ))
     }
 
@@ -5655,14 +5581,14 @@ impl GitlabProvider {
             .map_err(|error| write.failed(error))?;
         ensure_job_in_project(&project, &response.value)
             .map_err(|error| write.unverified(error))?;
-        Ok(gitlab_result_with_request_body_audit(
+        Ok(gitlab_result_with_observation_audit(
             "job.play",
             &project,
             Some(json!({ "job": gitlab_job_object_id(&project, response.value.id) })),
             (response.status, response.duration_ms),
             json!({ "job": response.value }),
             self.backend.egress_proxy_audit(credential),
-            ci_ref_audit(ref_name, &safety),
+            ci_ref_audit(&safety),
         ))
     }
 
@@ -5885,10 +5811,6 @@ impl GitlabProvider {
                 ("urlChanged", json!(true)),
                 ("destinationScheme", json!(destination.scheme())),
                 ("matchedDestinationPatternIndex", json!(matched_pattern)),
-                (
-                    "eventCount",
-                    json!(inputs.events.as_ref().map_or(0, Vec::len)),
-                ),
             ],
         );
         Ok(result)
@@ -6025,9 +5947,6 @@ impl GitlabProvider {
             audit.push(("destinationScheme", json!(scheme)));
             audit.push(("matchedDestinationPatternIndex", json!(matched_pattern)));
         }
-        if let Some(events) = &inputs.events {
-            audit.push(("eventCount", json!(events.len())));
-        }
         add_gitlab_audit_fields(&mut result, audit);
         Ok(result)
     }
@@ -6108,7 +6027,7 @@ impl GitlabProvider {
             .map_err(|error| {
                 mutation_backend_error(error, MutationVerificationStage::MutationResponse, safe)
             })?;
-        let mut result = gitlab_result(
+        let result = gitlab_result(
             "webhook.test",
             &project,
             Some(json!({ "webhook": inputs.webhook_id })),
@@ -6120,7 +6039,6 @@ impl GitlabProvider {
             }),
             self.backend.egress_proxy_audit(credential),
         );
-        add_gitlab_audit_fields(&mut result, vec![("event", json!(inputs.event))]);
         Ok(result)
     }
 
@@ -7266,6 +7184,7 @@ fn gitlab_read_action(action: &str, description: &str, input_schema: Value) -> A
 
 fn gitlab_action(action: &str, description: &str, input_schema: Value) -> ActionDescriptor {
     ActionDescriptor::new(action, description, input_schema)
+        .audit_inputs(audit::projection(action))
         .scope("repository")
         .credential_modes(["service", "per_user"])
         .lookup(LookupRequirement::ScopeResolution)
@@ -7760,7 +7679,10 @@ fn draft_note_list_schema(max_results: u32) -> Value {
 }
 
 fn draft_note_object_schema() -> Value {
-    numeric_object_schema("draftNoteId")
+    let mut schema = numeric_object_schema("draftNoteId");
+    schema["properties"]["iid"] = json!({ "type": ["integer", "string"] });
+    schema["required"] = json!(["project", "iid", "draftNoteId"]);
+    schema
 }
 
 fn draft_note_add_schema() -> Value {
@@ -13406,7 +13328,6 @@ fn ci_ref_execution_denied(safety: &GitlabCiRefSafety) -> ProviderError {
     .with_audit(json!({
         "gitlab": {
             "refSafety": ci_ref_safety_audit(safety),
-            "requestBody": ci_ref_audit(&safety.ref_name, safety),
         }
     }))
 }
@@ -13466,14 +13387,14 @@ fn gitlab_result(
     provider_result
 }
 
-fn gitlab_result_with_request_body_audit(
+fn gitlab_result_with_observation_audit(
     operation: &str,
     project: &GitlabProject,
     object_ids: Option<Value>,
     upstream: (u16, u64),
     result: Value,
     egress_proxy: Value,
-    request_body: Value,
+    observations: Value,
 ) -> ProviderResult {
     let mut result = gitlab_result(
         operation,
@@ -13486,8 +13407,9 @@ fn gitlab_result_with_request_body_audit(
     );
     if let Some(Value::Object(audit)) = result.audit.as_mut()
         && let Some(Value::Object(gitlab_audit)) = audit.get_mut("gitlab")
+        && let Value::Object(observations) = observations
     {
-        gitlab_audit.insert("requestBody".to_string(), request_body);
+        gitlab_audit.extend(observations);
     }
     result
 }
@@ -13518,23 +13440,17 @@ fn add_gitlab_review_context(
 
 fn add_gitlab_review_mutation_audit(
     result: &mut ProviderResult,
-    merge_request_iid: u64,
     user_id: u64,
     mut fields: Vec<(&'static str, Value)>,
 ) {
     fields.insert(0, ("userId", json!(user_id)));
-    fields.insert(0, ("mergeRequestIid", json!(merge_request_iid)));
     add_gitlab_audit_fields(result, fields);
 }
 
 fn review_position_audit_fields(
-    expected_head_sha: Option<&str>,
     position: Option<&GitlabDiffPosition>,
 ) -> Vec<(&'static str, Value)> {
     let mut fields = Vec::new();
-    if let Some(expected_head_sha) = expected_head_sha {
-        fields.push(("expectedHeadSha", json!(expected_head_sha)));
-    }
     let Some(position) = position else {
         return fields;
     };
@@ -13574,7 +13490,7 @@ fn add_gitlab_content_write_audit(
     inputs: &Value,
     native_content: Option<&str>,
 ) {
-    let (Some(content_format), Some(source), Some(native_content)) = (
+    let (Some(_), Some(_), Some(native_content)) = (
         inputs.get("contentFormat").and_then(Value::as_str),
         inputs.get("content").and_then(Value::as_str),
         native_content,
@@ -13584,9 +13500,7 @@ fn add_gitlab_content_write_audit(
     add_gitlab_audit_fields(
         result,
         vec![
-            ("contentFormat", json!(content_format)),
             ("nativeContentFormat", json!("markdown")),
-            ("sourceContentBytes", json!(source.len() as u64)),
             (
                 "finalNativeContentBytes",
                 json!(native_content.len() as u64),
@@ -13646,87 +13560,29 @@ fn gitlab_file_inline_result(
     }))
 }
 
-fn branch_write_audit(branch: &str, ref_name: Option<&str>, safety: &GitlabBranchSafety) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("branch");
-    audit.add_optional_scalar_field("ref", ref_name.is_some());
-    let mut value = audit.into_value();
-    add_branch_safety_audit(&mut value, branch, safety);
-    value
+fn branch_write_audit(safety: &GitlabBranchSafety) -> Value {
+    json!({"branchSafety": branch_safety_audit(safety)})
 }
 
 fn file_mutation_audit(request: &GitlabFileWriteRequest, safety: &GitlabBranchSafety) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("path");
-    audit.add_scalar_field("branch");
-    audit.add_text_field("commit_message", &request.commit_message);
-    audit.add_optional_scalar_field("start_branch", request.start_branch.is_some());
-    audit.add_optional_scalar_field("author_name", request.author_name.is_some());
-    audit.add_optional_scalar_field("author_email", request.author_email.is_some());
-    audit.add_optional_scalar_field("encoding", request.encoding.is_some());
-    audit.add_optional_scalar_field("execute_filemode", request.execute_filemode.is_some());
-    audit.add_optional_scalar_field("last_commit_id", request.last_commit_id.is_some());
-    audit
-        .text_byte_counts
-        .insert("decoded_content", request.decoded_content_bytes);
-    let mut value = audit.into_value();
-    add_path_branch_audit(&mut value, &request.path, &request.branch);
-    add_branch_safety_audit(&mut value, &request.branch, safety);
-    value
-}
-
-fn file_delete_audit(request: &GitlabFileDeleteRequest, safety: &GitlabBranchSafety) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("path");
-    audit.add_scalar_field("branch");
-    audit.add_text_field("commit_message", &request.commit_message);
-    audit.add_optional_scalar_field("start_branch", request.start_branch.is_some());
-    audit.add_optional_scalar_field("author_name", request.author_name.is_some());
-    audit.add_optional_scalar_field("author_email", request.author_email.is_some());
-    audit.add_optional_scalar_field("last_commit_id", request.last_commit_id.is_some());
-    let mut value = audit.into_value();
-    add_path_branch_audit(&mut value, &request.path, &request.branch);
-    add_branch_safety_audit(&mut value, &request.branch, safety);
-    value
+    json!({
+        "branchSafety": branch_safety_audit(safety),
+        "contentProcessing": {"decodedContentBytes": request.decoded_content_bytes},
+    })
 }
 
 fn commit_create_audit(request: &GitlabCommitCreateRequest, safety: &GitlabBranchSafety) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("branch");
-    audit.add_text_field("commit_message", &request.commit_message);
-    audit.add_list_field("actions", request.actions.len());
-    audit.add_optional_scalar_field("start_branch", request.start_branch.is_some());
-    audit.add_optional_scalar_field("start_sha", request.start_sha.is_some());
-    audit.add_optional_scalar_field("author_name", request.author_name.is_some());
-    audit.add_optional_scalar_field("author_email", request.author_email.is_some());
-    let mut value = audit.into_value();
-    let actions = request
-        .actions
-        .iter()
-        .map(|action| {
-            json!({
-                "action": action.action,
-                "filePath": action.file_path,
-                "previousPath": action.previous_path,
-                "encoding": action.encoding,
-                "executeFilemode": action.execute_filemode.is_some(),
-                "lastCommitId": action.last_commit_id.is_some(),
-                "decodedContentBytes": action.decoded_content_bytes,
-            })
-        })
-        .collect::<Vec<_>>();
-    value["actions"] = json!(actions);
-    add_branch_safety_audit(&mut value, &request.branch, safety);
-    value
+    let actions = request.actions.iter().enumerate().map(|(input_index, action)| {
+        json!({"inputIndex": input_index, "decodedContentBytes": action.decoded_content_bytes})
+    }).collect::<Vec<_>>();
+    json!({
+        "branchSafety": branch_safety_audit(safety),
+        "contentProcessing": {"actions": actions},
+    })
 }
 
-fn ci_ref_audit(ref_name: &str, safety: &GitlabCiRefSafety) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("ref");
-    let mut value = audit.into_value();
-    value["ref"] = json!(ref_name);
-    value["refSafety"] = ci_ref_safety_audit(safety);
-    value
+fn ci_ref_audit(safety: &GitlabCiRefSafety) -> Value {
+    json!({"refSafety": ci_ref_safety_audit(safety)})
 }
 
 fn ci_ref_safety_audit(safety: &GitlabCiRefSafety) -> Value {
@@ -13740,193 +13596,27 @@ fn ci_ref_safety_audit(safety: &GitlabCiRefSafety) -> Value {
     })
 }
 
-fn add_path_branch_audit(value: &mut Value, path: &str, branch: &str) {
-    value["path"] = json!(path);
-    value["branch"] = json!(branch);
-}
-
-fn add_branch_safety_audit(value: &mut Value, branch: &str, safety: &GitlabBranchSafety) {
-    value["branch"] = json!(branch);
-    value["branchSafety"] = json!({
+fn branch_safety_audit(safety: &GitlabBranchSafety) -> Value {
+    json!({
         "branch": safety.branch,
         "defaultBranch": safety.default_branch,
         "targetBranchExists": safety.target_branch_exists,
         "existingBranchDefault": safety.existing_branch_default,
         "existingBranchProtected": safety.existing_branch_protected,
         "matchedProtectedBranch": safety.matched_protected_branch,
-    });
+    })
 }
 
-fn request_body_audit_for_issue_create(request: &GitlabIssueCreateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_text_field("title", &request.title);
-    audit.add_optional_text_field("description", request.description.as_ref());
-    audit.add_list_field("labels", request.labels.len());
-    audit.add_optional_scalar_field("milestone", request.milestone.is_some());
-    audit.add_list_field("assignee_ids", request.assignee_ids.len());
-    audit.add_optional_scalar_field("confidential", request.confidential.is_some());
-    audit.into_value()
-}
-
-fn request_body_audit_for_issue_update(request: &GitlabIssueUpdateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_optional_text_field("title", request.title.as_ref());
-    audit.add_optional_text_field("description", request.description.as_ref());
-    audit.add_optional_scalar_field("state_event", request.state_event.is_some());
-    audit.add_list_field("labels", request.labels.len());
-    audit.add_list_field("add_labels", request.add_labels.len());
-    audit.add_list_field("remove_labels", request.remove_labels.len());
-    audit.add_optional_scalar_field("milestone", request.milestone.is_some());
-    audit.add_list_field("assignee_ids", request.assignee_ids.len());
-    audit.add_optional_scalar_field("confidential", request.confidential.is_some());
-    audit.into_value()
-}
-
-fn request_body_audit_for_issue_note_create(request: &GitlabIssueNoteCreateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_text_field("body", &request.body);
-    audit.add_optional_scalar_field("confidential", request.confidential.is_some());
-    audit.into_value()
-}
-
-fn request_body_audit_for_note_create(request: &GitlabNoteCreateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_text_field("body", &request.body);
-    audit.into_value()
-}
-
-fn request_body_audit_for_note_update(request: &GitlabNoteUpdateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_text_field("body", &request.body);
-    audit.into_value()
-}
-
-fn request_body_audit_for_discussion_note_update(
-    request: &GitlabDiscussionNoteUpdateRequest,
-) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_text_field("body", &request.body);
-    audit.into_value()
-}
-
-fn request_body_audit_for_merge_request_create(request: &GitlabMergeRequestCreateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("source_branch");
-    audit.add_scalar_field("target_branch");
-    audit.add_text_field("title", &request.title);
-    audit.add_optional_text_field("description", request.description.as_ref());
-    audit.add_list_field("labels", request.labels.len());
-    audit.add_list_field("assignee_ids", request.assignee_ids.len());
-    audit.add_list_field("reviewer_ids", request.reviewer_ids.len());
-    audit.add_optional_scalar_field(
-        "remove_source_branch",
-        request.remove_source_branch.is_some(),
-    );
-    audit.add_optional_scalar_field("squash", request.squash.is_some());
-    audit.add_optional_scalar_field("draft", request.draft.is_some());
-    audit.into_value()
-}
-
-fn request_body_audit_for_merge_request_update(request: &GitlabMergeRequestUpdateRequest) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_optional_text_field("title", request.title.as_ref());
-    audit.add_optional_text_field("description", request.description.as_ref());
-    audit.add_optional_scalar_field("state_event", request.state_event.is_some());
-    audit.add_list_field("labels", request.labels.len());
-    audit.add_list_field("add_labels", request.add_labels.len());
-    audit.add_list_field("remove_labels", request.remove_labels.len());
-    audit.add_list_field("assignee_ids", request.assignee_ids.len());
-    audit.add_list_field("reviewer_ids", request.reviewer_ids.len());
-    audit.add_optional_scalar_field("target_branch", request.target_branch.is_some());
-    audit.add_optional_scalar_field(
-        "remove_source_branch",
-        request.remove_source_branch.is_some(),
-    );
-    audit.add_optional_scalar_field("squash", request.squash.is_some());
-    audit.into_value()
-}
-
-fn request_body_audit_for_merge_request_merge(
-    request: &GitlabMergeRequestMergeRequest,
-    existing: &GitlabMergeRequest,
-    merged: &GitlabMergeRequest,
-) -> Value {
-    let mut audit = GitlabRequestBodyAudit::default();
-    audit.add_scalar_field("iid");
-    audit.add_scalar_field("sha");
-    audit.add_optional_scalar_field("squash", request.squash.is_some());
-    audit.add_optional_scalar_field(
-        "should_remove_source_branch",
-        request.should_remove_source_branch.is_some(),
-    );
-    audit.add_optional_text_field(
-        "merge_commit_message",
-        request.merge_commit_message.as_ref(),
-    );
-    audit.add_optional_text_field(
-        "squash_commit_message",
-        request.squash_commit_message.as_ref(),
-    );
-    let mut value = audit.into_value();
-    value["iid"] = json!(request.iid);
-    value["sha"] = json!(request.sha);
-    value["sourceBranch"] = json!(existing.source_branch.clone());
-    value["targetBranch"] = json!(existing.target_branch.clone());
-    value["currentMergeStatus"] = json!(existing.merge_status.clone());
-    value["currentDetailedMergeStatus"] = json!(existing.detailed_merge_status.clone());
-    value["upstreamMergeStatus"] = json!(merged.merge_status.clone());
-    value["upstreamDetailedMergeStatus"] = json!(merged.detailed_merge_status.clone());
-    value["mergeCommitSha"] = json!(merged.merge_commit_sha.clone());
-    value
-}
-
-#[derive(Default)]
-struct GitlabRequestBodyAudit {
-    json_fields: Vec<&'static str>,
-    text_byte_counts: BTreeMap<&'static str, u64>,
-    list_counts: BTreeMap<&'static str, usize>,
-}
-
-impl GitlabRequestBodyAudit {
-    fn add_scalar_field(&mut self, field: &'static str) {
-        self.json_fields.push(field);
-    }
-
-    fn add_optional_scalar_field(&mut self, field: &'static str, present: bool) {
-        if present {
-            self.add_scalar_field(field);
-        }
-    }
-
-    fn add_text_field(&mut self, field: &'static str, value: &str) {
-        self.add_scalar_field(field);
-        self.text_byte_counts.insert(field, value.len() as u64);
-    }
-
-    fn add_optional_text_field(&mut self, field: &'static str, value: Option<&String>) {
-        if let Some(value) = value {
-            self.add_text_field(field, value);
-        }
-    }
-
-    fn add_list_field(&mut self, field: &'static str, count: usize) {
-        if count > 0 {
-            self.add_scalar_field(field);
-            self.list_counts.insert(field, count);
-        }
-    }
-
-    fn into_value(self) -> Value {
-        let mut value =
-            serde_json::Map::from_iter([("jsonFields".to_string(), json!(self.json_fields))]);
-        if !self.text_byte_counts.is_empty() {
-            value.insert("textByteCounts".to_string(), json!(self.text_byte_counts));
-        }
-        if !self.list_counts.is_empty() {
-            value.insert("listCounts".to_string(), json!(self.list_counts));
-        }
-        Value::Object(value)
-    }
+fn merge_observation_audit(existing: &GitlabMergeRequest, merged: &GitlabMergeRequest) -> Value {
+    json!({"merge": {
+        "sourceBranch": existing.source_branch,
+        "targetBranch": existing.target_branch,
+        "currentMergeStatus": existing.merge_status,
+        "currentDetailedMergeStatus": existing.detailed_merge_status,
+        "upstreamMergeStatus": merged.merge_status,
+        "upstreamDetailedMergeStatus": merged.detailed_merge_status,
+        "mergeCommitSha": merged.merge_commit_sha,
+    }})
 }
 
 fn gitlab_lookup_backend_error(error: GitlabBackendError) -> ProviderError {
