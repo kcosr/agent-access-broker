@@ -1,4 +1,7 @@
 //! Managed endpoint, real CLI and stdio MCP against an offline Teams transport.
+#[path = "common/request_audit.rs"]
+mod request_audit;
+
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -162,6 +165,9 @@ authority = "managed"
 allowed_upstream_hosts = ["https://synthetic.environment.api.powerplatform.com/**"]
 [limits]
 upload_spool_dir = {spool}
+[audit]
+type = "jsonl"
+path = {audit}
 [mcp]
 enabled = true
 public_url = {mcp_public_url}
@@ -170,11 +176,12 @@ public_url = {mcp_public_url}
         hash_key = toml_string(format_args!("file:{}", key.display())),
         key = toml_string(key.display()),
         spool = toml_string(directory.join("spool").display()),
+        audit = toml_string(directory.join("audit.jsonl").display()),
         mcp_public_url = toml_string(mcp_public_url),
     )
 }
 
-async fn fixture() -> Fixture {
+async fn fixture(status: u16) -> Fixture {
     let application = IsolatedBroker::new(
         agent_access_broker::composition().unwrap(),
         agent_access_broker::build_identity(),
@@ -248,7 +255,7 @@ async fn fixture() -> Fixture {
         Arc::new(move |endpoint, body| {
             assert_eq!(endpoint, ENDPOINT);
             captured.lock().unwrap().push(body.clone());
-            202
+            status
         }),
     );
     // The listener is already bound, so HTTP MCP can name its address.
@@ -351,7 +358,7 @@ async fn fixture() -> Fixture {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credentials() {
-    let f = fixture().await;
+    let f = fixture(202).await;
     let resource_list = success(run(
         &f.agent_config,
         &["resource-access", "describe", "--service", "teams"],
@@ -675,6 +682,86 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
     drop(mcp);
     f.broker.shutdown();
     f.broker.join().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn teams_stored_audit_retains_destination_without_notification_or_signed_endpoint() {
+    for status in [202, 502] {
+        let f = fixture(status).await;
+        let card = json!({
+            "@type":"MessageCard",
+            "@context":"http://schema.org/extensions",
+            "summary":"PRIVATE_TEAMS_CARD_SUMMARY",
+            "text":"PRIVATE_TEAMS_CARD_TEXT"
+        });
+        let inputs = json!({
+            "destination":"release-alerts",
+            "contentFormat":"microsoft",
+            "content":card
+        });
+        let output = run(
+            &f.agent_config,
+            &[
+                "invoke",
+                "teams.notification.send",
+                "--input-json",
+                &inputs.to_string(),
+            ],
+        );
+        assert_eq!(output.status.success(), status == 202);
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        if status == 202 {
+            assert_eq!(response["result"]["accepted"], true);
+        } else {
+            assert_eq!(response["decision"], "error");
+            assert_eq!(response["reasonCode"], "upstream_failed");
+            assert_eq!(response["result"]["mutationStatus"], "unknown");
+            assert_eq!(response["result"]["retrySafe"], false);
+        }
+        assert_eq!(f.calls.lock().unwrap().as_slice(), &[card]);
+        let audit = f.broker.audit().unwrap();
+        let records = audit.require_request(
+            response["agentRequestId"].as_str().unwrap(),
+            "teams",
+            "notification.send",
+        );
+        assert_eq!(records.len(), 1);
+        request_audit::assert_captured_values(&records, "destination", &[json!("release-alerts")]);
+        request_audit::assert_captured_values(&records, "contentFormat", &[json!("microsoft")]);
+        request_audit::assert_captured_values(&records, "content", &[json!(true)]);
+        let record = &records[0];
+        assert_eq!(record["decision"], response["decision"]);
+        assert_eq!(record["reasonCode"], response["reasonCode"]);
+        // Admission is added by the Broker, beside the provider-owned facts.
+        let mut provider = record["providerAudit"].as_object().unwrap().clone();
+        let admission = provider.remove("admission").unwrap();
+        assert_eq!(admission["outcome"], "admitted");
+        assert_eq!(json!(provider), json!({"upstreamOrigin":ORIGIN}));
+        if status == 202 {
+            assert_eq!(record["objectIds"], json!({"destination":"release-alerts"}));
+        }
+        let fields = record["requestAudit"]["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 3);
+        let content = fields
+            .iter()
+            .find(|field| field["key"] == "content")
+            .unwrap();
+        assert_eq!(content["capture"], "presence");
+        for excluded in [
+            "/opaque/fixture/trigger",
+            "sig=",
+            "SYNTHETIC_SIGNED_SECRET",
+            "PRIVATE_TEAMS_CARD_SUMMARY",
+            "PRIVATE_TEAMS_CARD_TEXT",
+        ] {
+            assert!(
+                !record.to_string().contains(excluded),
+                "{excluded}: {record}"
+            );
+        }
+        f.broker.shutdown();
+        f.broker.join().await.unwrap();
+    }
 }
 
 async fn rpc_response(response: reqwest::Response) -> Value {

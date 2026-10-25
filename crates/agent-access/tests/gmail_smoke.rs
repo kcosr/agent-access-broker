@@ -1,8 +1,12 @@
 //! Real CLI, stdio MCP, HTTP MCP and HTTP against the managed Gmail fixture.
+#[path = "common/request_audit.rs"]
+mod request_audit;
+
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
 use agent_access_broker_host::{AssemblyIdentity, BrokerComposition};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::{
@@ -179,7 +183,39 @@ fn success(output: std::process::Output) -> Value {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects() {
-    let f = fixture::gmail_fixture().await;
+    let mut f = fixture::gmail_fixture().await;
+    let directory = f.broker.directory().clone();
+    let mut document = std::fs::read_to_string(f.broker.config_path()).unwrap();
+    document.push_str(&format!(
+        "\n[audit]\ntype = \"jsonl\"\npath = {:?}\n",
+        f.broker
+            .directory()
+            .join("audit.jsonl")
+            .display()
+            .to_string()
+    ));
+    // Changing the audit backend requires startup. Keep the managed identity
+    // and browser session in the same fixture directory across the restart.
+    f.broker.shutdown();
+    f.broker.join().await.unwrap();
+    f.broker = IsolatedBroker::new(
+        BrokerComposition::builder()
+            .native(&agent_access_gmail::GMAIL_BACKEND)
+            .oauth(agent_access_gmail::test_support::dialect(&f.server.uri()))
+            .build()
+            .unwrap(),
+        AssemblyIdentity::new("example-assembly", "9.8.7"),
+    )
+    .unwrap()
+    .in_directory(directory)
+    .config_document(document)
+    .provider_fixture(
+        "gmail",
+        ProviderFixture::instance(agent_access_gmail::test_support::provider(&f.server.uri())),
+    )
+    .start()
+    .await
+    .unwrap();
     f.connect("").await;
     // Alice's own connection list reports the Google registration's subject.
     let connections = fixture::body_json(
@@ -244,7 +280,28 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
     let messages = || Mock::given(method("GET")).and(path("/gmail/v1/users/me/messages"));
     messages()
         .and(query_param_is_missing("pageToken"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"nextPageToken":"page-2"})))
+        .and(query_param("q", "in:inbox"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "messages":[{"id":"a123","threadId":"b456"}],
+            "nextPageToken":"page-2"
+        })))
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/gmail/v1/users/me/messages/a123"))
+        .and(query_param("format", "metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"a123",
+            "threadId":"b456",
+            "labelIds":["INBOX"],
+            "snippet":"PRIVATE_GMAIL_SNIPPET",
+            "payload":{
+                "mimeType":"text/plain",
+                "headers":[{"name":"Subject","value":"PRIVATE_GMAIL_SUBJECT"}],
+                "body":{"data":URL_SAFE_NO_PAD.encode("PRIVATE_GMAIL_BODY")}
+            }
+        })))
         .expect(1)
         .mount(&f.server)
         .await;
@@ -260,12 +317,48 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
     ));
     let page_token = page["result"]["nextPageToken"].as_str().unwrap();
     assert_ne!(page_token, "page-2");
+    let message = &page["result"]["messages"][0];
+    assert_eq!(message["snippet"], "PRIVATE_GMAIL_SNIPPET");
+    assert_eq!(
+        message["headers"],
+        json!([{"name":"Subject","value":"PRIVATE_GMAIL_SUBJECT"}])
+    );
+    assert_eq!(message["textParts"], json!([]));
     let next = json!({"query":"in:inbox","pageToken":page_token}).to_string();
     let next = success(run(
         &config,
         &["invoke", "gmail.message.search", "--input-json", &next],
     ));
     assert!(next["result"]["nextPageToken"].is_null(), "{next}");
+    let audit = f.broker.audit().unwrap();
+    for response in [&page, &next] {
+        let records = audit.require_request(
+            response["agentRequestId"].as_str().unwrap(),
+            "gmail",
+            "message.search",
+        );
+        assert_eq!(records.len(), 1);
+        request_audit::assert_captured_values(&records, "query", &[json!("in:inbox")]);
+        // Admission is added by the Broker, beside the provider-owned facts.
+        let mut provider = records[0]["providerAudit"].as_object().unwrap().clone();
+        let admission = provider.remove("admission").unwrap();
+        assert_eq!(admission["outcome"], "admitted");
+        assert_eq!(
+            json!(provider),
+            json!({"provider":"gmail","operation":"message.search"})
+        );
+        for excluded in [
+            "PRIVATE_GMAIL_SNIPPET",
+            "PRIVATE_GMAIL_SUBJECT",
+            "PRIVATE_GMAIL_BODY",
+            &URL_SAFE_NO_PAD.encode("PRIVATE_GMAIL_BODY"),
+            "google-access-1",
+            "google-reusable-refresh",
+            page_token,
+        ] {
+            assert!(!records[0].to_string().contains(excluded), "{excluded}");
+        }
+    }
     let before = f.server.received_requests().await.unwrap().len();
     for action in ["message.send", "message.delete", "thread.delete"] {
         assert!(

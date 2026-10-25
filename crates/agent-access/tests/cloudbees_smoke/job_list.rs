@@ -296,6 +296,39 @@ async fn job_list_service_personal_cli_send_http_and_mcp_filter_current_inventor
         }
         let audit = broker.audit().unwrap();
         audit.require_action("cloudbees_ci", "job.list");
+        for (response, token_supplied, continuation_present) in
+            [(&first, false, true), (&second, true, false)]
+        {
+            let records = audit.require_request(
+                response["agentRequestId"].as_str().unwrap(),
+                "cloudbees_ci",
+                "job.list",
+            );
+            assert_eq!(records.len(), 1);
+            request_audit::assert_captured_values(&records, "controller", &[json!("team-ci")]);
+            request_audit::assert_captured_values(&records, "folder", &[json!("payments")]);
+            let fields = records[0]["requestAudit"]["fields"].as_array().unwrap();
+            let page_token = fields
+                .iter()
+                .find(|field| field["key"] == "pageToken")
+                .unwrap();
+            assert_eq!(page_token["capture"], "presence");
+            assert_eq!(page_token["value"], token_supplied);
+            let provider = &records[0]["providerAudit"]["cloudbees_ci"];
+            assert_eq!(provider["continuationPresent"], continuation_present);
+            assert_eq!(provider["returnedCount"], response["result"]["count"]);
+            let jobs: Vec<_> = response["result"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["resource"].clone())
+                .collect();
+            assert_eq!(provider["jobs"], json!(jobs));
+            for input in ["controller", "folder", "pageToken", "pageTokenPresent"] {
+                assert!(provider.get(input).is_none(), "{input}: {provider}");
+            }
+        }
+        assert!(!audit.text().contains(token));
         let provider_audit = audit
             .text()
             .lines()
