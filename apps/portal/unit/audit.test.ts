@@ -540,8 +540,11 @@ describe("audit record summary rows", () => {
       { key: "buildNumber", label: "Build number", value: "469" },
     ]);
     // A scope listing several values does not hide the one the provider names.
-    const several = [{ key: "jira_project", label: "Jira project", value: "OPS, SEC" }];
+    const several = [{ key: "project", label: "Project", value: "OPS, SEC" }];
     expect(auditObjectIdRows(record({ objectIds: { project: "OPS" } }), several)).toEqual([{ key: "project", label: "Project", value: "OPS" }]);
+    // An equal value under another key names something else: a numeric space key is not the page.
+    const space = [{ key: "space", label: "Space", value: "123" }];
+    expect(auditObjectIdRows(record({ objectIds: { pageId: "123" } }), space)).toEqual([{ key: "pageId", label: "Page ID", value: "123" }]);
   });
 
   test("group names come from catalog groups with a display name", () => {
