@@ -7,6 +7,9 @@ use super::*;
 use agent_access_core::imports::ImportedDiscoveryCredential;
 use agent_access_core::*;
 
+mod credentials;
+mod documents;
+
 fn admin_token(fixture: &Fixture) -> String {
     admin_token_for(fixture, "admin")
 }
@@ -255,6 +258,7 @@ async fn refresh_quarantines_changed_tools_and_accept_requires_grant_confirmatio
         .unwrap()
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: record.status,
                 actions,
@@ -1003,12 +1007,12 @@ async fn personal_discovery_rotation_invalidates_preview_without_service_edit() 
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let put = |token: &str| {
-        fixture
-            .runtime
+        let runtime = broker.runtime();
+        runtime
             .managed_store()
             .unwrap()
-            .upsert_user_credential(
-                fixture.runtime.credential_key_ring().unwrap(),
+            .upsert_imported_user_credential(
+                runtime.credential_key_ring().unwrap(),
                 CredentialWriteRequest {
                     owner_principal_id: "admin".into(),
                     service: "observability".into(),
@@ -1020,6 +1024,10 @@ async fn personal_discovery_rotation_invalidates_preview_without_service_edit() 
                     actor: "admin".into(),
                 },
                 agent_access_core::CredentialManagementPurpose::Administrative,
+                &runtime
+                    .prepare_imported_connection_contract("observability")
+                    .unwrap()
+                    .unwrap(),
             )
             .unwrap()
     };

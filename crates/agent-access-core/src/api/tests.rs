@@ -1211,6 +1211,77 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
 }
 
 #[test]
+fn raw_json_routes_keep_exact_byte_metadata_and_are_excluded_from_json_send() {
+    let mut raw = http_route_specs(&crate::tests::test_resource_types())
+        .into_iter()
+        .find(|route| route.operation == "admin.imports.document.upload")
+        .unwrap();
+    assert_eq!(raw.request_body_kind, RequestBodyKind::RawJson);
+    // Projection depends on the transport contract, not this import's route or
+    // operation identity.
+    raw.route = "/v1/source-documents".into();
+    raw.operation = "documents.replace".into();
+    raw.path_params.clear();
+    let ordinary = body_route(
+        "POST",
+        "/v1/ordinary-json",
+        "ordinary.create",
+        RouteAccess::AdminWrite,
+        ResponseKind::ManagementEnvelope,
+        ExitPolicy::ManagementOk,
+        vec![],
+    );
+    let encoded = serde_json::to_value(&raw).unwrap();
+    assert_eq!(encoded["requestBodyKind"], "raw_json");
+    assert_eq!(
+        serde_json::from_value::<HttpRouteSpec>(encoded.clone()).unwrap(),
+        raw
+    );
+    let mut unknown = encoded;
+    unknown["requestBodyKind"] = json!("future_binary_kind");
+    assert!(serde_json::from_value::<HttpRouteSpec>(unknown).is_err());
+    let encoded = serde_json::to_value(&ordinary).unwrap();
+    assert!(encoded.get("requestBodyKind").is_none());
+    assert_eq!(
+        serde_json::from_value::<HttpRouteSpec>(encoded)
+            .unwrap()
+            .request_body_kind,
+        RequestBodyKind::Json
+    );
+
+    let mut catalog = empty_catalog(json!({}));
+    catalog.routes = vec![raw, ordinary];
+    let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "session");
+    let operation = &openapi["paths"]["/v1/source-documents"]["put"];
+    assert_eq!(operation["x-agent-access-request-body-kind"], "raw_json");
+    assert_eq!(
+        operation["requestBody"]["content"]["application/json"]["schema"]["type"],
+        "object"
+    );
+    assert!(
+        operation["requestBody"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("without parsing or reserialization")
+    );
+    assert!(
+        openapi["paths"]["/v1/ordinary-json"]["post"]
+            .get("x-agent-access-request-body-kind")
+            .is_none()
+    );
+    let send = send_schema_from_catalog(&catalog);
+    let variants = send["oneOf"].as_array().unwrap();
+    assert_eq!(variants.len(), 1);
+    assert_eq!(
+        variants[0]["properties"]["route"]["const"],
+        "/v1/ordinary-json"
+    );
+    let validator = jsonschema::validator_for(&send).unwrap();
+    assert!(validator.is_valid(&json!({"version":SEND_SCHEMA_VERSION,"kind":"http","method":"POST","route":"/v1/ordinary-json","body":{}})));
+    assert!(!validator.is_valid(&json!({"version":SEND_SCHEMA_VERSION,"kind":"http","method":"PUT","route":"/v1/source-documents","body":{}})));
+}
+
+#[test]
 fn generated_openapi_omits_request_body_for_no_body_routes() {
     let mut catalog = empty_catalog(json!({}));
     catalog.routes = http_route_specs(&crate::tests::test_resource_types())

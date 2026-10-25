@@ -610,7 +610,7 @@ personal binding. It mirrors that binding and never adds a second method:
 | Import's personal binding | Published connection |
 | --- | --- |
 | None, unsupported or not allowed (service-only, credential-free, unapproved OAuth) | None |
-| Static personal token | `token_profiles` with the one profile, for every principal kind: `token`, or `username-token` for a command import that declares `username_token` |
+| Static personal credential | `token_profiles` with the one profile, for every principal kind: `token`, or `username-token` for HTTP Basic and command imports that declare `username_token` |
 | Approved MCP OAuth | `oauth` only, with the import's registration and profile |
 
 Imported connections are not configured in TOML. See
@@ -2189,12 +2189,14 @@ Invocation and Git handlers authenticate before consuming bodies and retain thei
 existing caller admission.
 
 Browser authentication bodies are capped at 16 KiB; control-plane JSON and
-management bodies are capped at 1 MiB. Both are additionally limited by
+management bodies are capped at 1 MiB, except authenticated imported-document
+uploads, which allow 4 MiB. Anonymous requests to that upload route retain the
+1 MiB cap. All are additionally limited by
 `max_http_body_bytes` and the startup hard cap. Invocation JSON retains the
 configured transfer cap so provider inline-content limits remain usable.
 Multipart JSON metadata has a 1 MiB cap; file parts and Git uploads use the
 configured transfer cap. Browser-auth bodies have a five-second total receive
-ceiling, other control-plane bodies fifteen seconds. A smaller configured
+ceiling, other control-plane bodies, including document uploads, fifteen seconds. A smaller configured
 `request_body_timeout_ms` also applies to these routes. Invocation and Git bodies
 use `request_body_timeout_ms` directly (five minutes by default). All total
 receive deadlines start at admission and progress does not reset them. Public
@@ -2737,5 +2739,11 @@ registrations retain their connections, whether `scope_mode` is omitted or set
 to `"explicit"`.
 
 OpenAPI imports use the compiled `openapi_http` adapter. Operator endpoint policy
-must cover both the API base and its definition document URL. See
-[OpenAPI imports](imported-openapi.md) for document authentication and scheme selection.
+must cover the API base and, for URL sources, the definition document URL.
+Uploaded documents need only the API destination and no document credential.
+Authenticated upload bodies are limited to 4 MiB, further bounded by the startup
+hard cap, `limits.max_http_body_bytes` and `limits.max_upstream_response_bytes`.
+Anonymous requests retain the 1 MiB control-plane cap. The total receive deadline
+is the smaller of `limits.request_body_timeout_ms` and 15 seconds.
+See [OpenAPI imports](imported-openapi.md) for source selection, document
+authentication and scheme selection.

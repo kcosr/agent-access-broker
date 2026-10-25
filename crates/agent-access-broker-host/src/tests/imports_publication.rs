@@ -61,6 +61,10 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
                     actor: "admin".into(),
                 },
                 ring,
+                &BrokerRuntime::new(fixture.config.clone())
+                    .unwrap()
+                    .prepare_imported_secret_contract("transported", purpose)
+                    .unwrap(),
                 |_, _| Ok(()),
             )
             .unwrap()
@@ -70,6 +74,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+                discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Enabled,
                 actions: vec![ImportedActionWrite {
@@ -146,9 +151,17 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
         .unwrap();
     assert!(
         store
-            .write_imported_secret(rotation(), ring, |catalog, _| {
-                reloaded.with_imported_catalog(catalog.clone(), stale)
-            })
+            .write_imported_secret(
+                rotation(),
+                ring,
+                &reloaded
+                    .prepare_imported_secret_contract(
+                        "transported",
+                        ImportedCredentialPurpose::Transport
+                    )
+                    .unwrap(),
+                |catalog, _| { reloaded.with_imported_catalog(catalog.clone(), stale) }
+            )
             .is_err()
     );
     assert_eq!(
@@ -181,12 +194,22 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
         .unwrap();
     assert!(
         store
-            .write_imported_secret(rotation(), ring, |catalog, proof| {
-                reloaded.with_imported_catalog(
-                    catalog.clone(),
-                    wrong_plaintext.bind_secret_write(proof)?,
-                )
-            })
+            .write_imported_secret(
+                rotation(),
+                ring,
+                &reloaded
+                    .prepare_imported_secret_contract(
+                        "transported",
+                        ImportedCredentialPurpose::Transport
+                    )
+                    .unwrap(),
+                |catalog, proof| {
+                    reloaded.with_imported_catalog(
+                        catalog.clone(),
+                        wrong_plaintext.bind_secret_write(proof)?,
+                    )
+                }
+            )
             .is_err()
     );
     assert_eq!(
@@ -218,6 +241,12 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
             .write_imported_secret(
                 request,
                 worker_runtime.credential_key_ring().unwrap(),
+                &worker_runtime
+                    .prepare_imported_secret_contract(
+                        "transported",
+                        ImportedCredentialPurpose::Transport,
+                    )
+                    .unwrap(),
                 |catalog, proof| {
                     worker_runtime
                         .with_imported_catalog(catalog.clone(), providers.bind_secret_write(proof)?)

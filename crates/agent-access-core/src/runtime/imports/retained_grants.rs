@@ -52,7 +52,11 @@ impl BrokerRuntime {
         if grants.is_empty() {
             return Ok(());
         }
-        let mut config = retention_config(&self.config, &self.imported_catalog);
+        let mut config = retention_config_with_contracts(
+            &self.config,
+            &self.imported_catalog,
+            &self.imported_credential_contracts,
+        );
         config.policy.resources = snapshot.resource_catalog.resources.clone();
         config.policy.resource_groups = snapshot.resource_catalog.resource_groups.clone();
         let issues = crate::normalized_policy_grant_validation_issues(

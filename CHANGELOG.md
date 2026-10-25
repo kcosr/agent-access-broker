@@ -6,12 +6,24 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- **Imported action API additions require consumer updates.**
+- **Uploaded import documents add a managed-store migration.** Back up before
+  applying `032_imported_source_documents` and upgrade the Broker, CLI and
+  portal together. Existing imports are unchanged; rollback across this schema
+  change requires the pre-migration backup. See
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+  ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
+
+- **Route and imported API additions require consumer updates.**
+  `HttpRouteSpec` gains `request_body_kind`; downstream struct literals must
+  supply `RequestBodyKind::Json` for ordinary JSON routes.
   `ImportedActionDefinition`, exposed through the host's `test-support` API,
   gains the public `download: bool` field. Downstream struct literals must
   supply it (`false` preserves existing JSON actions), and exhaustive
-  destructuring must include it or use `..`.
-  ([#64](https://github.com/kcosr/agent-access-broker/pull/64))
+  destructuring must include it or use `..`. `ImportedCredentialDelivery`
+  gains `Basic`; update exhaustive matches to handle that delivery explicitly.
+  `ImportedServiceRecord` gains `document` metadata; existing downstream struct
+  literals must supply `None` when no uploaded source is retained.
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64), [#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Resource-access discovery replaces resource listing.** Use MCP
   `resource_access_describe`, CLI `resource-access describe`, HTTP
@@ -57,6 +69,20 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Swagger imports, document uploads and shared OpenAPI request support.** Swagger 2.0 JSON
+  and OpenAPI 3.1 JSON share reviewed actions, Basic credentials and scalar
+  URL-encoded forms through CLI, HTTP MCP and stdio MCP. Credential forms use
+  server-derived input policies; Basic usernames and secrets preserve spaces
+  and Unicode. Definition-fetch and execution credentials remain independent.
+  Choose an approved document URL or upload a JSON file in the portal or CLI.
+  Uploaded sources are retained for offline refresh; validated replacements
+  atomically create a review preview and quarantine changed actions, while
+  failed uploads preserve the prior source and accepted generation.
+  See [OpenAPI and Swagger imports](docs/imported-openapi.md). Accepted Basic or
+  form definitions require a compatible backup or removal through the newer
+  Broker before rollback to a binary without those capabilities.
+  ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Bounded invocation waiting and live limits.** Optional `max_wait` holds
   service invocations in FIFO order within existing request capacity; existing
@@ -142,6 +168,17 @@ All notable changes to this project are documented in this file.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Changed
+
+- **Import validation is stricter.** OpenAPI documents with
+  duplicate names now fail discovery or refresh instead of using the last value;
+  failed refresh preserves accepted actions. Previously accepted `+json` response
+  media declarations containing spaces or parameters now make the imported
+  service unavailable; correct the source and refresh and accept it before use.
+  See [the supported profile](docs/imported-openapi.md#supported-document-and-request-profile).
+  Import credential writes check the
+  server's current field policy and both explicit revisions before consuming
+  secret input; upgrade the administrative CLI and Broker together.
+  ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Admission and service-detail behavior.** Runtime publication cancels requests
   whose captured runtime is replaced before admission even with `max_wait = "0s"`.

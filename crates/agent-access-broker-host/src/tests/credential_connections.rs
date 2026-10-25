@@ -348,6 +348,81 @@ fn jira_secret(token: &str) -> Value {
     json!({"secret": {"username": "alice@example.com", "token": token}})
 }
 
+#[tokio::test]
+async fn native_saves_survive_unrelated_snapshot_publication_without_the_import_fence() {
+    use crate::handlers::management::common::{ManagementAccess, management_context};
+    use crate::handlers::management::credentials::tests::put_admitted_connection;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    let fixture = fixture("jira").await;
+    let state = crate::state::AppState {
+        reloadable: fixture._broker.state(),
+    };
+    for (token, principal, access, operation) in [
+        (
+            &fixture.alice,
+            "alice",
+            ManagementAccess::User,
+            "credentials.put",
+        ),
+        (
+            &fixture.admin,
+            "robot",
+            ManagementAccess::AdminWrite,
+            crate::handlers::management::audit_actions::ADMIN_CREDENTIALS_PUT,
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        headers.insert(
+            REQUEST_ID_HEADER,
+            HeaderValue::from_static("native-save-after-publication"),
+        );
+        let context = management_context(
+            &state,
+            "127.0.0.1:43210".parse().unwrap(),
+            &headers,
+            operation,
+            access,
+        )
+        .await
+        .unwrap();
+        let admitted = context.snapshot.clone();
+        let publication = state.reloadable.policy_mutation_lock.lock().await;
+        let mut next = (*admitted).clone();
+        next.generation += 1;
+        state.reloadable.publish_snapshot(Arc::new(next));
+        assert!(!Arc::ptr_eq(&admitted, &state.reloadable.current()));
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            put_admitted_connection(
+                &state,
+                context,
+                principal,
+                &fixture.jira,
+                jira_secret("native-after-publication"),
+            ),
+        )
+        .await
+        .expect("native credential saves must not wait for the import publication fence");
+        drop(publication);
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            fixture
+                .store
+                .credential_by_tuple(principal, &fixture.jira, "default")
+                .unwrap()
+                .profile,
+            JIRA_PROFILE
+        );
+    }
+}
+
 fn connection_row<'a>(list: &'a Value, connection: &str) -> &'a Value {
     list["connections"]
         .as_array()

@@ -11,6 +11,7 @@ fn command_record(
     kind: Option<ImportedCredentialKind>,
 ) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        document: None,
         definition: ImportedServiceDefinition {
             service: "ticketing".into(),
             display_name: "Ticketing".into(),
@@ -70,8 +71,18 @@ static COMMAND_FORM: CommandForm = CommandForm;
 
 #[async_trait::async_trait]
 impl crate::imports::ImportedAdapter for CommandForm {
+    fn credential_contract(
+        &self,
+        definition: &crate::imports::ImportedServiceDefinition,
+        import: &crate::imports::ImportedAdapterContext<'_>,
+    ) -> Result<crate::imports::ImportedCredentialContract, String> {
+        crate::imports::test_credential_contract(definition, import)
+    }
     fn kind(&self) -> &'static str {
         "command"
+    }
+    fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
+        definition.validate()
     }
     fn development_only(&self) -> bool {
         false

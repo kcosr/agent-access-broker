@@ -30,6 +30,7 @@ mod import_control;
 mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
+pub use imports::{PreparedImportedCredentialContract, PreparedImportedDocumentUpload};
 mod lookup_access;
 mod mcp_views;
 mod owned;
@@ -1733,6 +1734,7 @@ pub struct BrokerRuntime {
     /// Each is the same object as the service's entry in `providers`.
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
     imported_catalog: Arc<crate::ImportedCatalog>,
+    imported_credential_contracts: Arc<imports::ImportedCredentialContracts>,
     effective_credentials: Arc<crate::CredentialsConfig>,
     import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
     /// Command-import budgets and live process supervisors, carried from
@@ -2225,6 +2227,8 @@ impl BrokerRuntime {
                 previous.map(|previous| &*previous.resource_types),
             )
             .map_err(|message| RuntimeError::ManagedStore { message })?;
+        let imported_credential_contracts =
+            imports::resolve_credential_contracts(&config, &imported_catalog);
         let mut services = build_service_descriptors(&config, &provider_map, &resource_types)?;
         for record in &imported_catalog.services {
             let name = &record.definition.service;
@@ -2233,7 +2237,12 @@ impl BrokerRuntime {
                     message: format!("retained imported service {name} collides with {owner}"),
                 });
             }
-            let descriptor = imports::descriptor(record, &config, resource_types.registry());
+            let descriptor = imports::descriptor_with_contract(
+                record,
+                &config,
+                resource_types.registry(),
+                imported_credential_contracts.get(name),
+            );
             // Retained metadata survives an adapter becoming unavailable. The
             // provider builder fails that service closed on semantic validation.
             services.insert(name.clone(), Arc::new(descriptor));
@@ -2255,6 +2264,7 @@ impl BrokerRuntime {
         let imported_providers = imports::build_providers(
             &config,
             &imported_catalog,
+            &imported_credential_contracts,
             resource_types.registry(),
             managed_store.as_ref(),
             credential_key_ring.as_ref(),
@@ -2274,7 +2284,11 @@ impl BrokerRuntime {
             );
         }
         let source_config = config.clone();
-        imports::effective_credentials(&mut config, &imported_catalog);
+        imports::effective_credentials_with_contracts(
+            &mut config,
+            &imported_catalog,
+            &imported_credential_contracts,
+        );
         // Imports add connections offline validation cannot see. The
         // published connections hold their implicit types.
         let connection_errors = crate::connections::resolve_effective_connections(
@@ -2290,7 +2304,11 @@ impl BrokerRuntime {
             }));
         }
         let policy_snapshot = Arc::new(ArcSwap::from_pointee(load_policy_snapshot(
-            &imports::retention_config(&config, &imported_catalog),
+            &imports::retention_config_with_contracts(
+                &config,
+                &imported_catalog,
+                &imported_credential_contracts,
+            ),
             managed_store.as_ref(),
             &services,
             &imported_catalog,
@@ -2328,6 +2346,7 @@ impl BrokerRuntime {
             command_providers: Arc::new(command_providers),
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
+            imported_credential_contracts: Arc::new(imported_credential_contracts),
             import_dispatch: Arc::new(BTreeMap::new()),
             command_registry: previous
                 .map(|previous| previous.command_registry.clone())
@@ -2865,7 +2884,11 @@ impl BrokerRuntime {
         resource_management::validate_attribute_bindings(self.resource_types.registry(), catalog)?;
         self.validate_new_imported_grants(grants, &baseline.1)?;
         let issues = managed_policy_validation_issues(
-            &imports::retention_config(&self.config, &self.imported_catalog),
+            &imports::retention_config_with_contracts(
+                &self.config,
+                &self.imported_catalog,
+                &self.imported_credential_contracts,
+            ),
             subjects,
             &self.services,
             &self.imported_catalog,

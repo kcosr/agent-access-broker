@@ -361,6 +361,11 @@ impl BrokerRuntime {
                     ImportedCredentialPurpose::Execution,
                     version,
                     ring,
+                    self.imported_credential_contracts
+                        .get(service)
+                        .ok_or_else(UnavailableCredential::missing)?
+                        .requirement(ImportedCredentialPurpose::Execution)
+                        .ok_or_else(UnavailableCredential::missing)?,
                 )
                 .map(drop)
                 .map_err(provider_error_from_managed_store)
@@ -413,12 +418,16 @@ impl BrokerRuntime {
                     return Err(UnavailableCredential::missing());
                 };
                 store
-                    .check_user_credential(
+                    .check_user_credential_with_imported_contract(
                         ring,
                         &identity.principal,
                         connection.id,
                         crate::CONNECTION_CREDENTIAL_NAME,
                         profiles,
+                        self.imported_connection_requirement(connection.id)
+                            .map_err(provider_error_from_managed_store)
+                            .map_err(UnavailableCredential::from_provider)?
+                            .as_ref(),
                     )
                     .map_err(provider_error_from_managed_store)
                     .map_err(UnavailableCredential::from_provider)

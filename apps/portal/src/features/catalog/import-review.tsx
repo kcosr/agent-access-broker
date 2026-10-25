@@ -96,6 +96,10 @@ export function OperationDetails({ definition }: { definition: ImportActionDefin
         {operation.method} {operation.path}
       </span>
       {operation.security ? <span className="wb-muted"> · {openApiSchemeLabel(operation.security)}</span> : null}
+      {operation.requestMedia !== undefined ? <span className="wb-muted"> · {operation.requestMedia ?? "No request body"}</span> : null}
+      {operation.requestBodyRequired !== undefined ? <span className="wb-muted"> · Body {operation.requestBodyRequired ? "required" : "optional"}</span> : null}
+      {operation.requiredBodyFields?.length ? <span className="wb-muted"> · {operation.requestBodyRequired ? "Required body fields" : "Required fields when body is supplied"}: {operation.requiredBodyFields.join(", ")}</span> : null}
+      {operation.noContentStatuses.length ? <span className="wb-muted"> · Declares no response content ({operation.noContentStatuses.join(", ")})</span> : null}
     </p>
   );
 }
@@ -488,6 +492,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
       <p className="pt-prose wb-small wb-muted">
         Preview expires <Time value={data.preview?.expiresAt} format="datetime" fallback="soon" />. Configuration, credential or catalog changes require a fresh preview.
       </p>
+      {data.service.definition.adapterKind === "openapi_http" && data.preview ? <p className="pt-prose wb-small">Source: {data.preview.manifest.protocolVersion === "2.0" ? "Swagger" : "OpenAPI"} {data.preview.manifest.protocolVersion}</p> : null}
       <ScopedMcpStatus value={data.scopedMcp} />
       {data.scopedMcpWarnings.length ? (
         <Banner tone="warning" slim>

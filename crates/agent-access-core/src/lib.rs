@@ -4638,6 +4638,8 @@ pub struct CredentialInputSchema {
     pub profile: String,
     pub credential_kind: String,
     pub fields: Vec<CredentialInputField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_policy: Option<imports::ImportedCredentialInputPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4710,6 +4712,7 @@ pub fn credential_input_schema(
         connection: connection.to_string(),
         profile: profile.to_string(),
         credential_kind: credential_kind.to_string(),
+        input_policy: None,
         fields,
     })
 }

@@ -366,6 +366,31 @@ impl core::marker::Unpin for agent_access_core::api::ExitPolicy
 impl core::marker::UnsafeUnpin for agent_access_core::api::ExitPolicy
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::api::ExitPolicy
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::ExitPolicy
+#[non_exhaustive] pub enum agent_access_core::api::RequestBodyKind
+pub agent_access_core::api::RequestBodyKind::Json
+pub agent_access_core::api::RequestBodyKind::RawJson
+impl core::clone::Clone for agent_access_core::api::RequestBodyKind
+pub fn agent_access_core::api::RequestBodyKind::clone(&self) -> agent_access_core::api::RequestBodyKind
+impl core::cmp::Eq for agent_access_core::api::RequestBodyKind
+impl core::cmp::PartialEq for agent_access_core::api::RequestBodyKind
+pub fn agent_access_core::api::RequestBodyKind::eq(&self, &agent_access_core::api::RequestBodyKind) -> bool
+impl core::default::Default for agent_access_core::api::RequestBodyKind
+pub fn agent_access_core::api::RequestBodyKind::default() -> agent_access_core::api::RequestBodyKind
+impl core::fmt::Debug for agent_access_core::api::RequestBodyKind
+pub fn agent_access_core::api::RequestBodyKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_core::api::RequestBodyKind
+impl core::marker::StructuralPartialEq for agent_access_core::api::RequestBodyKind
+impl serde_core::ser::Serialize for agent_access_core::api::RequestBodyKind
+pub fn agent_access_core::api::RequestBodyKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_core::api::RequestBodyKind
+pub fn agent_access_core::api::RequestBodyKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_core::api::RequestBodyKind
+impl core::marker::Send for agent_access_core::api::RequestBodyKind
+impl core::marker::Sync for agent_access_core::api::RequestBodyKind
+impl core::marker::Unpin for agent_access_core::api::RequestBodyKind
+impl core::marker::UnsafeUnpin for agent_access_core::api::RequestBodyKind
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::api::RequestBodyKind
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::RequestBodyKind
 pub enum agent_access_core::api::ResponseKind
 pub agent_access_core::api::ResponseKind::AuthEnvelope
 pub agent_access_core::api::ResponseKind::ManagementEnvelope
@@ -454,6 +479,7 @@ pub agent_access_core::api::HttpRouteSpec::null_body_allowed: bool
 pub agent_access_core::api::HttpRouteSpec::operation: alloc::string::String
 pub agent_access_core::api::HttpRouteSpec::path_params: alloc::vec::Vec<agent_access_core::api::RouteParamSpec>
 pub agent_access_core::api::HttpRouteSpec::query_params: alloc::vec::Vec<agent_access_core::api::RouteParamSpec>
+pub agent_access_core::api::HttpRouteSpec::request_body_kind: agent_access_core::api::RequestBodyKind
 pub agent_access_core::api::HttpRouteSpec::request_body_schema: core::option::Option<serde_json::value::Value>
 pub agent_access_core::api::HttpRouteSpec::required_feature: core::option::Option<agent_access_core::api::RouteFeature>
 pub agent_access_core::api::HttpRouteSpec::response_kind: agent_access_core::api::ResponseKind
@@ -645,6 +671,7 @@ impl core::marker::UnsafeUnpin for agent_access_core::imports::definition::Impor
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::definition::ImportedBindingStatus
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::definition::ImportedBindingStatus
 pub enum agent_access_core::imports::definition::ImportedCredentialDelivery
+pub agent_access_core::imports::definition::ImportedCredentialDelivery::Basic
 pub agent_access_core::imports::definition::ImportedCredentialDelivery::Bearer
 pub agent_access_core::imports::definition::ImportedCredentialDelivery::RawHeader
 pub agent_access_core::imports::definition::ImportedCredentialDelivery::RawHeader::name: alloc::string::String
@@ -662,7 +689,7 @@ impl core::marker::StructuralPartialEq for agent_access_core::imports::definitio
 impl serde_core::ser::Serialize for agent_access_core::imports::definition::ImportedCredentialDelivery
 pub fn agent_access_core::imports::definition::ImportedCredentialDelivery::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for agent_access_core::imports::definition::ImportedCredentialDelivery
-pub fn agent_access_core::imports::definition::ImportedCredentialDelivery::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn agent_access_core::imports::definition::ImportedCredentialDelivery::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 impl core::marker::Freeze for agent_access_core::imports::definition::ImportedCredentialDelivery
 impl core::marker::Send for agent_access_core::imports::definition::ImportedCredentialDelivery
 impl core::marker::Sync for agent_access_core::imports::definition::ImportedCredentialDelivery
@@ -1025,6 +1052,30 @@ impl core::marker::UnsafeUnpin for agent_access_core::imports::registration::Imp
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 pub mod agent_access_core::managed_store
+pub mod agent_access_core::managed_store::imported_documents
+#[non_exhaustive] pub struct agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+pub agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::byte_length: u64
+pub agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::filename: core::option::Option<alloc::string::String>
+pub agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::sha256: alloc::string::String
+impl core::clone::Clone for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+pub fn agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::clone(&self) -> agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::cmp::Eq for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::cmp::PartialEq for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+pub fn agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::eq(&self, &agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+pub fn agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl serde_core::ser::Serialize for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+pub fn agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+pub fn agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::marker::Send for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::marker::Sync for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::marker::Unpin for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
 pub mod agent_access_core::managed_store::imported_store
 pub enum agent_access_core::managed_store::imported_store::ImportedActionStatus
 pub agent_access_core::managed_store::imported_store::ImportedActionStatus::Disabled
@@ -1130,6 +1181,7 @@ pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::act
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::created_at: alloc::string::String
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::created_by: alloc::string::String
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::definition: agent_access_core::imports::definition::ImportedServiceDefinition
+pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::document: core::option::Option<agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata>
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::slot_versions: alloc::collections::btree::map::BTreeMap<agent_access_core::imports::definition::ImportedCredentialPurpose, alloc::string::String>
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::status: agent_access_core::managed_store::imported_store::ImportedServiceStatus
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::updated_at: alloc::string::String
@@ -1685,6 +1737,7 @@ impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_core::test_suppo
 // Implementation and construction contracts of the items above
 
 enum agent_access_core::api::ExitPolicy: exhaustive
+enum agent_access_core::api::RequestBodyKind: non-exhaustive
 enum agent_access_core::api::ResponseKind: exhaustive
 enum agent_access_core::api::RouteAccess: exhaustive
 enum agent_access_core::api::RouteFeature: exhaustive
@@ -1743,6 +1796,7 @@ struct agent_access_core::managed_store::ImportBlockingResourceGroup: named fiel
 struct agent_access_core::managed_store::ImportChangeBlocked: named fields, non-exhaustive
 struct agent_access_core::managed_store::ManagedPolicyGrantRecord: named fields
 struct agent_access_core::managed_store::PolicyValidationIssue: named fields
+struct agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata: named fields, non-exhaustive
 struct agent_access_core::managed_store::imported_store::ImportedActionRecord: named fields
 struct agent_access_core::managed_store::imported_store::ImportedCatalog: named fields
 struct agent_access_core::managed_store::imported_store::ImportedServiceRecord: named fields

@@ -1,3 +1,4 @@
+import { COMMAND_INPUT, TOKEN_INPUT } from "./credential-input.fixture";
 import { vi } from "vitest";
 const sessionFixture = vi.hoisted(() => ({ authenticated: true, role: "admin" as "admin" | "service_policy_manager", selfServiceEnabled: true, principal: "admin" }));
 vi.mock("../src/app/session", () => ({ useSession: () => ({ session: sessionFixture }) }));
@@ -133,16 +134,16 @@ describe("command import configuration", () => {
   });
 
   test("a username-and-token execution credential takes the username with the token", () => {
-    const html = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: false, withUsername: true, noun: "credential", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    const html = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: false, descriptor: COMMAND_INPUT, noun: "credential", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
     expect(html).toContain("Set execution credential");
     expect(html).toContain("Username");
     expect(html).toContain("Save credential");
     // A command's token credential takes no username; other imports' slots hold tokens.
-    const token = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, noun: "credential", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    const token = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, descriptor: TOKEN_INPUT, noun: "credential", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
     expect(token).toContain("Rotate execution credential");
     expect(token).toContain("Save credential");
     expect(token).not.toContain("Username");
-    const other = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, noun: "token", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
+    const other = renderToStaticMarkup(createElement(ImportTokenModal, { purpose: "execution", rotate: true, descriptor: TOKEN_INPUT, noun: "token", onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
     expect(other).toContain("Rotate execution token");
     expect(other).toContain("Save token");
   });

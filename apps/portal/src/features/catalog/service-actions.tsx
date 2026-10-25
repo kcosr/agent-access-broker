@@ -543,12 +543,16 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
         </DrawerSection>
       ) : null}
       {operation ? (
-        <DrawerSection title="OpenAPI operation">
+        <DrawerSection title="OpenAPI / Swagger operation">
           <KeyValue
             labelWidth={150}
             items={[
               { label: "Operation", value: <span className="wb-mono">{`${operation.method} ${operation.path}`}</span> },
-              operation.security ? { label: "Security", value: openApiSchemeLabel(operation.security) } : null
+              operation.security ? { label: "Security", value: openApiSchemeLabel(operation.security) } : null,
+              operation.requestMedia !== undefined ? { label: "Request media", value: operation.requestMedia ?? "No request body" } : null,
+              operation.requestBodyRequired !== undefined ? { label: "Request body", value: operation.requestBodyRequired ? "Required" : "Optional" } : null,
+              operation.requiredBodyFields?.length ? { label: operation.requestBodyRequired ? "Required body fields" : "Required fields when body is supplied", value: operation.requiredBodyFields.join(", ") } : null,
+              operation.noContentStatuses.length ? { label: "No response content", value: operation.noContentStatuses.join(", ") } : null
             ]}
           />
         </DrawerSection>

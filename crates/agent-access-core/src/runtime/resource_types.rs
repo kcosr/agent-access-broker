@@ -429,6 +429,7 @@ mod tests {
         types: Vec<ImportedResourceTypeDeclaration>,
     ) -> ImportedServiceRecord {
         ImportedServiceRecord {
+            document: None,
             definition: ImportedServiceDefinition {
                 service: service.into(),
                 display_name: service.into(),

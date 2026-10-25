@@ -1,0 +1,732 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "version": "1.0.0",
+    "title": "Synthetic Sample API",
+    "description": "Fully synthetic Swagger 2.0 sample. It reproduces the structural and serialization feature set of a sanitized reference document; all names, values, and relationships are neutral and carry no business meaning."
+  },
+  "host": "api.example.test",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "consumes": [
+    "application/x-www-form-urlencoded",
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "basicAuth": { "type": "basic" }
+  },
+  "security": [
+    { "basicAuth": [] }
+  ],
+  "tags": [
+    { "name": "Alpha" },
+    { "name": "Gamma" },
+    { "name": "Zeta" }
+  ],
+  "paths": {
+    "/alpha": {
+      "post": {
+        "tags": ["Alpha"],
+        "consumes": ["application/x-www-form-urlencoded"],
+        "produces": ["application/json"],
+        "parameters": [
+          { "$ref": "#/parameters/pageFilter" },
+          { "$ref": "#/parameters/alphaNumberFilter" },
+          { "$ref": "#/parameters/alphaNameFilter" },
+          { "$ref": "#/parameters/alphaStatusFilter" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/responses/alphaSearchResult" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "404": { "$ref": "#/responses/notFoundError" },
+          "409": { "$ref": "#/responses/alphaSearchConflict" }
+        }
+      }
+    },
+    "/alpha/new": {
+      "post": {
+        "tags": ["Alpha"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/createAlpha" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/alphaCreated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/alpha/{alphaNumber}": {
+      "get": {
+        "tags": ["Alpha"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/alphaNumber" } ],
+        "responses": {
+          "200": { "description": "OK", "schema": { "$ref": "#/definitions/Alpha" } },
+          "401": { "$ref": "#/responses/unauthorizedError" }
+        }
+      },
+      "patch": {
+        "tags": ["Alpha"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [
+          { "$ref": "#/parameters/alphaNumber" },
+          { "$ref": "#/parameters/updateAlphaByPath" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/responses/alphaUpdated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/alpha/config/{alphaNumber}": {
+      "get": {
+        "tags": ["Alpha"],
+        "produces": ["application/json"],
+        "parameters": [
+          { "$ref": "#/parameters/alphaNumber" },
+          { "$ref": "#/parameters/pageQuery" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "page": { "$ref": "#/definitions/Page" },
+                "results": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "deltaNumber": { "type": "string", "description": "Identifier of the related resource D." },
+                      "configKey": { "type": "string" },
+                      "configData": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "404": { "$ref": "#/responses/notFoundError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/alpha/activate": {
+      "post": {
+        "tags": ["Alpha"],
+        "consumes": ["application/x-www-form-urlencoded"],
+        "produces": ["application/json"],
+        "parameters": [
+          { "$ref": "#/parameters/sourceEpsilonNumber" },
+          { "$ref": "#/parameters/targetEpsilonNumber" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/responses/alphaUpdated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "409": { "$ref": "#/responses/conflictError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/alphaFamily/new": {
+      "post": {
+        "tags": ["Alpha"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/createAlphaFamily" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/alphaFamilyCreated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "409": { "$ref": "#/responses/conflictError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/batch/alpha/update": {
+      "patch": {
+        "tags": ["Alpha"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/batchUpdateAlpha" } ],
+        "responses": {
+          "200": {
+            "description": "An array containing the result for each requested item.",
+            "schema": { "type": "array", "items": { "type": "object" } }
+          },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/gamma/new": {
+      "post": {
+        "tags": ["Gamma"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/createGamma" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/gammaCreated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "409": { "$ref": "#/responses/gammaCreateConflict" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/batch/gamma/new": {
+      "post": {
+        "tags": ["Gamma"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/batchCreateGamma" } ],
+        "responses": {
+          "200": {
+            "description": "An array containing the result for each requested item.",
+            "schema": { "type": "array", "items": { "type": "object" } }
+          },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/beta": {
+      "delete": {
+        "tags": ["Alpha"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/deleteBeta" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/betaDeleted" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "409": { "$ref": "#/responses/conflictError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/gamma": {
+      "delete": {
+        "tags": ["Gamma"],
+        "consumes": ["application/x-www-form-urlencoded"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/requiredGammaNumberFilter" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/gammaDeleted" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "404": { "$ref": "#/responses/gammaNotFound" }
+        }
+      }
+    },
+    "/delta/{deltaNumber}": {
+      "patch": {
+        "tags": ["Gamma"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [
+          { "$ref": "#/parameters/deltaNumber" },
+          { "$ref": "#/parameters/updateDeltaByPath" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/responses/deltaUpdated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/zeta/new": {
+      "post": {
+        "tags": ["Zeta"],
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/createZeta" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/zetaCreated" },
+          "400": { "$ref": "#/responses/badRequestError" },
+          "401": { "$ref": "#/responses/unauthorizedError" },
+          "409": { "$ref": "#/responses/conflictError" },
+          "500": { "$ref": "#/responses/internalServerError" }
+        }
+      }
+    },
+    "/zeta/{id}": {
+      "get": {
+        "tags": ["Zeta"],
+        "produces": ["application/json"],
+        "parameters": [ { "$ref": "#/parameters/zetaId" } ],
+        "responses": {
+          "200": { "$ref": "#/responses/zetaFound" },
+          "401": { "$ref": "#/responses/unauthorizedError" }
+        }
+      }
+    }
+  },
+  "parameters": {
+    "alphaNumber": {
+      "name": "alphaNumber",
+      "in": "path",
+      "required": true,
+      "type": "integer",
+      "description": "Numeric identifier of resource A."
+    },
+    "deltaNumber": {
+      "name": "deltaNumber",
+      "in": "path",
+      "required": true,
+      "type": "integer",
+      "description": "Numeric identifier of resource D."
+    },
+    "zetaId": {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "type": "integer",
+      "format": "int32",
+      "description": "Numeric identifier of resource F. NOTE: parameter map key differs from the name field, which is authoritative for the wire."
+    },
+    "pageFilter": {
+      "name": "page",
+      "in": "formData",
+      "required": false,
+      "type": "integer",
+      "description": "Index of the page to view; the reference document's prose claims a fixed maximum page size."
+    },
+    "alphaNumberFilter": {
+      "name": "alphaNumber",
+      "in": "formData",
+      "required": false,
+      "type": "string",
+      "description": "A list of 1 or more identifiers, separated by ','."
+    },
+    "alphaNameFilter": {
+      "name": "alphaName",
+      "in": "formData",
+      "required": false,
+      "type": "string",
+      "description": "A list of 1 or more names, separated by ','."
+    },
+    "alphaStatusFilter": {
+      "name": "alphaStatus",
+      "in": "formData",
+      "required": false,
+      "type": "string",
+      "description": "A list of 1 or more status codes, separated by ','."
+    },
+    "pageQuery": {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "type": "integer",
+      "minimum": 1,
+      "description": "Page index starting at 1."
+    },
+    "sourceEpsilonNumber": {
+      "name": "sourceEpsilonNumber",
+      "in": "formData",
+      "required": true,
+      "type": "integer",
+      "description": "Identifier of the source aggregate."
+    },
+    "targetEpsilonNumber": {
+      "name": "targetEpsilonNumber",
+      "in": "formData",
+      "required": true,
+      "type": "integer",
+      "description": "Identifier of the target aggregate."
+    },
+    "requiredGammaNumberFilter": {
+      "name": "gammaNumber",
+      "in": "formData",
+      "required": true,
+      "type": "string",
+      "description": "The string identifier to delete."
+    },
+    "createAlpha": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["alphaType", "alphaName", "alphaStatus", "epsilonNumber"],
+        "properties": {
+          "alphaType": { "$ref": "#/definitions/num" },
+          "alphaName": { "$ref": "#/definitions/label" },
+          "alphaStatus": { "$ref": "#/definitions/num" },
+          "epsilonNumber": { "$ref": "#/definitions/num32" },
+          "alphaDescription": { "$ref": "#/definitions/label" },
+          "execFlag": { "$ref": "#/definitions/flag" }
+        }
+      }
+    },
+    "updateAlphaByPath": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["alphaName"],
+        "properties": {
+          "alphaName": { "$ref": "#/definitions/label" },
+          "alphaStatus": { "$ref": "#/definitions/num" },
+          "epsilonNumber": { "$ref": "#/definitions/num32" },
+          "alphaDescription": { "$ref": "#/definitions/label" }
+        }
+      }
+    },
+    "createAlphaFamily": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["familyName"],
+        "properties": {
+          "familyName": { "$ref": "#/definitions/label" }
+        }
+      }
+    },
+    "batchUpdateAlpha": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["alphaNumber", "alphaName"],
+          "properties": {
+            "alphaNumber": { "$ref": "#/definitions/num" },
+            "alphaName": { "$ref": "#/definitions/label" },
+            "alphaStatus": { "$ref": "#/definitions/num" }
+          }
+        }
+      }
+    },
+    "createGamma": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["gammaNumber", "gammaStatus"],
+        "properties": {
+          "gammaNumber": { "$ref": "#/definitions/gammaNumber" },
+          "gammaDescription": { "$ref": "#/definitions/label" },
+          "gammaStatus": { "$ref": "#/definitions/num" },
+          "region": { "$ref": "#/definitions/region" },
+          "deltaNumber": { "$ref": "#/definitions/num" },
+          "metadata": { "$ref": "#/definitions/gammaMetadata" }
+        }
+      }
+    },
+    "batchCreateGamma": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["gammaNumber", "gammaStatus"],
+          "properties": {
+            "gammaNumber": { "$ref": "#/definitions/gammaNumber" },
+            "gammaStatus": { "$ref": "#/definitions/num" },
+            "region": { "$ref": "#/definitions/region" }
+          }
+        }
+      }
+    },
+    "deleteBeta": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["betaLabel"],
+        "properties": {
+          "betaLabel": { "$ref": "#/definitions/label" }
+        }
+      }
+    },
+    "updateDeltaByPath": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["deltaName"],
+        "properties": {
+          "deltaName": { "$ref": "#/definitions/label" },
+          "deltaType": { "$ref": "#/definitions/num" },
+          "addGammas": { "type": "string", "description": "Comma-separated identifiers to add." },
+          "removeGammas": { "type": "string", "description": "Comma-separated identifiers to remove." },
+          "beginTime": { "type": "string", "description": "10-digit Unix timestamp." }
+        }
+      }
+    },
+    "createZeta": {
+      "name": "body",
+      "in": "body",
+      "required": true,
+      "schema": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    }
+  },
+  "responses": {
+    "alphaSearchResult": {
+      "description": "OK",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "page": { "$ref": "#/definitions/Page" },
+          "results": { "$ref": "#/definitions/alphaSearchResult" }
+        }
+      }
+    },
+    "alphaCreated": { "description": "OK", "schema": { "$ref": "#/definitions/Alpha" } },
+    "alphaUpdated": { "description": "OK", "schema": { "$ref": "#/definitions/Alpha" } },
+    "alphaFamilyCreated": { "description": "Created", "schema": { "$ref": "#/definitions/AlphaFamily" } },
+    "alphaSearchConflict": {
+      "description": "Conflict",
+      "schema": { "$ref": "#/definitions/errorResponse" },
+      "examples": {
+        "application/json": {
+          "status": "CONFLICT",
+          "message": "Search could not be executed with the given variables",
+          "errors": ["alphaStatus could only take numeric values as input"]
+        }
+      }
+    },
+    "gammaCreated": { "description": "Created", "schema": { "$ref": "#/definitions/Gamma" } },
+    "gammaCreateConflict": {
+      "description": "Conflict",
+      "schema": { "$ref": "#/definitions/errorResponse" },
+      "examples": {
+        "application/json": {
+          "status": "CONFLICT",
+          "message": "gammaNumber 0000000001 can not be added",
+          "errors": ["gamma already existed: gammaNumber=0000000001"]
+        }
+      }
+    },
+    "gammaDeleted": { "description": "OK" },
+    "gammaNotFound": {
+      "description": "Not Found",
+      "schema": { "$ref": "#/definitions/errorResponse" },
+      "examples": {
+        "application/json": {
+          "status": "NOT_FOUND",
+          "message": "gamma was not present",
+          "errors": ["gamma was not present"]
+        }
+      }
+    },
+    "betaDeleted": { "description": "OK" },
+    "deltaUpdated": { "description": "OK", "schema": { "$ref": "#/definitions/Delta" } },
+    "zetaCreated": { "description": "OK", "schema": { "$ref": "#/definitions/Zeta" } },
+    "zetaFound": { "description": "OK", "schema": { "$ref": "#/definitions/Zeta" } },
+    "badRequestError": {
+      "description": "Bad Request",
+      "schema": { "$ref": "#/definitions/errorResponse" },
+      "examples": {
+        "application/json": {
+          "status": "BAD_REQUEST",
+          "message": "alpha can not be added",
+          "errors": ["alphaName should be between 1 and 64 characters"]
+        }
+      }
+    },
+    "unauthorizedError": {
+      "description": "Authentication information is missing or invalid",
+      "schema": { "$ref": "#/definitions/errorResponse" },
+      "examples": {
+        "application/json": {
+          "status": "UNAUTHORIZED",
+          "message": "Invalid username and password",
+          "errors": ["Invalid username and password"]
+        }
+      }
+    },
+    "notFoundError": { "description": "Not Found", "schema": { "$ref": "#/definitions/errorResponse" } },
+    "conflictError": { "description": "Conflict", "schema": { "$ref": "#/definitions/errorResponse" } },
+    "internalServerError": {
+      "description": "Internal Server Error",
+      "schema": { "$ref": "#/definitions/errorResponse" },
+      "examples": {
+        "application/json": {
+          "status": "INTERNAL_SERVER_ERROR",
+          "message": "Validation failed",
+          "errors": ["implementation-level exception identifier (abstracted)"]
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Alpha": {
+      "type": "object",
+      "description": "Primary resource A.",
+      "properties": {
+        "alphaNumber": { "$ref": "#/definitions/num" },
+        "alphaName": { "$ref": "#/definitions/label" },
+        "alphaType": { "$ref": "#/definitions/num" },
+        "alphaTypeDescription": { "type": "string" },
+        "alphaStatus": { "$ref": "#/definitions/num" },
+        "alphaStatusDescription": { "type": "string" },
+        "execFlag": { "type": "string", "enum": ["Y", "N"] },
+        "created": { "$ref": "#/definitions/stamp" },
+        "createdBy": { "$ref": "#/definitions/actor" },
+        "modified": { "$ref": "#/definitions/stamp" },
+        "modifiedBy": { "$ref": "#/definitions/actor" },
+        "epsilonNumber": { "$ref": "#/definitions/num32" },
+        "epsilonSymbolicName": { "$ref": "#/definitions/label" }
+      }
+    },
+    "AlphaFamily": {
+      "type": "object",
+      "description": "Family aggregate of resource A.",
+      "properties": {
+        "alphaNumber": { "$ref": "#/definitions/num" },
+        "familyKey": { "$ref": "#/definitions/num32" },
+        "alphaName": { "$ref": "#/definitions/label" },
+        "familyName": { "$ref": "#/definitions/label" },
+        "familyMemberNumbers": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "Beta": {
+      "type": "object",
+      "description": "Association record B linking a label to resource A.",
+      "properties": {
+        "betaLabel": { "type": "string" },
+        "alphaNumber": { "type": "integer" },
+        "added": { "$ref": "#/definitions/stamp" },
+        "addedBy": { "type": "string" }
+      }
+    },
+    "BetaName": {
+      "type": "object",
+      "description": "Named label for resource B.",
+      "properties": {
+        "name": { "$ref": "#/definitions/label" },
+        "description": { "$ref": "#/definitions/label" },
+        "added": { "$ref": "#/definitions/stamp" },
+        "addedBy": { "type": "string" }
+      }
+    },
+    "Gamma": {
+      "type": "object",
+      "description": "Resource C with a string identifier.",
+      "properties": {
+        "gammaNumber": { "$ref": "#/definitions/gammaNumber" },
+        "gammaDescription": { "$ref": "#/definitions/label" },
+        "gammaStatus": { "$ref": "#/definitions/num" },
+        "gammaStatusDescription": { "type": "string", "example": "Active" },
+        "responseOrg": { "type": "string" },
+        "region": { "$ref": "#/definitions/region" },
+        "deltaNumber": { "$ref": "#/definitions/num" },
+        "billingNumber": { "type": "string" },
+        "sitePhone": { "type": "string" },
+        "metadata": { "$ref": "#/definitions/gammaMetadata" },
+        "created": { "$ref": "#/definitions/stamp" },
+        "createdBy": { "$ref": "#/definitions/actor" },
+        "modified": { "$ref": "#/definitions/stamp" },
+        "modifiedBy": { "$ref": "#/definitions/actor" }
+      }
+    },
+    "Delta": {
+      "type": "object",
+      "description": "Resource D with a numeric identifier; embeds a full reference to resource A.",
+      "properties": {
+        "deltaNumber": { "$ref": "#/definitions/num" },
+        "deltaName": { "$ref": "#/definitions/label" },
+        "deltaType": { "$ref": "#/definitions/num" },
+        "description": { "$ref": "#/definitions/label" },
+        "alpha": { "$ref": "#/definitions/Alpha" },
+        "ownerNumber": { "type": "integer" },
+        "handlerNumber": { "type": "integer" },
+        "billingNumber": { "type": "integer" },
+        "beginTime": { "type": "string", "description": "10-digit Unix timestamp." },
+        "endTime": { "type": "string", "description": "10-digit Unix timestamp." },
+        "gammaRefs": { "type": "array", "items": { "$ref": "#/definitions/gammaRef" } },
+        "gammaRefList": { "type": "string", "description": "Concatenated copy of gammaRefs separated by ','." },
+        "totalCurrentGamma": { "type": "integer" },
+        "opaqueInfo": { "type": "object" },
+        "opaqueList": { "type": "array", "items": { "type": "object" } },
+        "configVars": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "Epsilon": {
+      "type": "object",
+      "description": "Aggregate resource E.",
+      "properties": {
+        "epsilonNumber": { "$ref": "#/definitions/num32" },
+        "symbolicName": { "$ref": "#/definitions/label" },
+        "description": { "$ref": "#/definitions/label" },
+        "zetaIds": { "type": "array", "minItems": 1, "items": { "type": "integer", "format": "int32" } },
+        "modified": { "$ref": "#/definitions/stamp" },
+        "modifiedBy": { "$ref": "#/definitions/actor" }
+      }
+    },
+    "Zeta": {
+      "type": "object",
+      "description": "Resource F keyed by a generic integer id.",
+      "properties": {
+        "id": { "type": "integer", "format": "int32" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "modifiedAt": { "$ref": "#/definitions/stamp" },
+        "modifiedBy": { "$ref": "#/definitions/actor" },
+        "epsilonNumbers": { "type": "array", "items": { "type": "integer", "format": "int32" } }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["BAD_REQUEST", "UNAUTHORIZED", "NOT_FOUND", "CONFLICT", "INTERNAL_SERVER_ERROR"] },
+        "message": { "type": "string" },
+        "errors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "description": "Pagination metadata.",
+      "properties": {
+        "current": { "$ref": "#/definitions/num32" },
+        "total": { "$ref": "#/definitions/num32" },
+        "size": { "$ref": "#/definitions/num32" },
+        "next": { "type": "string", "description": "Opaque token for the next page, if any." }
+      }
+    },
+    "alphaSearchResult": {
+      "type": "array",
+      "description": "Array of full resource A. NOTE: this definition intentionally shares its name with the global response of the same name, which wraps this array in a page envelope.",
+      "items": { "$ref": "#/definitions/Alpha" }
+    },
+    "num": { "type": "integer", "example": 1234 },
+    "num32": { "type": "integer", "format": "int32", "example": 1234 },
+    "label": { "type": "string" },
+    "stamp": { "type": "string", "format": "YYYY-MM-DD HH:mm:ss", "description": "Timestamp using the reference document's non-standard custom format." },
+    "actor": { "type": "string" },
+    "region": { "type": "string", "enum": ["REGION_A", "REGION_B", "REGION_C", "REGION_D"] },
+    "flag": { "type": "string", "description": "Single-character flag. NOTE: intentionally has no enum here even though the Alpha model property of the same role declares an inline Y/N enum, mirroring an inconsistency in the reference document." },
+    "gammaRef": { "type": "string", "example": "1234567890::" },
+    "gammaNumber": { "type": "string", "example": "0000000001" },
+    "gammaMetadata": { "type": "string", "example": "{\"sample\":[{\"field\":\"value\"}]}" }
+  }
+}

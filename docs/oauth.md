@@ -25,7 +25,7 @@ access tokens, refresh tokens, client secrets or authorization codes.
 | `mcp_oauth` | Personal OAuth for reviewed imported MCP services | [Imported MCP OAuth](imported-oauth.md) |
 | `stub` | Development records provider and lifecycle fault tests; forbidden in production | [Test-provider configuration](#development-test-provider-configuration) |
 
-The linked production adapters do not enable Microsoft Graph delegated OAuth. OpenAPI imports use static Bearer/header-key credentials.
+The linked production adapters do not enable Microsoft Graph delegated OAuth. OpenAPI and Swagger imports use static Basic, Bearer or header-key credentials.
 Microsoft OIDC remains a separate browser-login feature.
 
 ## Credential connections and shared registrations

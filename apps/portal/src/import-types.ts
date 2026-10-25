@@ -1,4 +1,4 @@
-import type { OAuthScopeMode } from "./types";
+import type { CredentialInputDescriptor, CredentialInputPolicy, OAuthScopeMode } from "./types";
 
 /** Secret-free import metadata. Token values exist only in write request bodies. */
 export type ImportOwnerMode = "service" | "per_user";
@@ -6,7 +6,7 @@ export type ImportPurpose = "execution" | "discovery" | "transport";
 export type ImportServiceStatus = "draft" | "disabled" | "enabled" | "retired";
 export type ImportActionStatus = "enabled" | "disabled" | "quarantined" | "retired";
 /** `stdin` is the delivery of command imports, whose request on stdin carries the credential. */
-export type ImportDelivery = { kind: "bearer" } | { kind: "raw_header"; name: string } | { kind: "stdin" };
+export type ImportDelivery = { kind: "bearer" } | { kind: "basic" } | { kind: "raw_header"; name: string } | { kind: "stdin" };
 export type ImportBinding = {
   ownerMode: ImportOwnerMode;
   mechanism: "static_token" | "oauth";
@@ -74,12 +74,18 @@ export type ImportServiceMetadata = {
   verify: boolean;
   resourceTypes: ImportResourceTypeDeclaration[];
 };
+export type ImportCredentialInput = (CredentialInputDescriptor & { state: "ready"; inputPolicy: CredentialInputPolicy }) | { state: "unavailable"; reason: string };
+/** Uploaded source metadata only; source bytes are never returned by management reads. */
+export type ImportDocumentMetadata = { filename?: string; byteLength: number; sha256: string };
 export type ImportedServiceRecord = {
+  /** Read-only administrative projection; not part of a saved definition. */
+  credentialInputs: Partial<Record<ImportPurpose, ImportCredentialInput>>;
   definition: ImportDefinition;
   status: ImportServiceStatus;
   version: number;
   actions: ImportActionRecord[];
   slotVersions: Partial<Record<ImportPurpose, string>>;
+  document?: ImportDocumentMetadata;
   /** Command imports after their first acceptance. */
   acceptedMetadata?: ImportServiceMetadata;
   createdAt: string;
@@ -177,7 +183,7 @@ export type ImportOAuthRegistration = {
 };
 /** The OAuth companion that authenticates one selected import kind, with the registrations it approves (possibly none). */
 export type ImportAuthentication = { importKind: string; dialectId: string; registrations: ImportOAuthRegistration[] };
-export type ImportSecurityScheme = { name: string; kind: "bearer" | "raw_header"; header?: string };
+export type ImportSecurityScheme = { name: string; kind: "bearer" | "basic" | "raw_header"; header?: string };
 export type ImportListResult = {
   catalogRevision: number;
   operatorEnabled: boolean;

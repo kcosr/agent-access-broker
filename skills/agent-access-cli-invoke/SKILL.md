@@ -1125,7 +1125,11 @@ personal connection with a shared credential. See `docs/imported-oauth.md`.
 
 Imported OpenAPI operations use the same discovered action interface. Follow their
 accepted input schemas: parameters are separated into `path`, `query`, `headers`
-and `body`. JSON results appear under `result.upstreamHttp`, marked sensitive;
+and `body`. Swagger 2.0 and OpenAPI 3.1 imports share this interface.
+For URL-encoded operations, supply a JSON `body` object with the declared scalar
+fields; the Broker performs encoding. Never pass pre-encoded text or upstream
+Basic credentials as action arguments. JSON results appear under
+`result.upstreamHttp`, marked sensitive;
 write receipts retain `applied_unverified` or unknown outcomes. Never replay an
 uncertain operation to retry authentication or local file saving. See
 `docs/imported-openapi.md` for administrative setup and the supported profile.

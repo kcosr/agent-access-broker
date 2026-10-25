@@ -20,6 +20,7 @@ import type {
   CredentialList,
   CredentialMetadata,
   CredentialTarget,
+  CredentialInputSchema,
   CredentialVerificationInput,
   GroupDetail,
   ExternalGroupBinding,
@@ -256,6 +257,11 @@ export const brokerApi = {
   updateImport: (session: Session, service: string, body: ImportVersions & { definition: ImportDefinition; confirmAffectedGrants: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}`, { method: "PATCH", body: JSON.stringify(body) }, session),
   importPreview: (session: Session, service: string) => managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/preview`, {}, session),
   discoverImport: (session: Session, service: string, versions: ImportVersions) => managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/discover`, { method: "POST", body: JSON.stringify(versions) }, session),
+  uploadImportDocument: (session: Session, service: string, versions: ImportVersions, file: File) => {
+    const query = new URLSearchParams({ expectedVersion: String(versions.expectedVersion), expectedCatalogRevision: String(versions.expectedCatalogRevision), filename: file.name });
+    // Send the File unchanged: duplicate JSON members and exact bytes belong to Broker validation.
+    return managementRequest<ImportPreviewResult>(`/v1/admin/imports/${enc(service)}/document?${query}`, { method: "PUT", body: file }, session);
+  },
   acceptImport: (session: Session, service: string, body: ImportVersions & { manifestHash: string; selections: ImportSelection[]; confirmAffectedGrants: boolean; resourceTypeIds?: ImportResourceTypeIds }) => managementRequest<ImportAcceptResult>(`/v1/admin/imports/${enc(service)}/accept`, { method: "POST", body: JSON.stringify(body) }, session),
   setImportStatus: (session: Session, service: string, body: ImportVersions & { status: Exclude<ImportServiceStatus, "draft">; confirm: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/status`, { method: "POST", body: JSON.stringify(body) }, session),
   setImportActionStatus: (session: Session, service: string, action: string, body: ImportVersions & { status: Exclude<ImportActionStatus, "quarantined">; confirm: boolean }) => managementRequest<ImportRecordResult>(`/v1/admin/imports/${enc(service)}/actions/${enc(action)}/status`, { method: "POST", body: JSON.stringify(body) }, session),
@@ -568,6 +574,8 @@ export const brokerApi = {
       { method: "DELETE" },
       session
     ),
+  adminPrincipalCredentialInputSchema: (session: Session, principalId: string, connection: string, profile: string) =>
+    managementRequest<CredentialInputSchema>(`/v1/admin/principals/${encodeURIComponent(principalId)}/credentials/connections/${encodeURIComponent(connection)}/input-schema?profile=${encodeURIComponent(profile)}`, {}, session),
   adminPrincipalCredentialTargets: (session: Session, principalId: string) =>
     managementRequest<CredentialTarget[]>(
       `/v1/admin/principals/${enc(principalId)}/credentials/targets`,

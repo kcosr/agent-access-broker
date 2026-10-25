@@ -13,7 +13,7 @@ const service: PolicyServiceCatalog = {
 };
 const imported = (id: string, status: ImportedServiceRecord["status"]): ImportedServiceRecord => ({
   definition: { service: id, displayName: `Imported ${id}`, adapterKind: "mcp_http", endpoint: "https://example.test/mcp", connectionSettings: {}, executionBindings: [], discovery: { kind: "anonymous" }, transportAuth: false },
-  status, version: 1, actions: [], slotVersions: {}, createdAt: "", createdBy: "", updatedAt: "", updatedBy: ""
+  status, version: 1, actions: [], slotVersions: {}, credentialInputs: {}, createdAt: "", createdBy: "", updatedAt: "", updatedBy: ""
 });
 const credential: ConnectionCredential = {
   credentialId: "cred-123", ownerPrincipal: "alice", ownerKind: "user", connection: "tracker", profile: "standard", label: null, credentialKind: "token",

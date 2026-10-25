@@ -3,7 +3,11 @@ use std::task::Poll;
 
 fn body_request(path: &str, body: Body) -> Request<Body> {
     Request::builder()
-        .method(Method::POST)
+        .method(if path.ends_with("/document") {
+            Method::PUT
+        } else {
+            Method::POST
+        })
         .uri(path)
         .extension(ConnectInfo(
             "127.0.0.1:41320".parse::<SocketAddr>().unwrap(),
@@ -20,6 +24,7 @@ async fn body_admission_limits_login_json_and_management_bytes_before_polling() 
         "/v1/auth/local/login",
         "/v1/admin/principals",
         "/v1/admin/config/reload",
+        "/v1/admin/imports/documents/document",
     ] {
         let mut config = fake_config("");
         config.limits.max_concurrent_requests = 1;
@@ -67,6 +72,8 @@ async fn body_admission_uses_small_route_caps() {
         ("/v1/auth/local/login", 16 * 1024 + 1),
         ("/v1/admin/principals", 1024 * 1024 + 1),
         ("/v1/admin/config/reload", 1024 * 1024 + 1),
+        // The upload route's larger allowance requires an admitted identity.
+        ("/v1/admin/imports/documents/document", 1024 * 1024 + 1),
     ] {
         let broker = TestBroker::start_config(&fake_config("")).await;
         let app = broker.app();
@@ -80,39 +87,44 @@ async fn body_admission_uses_small_route_caps() {
 
 #[tokio::test]
 async fn body_admission_idle_and_total_deadlines_release_requests() {
-    for progress in [false, true] {
-        let mut config = fake_config("");
-        config.limits.request_body_timeout_ms = 100;
-        config.limits.streaming_idle_timeout_ms = 40;
-        let broker = TestBroker::start_config(&config).await;
-        let app = broker.app();
-        let body = Body::from_stream(stream::unfold((), move |()| async move {
-            if progress {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-            Some((Ok::<Bytes, std::io::Error>(Bytes::from_static(b" ")), ()))
-        }));
-        let started = Instant::now();
-        let response = tokio::time::timeout(
-            Duration::from_secs(2),
-            app.oneshot(body_request("/v1/auth/local/login", body)),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
-        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+    for path in [
+        "/v1/auth/local/login",
+        "/v1/admin/imports/documents/document",
+    ] {
+        for progress in [false, true] {
+            let mut config = fake_config("");
+            config.limits.request_body_timeout_ms = 100;
+            config.limits.streaming_idle_timeout_ms = 40;
+            let broker = TestBroker::start_config(&config).await;
+            let app = broker.app();
+            let body = Body::from_stream(stream::unfold((), move |()| async move {
+                if progress {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+                Some((Ok::<Bytes, std::io::Error>(Bytes::from_static(b" ")), ()))
+            }));
+            let started = Instant::now();
+            let response = tokio::time::timeout(
+                Duration::from_secs(2),
+                app.oneshot(body_request(path, body)),
+            )
             .await
+            .unwrap()
             .unwrap();
-        assert!(
-            std::str::from_utf8(&bytes)
-                .unwrap()
-                .contains("receive deadline exceeded")
-        );
-        if progress {
-            assert!(started.elapsed() >= Duration::from_millis(90));
+            assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert!(
+                std::str::from_utf8(&bytes)
+                    .unwrap()
+                    .contains("receive deadline exceeded")
+            );
+            if progress {
+                assert!(started.elapsed() >= Duration::from_millis(90));
+            }
         }
     }
 }
@@ -123,6 +135,7 @@ async fn body_admission_charges_sources_before_json_and_bytes_extraction() {
         "/v1/auth/local/login",
         "/v1/admin/principals",
         "/v1/admin/config/reload",
+        "/v1/admin/imports/documents/document",
     ] {
         let mut config = fake_config("");
         config.limits.auth_requests_per_source_per_minute = 1;

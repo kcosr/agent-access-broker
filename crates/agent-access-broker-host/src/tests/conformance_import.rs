@@ -55,8 +55,40 @@ impl ImportedAdapter for ConformanceImportAdapter {
     fn kind(&self) -> &'static str {
         "conformance_import"
     }
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        _import: &ImportedAdapterContext<'_>,
+    ) -> Result<ImportedCredentialContract, String> {
+        let execution = definition
+            .execution_bindings
+            .iter()
+            .find(|binding| binding.mechanism == ImportedAuthMechanism::StaticToken)
+            .map(|binding| match binding.delivery {
+                ImportedCredentialDelivery::Basic => ImportedCredentialRequirement::http_basic(),
+                _ => ImportedCredentialRequirement::token_header(),
+            });
+        let contract = ImportedCredentialContract::new(
+            execution,
+            matches!(definition.discovery, ImportedDiscoveryCredential::Slot)
+                .then(ImportedCredentialRequirement::token_header),
+            definition
+                .transport_auth
+                .then(ImportedCredentialRequirement::token_header),
+        );
+        contract.validate(definition)?;
+        Ok(contract)
+    }
     fn development_only(&self) -> bool {
         true
+    }
+    fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
+        definition.validate()?;
+        if !definition.connection_settings.is_empty() {
+            return Err("conformance import has no connection settings".into());
+        }
+        // This offline fixture can describe its one operation without material.
+        Ok(())
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String> {
         if action.source != json!({"fixtureOperation":"upstream_inspect"}) {

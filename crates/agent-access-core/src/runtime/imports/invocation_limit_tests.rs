@@ -116,6 +116,7 @@ fn update(
         .unwrap()
         .update_imported_service(
             crate::ImportedServiceUpdateRequest {
+                discovery_source: crate::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition,
                 status: record.status,
                 actions: vec![],

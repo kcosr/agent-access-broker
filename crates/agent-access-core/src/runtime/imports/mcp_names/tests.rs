@@ -7,6 +7,7 @@ use crate::imports::{
 
 fn record(service: &str, names: &[&str]) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        document: None,
         definition: ImportedServiceDefinition {
             service: service.into(),
             display_name: service.into(),

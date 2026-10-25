@@ -242,6 +242,7 @@ fn imported_definitions_actions_and_previews_persist_frozen_json() {
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+            discovery_source: crate::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Disabled,
                 actions: golden_actions(),
@@ -413,8 +414,7 @@ fn baseline_imported_rows_remain_readable() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        serde_json::from_value::<crate::imports::ImportedDiscovery>(stored.manifest)
-            .unwrap(),
+        serde_json::from_value::<crate::imports::ImportedDiscovery>(stored.manifest).unwrap(),
         golden_discovery()
     );
     assert_eq!(
@@ -452,7 +452,7 @@ fn imported_secret_rows_from_baseline_decrypt_without_reentry() {
     }
     store.check_ready(Some(&ring)).unwrap();
     let credential = store
-        .resolve_imported_secret(
+        .resolve_imported_secret_for_test(
             "observability",
             ImportedCredentialPurpose::Execution,
             version,

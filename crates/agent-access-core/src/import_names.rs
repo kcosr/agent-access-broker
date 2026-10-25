@@ -113,6 +113,7 @@ mod tests {
     use serde_json::json;
     fn record() -> ImportedServiceRecord {
         ImportedServiceRecord {
+            document: None,
             definition: ImportedServiceDefinition {
                 service: "search".into(),
                 display_name: "Search".into(),

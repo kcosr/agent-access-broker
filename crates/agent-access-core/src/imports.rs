@@ -9,6 +9,7 @@ mod command;
 mod command_facts;
 mod command_registry;
 mod command_request;
+mod credentials;
 mod definition;
 mod metadata;
 mod registration;
@@ -29,6 +30,7 @@ pub(crate) use command_request::{
     RequestAuthorization, RequestBoundary, RequestCredentials, RequestGrant, RequestResource,
     VerifyRequest, wire_deadline, wire_mode,
 };
+pub use credentials::*;
 pub use definition::*;
 pub use metadata::*;
 pub use registration::{
@@ -36,6 +38,9 @@ pub use registration::{
 };
 pub use schema::*;
 pub use type_changes::*;
+
+/// Maximum retained raw discovery document, before protocol parsing.
+pub const IMPORT_MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 
 /// The implementation an imported protocol client names itself as, such as
 /// an imported MCP connection's `clientInfo`: the Broker host package and

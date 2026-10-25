@@ -26,7 +26,10 @@ fn command_metadata(kind: Option<ImportedCredentialKind>) -> ImportedServiceMeta
         version: "1.4.0".into(),
         credential: kind.map(|kind| crate::imports::ImportedCredentialDeclaration {
             kind,
-            modes: vec![ImportedCredentialMode::Service, ImportedCredentialMode::PerUser],
+            modes: vec![
+                ImportedCredentialMode::Service,
+                ImportedCredentialMode::PerUser,
+            ],
         }),
         verify: true,
         resource_types: Vec::new(),
@@ -78,6 +81,7 @@ fn accept_command(
     store
         .update_imported_service(
             ImportedServiceUpdateRequest {
+            discovery_source: crate::imports::ImportedDiscoverySource::Remote,
                 definition: record.definition.clone(),
                 status: ImportedServiceStatus::Disabled,
                 actions: vec![command_action()],
@@ -105,7 +109,7 @@ fn command_slot(
     let catalog = store.imported_catalog().unwrap();
     let record = catalog.service("ticketing").unwrap();
     store
-        .write_imported_secret(
+        .write_imported_secret_for_test(
             ImportedSecretWriteRequest {
                 service: "ticketing".into(),
                 purpose: ImportedCredentialPurpose::Execution,
@@ -184,7 +188,11 @@ fn upgrade_preserves_import_rows(from: &str) {
     }
     let config = ManagedStoreConfig {
         kind: "sqlite".into(),
-        path: temp.path().join(format!("schema-{from}.sqlite")).display().to_string(),
+        path: temp
+            .path()
+            .join(format!("schema-{from}.sqlite"))
+            .display()
+            .to_string(),
         auto_migrate: true,
         require_registered_principal_for_invocation: false,
     };
@@ -222,11 +230,31 @@ fn upgrade_preserves_import_rows(from: &str) {
         )
         .unwrap();
         for (service, purpose, key_id, token) in [
-            ("golden-header", "execution", "old", "header-execution-token"),
-            ("golden-header", "discovery", "new", "header-discovery-token"),
-            ("golden-header", "transport", "old", "header-transport-token"),
+            (
+                "golden-header",
+                "execution",
+                "old",
+                "header-execution-token",
+            ),
+            (
+                "golden-header",
+                "discovery",
+                "new",
+                "header-discovery-token",
+            ),
+            (
+                "golden-header",
+                "transport",
+                "old",
+                "header-transport-token",
+            ),
             ("golden-oauth", "discovery", "new", "oauth-discovery-token"),
-            ("golden-openapi", "execution", "new", "openapi-execution-token"),
+            (
+                "golden-openapi",
+                "execution",
+                "new",
+                "openapi-execution-token",
+            ),
         ] {
             let mut row = SecretRow {
                 service: service.into(),
@@ -279,7 +307,11 @@ fn upgrade_preserves_import_rows(from: &str) {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert!(ledger.iter().any(|version| version == "027_command_imports"));
+    assert!(
+        ledger
+            .iter()
+            .any(|version| version == "027_command_imports")
+    );
     assert_eq!(
         ledger.last().map(String::as_str),
         Some(MANAGED_STORE_SCHEMA_VERSION)
@@ -303,7 +335,7 @@ fn upgrade_preserves_import_rows(from: &str) {
     store.check_ready(Some(&ring)).unwrap();
     assert_eq!(
         store
-            .resolve_imported_secret(
+            .resolve_imported_secret_for_test(
                 "observability",
                 ImportedCredentialPurpose::Execution,
                 GOLDEN_IMPORTED_SLOT.0,
@@ -314,7 +346,7 @@ fn upgrade_preserves_import_rows(from: &str) {
     );
     assert_eq!(
         store
-            .resolve_imported_secret(
+            .resolve_imported_secret_for_test(
                 "golden-header",
                 ImportedCredentialPurpose::Transport,
                 "golden-header-transport-version",
@@ -337,7 +369,10 @@ fn username_token_slots_encrypt_the_managed_encoding_and_round_trip() {
     let (_temp, _config, store, ring) = fixture();
     store
         .create_imported_service(
-            command_definition(&[ImportedCredentialMode::Service, ImportedCredentialMode::PerUser]),
+            command_definition(&[
+                ImportedCredentialMode::Service,
+                ImportedCredentialMode::PerUser,
+            ]),
             "admin",
             accept,
         )
@@ -345,7 +380,7 @@ fn username_token_slots_encrypt_the_managed_encoding_and_round_trip() {
     // The kind is unknown until the manifest's declaration is accepted.
     assert!(matches!(
         command_slot(&store, &ring, "svc-example", Some("svc-tickets")),
-        Err(ManagedStoreError::InputInvalid(message)) if message.contains("accept the command's manifest")
+        Err(ManagedStoreError::InputInvalid(message)) if message.contains("Accept the command manifest")
     ));
     let metadata = command_metadata(Some(ImportedCredentialKind::UsernameToken));
     let catalog = accept_command(&store, Some(metadata.clone())).unwrap();
@@ -364,7 +399,9 @@ fn username_token_slots_encrypt_the_managed_encoding_and_round_trip() {
         .clone();
     {
         let conn = store.connection.lock().unwrap();
-        let row = secret_row(&conn, "ticketing", "execution").unwrap().unwrap();
+        let row = secret_row(&conn, "ticketing", "execution")
+            .unwrap()
+            .unwrap();
         assert_eq!(row.credential_kind, "basic_api_token");
         assert_eq!(
             String::from_utf8(aad(&row).unwrap()).unwrap(),
@@ -379,7 +416,7 @@ fn username_token_slots_encrypt_the_managed_encoding_and_round_trip() {
         );
     }
     let resolve = |ring: &CredentialKeyRing| {
-        store.resolve_imported_secret(
+        store.resolve_imported_secret_for_test(
             "ticketing",
             ImportedCredentialPurpose::Execution,
             &version,
@@ -403,7 +440,10 @@ fn username_token_slots_encrypt_the_managed_encoding_and_round_trip() {
     let row = secret_row(&store.connection.lock().unwrap(), "ticketing", "execution")
         .unwrap()
         .unwrap();
-    assert_eq!((row.key_id.as_str(), row.material_version.as_str()), ("new", version.as_str()));
+    assert_eq!(
+        (row.key_id.as_str(), row.material_version.as_str()),
+        ("new", version.as_str())
+    );
     assert_eq!(resolve(&ring).unwrap(), credential);
 }
 
@@ -417,11 +457,15 @@ fn command_slots_follow_the_accepted_credential_declaration() {
             accept,
         )
         .unwrap();
-    accept_command(&store, Some(command_metadata(Some(ImportedCredentialKind::Token)))).unwrap();
+    accept_command(
+        &store,
+        Some(command_metadata(Some(ImportedCredentialKind::Token))),
+    )
+    .unwrap();
     assert!(command_slot(&store, &ring, "svc-example", Some("svc-tickets")).is_err());
     let catalog = command_slot(&store, &ring, "svc-example", None).unwrap();
-    let version = &catalog.service("ticketing").unwrap().slot_versions
-        [&ImportedCredentialPurpose::Execution];
+    let version =
+        &catalog.service("ticketing").unwrap().slot_versions[&ImportedCredentialPurpose::Execution];
     let row = secret_row(&store.connection.lock().unwrap(), "ticketing", "execution")
         .unwrap()
         .unwrap();
@@ -429,7 +473,12 @@ fn command_slots_follow_the_accepted_credential_declaration() {
     assert_eq!(decrypt(&ring, &row).unwrap(), "svc-example");
     assert_eq!(
         store
-            .resolve_imported_secret("ticketing", ImportedCredentialPurpose::Execution, version, &ring)
+            .resolve_imported_secret_for_test(
+                "ticketing",
+                ImportedCredentialPurpose::Execution,
+                version,
+                &ring
+            )
             .unwrap(),
         bearer_credential("svc-example")
     );
@@ -442,7 +491,7 @@ fn command_slots_follow_the_accepted_credential_declaration() {
     accept_command(&store, Some(command_metadata(None))).unwrap();
     assert!(matches!(
         command_slot(&store, &ring, "svc-example", None),
-        Err(ManagedStoreError::InputInvalid(message)) if message.contains("declares no execution credential")
+        Err(ManagedStoreError::InputInvalid(message)) if message.contains("slot is not declared")
     ));
 }
 
@@ -479,10 +528,7 @@ fn accepted_metadata_is_written_with_acceptance_and_its_credential_is_fixed() {
         catalog.service("ticketing").unwrap().accepted_metadata,
         Some(metadata.clone())
     );
-    for credential in [
-        None,
-        Some(ImportedCredentialKind::UsernameToken),
-    ] {
+    for credential in [None, Some(ImportedCredentialKind::UsernameToken)] {
         let changed = ImportedServiceMetadata {
             credential: command_metadata(credential).credential,
             ..metadata.clone()

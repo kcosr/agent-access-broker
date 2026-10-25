@@ -279,8 +279,8 @@ test("administrator imports the reference command, grants it, and agents invoke 
     const drawer = page.getByRole("complementary", { name: "Ticketing credential", exact: true });
     await expect(drawer).toContainText("username-token");
     // The form follows the Broker's schema for the `username-token` profile.
-    await drawer.getByLabel("Ticketing username", { exact: true }).fill("avery");
-    await drawer.getByLabel("Ticketing API token", { exact: true }).fill(PERSONAL_TOKEN);
+    await drawer.getByLabel("Username", { exact: true }).fill("avery");
+    await drawer.getByLabel("Token", { exact: true }).fill(PERSONAL_TOKEN);
     await drawer.getByRole("button", { name: "Save credential", exact: true }).click();
     await expect(drawer).toContainText("Not verified");
     await drawer.getByRole("button", { name: "Verify", exact: true }).click();

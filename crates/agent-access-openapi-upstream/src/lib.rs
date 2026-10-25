@@ -1,13 +1,18 @@
-//! OpenAPI 3.1 JSON discovery and frozen, single-attempt HTTP operation execution.
+//! Swagger 2.0 / OpenAPI 3.1 JSON discovery and frozen single-attempt HTTP execution.
+mod compile;
 mod config;
 mod document;
+mod forms;
+mod json;
+mod model;
+mod readers;
 mod refs;
 mod transport;
 
 use agent_access_core::imports::*;
 use agent_access_provider::*;
 use async_trait::async_trait;
-use config::Settings;
+use config::{DefinitionSource, Settings};
 use document::Document;
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -29,6 +34,21 @@ pub fn registration() -> ImportedAdapterRegistration {
 
 #[derive(Debug)]
 struct OpenApiAdapter;
+enum DocumentInput<'a> {
+    Remote {
+        client: Arc<UpstreamClient>,
+        url: Url,
+    },
+    Uploaded(&'a [u8]),
+}
+fn invalid_document(uploaded: bool, message: impl Into<String>) -> ProviderError {
+    let message = message.into();
+    if uploaded {
+        ProviderError::deny(ReasonCode::InputInvalid, message)
+    } else {
+        ProviderError::error(ReasonCode::UpstreamProtocolFailed, message)
+    }
+}
 #[async_trait]
 impl ImportedAdapter for OpenApiAdapter {
     fn kind(&self) -> &'static str {
@@ -40,11 +60,57 @@ impl ImportedAdapter for OpenApiAdapter {
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         Settings::parse(definition).map(|_| ())
     }
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        _import: &ImportedAdapterContext<'_>,
+    ) -> Result<ImportedCredentialContract, String> {
+        let settings = Settings::parse(definition)?;
+        fn requirement(
+            delivery: &ImportedCredentialDelivery,
+        ) -> Result<ImportedCredentialRequirement, String> {
+            match delivery {
+                ImportedCredentialDelivery::Basic => {
+                    Ok(ImportedCredentialRequirement::http_basic())
+                }
+                ImportedCredentialDelivery::Bearer
+                | ImportedCredentialDelivery::RawHeader { .. } => {
+                    Ok(ImportedCredentialRequirement::token_header())
+                }
+                _ => Err("unsupported HTTP credential delivery".into()),
+            }
+        }
+        let execution = definition
+            .execution_bindings
+            .first()
+            .map(|binding| requirement(&binding.delivery))
+            .transpose()?;
+        let discovery = settings
+            .document_delivery
+            .as_ref()
+            .map(requirement)
+            .transpose()?;
+        let contract = ImportedCredentialContract::new(execution, discovery, None);
+        contract.validate(definition)?;
+        Ok(contract)
+    }
+    fn discovery_source(
+        &self,
+        definition: &ImportedServiceDefinition,
+    ) -> Result<ImportedDiscoverySource, String> {
+        Ok(match Settings::parse(definition)?.source {
+            DefinitionSource::Url(_) => ImportedDiscoverySource::Remote,
+            DefinitionSource::Upload => ImportedDiscoverySource::StoredDocument,
+        })
+    }
     fn additional_destinations(
         &self,
         definition: &ImportedServiceDefinition,
     ) -> Result<Vec<String>, String> {
-        Ok(vec![Settings::parse(definition)?.document.to_string()])
+        Ok(match Settings::parse(definition)?.source {
+            DefinitionSource::Url(document) => vec![document.to_string()],
+            DefinitionSource::Upload => Vec::new(),
+        })
     }
     fn sensitive_output_pointers(&self) -> &'static [&'static str] {
         &["/result/upstreamHttp"]
@@ -135,7 +201,7 @@ impl ImportedAdapter for OpenApiAdapter {
         definition: &ImportedServiceDefinition,
         authentication: &ImportedDiscoveryAuthentication,
         transport_credential: Option<ExecutionCredential>,
-        _import: &ImportedAdapterContext<'_>,
+        import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
     ) -> Result<ImportedDiscovery, AdapterDiscoveryError> {
         let settings = Settings::parse(definition).map_err(|reason| {
@@ -154,65 +220,98 @@ impl ImportedAdapter for OpenApiAdapter {
             }
             _ => return Err(credential_error().into()),
         };
-        let client =
-            client(&settings.document, &[settings.document.to_string()], host).map_err(|_| {
-                AdapterDiscoveryError::Configuration(
-                    "OpenAPI document destination is invalid".to_owned(),
-                )
-            })?;
-        let limit = MAX_DOCUMENT_BYTES.min(host.limits().max_upstream_response_bytes as usize);
+        let limit =
+            IMPORT_MAX_DOCUMENT_BYTES.min(host.limits().max_upstream_response_bytes as usize);
+        let input = match (settings.source, import.document()) {
+            (DefinitionSource::Url(url), None) => DocumentInput::Remote {
+                client: client(&url, &[url.to_string()], host).map_err(|_| {
+                    AdapterDiscoveryError::Configuration(
+                        "OpenAPI document destination is invalid".to_owned(),
+                    )
+                })?,
+                url,
+            },
+            (DefinitionSource::Upload, Some(bytes)) => {
+                if bytes.len() > limit {
+                    return Err(ProviderError::deny(
+                        ReasonCode::BodySizeDenied,
+                        "OpenAPI definition exceeds the discovery byte limit",
+                    )
+                    .into());
+                }
+                DocumentInput::Uploaded(bytes)
+            }
+            (DefinitionSource::Upload, None) => {
+                return Err(AdapterDiscoveryError::Configuration(
+                    "OpenAPI uploaded definition is unavailable".into(),
+                ));
+            }
+            (DefinitionSource::Url(_), Some(_)) => {
+                return Err(AdapterDiscoveryError::Configuration(
+                    "OpenAPI URL discovery does not accept an uploaded definition".into(),
+                ));
+            }
+        };
+        let uploaded = matches!(&input, DocumentInput::Uploaded(_));
         let operation = async {
-            let mut response = client
-                .send(
-                    client.request(Method::GET, settings.document).header(
-                        "Accept",
-                        "application/json, application/vnd.oai.openapi+json",
-                    ),
-                    UpstreamCall::new("openapi.discover")
-                        .with_authorizations(authorization.as_slice()),
-                )
-                .await
-                .map_err(|error| {
-                    ProviderError::error(error.reason_code(), "OpenAPI document request failed")
-                })?;
-            let status = response.status().as_u16();
-            complete_upstream_trace(&mut response, None);
-            if status == 429 {
-                // Throttling by the document server is the upstream's rate
-                // limit for this imported service, with its bounded wait.
-                return Err(upstream_rate_limited(
-                    &definition.service,
-                    UpstreamRetryAfter::from_headers(response.headers()),
-                )
-                .with_upstream(Some(status), None));
-            }
-            if status != 200 {
-                return Err(ProviderError::error(
-                    status_reason(status),
-                    "OpenAPI document could not be read",
-                )
-                .with_upstream(Some(status), None));
-            }
-            if !json_media(
-                response
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or(""),
-            ) {
-                return Err(protocol_error());
-            }
-            let bytes = read_body(response, limit).await?;
+            let bytes = match input {
+                DocumentInput::Uploaded(bytes) => bytes.to_vec(),
+                DocumentInput::Remote { client, url } => {
+                    let mut response = client
+                        .send(
+                            client.request(Method::GET, url).header(
+                                "Accept",
+                                "application/json, application/vnd.oai.openapi+json",
+                            ),
+                            UpstreamCall::new("openapi.discover")
+                                .with_authorizations(authorization.as_slice()),
+                        )
+                        .await
+                        .map_err(|error| {
+                            ProviderError::error(
+                                error.reason_code(),
+                                "OpenAPI document request failed",
+                            )
+                        })?;
+                    let status = response.status().as_u16();
+                    complete_upstream_trace(&mut response, None);
+                    if status == 429 {
+                        // Throttling by the document server is the upstream's rate
+                        // limit for this imported service, with its bounded wait.
+                        return Err(upstream_rate_limited(
+                            &definition.service,
+                            UpstreamRetryAfter::from_headers(response.headers()),
+                        )
+                        .with_upstream(Some(status), None));
+                    }
+                    if status != 200 {
+                        return Err(ProviderError::error(
+                            status_reason(status),
+                            "OpenAPI document could not be read",
+                        )
+                        .with_upstream(Some(status), None));
+                    }
+                    if !json_media(
+                        response
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or(""),
+                    ) {
+                        return Err(protocol_error());
+                    }
+                    read_body(response, limit).await?
+                }
+            };
             let definition = definition.clone();
             let parse_definition = definition.clone();
             let document = tokio::task::spawn_blocking(move || {
-                let value = serde_json::from_slice(&bytes)
-                    .map_err(|_| "definition must be bounded JSON".to_owned())?;
+                let value = json::decode(&bytes)?;
                 Document::new(value, &parse_definition)
             })
             .await
             .map_err(|_| protocol_error())?
-            .map_err(|reason| ProviderError::error(ReasonCode::UpstreamProtocolFailed, reason))?;
+            .map_err(|reason| invalid_document(uploaded, reason))?;
             let document = Arc::new(document);
             let mut tools = Vec::new();
             let mut manifest_bytes = 0usize;
@@ -233,8 +332,8 @@ impl ImportedAdapter for OpenApiAdapter {
                         .len(),
                 );
                 if manifest_bytes > IMPORT_MAX_MANIFEST_BYTES {
-                    return Err(ProviderError::error(
-                        ReasonCode::UpstreamProtocolFailed,
+                    return Err(invalid_document(
+                        uploaded,
                         "OpenAPI discovery exceeds the imported manifest size budget",
                     ));
                 }
@@ -296,7 +395,7 @@ impl Provider for OpenApiProvider {
             return Err(input_error());
         }
         let action = self.actions.get(request.action()).ok_or_else(input_error)?;
-        let (url, headers) = action.request(&self.endpoint, request.inputs())?;
+        let prepared = action.request(&self.endpoint, request.inputs())?;
         let binding = self
             .definition
             .execution_bindings
@@ -318,8 +417,8 @@ impl Provider for OpenApiProvider {
         // of a parameter header of the same name.
         let mut upstream = self
             .client
-            .request(method(&action.plan), url)
-            .headers(headers);
+            .request(method(&action.plan), prepared.url)
+            .headers(prepared.headers);
         let accepted_media = action
             .plan
             .responses
@@ -332,8 +431,8 @@ impl Provider for OpenApiProvider {
         if !accepted_media.is_empty() {
             upstream = upstream.header("Accept", accepted_media);
         }
-        if let Some(body) = request.inputs().get("body") {
-            upstream = upstream.json(body);
+        if let Some((media, bytes)) = prepared.body {
+            upstream = upstream.header("Content-Type", media).body(bytes);
         }
         let started = Instant::now();
         let mut dispatched = false;

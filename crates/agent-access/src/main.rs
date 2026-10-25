@@ -1,3 +1,4 @@
+mod credential_input;
 mod discovery;
 mod gitlab_provisioning;
 mod gitlab_search;
@@ -8,6 +9,7 @@ mod output;
 mod request_timeout_tests;
 #[cfg(test)]
 use agent_access_core::ExitPolicy;
+use agent_access_core::imports::ImportedCredentialInputPolicy;
 use agent_access_core::{
     API_CATALOG_VERSION, AgentTokenServiceRestriction, ApiActionSpec, ApiCatalog, CliConfig,
     CliTlsConfig, ConfigError, CredentialInputField, HttpRouteSpec, InvokeRequest,
@@ -11299,11 +11301,26 @@ fn catalog_route<'a>(
     if !route.starts_with("/v1/") {
         anyhow::bail!("send HTTP route must start with /v1/");
     }
-    catalog
+    let route_spec = catalog
         .routes
         .iter()
         .find(|candidate| candidate.method == method && candidate.route == route)
-        .ok_or_else(|| anyhow::anyhow!("runtime catalog does not expose route {method} {route}"))
+        .ok_or_else(|| anyhow::anyhow!("runtime catalog does not expose route {method} {route}"))?;
+    if !matches!(
+        route_spec.request_body_kind,
+        agent_access_core::RequestBodyKind::Json
+    ) {
+        let guidance = if route_spec.operation == "admin.imports.document.upload" {
+            "use agent-access admin imports upload-document to preserve the original document bytes"
+        } else {
+            "use a client that supports the route's request body format"
+        };
+        return Err(DeferredCliError::input(anyhow::anyhow!(
+            "route {method} {route} requires a request body format unsupported by kind=http; {guidance}"
+        ))
+        .into());
+    }
+    Ok(route_spec)
 }
 
 fn resolve_route_path(
@@ -11389,7 +11406,19 @@ fn append_query_value(
 #[serde(rename_all = "camelCase")]
 struct CredentialInputSchema {
     profile: String,
+    credential_kind: String,
     fields: Vec<CredentialInputField>,
+    #[serde(default, deserialize_with = "deserialize_credential_input_policy")]
+    input_policy: Option<ImportedCredentialInputPolicy>,
+}
+
+fn deserialize_credential_input_policy<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<ImportedCredentialInputPolicy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    ImportedCredentialInputPolicy::deserialize(deserializer).map(Some)
 }
 
 async fn fetch_credential_input_schema(
@@ -13907,9 +13936,10 @@ enum CredentialFieldSource {
 }
 
 fn credential_put_body(input: CredentialPutInput<'_>) -> Result<serde_json::Value> {
+    validate_imported_credential_input_schema(input.schema)?;
     let plans = credential_field_source_plans(&input)?;
     validate_credential_field_plans(input.schema, &plans)?;
-    let mut collected = read_planned_credential_fields(&plans)?;
+    let mut collected = read_planned_credential_fields(&plans, input.schema.input_policy)?;
     for field in &input.schema.fields {
         if field.required && !collected.contains_key(&field.name) {
             if !credential_field_allows_source(field, CredentialFieldSource::Prompt) {
@@ -13919,7 +13949,7 @@ fn credential_put_body(input: CredentialPutInput<'_>) -> Result<serde_json::Valu
                     credential_field_input_hint(field)
                 );
             }
-            let value = read_prompted_schema_field(field)?;
+            let value = read_prompted_schema_field(field, input.schema.input_policy)?;
             collected.insert(
                 field.name.clone(),
                 CollectedCredentialField {
@@ -13934,6 +13964,9 @@ fn credential_put_body(input: CredentialPutInput<'_>) -> Result<serde_json::Valu
         if let Some(value) = collected.get(&field.name) {
             secret.insert(field.name.clone(), serde_json::json!(value.value));
         }
+    }
+    if input.schema.input_policy == Some(ImportedCredentialInputPolicy::HttpBasic) {
+        credential_input::validate_basic_material(&secret)?;
     }
     let mut metadata = serde_json::Map::new();
     if let Some(display_name) = input.display_name {
@@ -13950,6 +13983,37 @@ fn credential_put_body(input: CredentialPutInput<'_>) -> Result<serde_json::Valu
     body.insert("secret".to_string(), serde_json::Value::Object(secret));
     body.insert("metadata".to_string(), serde_json::Value::Object(metadata));
     Ok(serde_json::Value::Object(body))
+}
+
+/// Imported field conventions are usable only with a complete, consistent
+/// server-derived descriptor. Validate it before consuming any input source.
+fn validate_imported_credential_input_schema(schema: &CredentialInputSchema) -> Result<()> {
+    let Some(policy) = schema.input_policy else {
+        return Ok(());
+    };
+    let with_username = match (policy, schema.credential_kind.as_str()) {
+        (ImportedCredentialInputPolicy::HttpBasic, "basic_api_token") => true,
+        (ImportedCredentialInputPolicy::TokenHeader, "bearer_token") => false,
+        (ImportedCredentialInputPolicy::CommandStdin, "basic_api_token") => true,
+        (ImportedCredentialInputPolicy::CommandStdin, "bearer_token") => false,
+        _ => {
+            anyhow::bail!("malformed broker response: imported credential policy and kind disagree")
+        }
+    };
+    if schema.fields.len() != if with_username { 2 } else { 1 }
+        || !schema
+            .fields
+            .iter()
+            .any(|field| field.name == "token" && field.required && field.secret)
+        || (with_username
+            && !schema
+                .fields
+                .iter()
+                .any(|field| field.name == "username" && field.required && !field.secret))
+    {
+        anyhow::bail!("malformed broker response: imported credential fields are invalid");
+    }
+    Ok(())
 }
 
 fn credential_field_source_plans(
@@ -14111,25 +14175,40 @@ fn validate_credential_field_plans(
 
 fn read_planned_credential_fields(
     plans: &BTreeMap<String, PlannedCredentialField>,
+    input_policy: Option<ImportedCredentialInputPolicy>,
 ) -> Result<BTreeMap<String, CollectedCredentialField>> {
     let mut collected = BTreeMap::new();
+    let http_basic = input_policy == Some(ImportedCredentialInputPolicy::HttpBasic);
     for (name, plan) in plans {
         let value = match &plan.input {
             CredentialFieldInput::Literal(value) => value.clone(),
-            CredentialFieldInput::Env(env_name) => env::var(env_name).map_err(|error| {
+            CredentialFieldInput::Env(env_name) => env::var(env_name).map_err(|_| {
                 anyhow::anyhow!(
-                    "failed to read credential field {name} from environment variable {env_name}: {error}"
+                    "failed to read credential field {name} from environment variable {env_name}"
                 )
             })?,
+            CredentialFieldInput::File(path) if http_basic => {
+                credential_input::read_basic_file(path)?
+            }
             CredentialFieldInput::File(path) => read_token_file(path)?,
+            CredentialFieldInput::Stdin if http_basic => {
+                credential_input::read_basic_reader(std::io::stdin().lock())?
+            }
             CredentialFieldInput::Stdin => {
                 let mut value = String::new();
-                std::io::stdin().read_to_string(&mut value).map_err(|error| {
-                    anyhow::anyhow!("failed to read credential field {name} from stdin: {error}")
-                })?;
+                std::io::stdin()
+                    .read_to_string(&mut value)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "failed to read credential field {name} from stdin: {error}"
+                        )
+                    })?;
                 value.trim().to_string()
             }
         };
+        if http_basic {
+            credential_input::validate_basic_field(name, &value)?;
+        }
         collected.insert(
             name.clone(),
             CollectedCredentialField {
@@ -14148,7 +14227,10 @@ fn credential_schema_field<'a>(
     schema.fields.iter().find(|field| field.name == name)
 }
 
-fn read_prompted_schema_field(field: &CredentialInputField) -> Result<String> {
+fn read_prompted_schema_field(
+    field: &CredentialInputField,
+    input_policy: Option<ImportedCredentialInputPolicy>,
+) -> Result<String> {
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
             "missing required credential field {}; use {}",
@@ -14156,7 +14238,7 @@ fn read_prompted_schema_field(field: &CredentialInputField) -> Result<String> {
             credential_field_input_hint(field)
         );
     }
-    read_prompted_field(&field.prompt, &field.name, field.secret)
+    read_prompted_field(&field.prompt, &field.name, field.secret, input_policy)
 }
 
 fn credential_field_input_hint(field: &CredentialInputField) -> String {
@@ -14333,7 +14415,12 @@ fn credential_input_schema_path(credential_path: &str, profile: &Option<String>)
     path
 }
 
-fn read_prompted_field(prompt_label: &str, field_name: &str, secret: bool) -> Result<String> {
+fn read_prompted_field(
+    prompt_label: &str,
+    field_name: &str,
+    secret: bool,
+    input_policy: Option<ImportedCredentialInputPolicy>,
+) -> Result<String> {
     let prompt = format!("{prompt_label}: ");
     let value = if secret {
         rpassword::prompt_password(prompt).map_err(|error| {
@@ -14352,7 +14439,17 @@ fn read_prompted_field(prompt_label: &str, field_name: &str, secret: bool) -> Re
             .map_err(|error| anyhow::anyhow!("failed to read {field_name} from prompt: {error}"))?;
         value
     };
-    Ok(value.trim().to_string())
+    if input_policy == Some(ImportedCredentialInputPolicy::HttpBasic) {
+        let value = if secret {
+            value
+        } else {
+            credential_input::strip_terminal_newline(value)
+        };
+        credential_input::validate_basic_field(field_name, &value)?;
+        Ok(value)
+    } else {
+        Ok(value.trim().to_string())
+    }
 }
 
 fn validate_connection_argument(connection: &str) -> Result<()> {
@@ -17469,7 +17566,9 @@ mod tests {
     ) -> super::CredentialInputSchema {
         super::CredentialInputSchema {
             profile: schema.profile,
+            credential_kind: schema.credential_kind,
             fields: schema.fields,
+            input_policy: schema.input_policy,
         }
     }
 
@@ -23102,6 +23201,120 @@ upload_spool_dir = "upload-spool"
             "route": "/v1/services/{service}"
         });
         reject_literal_identity_token_for_send_management(&ctx, &catalog, &request).unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_http_rejects_raw_json_routes_before_dispatch() {
+        let server = wiremock::MockServer::start().await;
+        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        settings.url = server.uri();
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let mut upload = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs()
+            .into_iter()
+            .find(|route| route.operation == "admin.imports.document.upload")
+            .unwrap();
+        let mut catalog = agent_access_core::empty_catalog(serde_json::json!({}));
+        for dedicated_upload in [true, false] {
+            if !dedicated_upload {
+                upload.route = "/v1/synthetic/{service}/source".into();
+                upload.operation = "synthetic.source.upload".into();
+            }
+            catalog.routes = vec![upload.clone()];
+            for body in [
+                Some(
+                    serde_json::from_str(r#"{"swagger":"2.0","duplicate":1,"duplicate":2}"#)
+                        .unwrap(),
+                ),
+                None,
+            ] {
+                let error = run_send_http(
+                    &ctx,
+                    &catalog,
+                    "PUT",
+                    &upload.route,
+                    BTreeMap::from([("service".into(), "example".into())]),
+                    BTreeMap::from([
+                        ("expectedVersion".into(), serde_json::json!(2)),
+                        ("expectedCatalogRevision".into(), serde_json::json!(7)),
+                    ]),
+                    body,
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(error.downcast_ref::<DeferredCliError>().unwrap().code, 3);
+                assert!(error.to_string().contains("unsupported by kind=http"));
+                if dedicated_upload {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("agent-access admin imports upload-document")
+                    );
+                }
+            }
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_http_rejects_raw_json_before_reading_secret_sources() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        settings.url = server.uri();
+        let ctx = CliContext {
+            settings: &settings,
+            output: None,
+        };
+        let mut catalog = agent_access_core::empty_catalog(serde_json::json!({}));
+        catalog.routes = agent_access_broker::composition()
+            .unwrap()
+            .http_route_specs();
+        Mock::given(method("GET"))
+            .and(path("/v1/spec/catalog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&catalog))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let request_file = dir.path().join("request.json");
+        fs::write(
+            &request_file,
+            serde_json::to_vec(&serde_json::json!({
+                "version": SEND_SCHEMA_VERSION,
+                "kind": "http",
+                "method": "PUT",
+                "route": "/v1/admin/imports/{service}/document",
+                "pathParams": {"service": "example"},
+                "query": {"expectedVersion": 2, "expectedCatalogRevision": 7},
+                "secretSources": [{
+                    "pointer": "/body",
+                    "source": {"type": "file", "path": dir.path().join("absent.json")}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = run_send_command(&ctx, &None, &Some(request_file), false)
+            .await
+            .unwrap_err();
+        assert_eq!(error.downcast_ref::<DeferredCliError>().unwrap().code, 3);
+        assert!(
+            error
+                .to_string()
+                .contains("agent-access admin imports upload-document")
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        server.verify().await;
     }
 
     #[test]

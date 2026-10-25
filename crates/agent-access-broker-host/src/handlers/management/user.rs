@@ -706,7 +706,7 @@ pub(crate) async fn user_credentials_put(
         Err(response) => return *response,
     };
     let request = personal_request(&context, connection);
-    put_connection_credential(context, operation, request, body).await
+    put_connection_credential(&state, context, operation, request, body).await
 }
 
 pub(crate) async fn user_credential_input_schema(

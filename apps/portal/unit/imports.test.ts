@@ -1,3 +1,4 @@
+import { TOKEN_INPUT } from "./credential-input.fixture";
 import { vi } from "vitest";
 vi.mock("../src/app/session", () => ({ useSession: () => ({ session: { authenticated: true, role: "admin", selfServiceEnabled: true, principal: "admin" } }) }));
 import { describe, expect, test } from "vitest";
@@ -16,7 +17,7 @@ const tool = (action: string, readOnly = false): ImportActionDefinition => ({ ac
 function fixture(): ImportPreviewResult {
   return {
     operatorAllowed: true, scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], catalogRevision: 4, affectedGrants: ["grant1", "removed-grant"], affectedGrantsByAction: { read: ["grant1"], removed: ["removed-grant"] },
-    service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint: "https://example.test/mcp", executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], connectionSettings: {}, discovery: { kind: "execution" }, transportAuth: false }, status: "enabled", version: 2, actions: [{ definition: tool("read", true), status: "enabled", version: 1, definitionHash: "old" }, { definition: tool("removed", true), status: "quarantined", version: 1, definitionHash: "old" }], slotVersions: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" },
+    service: { definition: { service: "metrics", displayName: "Metrics", adapterKind: "mcp_http", endpoint: "https://example.test/mcp", executionBindings: [{ ownerMode: "service", mechanism: "static_token", delivery: { kind: "bearer" }, status: "configured" }], connectionSettings: {}, discovery: { kind: "execution" }, transportAuth: false }, status: "enabled", version: 2, actions: [{ definition: tool("read", true), status: "enabled", version: 1, definitionHash: "old" }, { definition: tool("removed", true), status: "quarantined", version: 1, definitionHash: "old" }], slotVersions: {}, credentialInputs: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" },
     preview: { service: "metrics", serviceVersion: 2, catalogRevision: 4, configRevision: "cfg", credentialVersions: {}, manifestHash: "hash", manifest: { protocolVersion: "fixture", metadata: {}, tools: [{ definition: tool("read"), unsupportedReason: null, readOnlyHint: false }, { definition: tool("new"), unsupportedReason: null, readOnlyHint: true }, { definition: tool("unsupported"), unsupportedReason: "Requires streaming", readOnlyHint: true }] }, createdAt: "", expiresAt: "", createdBy: "admin" },
   };
 }
@@ -246,7 +247,7 @@ describe("catalog service index", () => {
   });
   test("token dialogs name the slot and never render a stored value", () => {
     const render = (purpose: "execution" | "personal", rotate: boolean) =>
-      renderToStaticMarkup(createElement(ImportTokenModal, { purpose, rotate, noun: "token", onClose: () => {}, onSave: async () => undefined, frame: inlineFrame }));
+      renderToStaticMarkup(createElement(ImportTokenModal, { purpose, rotate, descriptor: TOKEN_INPUT, noun: "token", onClose: () => {}, onSave: async () => undefined, frame: inlineFrame }));
     const set = render("execution", false);
     expect(set).toContain("Set execution token");
     expect(set).toContain("without a Bearer prefix");

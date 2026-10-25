@@ -261,7 +261,7 @@ imported service ID and which only that import consumes. It mirrors the binding:
 
 | Personal binding | Connection | Who uses it |
 | --- | --- | --- |
-| Static token | Token profile `token`, or `username-token` for a command import whose credential kind is `username_token` | People and `system` principals store their own token; administrators provision service accounts' |
+| Static credential (`static_token`) | Token profile `token`, or `username-token` for HTTP Basic and command imports whose credential kind is `username_token` | People and `system` principals store their own credential; administrators provision service accounts' |
 | Approved MCP OAuth | OAuth with the import's registration and profile | People connect their account; service accounts and `system` principals have no personal credential |
 | None, unsupported or not allowed | None | Service mode only |
 
@@ -322,16 +322,28 @@ one-request contract instead.
 
 ## CLI and HTTP management
 
-`agent-access admin imports` has `list`, `get`, `create`, `update`, `discover`,
+`agent-access admin imports` has `list`, `get`, `create`, `update`, `discover`, `upload-document`,
 `preview`, `accept`, `status`, `action-status`, and nested `credentials put/delete`
 commands. Create/update/accept take `--request-file`. Versioned commands take
 `--expected-version` and `--expected-catalog-revision`. Shared token writes read
 `--secret-file`, `--secret-env`, or `--secret-stdin`; they never return plaintext.
-The execution slot of a command import whose credential kind is `username_token`
-also takes `--username` (`username` in the request body), and other slots reject it.
+Slots whose server-derived input schema requires a username also take `--username`
+(`username` in the request body). These include Basic execution/discovery slots
+and command execution slots whose accepted kind is `username_token`.
+Before consuming any secret source, the CLI reads current import detail and
+checks its `credentialInputs` descriptor and both supplied revisions. Missing,
+unavailable or stale descriptions fail without consuming stdin or reading the
+secret. The write sends the original revisions and is never retried automatically.
 Retirement uses `--confirm`. Typed discovery allows 75 seconds for the server's
 60-second discovery deadline. If a client times out, inspect the preview before
 starting another discovery.
+
+For an OpenAPI/Swagger upload source, `upload-document SERVICE --document-file
+PATH --expected-version N --expected-catalog-revision N` sends the exact bounded
+UTF-8 JSON bytes with the same discovery timeout and no automatic retry. It
+atomically stores a validated document and its review preview. See
+[uploaded documents](imported-openapi.md#uploading-and-replacing-a-document) for
+creation, replacement, retention and failure recovery.
 
 The matching admin routes are under `/v1/admin/imports`:
 
@@ -340,11 +352,25 @@ The matching admin routes are under `/v1/admin/imports`:
 | GET / POST | collection | List / create draft |
 | GET / PATCH | `/{service}` | Inspect / update settings |
 | POST | `/{service}/discover` | Discover or manually refresh |
+| PUT | `/{service}/document` | Validate and retain an uploaded source document with its preview |
 | GET | `/{service}/preview` | Inspect pending preview and affected grants |
 | POST | `/{service}/accept` | Accept reviewed source selections |
 | POST | `/{service}/status` | Enable, disable, or retire |
 | POST | `/{service}/actions/{action}/status` | Change an accepted action's availability |
 | PUT / DELETE | `/{service}/credentials/{purpose}` | Write / remove execution, discovery, or transport token |
+
+Every projected service includes read-only `credentialInputs`, keyed by declared
+writable slot purpose. List entries expose it at `services[i].credentialInputs`;
+detail, mutation and preview responses expose `service.credentialInputs`. A ready
+entry contains `state: "ready"`, `credentialKind`, `inputPolicy` and `fields`.
+The policy is `token_header`, `http_basic` or `command_stdin`, and fields reuse
+the personal credential input descriptions. Unavailable entries contain
+`state: "unavailable"` and a bounded `reason`; undeclared slots are omitted.
+Retired services cannot receive credentials. These descriptions are derived
+from the accepted adapter contract, never writable configuration or stored
+manifest data. An unaccepted command's credential requirements may be unavailable
+until its manifest is accepted. Personal connection schemas expose the same
+derived `inputPolicy` and field descriptions for their selected profile.
 
 The runtime OpenAPI and JSON-send schemas carry exact request/result shapes and
 mark token input sensitive. List results include `commandImports`, the

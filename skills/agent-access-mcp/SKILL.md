@@ -70,6 +70,11 @@ come from that action's schema and documentation. For example, when supported:
 Imported OpenAPI actions can have `path`, `query`, `headers`, and `body` inside
 `inputs`; preserve the discovered nesting. Imported MCP actions also retain the
 broker wrapper. Original tool names do not imply raw upstream argument passing.
+Swagger 2.0 and OpenAPI 3.1 URL-encoded operations take the same JSON
+`inputs.body` object of declared scalar fields on HTTP and stdio MCP; the Broker
+encodes those values for the upstream. Do not pass pre-encoded text or Basic
+credentials in tool arguments. File uploads and binary downloads remain outside
+this import profile.
 
 Caller discovery includes a service `availability` status. Missing or locally
 unusable backend credentials hide affected actions, schemas, resources and MCP

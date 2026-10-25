@@ -3,6 +3,23 @@ import { ApiError, brokerApi } from "../src/api";
 
 afterEach(() => vi.unstubAllGlobals());
 
+test("document upload sends the original file once with CSRF and encoded version fences", async () => {
+  const file = new File([' {"swagger":"2.0","x":"é","x":"preserved"}\n'], "café & notes.json");
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, result: {} })));
+  vi.stubGlobal("fetch", fetch);
+  await brokerApi.uploadImportDocument({ authenticated: true, role: "admin", csrfHeader: "x-csrf", csrfToken: "synthetic" }, "inventory", { expectedVersion: 7, expectedCatalogRevision: 12 }, file);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const [path, init] = fetch.mock.calls[0] as [string, RequestInit];
+  expect(new URL(path, "https://broker.example.test").searchParams).toEqual(new URLSearchParams({ expectedVersion: "7", expectedCatalogRevision: "12", filename: file.name }));
+  expect(init).toMatchObject({ method: "PUT", body: file, credentials: "same-origin" });
+  expect(init.body).toBe(file);
+  expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+  expect(new Headers(init.headers).get("x-csrf")).toBe("synthetic");
+  fetch.mockRejectedValueOnce(new TypeError("network connection lost"));
+  await expect(brokerApi.uploadImportDocument({ authenticated: true, role: "admin" }, "inventory", { expectedVersion: 7, expectedCatalogRevision: 12 }, file)).rejects.toThrow("network connection lost");
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
 test("proxy HTML errors preserve the HTTP status without exposing their body", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>private upstream diagnostics</html>", { status: 502 })));
   try {

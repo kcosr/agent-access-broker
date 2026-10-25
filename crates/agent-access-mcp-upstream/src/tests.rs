@@ -1136,3 +1136,26 @@ fn accepted_download_semantics_are_rejected_by_mcp() {
     );
     assert!(CompiledAction::new(&definition).is_err());
 }
+
+#[test]
+fn basic_delivery_is_rejected_by_mcp_validation_contract_and_build() {
+    let mut definition = definition("https://mcp.example.test/mcp");
+    definition.execution_bindings[0].delivery = ImportedCredentialDelivery::Basic;
+    assert!(McpAdapter.validate_definition(&definition).is_err());
+    assert!(
+        McpAdapter
+            .credential_contract(&definition, &ImportedAdapterContext::default())
+            .is_err()
+    );
+    assert!(
+        McpAdapter
+            .build(
+                &definition,
+                &[],
+                None,
+                &ImportedAdapterContext::default(),
+                &test_host().context()
+            )
+            .is_err()
+    );
+}

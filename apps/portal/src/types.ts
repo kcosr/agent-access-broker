@@ -213,11 +213,18 @@ export type CredentialInputField = {
   inputMethods?: string[];
 };
 
-export type CredentialInputSchema = {
+export type CredentialInputPolicy = "token_header" | "http_basic" | "command_stdin";
+
+/** Broker-derived input contract; never a writable credential kind selector. */
+export type CredentialInputDescriptor = {
+  credentialKind: string;
+  inputPolicy?: CredentialInputPolicy;
+  fields: CredentialInputField[];
+};
+
+export type CredentialInputSchema = CredentialInputDescriptor & {
   connection: string;
   profile: string;
-  credentialKind: string;
-  fields: CredentialInputField[];
 };
 
 /** A token profile (token type) a connection accepts from the principal, with its input form. */

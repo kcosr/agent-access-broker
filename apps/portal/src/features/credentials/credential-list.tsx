@@ -8,7 +8,7 @@ import { canWriteSubject } from "../../lib/capabilities";
 import { useSession } from "../../app/session";
 import { useEffect, useMemo, useState } from "react";
 import type { ConnectionCredential, CredentialConnection, CredentialList, CredentialMetadata, CredentialTarget, CredentialTokenProfile, OAuthConnectionTarget, RetainedCredential } from "../../types";
-import { MASKED_TEXT_SECURITY_SUPPORTED, credentialStatus, credentialTone, errorMessage } from "../../lib/helpers";
+import { credentialStatus, credentialTone, errorMessage } from "../../lib/helpers";
 import {
   administeredOAuthRegistrations,
   chosenTokenType,
@@ -36,7 +36,6 @@ import {
   Field,
   FilterInput,
   Icon,
-  IconButton,
   Input,
   KeyValue,
   ListFooter,
@@ -57,6 +56,7 @@ import { useTableUrlState } from "../../app/list-state";
 import { useModal } from "../../app/modal";
 import { useConsoleData, useOAuthConnections } from "../../data/queries";
 import { useCredentialActions } from "../../mutations/credentials";
+import { CredentialFields } from "../../components/credential-fields";
 import { FormError } from "../../components/form";
 import {
   ADMINISTERED_OAUTH_NOTICE,
@@ -762,7 +762,6 @@ function CredentialForm({
   const [chosen, setChosen] = useState(() => initialTokenType(accepted, stored?.profile));
   const type = chosenTokenType(accepted, chosen);
   const [values, setValues] = useState<Record<string, string>>(() => (type ? tokenTypeValues(type, {}) : {}));
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [typeTouched, setTypeTouched] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -818,36 +817,7 @@ function CredentialForm({
           </Select>
         </Field>
       ) : null}
-      {(type?.inputSchema.fields ?? []).map((field) => {
-        const hidden = field.secret && !visible[field.name];
-        return (
-          <Field key={field.name} label={field.prompt} hint={field.description} optional={!field.required}>
-            <div className="flex gap-2">
-              <Input
-                type={hidden && !MASKED_TEXT_SECURITY_SUPPORTED ? "password" : "text"}
-                className={hidden && MASKED_TEXT_SECURITY_SUPPORTED ? "pt-secret flex-1" : "flex-1"}
-                value={values[field.name] ?? ""}
-                onChange={(event) => setValues({ ...values, [field.name]: event.target.value })}
-                required={field.required}
-                autoComplete={field.secret ? "new-password" : "off"}
-                autoCapitalize="none"
-                spellCheck={false}
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-bwignore="true"
-              />
-              {field.secret ? (
-                <IconButton
-                  variant="default"
-                  icon={visible[field.name] ? "eye-off" : "eye"}
-                  label={`${visible[field.name] ? "Hide" : "Show"} ${field.prompt}`}
-                  onClick={() => setVisible({ ...visible, [field.name]: !visible[field.name] })}
-                />
-              ) : null}
-            </div>
-          </Field>
-        );
-      })}
+      {type ? <CredentialFields descriptor={type.inputSchema} values={values} onChange={setValues} disabled={pending} /> : null}
       <FormError error={error} />
       <div className="flex justify-end">
         <Button type="submit" variant="primary" disabled={!ready} pending={pending}>

@@ -18,6 +18,13 @@ static STATIC_IMPORT: SyntheticImport = SyntheticImport("static_import");
 
 #[async_trait::async_trait]
 impl ImportedAdapter for SyntheticImport {
+    fn credential_contract(
+        &self,
+        definition: &crate::imports::ImportedServiceDefinition,
+        import: &crate::imports::ImportedAdapterContext<'_>,
+    ) -> Result<crate::imports::ImportedCredentialContract, String> {
+        crate::imports::test_credential_contract(definition, import)
+    }
     fn kind(&self) -> &'static str {
         self.0
     }
@@ -233,6 +240,7 @@ fn oauth_eligibility_comes_from_the_selected_import_companion() {
 fn an_approved_oauth_binding_publishes_an_oauth_only_connection() {
     let config = config();
     let record = |binding: ImportedCredentialBinding| crate::ImportedServiceRecord {
+        document: None,
         definition: ImportedServiceDefinition {
             execution_bindings: vec![binding],
             ..definition("fixture_import")
@@ -309,6 +317,7 @@ fn synthesized_connections_sharing_a_registration_must_share_its_profile() {
         let mut binding = binding("stub", "records");
         binding.profile = Some(profile.into());
         crate::ImportedServiceRecord {
+            document: None,
             definition: ImportedServiceDefinition {
                 service: service.into(),
                 execution_bindings: vec![binding],

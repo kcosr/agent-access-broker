@@ -11,7 +11,7 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
         "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"importAuthentication":import_authentication(),
         "commandImports":{"type":"array","description":"Operator-approved command names a command import may name as command:<name>; paths are never returned.",
             "items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}},
-        "catalogRevision":revision(),"services":{"type":"array","items":service_record()}
+        "catalogRevision":revision(),"services":{"type":"array","items":service_view()}
     }}));
     routes.push(list);
     let mut get = get_management_route(DETAIL, "admin.imports.inspect", RouteAccess::AdminRead);
@@ -48,6 +48,33 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
         preview_result(),
         vec![],
     ));
+    let mut upload = mutation(
+        "PUT",
+        &format!("{DETAIL}/document"),
+        "admin.imports.document.upload",
+        json!({"type":"object","description":"Exact UTF-8 JSON OpenAPI or Swagger document bytes, at most 4 MiB and the configured body/discovery limits. Duplicate object members are rejected. application/json is required; bytes are retained without reserialization."}),
+        preview_result(),
+        vec!["/body".into()],
+    );
+    upload.request_body_kind = RequestBodyKind::RawJson;
+    upload.query_params = vec![
+        RouteParamSpec {
+            name: "expectedVersion".into(),
+            required: true,
+            schema: version(),
+        },
+        RouteParamSpec {
+            name: "expectedCatalogRevision".into(),
+            required: true,
+            schema: revision(),
+        },
+        RouteParamSpec {
+            name: "filename".into(),
+            required: false,
+            schema: json!({"type":"string","minLength":1,"maxLength":255,"description":"Optional basename, at most 255 UTF-8 bytes; controls, path separators, and dot-only names are rejected."}),
+        },
+    ];
+    routes.push(upload);
     let mut preview = get_management_route(
         &format!("{DETAIL}/preview"),
         "admin.imports.preview",
@@ -106,9 +133,9 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let credential_path = format!("{DETAIL}/credentials/{{purpose}}");
     let mut secret = versioned_request();
     secret["properties"]["token"] = json!({"type":"string","minLength":1,"maxLength":32768,
-        "pattern":"^[!-~]+$","writeOnly":true,"description":"Backend token; never returned by management reads."});
+        "writeOnly":true,"description":"Credential secret matching this slot's credentialInputs policy; never returned by management reads."});
     secret["properties"]["username"] = json!({"type":"string","minLength":1,"maxLength":256,
-        "description":"Username of a username_token command credential; required for that execution slot and rejected for every other slot."});
+        "description":"Username required exactly when this slot's credentialInputs declares it; preserve bytes."});
     secret["required"]
         .as_array_mut()
         .unwrap()
@@ -179,6 +206,7 @@ fn action_name() -> Value {
 fn delivery() -> Value {
     json!({"oneOf":[
         {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"bearer"}}},
+        {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"basic"}}},
         {"type":"object","additionalProperties":false,"required":["kind","name"],"properties":{"kind":{"const":"raw_header"},"name":{"type":"string","minLength":1,"maxLength":128}}},
         {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"stdin"}}}
     ]})
@@ -259,9 +287,17 @@ fn action_definition() -> Value {
         "inputSchema":{},"outputSchema":{},"annotations":{},"readOnly":{"type":"boolean"}
     }})
 }
-fn service_record() -> Value {
+fn credential_input() -> Value {
+    json!({"oneOf":[
+        {"type":"object","additionalProperties":false,"required":["state","credentialKind","inputPolicy","fields"],"properties":{
+            "state":{"const":"ready"},"credentialKind":{"enum":["bearer_token","basic_api_token"]},
+            "inputPolicy":{"enum":["token_header","http_basic","command_stdin"]},"fields":{"type":"array","items":{"type":"object"}}}},
+        {"type":"object","additionalProperties":false,"required":["state","reason"],"properties":{"state":{"const":"unavailable"},"reason":{"type":"string","maxLength":256}}}
+    ]})
+}
+fn service_view() -> Value {
     json!({"type":"object","additionalProperties":false,
-    "required":["definition","status","version","actions","slotVersions","createdAt","createdBy","updatedAt","updatedBy"],"properties":{
+    "required":["definition","status","version","actions","slotVersions","credentialInputs","createdAt","createdBy","updatedAt","updatedBy"],"properties":{
         "definition":stored_service_definition(),"status":{"enum":["draft","disabled","enabled","retired"]},"version":version(),
         "actions":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["definition","status","version","definitionHash"],"properties":{
@@ -269,7 +305,13 @@ fn service_record() -> Value {
                 "version":version(),"definitionHash":{"type":"string"}
             }}},
         "slotVersions":{"type":"object","additionalProperties":{"type":"string"},"description":"Opaque credential slot versions; no token values."},
+        "credentialInputs":{"type":"object","propertyNames":{"enum":["execution","discovery","transport"]},"additionalProperties":credential_input()},
         "acceptedMetadata":accepted_metadata(),
+        "document":{"type":"object","additionalProperties":false,"required":["byteLength","sha256"],"properties":{
+            "filename":{"type":"string","minLength":1,"maxLength":255},
+            "byteLength":{"type":"integer","minimum":1,"maximum":crate::imports::IMPORT_MAX_DOCUMENT_BYTES},
+            "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}
+        },"description":"Safe receipt for retained uploaded source bytes. Raw document contents are never returned."},
         "createdAt":{"type":"string","format":"date-time"},"createdBy":{"type":"string"},
         "updatedAt":{"type":"string","format":"date-time"},"updatedBy":{"type":"string"}
     }})
@@ -385,7 +427,7 @@ fn command_version() -> Value {
 fn service_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
         "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
-        "catalogRevision":revision(),"service":service_record(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
+        "catalogRevision":revision(),"service":service_view(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
         "resourceTypeEffects":resource_type_effects()
     }})
 }
@@ -433,7 +475,7 @@ fn preview_record() -> Value {
 fn preview_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","preview","affectedGrants","affectedGrantsByAction","importAuthentication","scopedMcp","scopedMcpWarnings","resourceTypeChanges"],"properties":{
         "resourceTypeChanges":resource_type_change_status(),
-        "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_record(),
+        "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_view(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
         "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings(),
@@ -530,7 +572,7 @@ mod tests {
     #[test]
     fn imports_are_admin_only_and_preserve_credential_secret_markers() {
         let routes = route_specs();
-        assert_eq!(routes.len(), 11);
+        assert_eq!(routes.len(), 12);
         for route in &routes {
             assert_eq!(
                 route.access,
@@ -552,6 +594,26 @@ mod tests {
             .find(|route| route.operation == "admin.imports.credentials.put")
             .unwrap();
         assert_eq!(secret.sensitive_request_pointers, ["/body/token"]);
+        let upload = routes
+            .iter()
+            .find(|route| route.operation == "admin.imports.document.upload")
+            .unwrap();
+        assert_eq!(upload.method, "PUT");
+        assert_eq!(upload.route, "/v1/admin/imports/{service}/document");
+        assert_eq!(upload.request_body_kind, RequestBodyKind::RawJson);
+        assert_eq!(upload.sensitive_request_pointers, ["/body"]);
+        assert_eq!(
+            upload
+                .query_params
+                .iter()
+                .map(|parameter| (parameter.name.as_str(), parameter.required))
+                .collect::<Vec<_>>(),
+            vec![
+                ("expectedVersion", true),
+                ("expectedCatalogRevision", true),
+                ("filename", false)
+            ]
+        );
         assert_eq!(
             secret.request_body_schema.as_ref().unwrap()["properties"]["token"]["writeOnly"],
             true

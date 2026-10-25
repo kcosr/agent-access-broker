@@ -27,6 +27,7 @@ async fn fixture_http() -> Fixture {
         store
             .update_imported_service(
                 ImportedServiceUpdateRequest {
+                    discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                     definition: record.definition.clone(),
                     status: record.status,
                     actions,

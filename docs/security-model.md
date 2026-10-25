@@ -1200,6 +1200,26 @@ does not publish. Service and personal credentials remain distinct, and a select
 personal credential never falls back to a shared credential. Discovery credentials
 are not execution fallback credentials.
 
+Swagger and OpenAPI share one accepted execution plan and request-validation
+path. Basic execution and definition-fetch credentials are independent encrypted
+username/token records. Local validation rejects invalid material before an
+opaque credential reaches the adapter; availability checks neither contact the
+upstream nor record credential use. Service-slot and personal credential writes
+bind their derived input contract to the current import record and admitted
+runtime snapshot, preventing a concurrent draft change from repurposing a new
+credential. Form encoding changes request representation, never grant scope or
+the downstream JSON tool contract.
+
+An uploaded Swagger/OpenAPI definition is administrator-supplied input, bounded
+and compiled through the same duplicate-rejecting readers as URL discovery.
+The API destination remains operator-approved; uploads neither fetch a document
+URL nor resolve external references. Raw source bytes are retained separately
+from catalog definitions and excluded from management responses, Debug and audit.
+They remain part of database backups. Document replacement requires the admitted
+runtime snapshot and current service/catalog revisions, and publishes its stored
+bytes, preview and quarantine atomically. A failed or stale replacement cannot
+overwrite the previous source or accepted actions.
+
 Personal MCP OAuth uses operator-approved registrations, exact resource/audience/
 target bindings, validated issuer and metadata endpoints, PKCE and the registered
 Broker callback. The adapter checks a returned token-response `resource` when

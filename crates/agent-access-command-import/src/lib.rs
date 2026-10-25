@@ -34,6 +34,7 @@ use agent_access_core::imports::{
     ImportedDiscoveryAuthentication, ImportedDiscoveryCredential, ImportedProvider,
     ImportedServiceDefinition, ImportedServiceMetadata, imported_adapter_registration,
 };
+use agent_access_core::imports::{ImportedCredentialContract, ImportedCredentialRequirement};
 use agent_access_provider::{
     BuildContext, ExecutionCredential, MutationReceipt, Provider, ProviderBuildError,
     ProviderCredentialVerification, ProviderError, ProviderInvocation, ProviderResult, ReasonCode,
@@ -83,6 +84,30 @@ fn describe_timeout() -> AdapterDiscoveryError {
 
 #[async_trait]
 impl ImportedAdapter for CommandAdapter {
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        import: &ImportedAdapterContext<'_>,
+    ) -> Result<ImportedCredentialContract, String> {
+        self.validate_definition(definition)?;
+        let execution = if definition.execution_bindings.is_empty() {
+            None
+        } else {
+            Some(match import.accepted_metadata {
+                Some(metadata) => ImportedCredentialRequirement::command_stdin(
+                    metadata
+                        .credential
+                        .as_ref()
+                        .ok_or("accepted command declares no execution credential")?
+                        .kind,
+                ),
+                None => ImportedCredentialRequirement::unavailable(
+                    "Accept the command manifest before setting its credential",
+                ),
+            })
+        };
+        Ok(ImportedCredentialContract::new(execution, None, None))
+    }
     fn kind(&self) -> &'static str {
         KIND
     }

@@ -16,6 +16,7 @@ use crate::handlers::management::common::{
     management_write_audit_preflight, management_write_audit_upstream_verification,
 };
 use crate::handlers::management::connections::{self, audit_target, connection_credential};
+use crate::state::AppState;
 use agent_access_core::{
     BrokerRuntime, CONNECTION_CREDENTIAL_NAME, ConnectionTokenProfile, CredentialVerificationInput,
     CredentialWriteRequest, IdentityContext, ManagedStoreError,
@@ -410,6 +411,7 @@ pub(super) async fn connection_input_schema(
 }
 
 pub(super) async fn put_connection_credential(
+    state: &AppState,
     context: ManagementContext,
     operation: &str,
     request: ConnectionCredentialRequest,
@@ -446,32 +448,55 @@ pub(super) async fn put_connection_credential(
         )
         .await;
     };
+    let contract = match context
+        .snapshot
+        .runtime
+        .prepare_imported_connection_contract(&request.connection)
+    {
+        Ok(contract) => contract,
+        Err(error) => {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    };
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await
     {
         return *response;
     }
-    let actor = context.identity.principal.clone();
-    let owner_principal_id = request.principal.clone();
-    let connection = request.connection.clone();
-    match management_store_call(&context, move |store| {
-        store.upsert_user_credential(
-            &key_ring,
-            CredentialWriteRequest {
-                owner_principal_id,
-                service: connection,
-                name: CONNECTION_CREDENTIAL_NAME.to_string(),
-                profile,
-                credential_kind,
-                secret: body.secret,
-                metadata: body.metadata,
-                actor,
-            },
-            purpose,
-        )
-    })
-    .await
-    {
+    let write = CredentialWriteRequest {
+        owner_principal_id: request.principal.clone(),
+        service: request.connection.clone(),
+        name: CONNECTION_CREDENTIAL_NAME.to_string(),
+        profile,
+        credential_kind,
+        secret: body.secret,
+        metadata: body.metadata,
+        actor: context.identity.principal.clone(),
+    };
+    let result = match contract {
+        Some(contract) => {
+            // The imported snapshot and publication fence stay owned until the
+            // blocking write finishes, even if this response waiter is canceled.
+            // Store validation also checks the prepared import definition and
+            // revisions in its transaction.
+            state
+                .reloadable
+                .token_store_call_from_snapshot(context.snapshot.clone(), move |runtime| {
+                    let store = runtime.managed_store().ok_or_else(|| {
+                        ManagedStoreError::Unavailable("managed store is unavailable".into())
+                    })?;
+                    store.upsert_imported_user_credential(&key_ring, write, purpose, &contract)
+                })
+                .await
+        }
+        None => {
+            management_store_call(&context, move |store| {
+                store.upsert_user_credential(&key_ring, write, purpose)
+            })
+            .await
+        }
+    };
+    match result {
         Ok(credential) => management_pre_audited_success_response(
             &context,
             operation,
@@ -637,14 +662,21 @@ pub(super) async fn verify_connection_credential(
     let principal = request.principal.clone();
     let connection = request.connection.clone();
     let profiles = admitted.profile_names();
+    let imported_requirement = match runtime.imported_connection_requirement(&connection) {
+        Ok(requirement) => requirement,
+        Err(error) => {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    };
     let candidate = match management_store_call(&context, move |store| {
-        store.resolve_user_credential_for_verification(
+        store.resolve_user_credential_for_verification_with_imported_contract(
             &key_ring,
             &principal,
             &connection,
             CONNECTION_CREDENTIAL_NAME,
             &profiles,
             purpose,
+            imported_requirement.as_ref(),
         )
     })
     .await
@@ -809,8 +841,36 @@ pub(super) async fn delete_connection_credential(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Exercise the ordinary owner/admin handler after test-controlled snapshot
+    /// publication, while retaining real management admission and store checks.
+    pub(crate) async fn put_admitted_connection(
+        state: &AppState,
+        context: ManagementContext,
+        principal: &str,
+        connection: &str,
+        body: Value,
+    ) -> axum::response::Response {
+        let (operation, access) = match context.credential_purpose {
+            agent_access_core::CredentialManagementPurpose::Personal => {
+                ("credentials.put", CredentialAccess::Owner)
+            }
+            agent_access_core::CredentialManagementPurpose::Administrative => (
+                crate::handlers::management::audit_actions::ADMIN_CREDENTIALS_PUT,
+                CredentialAccess::Administrator,
+            ),
+        };
+        put_connection_credential(
+            state,
+            context,
+            operation,
+            ConnectionCredentialRequest::new(principal.into(), connection.into(), access),
+            serde_json::from_value(body).unwrap(),
+        )
+        .await
+    }
 
     #[test]
     fn verification_failure_persistence_records_upstream_auth_failures() {

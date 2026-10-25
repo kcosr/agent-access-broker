@@ -50,7 +50,7 @@ pub struct ImportedDiscovery {
 /// Core's inputs to [`ImportedAdapter::build`] and
 /// [`ImportedAdapter::discover`] beyond the definition and the SDK build
 /// context. Core resolves them for the import after its operator gate.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct ImportedAdapterContext<'a> {
     /// The service-level metadata accepted with the import's actions; `None`
@@ -65,6 +65,8 @@ pub struct ImportedAdapterContext<'a> {
     /// from like its `invoke` and `verify` runs. Core supplies it to
     /// [`ImportedAdapter::discover`]; building never runs a command.
     pub command_registry: Option<&'a CommandRegistry>,
+    /// Retained or newly uploaded bytes, supplied only for document discovery.
+    document: Option<&'a [u8]>,
 }
 
 impl<'a> ImportedAdapterContext<'a> {
@@ -76,6 +78,7 @@ impl<'a> ImportedAdapterContext<'a> {
             accepted_metadata,
             command,
             command_registry: None,
+            document: None,
         }
     }
 
@@ -84,6 +87,34 @@ impl<'a> ImportedAdapterContext<'a> {
         self.command_registry = Some(registry);
         self
     }
+
+    pub fn with_document(mut self, document: &'a [u8]) -> Self {
+        self.document = Some(document);
+        self
+    }
+
+    pub fn document(&self) -> Option<&'a [u8]> {
+        self.document
+    }
+}
+
+impl std::fmt::Debug for ImportedAdapterContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportedAdapterContext")
+            .field("accepted_metadata", &self.accepted_metadata)
+            .field("command", &self.command)
+            .field("command_registry", &self.command_registry)
+            .field("document_byte_length", &self.document.map(<[u8]>::len))
+            .finish()
+    }
+}
+
+/// How discovery obtains its source; execution always uses accepted operation plans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImportedDiscoverySource {
+    Remote,
+    StoredDocument,
 }
 
 /// What an adapter builds for one enabled import.
@@ -134,6 +165,19 @@ pub enum ImportedDiscoveryAuthentication {
 
 #[async_trait]
 pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
+    /// Select the source offline, before any managed transaction is entered.
+    fn discovery_source(
+        &self,
+        _definition: &ImportedServiceDefinition,
+    ) -> Result<ImportedDiscoverySource, String> {
+        Ok(ImportedDiscoverySource::Remote)
+    }
+    /// Resolve static material requirements offline; unavailable requirements fail closed.
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        import: &ImportedAdapterContext<'_>,
+    ) -> Result<super::ImportedCredentialContract, String>;
     fn kind(&self) -> &'static str;
     /// A development fixture: the host accepts its kind only in a non-production
     /// deployment with `deployment.enable_fake_service`.

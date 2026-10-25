@@ -11,13 +11,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use url::Url;
 
-pub(crate) const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(crate) struct CompiledAction {
     pub definition: ImportedActionDefinition,
     pub plan: Plan,
     input: BoundedImportSchema,
+    body: BodyPlan,
     pub responses: BTreeMap<String, Option<BoundedImportSchema>>,
+}
+pub(crate) struct PreparedRequest {
+    pub url: Url,
+    pub headers: HeaderMap,
+    pub body: Option<(&'static str, Vec<u8>)>,
+}
+enum BodyPlan {
+    None,
+    Json,
+    FormUrlEncoded(Vec<crate::model::FormField>),
 }
 impl CompiledAction {
     pub fn new(definition: &ImportedActionDefinition) -> Result<Self, String> {
@@ -54,6 +64,11 @@ impl CompiledAction {
             return Err("invalid execution security scheme".into());
         }
         plan.security.delivery()?;
+        if plan.security.kind == "basic"
+            && annotations["openapi"]["security"].get("header").is_some()
+        {
+            return Err("Basic security must not declare a header field".into());
+        }
         let source = definition
             .source
             .as_object()
@@ -141,6 +156,21 @@ impl CompiledAction {
         {
             return Err("request body contract mismatch".into());
         }
+        if plan.request_body && matches!(plan.method.as_str(), "GET" | "HEAD" | "OPTIONS") {
+            return Err("request bodies on GET, HEAD or OPTIONS are unsupported".into());
+        }
+        let body = match (&plan.form_body, plan.request_body) {
+            (None, false) => BodyPlan::None,
+            (None, true) => BodyPlan::Json,
+            (Some(_), false) => return Err("formBody requires requestBody".into()),
+            (Some(form), true) => {
+                let fields = crate::forms::fields(&definition.input_schema)?;
+                if form.fields != fields {
+                    return Err("form descriptors do not match the closed body schema".into());
+                }
+                BodyPlan::FormUrlEncoded(fields)
+            }
+        };
         if plan.responses.is_empty() || plan.responses.len() > 64 {
             return Err("response contract exceeds supported bounds".into());
         }
@@ -152,10 +182,7 @@ impl CompiledAction {
             let compiled = match (&response.content_type, &response.schema) {
                 (None, None) => None,
                 (Some(media), Some(schema))
-                    if media == "application/json"
-                        || (media.starts_with("application/")
-                            && media.ends_with("+json")
-                            && bounded(media, 128)) =>
+                    if crate::readers::openapi31::json_response_media(media) =>
                 {
                     Some(BoundedImportSchema::compile(schema)?)
                 }
@@ -168,9 +195,10 @@ impl CompiledAction {
             plan,
             input: BoundedImportSchema::compile(&definition.input_schema)?,
             responses,
+            body,
         })
     }
-    pub fn request(&self, base: &Url, inputs: &Value) -> Result<(Url, HeaderMap), ProviderError> {
+    pub fn request(&self, base: &Url, inputs: &Value) -> Result<PreparedRequest, ProviderError> {
         if !self.input.is_valid(inputs)
             || serde_json::to_vec(inputs).map_err(|_| input_error())?.len() > MAX_REQUEST_BYTES
         {
@@ -199,7 +227,7 @@ impl CompiledAction {
                 }
                 let values = values
                     .iter()
-                    .map(|value| scalar(value, &parameter.value_type).map(|s| encode(&s)))
+                    .map(|value| parameter_scalar(value, &parameter.value_type).map(|s| encode(&s)))
                     .collect::<Result<Vec<_>, _>>()?;
                 if parameter.explode {
                     for value in values {
@@ -210,7 +238,7 @@ impl CompiledAction {
                 }
                 continue;
             }
-            let text = scalar(value, &parameter.value_type)?;
+            let text = parameter_scalar(value, &parameter.value_type)?;
             match parameter.location.as_str() {
                 "path" => {
                     if text.is_empty()
@@ -255,7 +283,38 @@ impl CompiledAction {
         if url.origin() != base.origin() || !url.path().starts_with(&prefix) {
             return Err(input_error());
         }
-        Ok((url, headers))
+        let body = match (inputs.get("body"), &self.body) {
+            (None, _) => None,
+            (Some(value), BodyPlan::Json) => Some((
+                "application/json",
+                serde_json::to_vec(value).map_err(|_| input_error())?,
+            )),
+            (Some(value), BodyPlan::FormUrlEncoded(fields)) => {
+                let mut encoded = String::new();
+                for field in fields {
+                    let Some(value) = value.get(&field.name) else {
+                        continue;
+                    };
+                    let text = scalar(value, &field.value_type)?;
+                    // Append the standard UTF-8 form encoder's fragments directly.
+                    // Never allocate an expanded pair larger than the body budget.
+                    let separator = usize::from(!encoded.is_empty());
+                    for fragment in std::iter::repeat_n("&", separator)
+                        .chain(url::form_urlencoded::byte_serialize(field.name.as_bytes()))
+                        .chain(std::iter::once("="))
+                        .chain(url::form_urlencoded::byte_serialize(text.as_bytes()))
+                    {
+                        if encoded.len() + fragment.len() > MAX_REQUEST_BYTES {
+                            return Err(input_error());
+                        }
+                        encoded.push_str(fragment);
+                    }
+                }
+                Some(("application/x-www-form-urlencoded", encoded.into_bytes()))
+            }
+            (Some(_), BodyPlan::None) => return Err(input_error()),
+        };
+        Ok(PreparedRequest { url, headers, body })
     }
 }
 fn scalar(value: &Value, kind: &str) -> Result<String, ProviderError> {
@@ -278,6 +337,10 @@ fn scalar(value: &Value, kind: &str) -> Result<String, ProviderError> {
         }
         _ => return Err(input_error()),
     };
+    Ok(text)
+}
+fn parameter_scalar(value: &Value, kind: &str) -> Result<String, ProviderError> {
+    let text = scalar(value, kind)?;
     if text.len() > 4096 || text.chars().any(char::is_control) {
         return Err(input_error());
     }
@@ -312,7 +375,7 @@ pub(crate) fn client(
         host.clients(),
     )?))
 }
-/// The selected static token in its delivery, checked and presented by the
+/// The selected static credential in its delivery, checked and presented by the
 /// SDK.
 pub(crate) fn auth(
     delivery: &ImportedCredentialDelivery,
@@ -321,6 +384,7 @@ pub(crate) fn auth(
     delivery.validate().map_err(|_| credential_error())?;
     let placement = match delivery {
         ImportedCredentialDelivery::Bearer => CredentialPlacement::bearer(),
+        ImportedCredentialDelivery::Basic => CredentialPlacement::basic(),
         ImportedCredentialDelivery::RawHeader { name } => {
             crate::config::parameter_header(name).map_err(|_| credential_error())?;
             CredentialPlacement::header(

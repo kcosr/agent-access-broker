@@ -225,6 +225,10 @@ async fn fixture(limit: Option<u32>) -> Fixture {
                     actor: "admin".into(),
                 },
                 ring,
+                &BrokerRuntime::new(config.clone())
+                    .unwrap()
+                    .prepare_imported_secret_contract(service, ImportedCredentialPurpose::Execution)
+                    .unwrap(),
                 |_, _| Ok(()),
             )
             .unwrap()
@@ -237,6 +241,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
         store
             .update_imported_service(
                 ImportedServiceUpdateRequest {
+                    discovery_source: agent_access_core::imports::ImportedDiscoverySource::Remote,
                     definition: record.definition.clone(),
                     status: ImportedServiceStatus::Enabled,
                     actions: vec![true, false]
@@ -255,7 +260,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
             )
             .unwrap();
         store
-            .upsert_user_credential(
+            .upsert_imported_user_credential(
                 ring,
                 CredentialWriteRequest {
                     owner_principal_id: "bob".into(),
@@ -268,6 +273,11 @@ async fn fixture(limit: Option<u32>) -> Fixture {
                     actor: "admin".into(),
                 },
                 agent_access_core::CredentialManagementPurpose::Administrative,
+                &BrokerRuntime::new(config.clone())
+                    .unwrap()
+                    .prepare_imported_connection_contract(service)
+                    .unwrap()
+                    .unwrap(),
             )
             .unwrap();
     }

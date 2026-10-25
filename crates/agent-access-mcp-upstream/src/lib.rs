@@ -46,6 +46,43 @@ struct McpAdapter;
 
 #[async_trait]
 impl ImportedAdapter for McpAdapter {
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        _import: &ImportedAdapterContext<'_>,
+    ) -> Result<ImportedCredentialContract, String> {
+        self.validate_definition(definition)?;
+        Ok(ImportedCredentialContract::new(
+            definition
+                .execution_bindings
+                .iter()
+                .any(|b| b.mechanism == ImportedAuthMechanism::StaticToken)
+                .then(ImportedCredentialRequirement::token_header),
+            matches!(definition.discovery, ImportedDiscoveryCredential::Slot)
+                .then(ImportedCredentialRequirement::token_header),
+            definition
+                .transport_auth
+                .then(ImportedCredentialRequirement::token_header),
+        ))
+    }
+    fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
+        definition.validate()?;
+        if !definition.connection_settings.is_empty()
+            || matches!(definition.discovery, ImportedDiscoveryCredential::Anonymous)
+            || definition.execution_bindings.iter().any(|b| {
+                !matches!(
+                    b.delivery,
+                    ImportedCredentialDelivery::Bearer
+                        | ImportedCredentialDelivery::RawHeader { .. }
+                )
+            })
+        {
+            return Err(
+                "MCP imports require header-token delivery and authenticated discovery".into(),
+            );
+        }
+        Ok(())
+    }
     fn kind(&self) -> &'static str {
         "mcp_http"
     }
@@ -74,6 +111,8 @@ impl ImportedAdapter for McpAdapter {
         _import: &ImportedAdapterContext<'_>,
         host: &BuildContext<'_>,
     ) -> Result<ImportedProvider, ProviderBuildError> {
+        self.validate_definition(definition)
+            .map_err(ProviderBuildError::invalid)?;
         let mut compiled = BTreeMap::new();
         for action in actions {
             self.scoped_mcp_name(action)
@@ -436,7 +475,9 @@ fn static_authorization(
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| credential_error())?,
         ),
         // Stdin delivery belongs to command imports, never to HTTP.
-        ImportedCredentialDelivery::Stdin => return Err(credential_error()),
+        ImportedCredentialDelivery::Stdin | ImportedCredentialDelivery::Basic => {
+            return Err(credential_error());
+        }
     };
     let mut authorization = vec![
         execution
