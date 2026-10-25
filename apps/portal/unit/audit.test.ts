@@ -531,6 +531,19 @@ describe("audit record summary rows", () => {
     expect(auditObjectIdRows(record())).toEqual([]);
   });
 
+  test("object IDs leave out null values and values a scope row already shows", () => {
+    const objectIds = { job: "team-ci/payments/build-api", buildNumber: 469, queueId: null };
+    const scopes = [{ key: "job", label: "Job", value: "team-ci/payments/build-api" }];
+    expect(auditObjectIdRows(record({ objectIds }), scopes)).toEqual([{ key: "buildNumber", label: "Build number", value: "469" }]);
+    expect(auditObjectIdRows(record({ objectIds }))).toEqual([
+      { key: "job", label: "Job", value: "team-ci/payments/build-api" },
+      { key: "buildNumber", label: "Build number", value: "469" },
+    ]);
+    // A scope listing several values does not hide the one the provider names.
+    const several = [{ key: "jira_project", label: "Jira project", value: "OPS, SEC" }];
+    expect(auditObjectIdRows(record({ objectIds: { project: "OPS" } }), several)).toEqual([{ key: "project", label: "Project", value: "OPS" }]);
+  });
+
   test("group names come from catalog groups with a display name", () => {
     const names = auditGroupNames([
       { groupId: "users", displayName: "All users", status: "active" },

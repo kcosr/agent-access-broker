@@ -147,6 +147,7 @@ function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHr
   const management = auditManagement(record);
   const refUpdates = auditGitRefUpdates(record);
   const inputs = auditInputs(record);
+  const scopeRows = auditScopeRows(record, types);
   const replaced = auditReplacedIds(record, principalNames, groupNames);
   // The header carries the decision, reason code and execution context.
   const outcome = [
@@ -246,12 +247,12 @@ function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHr
           labelWidth={132}
           items={[
             { label: "Time", value: <RecordTime timestamp={record.timestamp} /> },
-            ...auditScopeRows(record, types).map((row) => ({
+            ...scopeRows.map((row) => ({
               key: `scope:${row.key}`,
               label: <span title={SCOPE_ROW_HINT}>{row.label}</span>,
               value: <span className="wb-mono">{row.value}</span>
             })),
-            ...auditObjectIdRows(record).map((row) => ({
+            ...auditObjectIdRows(record, scopeRows).map((row) => ({
               key: `object:${row.key}`,
               label: <span title={OBJECT_ID_ROW_HINT}>{row.label}</span>,
               value: <span className="wb-mono">{row.value}</span>

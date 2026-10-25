@@ -5,6 +5,7 @@ import type { AuditRecord } from "../src/types";
 import {
   AUDIT_INPUT_RECORDS,
   BROKER_GRANT_UPDATE,
+  CLOUDBEES_BUILD_VIEW,
   CONFLUENCE_PAGE_VIEW,
   GITLAB_ISSUE_SEARCH,
   GITLAB_ISSUE_VIEW,
@@ -29,7 +30,8 @@ const ROWS: [AuditRecord, [string, string][]][] = [
   [JIRA_ISSUE_CREATE, [["Project", "OPS"], ["Summary", `${TRUNCATED_SUMMARY.slice(0, 99)}…Truncated in record`]]],
   [JIRA_COMMENT_VIEW, [["Issue", "OPS-42"], ["Comment ID", "18446744073709551615"]]],
   [GITLAB_ISSUE_SEARCH, [["Project", "platform/api"], ["Search", SEARCH_PREVIEW], ["State", "opened"], ["Milestone", "null"]]],
-  [GITLAB_ISSUE_VIEW, [["Project", "platform/api"], ["Issue", "42"]]]
+  [GITLAB_ISSUE_VIEW, [["Project", "platform/api"], ["Issue", "42"]]],
+  [CLOUDBEES_BUILD_VIEW, [["Controller", "team-ci"], ["Job", "payments/build-api"], ["Build number", "469"]]]
 ];
 
 const DECISION_LABELS: Record<AuditRecord["decision"], string> = { allow: "Allowed", deny: "Denied", error: "Error" };
@@ -193,17 +195,17 @@ test("issued tokens, browser sessions and unnamed principals or groups read as e
 test("Request names each scope and object ID and keeps identifiers under a collapsed Details", async ({ page }) => {
   const { section, errors } = await openRecord(page, CONFLUENCE_PAGE_VIEW);
   const request = section("Request");
-  await expect(request.getByRole("term")).toHaveText(["Time", "Confluence space", "Page ID"]);
+  await expect(request.getByRole("term")).toHaveText(["Time", "Space", "Page ID"]);
   const values = request.getByRole("definition");
   await expect(values.nth(0).locator("time")).toHaveAttribute("title", "2026-10-25 18:36:20.518405 UTC");
   await expect(values.nth(1)).toHaveText("DOCS");
   await expect(values.nth(2)).toHaveText("123456789");
-  await expect(request.getByTitle("Resource scope the request was authorized against", { exact: true })).toHaveText("Confluence space");
+  await expect(request.getByTitle("Resource scope the request was authorized against", { exact: true })).toHaveText("Space");
   await expect(request.getByTitle("Identifier the provider reported", { exact: true })).toHaveText("Page ID");
 
   await request.getByText("Details", { exact: true }).click();
   await expect(request.getByRole("term")).toHaveText([
-    "Time", "Confluence space", "Page ID",
+    "Time", "Space", "Page ID",
     "Exact time", "Broker request ID", "Agent request ID", "Audit ID", "Node", "Config generation", "Policy generation",
     "Principal ID", "Principal subject", "Group IDs"
   ]);
@@ -212,6 +214,14 @@ test("Request names each scope and object ID and keeps identifiers under a colla
     "2026-10-25 18:36:20.518405 UTC", CONFLUENCE_PAGE_VIEW.brokerRequestId, "agent-confluence-page-view", "confluence-page-view",
     "broker-01.example.internal", "1", "150", "alice", "alice@example.test", "users"
   ]);
+  expect(errors).toEqual([]);
+});
+
+test("Request leaves out object IDs that are null or repeat a scope row", async ({ page }) => {
+  const { section, errors } = await openRecord(page, CLOUDBEES_BUILD_VIEW);
+  const request = section("Request");
+  await expect(request.getByRole("term")).toHaveText(["Time", "Job", "Build number"]);
+  await expect(request.getByRole("definition")).toHaveText([/./, "team-ci/payments/build-api", "469"]);
   expect(errors).toEqual([]);
 });
 

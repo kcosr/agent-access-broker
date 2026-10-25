@@ -36,7 +36,7 @@ export const CONFLUENCE_PAGE_VIEW = record("confluence-page-view", "5f0c2c3e-6a4
   nodeId: NODE,
   principalSubject: "alice@example.test",
   groups: ["users"],
-  resourceScopes: { confluence_space: ["DOCS"] },
+  resourceScopes: { space: ["DOCS"] },
   objectIds: { pageId: "123456789" },
   upstreamStatus: 200,
   upstreamDurationMs: 184,
@@ -55,7 +55,7 @@ export const JIRA_SEARCH = record("jira-search", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e
   timestamp: "2026-10-25T18:52:07.004913+00:00",
   nodeId: NODE,
   groups: ["users"],
-  resourceScopes: { jira_project: ["OPS"] },
+  resourceScopes: { project: ["OPS"] },
   upstreamStatus: 200,
   upstreamDurationMs: 412,
   matchedGrant: { grantId: "ops-readers", subject: "group:users", priority: 100 },
@@ -82,7 +82,7 @@ export const JIRA_ISSUE_CREATE = record("jira-issue-create", "5f0c2c3e-6a4b-4a8e
   decision: "deny",
   reasonCode: "grant_not_found",
   groups: ["users", "ops-oncall"],
-  resourceScopes: { jira_project: ["OPS"] },
+  resourceScopes: { project: ["OPS"] },
   executionContext: "default",
   identitySource: TRUSTED_USER,
   configGeneration: 1,
@@ -127,6 +127,23 @@ export const BROKER_GRANT_UPDATE = record("broker-grant-update", "5f0c2c3e-6a4b-
 });
 
 /** An action that opts no inputs into audit. */
+/** A CloudBees build view: the provider reports the scope's job again and a null queue ID. */
+export const CLOUDBEES_BUILD_VIEW = record("cloudbees-build-view", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e1f2a3a", "cloudbees_ci", "build.view", [
+  { input: "controller", label: "Controller", value: "team-ci" },
+  { input: "job", label: "Job", value: "payments/build-api" },
+  { input: "buildNumber", label: "Build number", value: 469 },
+], {
+  nodeId: NODE,
+  groups: ["users"],
+  resourceScopes: { job: ["team-ci/payments/build-api"] },
+  objectIds: { job: "team-ci/payments/build-api", buildNumber: 469, queueId: null },
+  upstreamStatus: 200,
+  upstreamDurationMs: 96,
+  credentialMode: "service",
+  executionContext: "default",
+  identitySource: TRUSTED_USER,
+});
+
 export const JIRA_PROJECT_LIST = record("jira-project-list", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e1f2a36", "jira", "project.list");
 
-export const AUDIT_INPUT_RECORDS = [CONFLUENCE_PAGE_VIEW, JIRA_SEARCH, JIRA_TEXT_SEARCH, JIRA_ISSUE_CREATE, JIRA_COMMENT_VIEW, GITLAB_ISSUE_SEARCH, GITLAB_ISSUE_VIEW, BROKER_GRANT_UPDATE, JIRA_PROJECT_LIST];
+export const AUDIT_INPUT_RECORDS = [CONFLUENCE_PAGE_VIEW, JIRA_SEARCH, JIRA_TEXT_SEARCH, JIRA_ISSUE_CREATE, JIRA_COMMENT_VIEW, GITLAB_ISSUE_SEARCH, GITLAB_ISSUE_VIEW, CLOUDBEES_BUILD_VIEW, BROKER_GRANT_UPDATE, JIRA_PROJECT_LIST];

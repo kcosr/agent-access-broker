@@ -415,13 +415,19 @@ export function auditScopeRows(record: Pick<AuditRecord, "resourceScopes">, type
 /**
  * One row per top-level key of the provider-reported object IDs, labeled by
  * the key as words: scalars as text, nested values as compact JSON. A value
- * that is not an object is one "Object IDs" row.
+ * that is not an object is one "Object IDs" row. Null IDs and IDs whose value
+ * a `shown` row (the scope rows) already displays are left out.
  */
-export function auditObjectIdRows(record: Pick<AuditRecord, "objectIds">): AuditLabeledValue[] {
+export function auditObjectIdRows(record: Pick<AuditRecord, "objectIds">, shown: AuditLabeledValue[] = []): AuditLabeledValue[] {
   const ids = record.objectIds;
   if (ids == null) return [];
   if (typeof ids !== "object" || Array.isArray(ids)) return [{ key: "objectIds", label: "Object IDs", value: compactJson(ids) }];
-  return Object.entries(ids).map(([key, value]) => ({ key, label: auditKeyLabel(key), value: compactJson(value) }));
+  // An absent ID says nothing, and one that repeats a scope row adds nothing.
+  const shownValues = new Set(shown.map((row) => row.value));
+  return Object.entries(ids)
+    .filter(([, value]) => value != null)
+    .map(([key, value]) => ({ key, label: auditKeyLabel(key), value: compactJson(value) }))
+    .filter((row) => !shownValues.has(row.value));
 }
 
 const IDENTITY_SOURCE_TYPES = new Map([
