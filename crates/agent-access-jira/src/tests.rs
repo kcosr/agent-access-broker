@@ -1207,9 +1207,13 @@ async fn issue_create_uses_authorized_project_and_returns_readback_issue() {
 
     assert_eq!(response.result["operation"], "issue.create");
     assert_eq!(response.result["issue"]["key"], "PROJ-2");
-    assert_eq!(
-        response.audit.as_ref().unwrap()["descriptionProvided"],
-        true
+    assert!(
+        response
+            .audit
+            .as_ref()
+            .unwrap()
+            .get("descriptionProvided")
+            .is_none()
     );
     assert!(
         !response
@@ -1303,7 +1307,7 @@ async fn issue_create_fails_closed_when_created_key_leaves_requested_project() {
     assert_eq!(audit["failurePhase"], "create_response_validation");
     assert_eq!(audit["issueId"], "10002");
     assert_eq!(audit["issueKey"], "NEW-2");
-    assert_eq!(audit["descriptionProvided"], false);
+    assert!(audit.get("descriptionProvided").is_none());
     assert!(!audit.to_string().contains("Created issue"));
 }
 
@@ -1348,9 +1352,9 @@ async fn issue_create_malformed_response_emits_side_effect_failure_audit() {
     );
     let audit = error.audit.unwrap();
     assert_eq!(audit["operation"], "issue.create");
-    assert_eq!(audit["project"], "PROJ");
-    assert_eq!(audit["issueTypeId"], "10001");
-    assert_eq!(audit["descriptionProvided"], true);
+    assert!(audit.get("project").is_none());
+    assert!(audit.get("issueTypeId").is_none());
+    assert!(audit.get("descriptionProvided").is_none());
     assert_eq!(audit["failurePhase"], "create_response_validation");
     assert_eq!(audit["issueId"], "10002");
     assert!(audit.get("issueKey").is_none());
@@ -1427,7 +1431,7 @@ async fn issue_create_readback_failure_emits_reconciliation_audit() {
     let audit = error.audit.unwrap();
     assert_eq!(audit["failurePhase"], "post_create_readback");
     assert_eq!(audit["upstreamFailure"], "not_found");
-    assert_eq!(audit["descriptionProvided"], true);
+    assert!(audit.get("descriptionProvided").is_none());
     let audit_text = audit.to_string();
     assert!(!audit_text.contains("Created issue"));
     assert!(!audit_text.contains("created body"));
@@ -3444,10 +3448,10 @@ async fn issue_update_uses_current_key_and_redacts_submitted_content_from_audit(
 
     let audit = response.audit.as_ref().unwrap();
     assert_eq!(audit["operation"], "issue.update");
-    assert_eq!(audit["changedFields"], json!(["summary", "description"]));
-    assert_eq!(audit["summaryChanged"], true);
-    assert_eq!(audit["descriptionChanged"], true);
-    assert_eq!(audit["notifyUsers"], false);
+    assert!(audit.get("changedFields").is_none());
+    assert!(audit.get("summaryChanged").is_none());
+    assert!(audit.get("descriptionChanged").is_none());
+    assert!(audit.get("notifyUsers").is_none());
     let audit_text = audit.to_string();
     assert!(!audit_text.contains("updated summary"));
     assert!(!audit_text.contains("secret description body"));
@@ -4636,7 +4640,17 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
                 "project_not_in"
             }
         );
-        assert_eq!(audit["pageTokenPresent"], true);
+        for retired in [
+            "pageTokenPresent",
+            "canonicalCallerJqlHash",
+            "queryType",
+            "queryShape",
+            "queryAstVersion",
+            "textOperandHashes",
+            "sortFields",
+        ] {
+            assert!(audit.get(retired).is_none(), "{retired}: {audit}");
+        }
         assert_eq!(audit["resultCount"], 2);
         assert_eq!(backend.credential_observations.lock().unwrap().len(), 2);
         let serialized = format!("{audit} {}", error.message);
@@ -4717,12 +4731,23 @@ async fn successful_search_returns_bounded_sanitized_issue_fields() {
     assert!(response.result["issues"][0].get("description").is_none());
     assert_eq!(response.upstream_status, Some(200));
     let audit = response.audit.as_ref().unwrap();
-    assert_eq!(audit["queryAstVersion"], JIRA_QUERY_AST_VERSION);
-    assert_eq!(audit["queryType"], "jql");
-    assert_eq!(audit["canonicalCallerJqlHash"].as_str().unwrap().len(), 64);
-    assert_eq!(audit["queryShape"]["filter"]["field"], "key");
-    assert_eq!(audit["queryShape"]["filter"]["operator"], "IN");
-    assert_eq!(audit["textOperandHashes"].as_array().unwrap().len(), 0);
+    for key in [
+        "queryAstVersion",
+        "queryType",
+        "canonicalCallerJqlHash",
+        "queryShape",
+        "textOperandHashes",
+        "sortFields",
+        "requestedProjects",
+    ] {
+        assert!(
+            audit.get(key).is_none(),
+            "retired request audit field {key}"
+        );
+    }
+    assert_eq!(audit["injectedScopePredicate"], "project_in");
+    assert_eq!(audit["maxResults"], 50);
+    assert_eq!(audit["resultCount"], 1);
     assert_eq!(response.object_ids.unwrap()["issueKeys"][0], "PROJ-1");
 }
 
@@ -5557,6 +5582,20 @@ async fn comment_update_preserves_visibility_and_defaults_notify_false() {
     );
     assert_eq!(result.audit.as_ref().unwrap()["visibilityRestricted"], true);
     assert_eq!(result.audit.as_ref().unwrap()["visibilityMode"], "preserve");
+    assert_eq!(result.audit.as_ref().unwrap()["notifyUsers"], false);
+    let descriptor = jira_descriptor(&jira_config());
+    let request_audit = audit::inventory::project(
+        audit::inventory::action(&descriptor, "comment.update"),
+        &json!({"issue":"PROJ-1","commentId":"10042","contentFormat":"adf","content":adf_text("updated secret")}),
+    );
+    assert_eq!(
+        audit::inventory::field(&request_audit, "visibilityMode")["state"],
+        "absent"
+    );
+    assert_eq!(
+        audit::inventory::field(&request_audit, "notifyUsers")["state"],
+        "absent"
+    );
     let updated = backend.updated_comments.lock().unwrap();
     assert_eq!(updated.len(), 1);
     assert_eq!(updated[0].0, "10042");
@@ -5660,9 +5699,13 @@ async fn comment_add_visibility_requires_allowlist_and_serializes_group_identifi
         .await
         .unwrap();
 
-    assert_eq!(
-        allowed.audit.as_ref().unwrap()["visibilityRestricted"],
-        true
+    assert!(
+        allowed
+            .audit
+            .as_ref()
+            .unwrap()
+            .get("visibilityRestricted")
+            .is_none()
     );
     let added = backend.added_comments.lock().unwrap();
     assert_eq!(
@@ -5714,7 +5757,14 @@ async fn comment_add_applies_configured_attribution_footer() {
         result.audit.as_ref().unwrap()["attribution"]["representation"],
         "adf"
     );
-    assert_eq!(result.audit.as_ref().unwrap()["contentFormat"], "adf");
+    assert!(
+        result
+            .audit
+            .as_ref()
+            .unwrap()
+            .get("contentFormat")
+            .is_none()
+    );
     assert_eq!(result.audit.as_ref().unwrap()["nativeContentFormat"], "adf");
     assert!(result.audit.as_ref().unwrap()["sourceContentBytes"].is_u64());
     assert!(result.audit.as_ref().unwrap()["finalNativeContentBytes"].is_u64());
@@ -6169,9 +6219,17 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         result["failures"][1]["reason"],
         "not_attempted_after_previous_failure"
     );
-    assert_eq!(
-        error.audit.as_ref().unwrap()["attachments"][0]["attachment"]["sha256"],
-        json!(sha256_hex(b"first upload".as_ref()))
+    assert_upload_audit_rows(
+        error.audit.as_deref().unwrap(),
+        &["created", "failed", "skipped"],
+    );
+    assert!(
+        !error
+            .audit
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains(&sha256_hex(b"first upload"))
     );
     assert_eq!(
         error.audit.as_ref().unwrap()["attachments"][1]["status"],
@@ -6322,10 +6380,8 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
     let audit = error.audit.unwrap();
-    assert_eq!(
-        audit["attachments"][0]["attachment"]["filename"],
-        "failure.txt"
-    );
+    assert_upload_audit_rows(&audit, &["failed"]);
+    assert!(!audit.to_string().contains("failure.txt"));
 }
 
 fn attachment_add_invocation(names: &[&str]) -> ProviderInvocation {
@@ -9097,7 +9153,10 @@ fn normalized_jira_content_contract_is_canonical_and_bounded() {
     let description = markdown.description.unwrap();
     assert_eq!(description["type"], "doc");
     assert_eq!(description["content"][0]["type"], "heading");
-    assert_eq!(markdown.content_audit.unwrap().requested_format, "markdown");
+    assert_eq!(
+        markdown.content_audit.unwrap().source_bytes,
+        "## Heading\n\n**bold**".len() as u64
+    );
 
     let plain = prepare_jira_content("test", "plain_text", &json!("*literal*"), 1024)
         .unwrap()
@@ -9515,5 +9574,82 @@ fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
                 .reason_code(),
             ReasonCode::BrokerProviderContractFailed
         );
+    }
+}
+
+fn assert_upload_audit_rows(audit: &Value, statuses: &[&str]) {
+    let rows = audit["attachments"].as_array().unwrap();
+    assert_eq!(rows.len(), statuses.len());
+    for (index, (row, status)) in rows.iter().zip(statuses).enumerate() {
+        assert_eq!(row["inputIndex"], index);
+        assert_eq!(row["status"], *status);
+        for excluded in [
+            "attachment",
+            "filename",
+            "contentType",
+            "size",
+            "sha256",
+            "field",
+        ] {
+            assert!(
+                row.get(excluded).is_none(),
+                "requested metadata {excluded} leaked: {row}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn upload_outcomes_keep_all_21_input_indices_beyond_request_metadata_sample() {
+    let mut backend = StubJiraBackend::default();
+    backend.issues.insert("PROJ-1".into(), visible_issue());
+    let provider =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
+    let names: Vec<_> = (0..21).map(|index| format!("file{index}")).collect();
+    let references: Vec<_> = names.iter().map(String::as_str).collect();
+    let invocation = attachment_add_invocation(&references);
+    let descriptor = jira_descriptor(&jira_config());
+    let request_audit = audit::inventory::project(
+        audit::inventory::action(&descriptor, "attachment.add"),
+        invocation.inputs(),
+    );
+    let response = provider.invoke(invocation).await.unwrap();
+    assert_upload_audit_rows(response.audit.as_ref().unwrap(), &["created"; 21]);
+    assert_eq!(
+        response.audit.as_ref().unwrap()["attachments"][20]["inputIndex"],
+        20
+    );
+    assert!(response.audit.as_ref().unwrap()["attachments"][20]["attachmentId"].is_string());
+    let projected = audit::inventory::field(&request_audit, "attachments");
+    assert_eq!(projected["totalCount"], 21);
+    assert_eq!(projected["limitedCount"], 1);
+    assert_eq!(projected["rows"].as_array().unwrap().len(), 20);
+}
+
+#[test]
+fn content_audit_retains_processing_sizes_for_text_and_adf_without_body_or_hash() {
+    for (format, source) in [
+        ("markdown", json!("**private body**")),
+        ("adf", adf_text("private body")),
+    ] {
+        let expected_source_bytes = if let Some(text) = source.as_str() {
+            text.len() as u64
+        } else {
+            serde_json::to_vec(&source).unwrap().len() as u64
+        };
+        let (native, mut processing) =
+            prepare_jira_content("issue.update", format, &source, 4096).unwrap();
+        finalize_jira_content(&native, &mut processing, 4096, false).unwrap();
+        let mut audit = json!({});
+        merge_content_write_audit(&mut audit, Some(&processing));
+        assert_eq!(audit["sourceContentBytes"], expected_source_bytes);
+        assert_eq!(
+            audit["finalNativeContentBytes"],
+            serde_json::to_vec(&native).unwrap().len()
+        );
+        assert_eq!(audit["nativeContentFormat"], "adf");
+        assert!(audit.get("contentFormat").is_none());
+        assert!(!audit.to_string().contains("private body"));
+        assert!(!audit.to_string().contains("sha256"));
     }
 }

@@ -8,6 +8,30 @@ attribution notes. Shared provider concepts and runtime discovery guidance are i
 Service name `confluence`. Policy scope type `space`, bound to `confluence_space` resources. Every action advertises
 credential modes `[service, per_user]`.
 
+## Request and provider audit
+
+Every action declares the original input facts retained in `requestAudit`:
+identities, relationship references, requested controls, page/blog/draft titles
+and expected titles (up to 1,024 UTF-8 bytes) and query text (up to 4,096 bytes). Prefix truncation
+is explicit; overlong identities are omitted whole. These retained strings can
+contain confidential business text and are visible to audit readers.
+
+Bodies have presence only; version-message strings retain only their UTF-8
+byte count. Raw locator URLs, draft handles, pagination tokens and continuations
+also have presence only, without values, lengths or hashes. Upload metadata contains a correlated sample of the
+first 20 requested filenames, media types and sizes; multipart fields and
+requested hashes are excluded. All provider upload outcome rows keep their
+zero-based `inputIndex`, including outcomes beyond that metadata sample.
+
+`providerAudit` records effective execution and observed results: resolved
+identities, effective search scope and limits, current versions, comment-read
+defaults, content-processing byte counts and transfer/verification outcomes. Requested
+content format appears in `requestAudit`; native format, polymorphic source
+bytes and final native bytes remain provider facts. Existing observed download
+checksums remain available. A requested change does not establish that the
+operation applied it, and omitted controls remain distinct from effective
+defaults.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker

@@ -1,0 +1,600 @@
+{
+  "fixture": "audit-inventory-maximal",
+  "cases": [
+    {
+      "action": "issue_type.list",
+      "variant": "metadata",
+      "inputs": {
+        "project": "PROJ",
+        "startAt": 0,
+        "maxResults": 2
+      }
+    },
+    {
+      "action": "project.list",
+      "variant": "metadata",
+      "inputs": {
+        "maxResults": 2,
+        "pageToken": "private-listing-token"
+      }
+    },
+    {
+      "action": "project.view",
+      "variant": "metadata",
+      "inputs": {
+        "project": "PROJ",
+        "include": [
+          "fields",
+          "versions"
+        ],
+        "query": "priority"
+      }
+    },
+    {
+      "action": "issue.view",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7"
+      }
+    },
+    {
+      "action": "issue.view",
+      "variant": "url",
+      "inputs": {
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "issue.create",
+      "variant": "metadata",
+      "inputs": {
+        "project": "PROJ",
+        "issueTypeId": "10001",
+        "summary": "Requested issue title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "issue.create",
+      "variant": "native-content",
+      "inputs": {
+        "project": "PROJ",
+        "issueTypeId": "10001",
+        "summary": "Requested issue title",
+        "contentFormat": "adf",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "issue.child.create",
+      "variant": "metadata",
+      "inputs": {
+        "project": "PROJ",
+        "issueTypeId": "10001",
+        "parentIssue": "PROJ-1",
+        "summary": "Requested issue title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "issue.child.create",
+      "variant": "parentUrl",
+      "inputs": {
+        "project": "PROJ",
+        "issueTypeId": "10001",
+        "summary": "Requested issue title",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "parentUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "issue.child.create",
+      "variant": "native-content",
+      "inputs": {
+        "project": "PROJ",
+        "issueTypeId": "10001",
+        "parentIssue": "PROJ-1",
+        "summary": "Requested issue title",
+        "contentFormat": "adf",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "issue.update",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "summary": "Requested issue title",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "notifyUsers": false
+      }
+    },
+    {
+      "action": "issue.update",
+      "variant": "url",
+      "inputs": {
+        "summary": "Requested issue title",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "notifyUsers": false,
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "issue.update",
+      "variant": "native-content",
+      "inputs": {
+        "issue": "PROJ-7",
+        "summary": "Requested issue title",
+        "contentFormat": "adf",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        },
+        "notifyUsers": false
+      }
+    },
+    {
+      "action": "issue.parent.set",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "parentIssue": "PROJ-1"
+      }
+    },
+    {
+      "action": "issue.parent.set",
+      "variant": "url",
+      "inputs": {
+        "parentIssue": "PROJ-1",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "issue.parent.set",
+      "variant": "parentUrl",
+      "inputs": {
+        "issue": "PROJ-7",
+        "parentUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "issue.dependency.add",
+      "variant": "metadata",
+      "inputs": {
+        "blockingIssue": "PROJ-1",
+        "blockedIssue": "PROJ-7"
+      }
+    },
+    {
+      "action": "issue.dependency.add",
+      "variant": "blockingUrl",
+      "inputs": {
+        "blockedIssue": "PROJ-7",
+        "blockingUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "issue.dependency.add",
+      "variant": "blockedUrl",
+      "inputs": {
+        "blockingIssue": "PROJ-1",
+        "blockedUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "search",
+      "variant": "metadata",
+      "inputs": {
+        "query": {
+          "type": "jql",
+          "value": "status = Open"
+        },
+        "projects": [
+          "PROJ",
+          "ENG"
+        ],
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "comment.list",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "maxResults": 2,
+        "startAt": 0,
+        "orderBy": "-created"
+      }
+    },
+    {
+      "action": "comment.list",
+      "variant": "url",
+      "inputs": {
+        "maxResults": 2,
+        "startAt": 0,
+        "orderBy": "-created",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.view",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "comment.view",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.add",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        }
+      }
+    },
+    {
+      "action": "comment.add",
+      "variant": "url",
+      "inputs": {
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        },
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.add",
+      "variant": "native-content",
+      "inputs": {
+        "issue": "PROJ-7",
+        "contentFormat": "adf",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        },
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        }
+      }
+    },
+    {
+      "action": "comment.reply",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "parentCommentId": "10041",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        }
+      }
+    },
+    {
+      "action": "comment.reply",
+      "variant": "url",
+      "inputs": {
+        "parentCommentId": "10041",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        },
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.reply",
+      "variant": "native-content",
+      "inputs": {
+        "issue": "PROJ-7",
+        "parentCommentId": "10041",
+        "contentFormat": "adf",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        },
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        }
+      }
+    },
+    {
+      "action": "comment.update",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "visibilityMode": "set",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        },
+        "notifyUsers": false
+      }
+    },
+    {
+      "action": "comment.update",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "visibilityMode": "set",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        },
+        "notifyUsers": false,
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.update",
+      "variant": "native-content",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042",
+        "contentFormat": "adf",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        },
+        "visibilityMode": "set",
+        "visibility": {
+          "type": "group",
+          "value": "Reviewers",
+          "identifier": "group-42"
+        },
+        "notifyUsers": false
+      }
+    },
+    {
+      "action": "comment.delete",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "comment.delete",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.property.list",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "comment.property.list",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.property.get",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042",
+        "propertyKey": "agent-access.workflow"
+      }
+    },
+    {
+      "action": "comment.property.get",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "propertyKey": "agent-access.workflow",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.property.set",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042",
+        "propertyKey": "agent-access.workflow",
+        "value": {
+          "privateMapKey": "private payload"
+        }
+      }
+    },
+    {
+      "action": "comment.property.set",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "propertyKey": "agent-access.workflow",
+        "value": {
+          "privateMapKey": "private payload"
+        },
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "comment.property.delete",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "commentId": "10042",
+        "propertyKey": "agent-access.workflow"
+      }
+    },
+    {
+      "action": "comment.property.delete",
+      "variant": "url",
+      "inputs": {
+        "commentId": "10042",
+        "propertyKey": "agent-access.workflow",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "attachment.add",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "attachments": [
+          {
+            "field": "private-form-field",
+            "filename": "diagram.txt",
+            "contentType": "text/plain",
+            "size": 5,
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        ]
+      }
+    },
+    {
+      "action": "attachment.download",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "attachmentId": "10100"
+      }
+    },
+    {
+      "action": "attachment.list",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7"
+      }
+    },
+    {
+      "action": "attachment.list",
+      "variant": "url",
+      "inputs": {
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "verify",
+      "variant": "metadata",
+      "inputs": {
+        "issue": "PROJ-7",
+        "expectCommentId": "10042",
+        "expectAttachmentId": "10100"
+      }
+    }
+  ]
+}

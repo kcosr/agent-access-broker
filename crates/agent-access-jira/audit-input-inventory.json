@@ -1,0 +1,1112 @@
+{
+  "actions": [
+    {
+      "action": "issue_type.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/project",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/startAt",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "issue.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "issue.create",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/project",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issueTypeId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/summary",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "issue.child.create",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/project",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issueTypeId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/parentIssue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/parentUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/summary",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "issue.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/summary",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "operation.flag",
+          "kind": "boolean",
+          "pointer": "/notifyUsers",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "issue.parent.set",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/parentIssue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/parentUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "issue.dependency.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blockingIssue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/blockingUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blockedIssue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/blockedUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "search",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/query/type",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "search.query",
+          "kind": "query",
+          "pointer": "/query/value",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "selection.identities",
+          "kind": "identifier",
+          "pointer": "/projects",
+          "role": "fact",
+          "shape": "list"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "comment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/startAt",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/orderBy",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/visibility/type",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/visibility/value",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/visibility/identifier",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.reply",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/parentCommentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/visibility/type",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/visibility/value",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/visibility/identifier",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/visibilityMode",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/visibility/type",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/visibility/value",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/visibility/identifier",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "operation.flag",
+          "kind": "boolean",
+          "pointer": "/notifyUsers",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.delete",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.property.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.property.get",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/propertyKey",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "comment.property.set",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/propertyKey",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "property.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/value",
+          "reason": "Arbitrary property values and object keys are excluded.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "comment.property.delete",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/propertyKey",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "attachment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "records",
+          "display": "primary",
+          "element": "attachment.metadata",
+          "fields": [
+            {
+              "capture": "value",
+              "display": "primary",
+              "element": "attachment.filename",
+              "kind": "path",
+              "pointer": "/filename",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.media_type",
+              "kind": "text",
+              "pointer": "/contentType",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.size",
+              "kind": "bytes",
+              "pointer": "/size",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "omit",
+              "element": "transport.multipart_field",
+              "opaque": true,
+              "pointer": "/field",
+              "reason": "Multipart field names are transport details, excluded from audit."
+            },
+            {
+              "capture": "omit",
+              "element": "content.fingerprint",
+              "opaque": true,
+              "pointer": "/sha256",
+              "reason": "Requested content hashes are excluded; no body fingerprinting."
+            }
+          ],
+          "kind": "records",
+          "pointer": "/attachments",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "attachment.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/attachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "attachment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "verify",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/issue",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/expectCommentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/expectAttachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "project.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/pageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "project.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/project",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.projection",
+          "kind": "text",
+          "pointer": "/include",
+          "role": "fact",
+          "shape": "list"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "search.query",
+          "kind": "query",
+          "pointer": "/query",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}

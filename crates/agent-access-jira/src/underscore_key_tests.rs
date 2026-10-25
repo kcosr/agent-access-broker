@@ -327,7 +327,7 @@ async fn underscore_search_results_still_require_matching_and_authorized_project
         assert_eq!(validation["issueKeyValid"], true);
         assert_eq!(validation["keyProjectMatches"], matches);
         assert_eq!(validation["projectAuthorized"], authorized);
-        assert_eq!(audit["pageTokenPresent"], true);
+        assert!(audit.get("pageTokenPresent").is_none());
         assert_eq!(audit["resultCount"], 50);
         let search = backend.last_search.lock().unwrap();
         assert_eq!(

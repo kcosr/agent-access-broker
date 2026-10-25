@@ -2509,7 +2509,7 @@ async fn all_except_confluence_search_checks_returned_containment() {
         );
         let mut request = invocation(
             "search",
-            json!({"query":{"type":"cql","value":"title ~ \"runbook\""},"maxResults":1}),
+            json!({"query":{"type":"cql","value":"title ~ \"runbook\""}}),
         );
         request = InvocationBuilder::from(request)
             .search(SearchAuthorization::new(
@@ -2517,8 +2517,43 @@ async fn all_except_confluence_search_checks_returned_containment() {
                 SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
             ))
             .build();
+        let descriptor = confluence_descriptor(&confluence_config());
+        let request_audit = audit::inventory::project(
+            audit::inventory::action(&descriptor, "search"),
+            request.inputs(),
+        );
+        assert_eq!(
+            audit::inventory::field(&request_audit, "query.value")["value"],
+            "title ~ \"runbook\""
+        );
+        assert_eq!(
+            audit::inventory::field(&request_audit, "maxResults")["state"],
+            "absent"
+        );
         let result = provider.invoke(request).await;
         assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
+        if let Ok(response) = &result {
+            let audit = response.audit.as_ref().unwrap();
+            for retired in [
+                "requestedSpaces",
+                "queryType",
+                "queryAstVersion",
+                "canonicalCallerCqlHash",
+                "queryShape",
+                "textOperandHashes",
+                "sortFields",
+            ] {
+                assert!(audit.get(retired).is_none(), "{retired}: {audit}");
+            }
+            assert_eq!(
+                audit["effectiveSearchScope"]["excludedValues"],
+                json!(["PRIVATE"])
+            );
+            assert_eq!(audit["injectedSpacePredicate"], "space_not_in");
+            assert_eq!(audit["injectedTypePredicate"], "type_page");
+            assert_eq!(audit["maxResults"], 2);
+            assert_eq!(audit["resultCount"], 1);
+        }
         if let Err(error) = result {
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         }
@@ -9013,6 +9048,11 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
     for field in ["limitScope", "service", "retryAfterSeconds", "retryAt"] {
         assert!(result.get(field).is_none(), "{field}: {result}");
     }
+    assert_upload_audit_rows(
+        error.audit.as_deref().unwrap(),
+        &["created", "failed", "skipped"],
+        false,
+    );
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
@@ -9834,6 +9874,11 @@ async fn throttled_draft_attachment_verification_keeps_the_batch_unverified() {
         assert_eq!(backend.uploads.lock().unwrap().len(), 2);
         let audit = error.audit.as_deref().unwrap();
         assert_eq!(audit["attachmentIds"], json!(["att1", "att2"]));
+        assert_upload_audit_rows(audit, &["created", "unverified", "skipped"], true);
+        assert_eq!(audit["attachments"][0]["size"], 5);
+        // The backend reports 5 bytes even though the second requested file
+        // has 6; preserve the observation, not an input metadata echo.
+        assert_eq!(audit["attachments"][1]["size"], 5);
         assert_eq!(
             error.object_ids.as_deref().unwrap()["attachmentIds"],
             json!(["att1", "att2"])
@@ -9920,6 +9965,11 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
             json!({id_key: backend.id(), "attachmentIds": ["att1"]})
         );
         assert!(result.get("retryAfterSeconds").is_none());
+        assert_upload_audit_rows(
+            error.audit.as_deref().unwrap(),
+            &["created", "failed", "skipped"],
+            true,
+        );
 
         // The first upload is throttled: nothing applied, so it stays a rate
         // limit with the wait.
@@ -10228,5 +10278,81 @@ fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
                 .reason_code(),
             ReasonCode::BrokerProviderContractFailed
         );
+    }
+}
+
+fn assert_upload_audit_rows(audit: &Value, statuses: &[&str], observed_draft_metadata: bool) {
+    let rows = audit["attachments"].as_array().unwrap();
+    assert_eq!(rows.len(), statuses.len());
+    for (index, (row, status)) in rows.iter().zip(statuses).enumerate() {
+        assert_eq!(row["inputIndex"], index);
+        assert_eq!(row["status"], *status);
+        for excluded in ["attachment", "filename", "sha256", "field"] {
+            assert!(
+                row.get(excluded).is_none(),
+                "requested metadata {excluded} leaked: {row}"
+            );
+        }
+        if observed_draft_metadata && matches!(*status, "created" | "unverified") {
+            assert!(row["size"].is_u64());
+            assert!(row["contentType"].is_string());
+        } else {
+            assert!(row.get("size").is_none());
+            assert!(row.get("contentType").is_none());
+        }
+    }
+}
+
+#[test]
+fn provider_verification_audit_keeps_observation_without_requested_version_echo() {
+    let mismatch = json!({"type":"pageVersion","expected":5,"actual":3});
+    assert_eq!(
+        verification_mismatch_audit(&mismatch),
+        json!({"type":"pageVersion","actual":3})
+    );
+    assert_eq!(mismatch["expected"], 5);
+    let other = json!({"type":"attachment","attachmentId":"att1","exists":false});
+    assert_eq!(verification_mismatch_audit(&other), other);
+}
+
+#[test]
+fn content_audit_retains_processing_sizes_for_text_and_adf_without_body_or_hash() {
+    let provider = ConfluenceProvider::with_backend(
+        confluence_config(),
+        ProviderLimits::default(),
+        Arc::new(attachment_list_backend()),
+    );
+    for (format, source) in [
+        ("markdown", json!("**private body**")),
+        (
+            "atlas_doc_format",
+            json!({"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"private body"}]}]}),
+        ),
+    ] {
+        let expected_source_bytes = if let Some(text) = source.as_str() {
+            text.len() as u64
+        } else {
+            serde_json::to_vec(&source).unwrap().len() as u64
+        };
+        let request = invocation(
+            "page.update",
+            json!({"pageId":"123456","baseVersion":1,"contentFormat":format,"content":source}),
+        );
+        let (native, processing, _) = provider
+            .prepare_write_content(
+                "page.update",
+                ConfluenceWriteTarget::CurrentPage,
+                format,
+                &source,
+                &request,
+            )
+            .unwrap();
+        let mut audit = json!({});
+        merge_confluence_content_write_audit(&mut audit, &processing);
+        assert_eq!(audit["sourceContentBytes"], expected_source_bytes);
+        assert_eq!(audit["finalNativeContentBytes"], native.value.len());
+        assert!(audit.get("contentFormat").is_none());
+        assert!(!audit.to_string().contains("private body"));
+        assert!(!audit.to_string().contains("sha256"));
     }
 }

@@ -183,6 +183,9 @@ async fn identity_is_checked_before_field_discovery_and_no_raw_payload_is_releas
     assert!(!response.result.to_string().contains("never-"));
     assert!(!response.result.to_string().contains("untrusted"));
     assert!(!format!("{:?} {:?}", response.audit, response.object_ids).contains("sentinel"));
+    assert!(response.audit.as_ref().unwrap().get("project").is_none());
+    assert_eq!(response.object_ids.as_ref().unwrap()["project"], "PROJ");
+    assert!(response.audit.as_ref().unwrap().get("include").is_some());
     assert_eq!(api.received_requests().await.unwrap().len(), 2);
 }
 

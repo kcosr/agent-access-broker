@@ -3,6 +3,7 @@
 //! resources.
 #[cfg(test)]
 mod access_tests;
+mod audit;
 mod backend;
 mod config;
 mod custom_fields;
@@ -850,7 +851,8 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    action.presentation(presentation)
+                    let projection = audit::projection(&action.action);
+                    action.presentation(presentation).audit_inputs(projection)
                 })
                 .collect(),
         )
@@ -1148,7 +1150,6 @@ impl JiraProvider {
             .with_audit(json!({
                 "provider": "jira",
                 "operation": "issue_type.list",
-                "project": inputs.project,
                 "startAt": page.start_at,
                 "maxResults": page.max_results,
                 "issueTypeCount": count,
@@ -1272,12 +1273,6 @@ impl JiraProvider {
         let scope_inputs = parse_issue_create_scope_inputs(request.inputs())?;
         ensure_authorized_project_scope(&scope_inputs.project, request.resource_scopes()?)?;
         let mut inputs = parse_issue_create_inputs(request.inputs(), &self.config)?;
-        let description_provided = inputs.description.is_some();
-        let audit_context = IssueCreateAuditContext {
-            project: &inputs.project,
-            issue_type_id: &inputs.issue_type_id,
-            description_provided,
-        };
         let attribution = if let Some(description) = inputs.description.as_mut() {
             self.apply_adf_attribution("issue.create", description, &request)?
         } else if self.attribution.capability("issue.create").is_some() {
@@ -1321,7 +1316,6 @@ impl JiraProvider {
                 let partial = PartialJiraCreatedIssue { id, key };
                 let mut audit = issue_create_failure_audit_partial(
                     &request,
-                    &audit_context,
                     "create_response_validation",
                     &partial,
                     &self.backend.egress_proxy_audit(credential),
@@ -1347,7 +1341,6 @@ impl JiraProvider {
         if let Some(error) = created_issue_scope_error(&created.key, &inputs.project) {
             let mut audit = issue_create_failure_audit(
                 &request,
-                &audit_context,
                 "create_response_validation",
                 Some(&created),
                 &self.backend.egress_proxy_audit(credential),
@@ -1371,7 +1364,6 @@ impl JiraProvider {
                         upstream_duration_ms += elapsed_ms(readback_started);
                         let mut audit = issue_create_failure_audit(
                             &request,
-                            &audit_context,
                             "post_create_readback",
                             Some(&created),
                             &self.backend.egress_proxy_audit(credential),
@@ -1394,7 +1386,6 @@ impl JiraProvider {
                 if !is_issue_key(&issue.key) || issue_key_project(&issue.key) != issue.project {
                     let mut audit = issue_create_failure_audit(
                         &request,
-                        &audit_context,
                         "post_create_readback",
                         Some(&created),
                         &self.backend.egress_proxy_audit(credential),
@@ -1415,7 +1406,6 @@ impl JiraProvider {
                 {
                     let mut audit = issue_create_failure_audit(
                         &request,
-                        &audit_context,
                         "post_create_readback",
                         Some(&created),
                         &self.backend.egress_proxy_audit(credential),
@@ -1432,7 +1422,6 @@ impl JiraProvider {
                 if let Err(error) = validate_returned_issue_description(&issue, &self.config) {
                     let mut audit = issue_create_failure_audit(
                         &request,
-                        &audit_context,
                         "post_create_readback",
                         Some(&created),
                         &self.backend.egress_proxy_audit(credential),
@@ -1452,7 +1441,6 @@ impl JiraProvider {
                 {
                     let mut audit = issue_create_failure_audit(
                         &request,
-                        &audit_context,
                         "post_create_readback",
                         Some(&created),
                         &self.backend.egress_proxy_audit(credential),
@@ -1469,8 +1457,6 @@ impl JiraProvider {
                     "issueId": issue.id,
                     "issueKey": issue.key,
                     "project": issue.project,
-                    "issueTypeId": inputs.issue_type_id,
-                    "descriptionProvided": description_provided,
                     "credentialMode": request.credential_mode(),
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 });
@@ -1503,13 +1489,7 @@ impl JiraProvider {
         ensure_authorized_issue_metadata(&parent, request.resource_scopes()?)?;
         let mut inputs = parse_issue_child_create_inputs(request.inputs(), &self.config)?;
 
-        let description_provided = inputs.description.is_some();
-        let audit_context = IssueChildCreateAuditContext {
-            project: &inputs.project,
-            issue_type_id: &inputs.issue_type_id,
-            description_provided,
-            parent: &parent,
-        };
+        let audit_context = IssueChildCreateAuditContext { parent: &parent };
         let attribution = if let Some(description) = inputs.description.as_mut() {
             self.apply_adf_attribution("issue.child.create", description, &request)?
         } else if self.attribution.capability("issue.child.create").is_some() {
@@ -1802,11 +1782,9 @@ impl JiraProvider {
                     "issueId": issue_metadata.id.as_str(),
                     "issueKey": issue_metadata.key.as_str(),
                     "project": issue_metadata.project.as_str(),
-                    "issueTypeId": inputs.issue_type_id,
                     "parentIssueId": parent.id.as_str(),
                     "parentIssueKey": parent.key.as_str(),
                     "parentProject": parent.project.as_str(),
-                    "descriptionProvided": description_provided,
                     "verificationStatus": "matched",
                     "credentialMode": request.credential_mode(),
                     "egressProxy": self.backend.egress_proxy_audit(credential),
@@ -1847,8 +1825,6 @@ impl JiraProvider {
             )?;
         }
         let changed_fields = inputs.changed_fields();
-        let summary_changed = inputs.summary.is_some();
-        let description_changed = inputs.description.is_some();
         let metadata_response = self
             .confirm_authorized_issue(
                 &inputs.locator,
@@ -1920,10 +1896,6 @@ impl JiraProvider {
                     "operation": "issue.update",
                     "issueKey": issue.key,
                     "project": issue.project,
-                    "changedFields": changed_fields,
-                    "summaryChanged": summary_changed,
-                    "descriptionChanged": description_changed,
-                    "notifyUsers": inputs.notify_users,
                     "credentialMode": request.credential_mode(),
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 });
@@ -2288,9 +2260,6 @@ impl JiraProvider {
                     "operation": "search",
                     "effectiveSearchScope": effective_scope.audit_value("project"),
                     "injectedScopePredicate": query.injected_scope_predicate,
-                    "canonicalCallerJqlHash": query.canonical_caller_jql_hash,
-                    "queryType": query.kind,
-                    "pageTokenPresent": inputs.next_page_token.is_some(),
                     "maxResults": max_results,
                     "resultCount": response.value.issues.len(),
                     "searchResultValidation": validation,
@@ -2322,16 +2291,9 @@ impl JiraProvider {
             .with_audit(json!({
                 "provider": "jira",
                 "operation": "search",
-                "requestedProjects": requested,
                 "effectiveSearchScope": effective_scope.audit_value("project"),
-                "queryType": query.kind,
-                "queryAstVersion": JIRA_QUERY_AST_VERSION,
-                "canonicalCallerJqlHash": query.canonical_caller_jql_hash,
-                "queryShape": query.query_shape,
-                "textOperandHashes": query.text_operand_hashes,
                 "injectedScopePredicate": query.injected_scope_predicate,
                 "observedProjects": observed_projects,
-                "sortFields": query.sort_fields,
                 "maxResults": max_results,
                 "resultCount": response.value.issues.len(),
                 "credentialMode": request.credential_mode(),
@@ -2407,7 +2369,6 @@ impl JiraProvider {
                 "project": metadata.project,
                 "startAt": list_response.value.start_at,
                 "maxResults": list_response.value.max_results,
-                "orderBy": inputs.order_by,
                 "commentCount": count,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
@@ -2495,7 +2456,6 @@ impl JiraProvider {
             )
             .await?;
         let metadata = metadata_response.value;
-        let visibility_restricted = inputs.visibility.is_some();
         let write = JiraWrite::new(json!({ "issueId": metadata.id, "issueKey": metadata.key }));
         let response = self
             .backend
@@ -2526,7 +2486,6 @@ impl JiraProvider {
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": response.value.id,
-                "visibilityRestricted": visibility_restricted,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             });
@@ -2593,7 +2552,6 @@ impl JiraProvider {
             } else {
                 parent_response.value.id
             };
-        let visibility_restricted = inputs.visibility.is_some();
         let write = JiraWrite::new(
             json!({ "issueId": metadata.id, "issueKey": metadata.key, "parentCommentId": effective_parent_comment_id }),
         );
@@ -2632,9 +2590,7 @@ impl JiraProvider {
                 "issueKey": metadata.key,
                 "project": metadata.project,
                 "commentId": response.value.id,
-                "requestedParentCommentId": requested_parent_comment_id,
                 "parentCommentId": effective_parent_comment_id,
-                "visibilityRestricted": visibility_restricted,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             });
@@ -2782,7 +2738,6 @@ impl JiraProvider {
                     "operation": "comment.delete",
                     "issueKey": metadata.key,
                     "project": metadata.project,
-                    "commentId": inputs.comment_id,
                     "credentialMode": request.credential_mode(),
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 }))
@@ -2843,7 +2798,6 @@ impl JiraProvider {
                 "operation": "comment.property.list",
                 "issueKey": metadata.key,
                 "project": metadata.project,
-                "commentId": inputs.comment_id,
                 "propertyCount": count,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
@@ -2898,8 +2852,6 @@ impl JiraProvider {
                 "operation": "comment.property.get",
                 "issueKey": metadata.key,
                 "project": metadata.project,
-                "commentId": inputs.comment_id,
-                "propertyKey": property_key,
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             }))
@@ -2962,8 +2914,6 @@ impl JiraProvider {
                     "operation": "comment.property.set",
                     "issueKey": metadata.key,
                     "project": metadata.project,
-                    "commentId": inputs.comment_id,
-                    "propertyKey": property_key,
                     "credentialMode": request.credential_mode(),
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 }))
@@ -3027,8 +2977,6 @@ impl JiraProvider {
                     "operation": "comment.property.delete",
                     "issueKey": metadata.key,
                     "project": metadata.project,
-                    "commentId": inputs.comment_id,
-                    "propertyKey": property_key,
                     "credentialMode": request.credential_mode(),
                     "egressProxy": self.backend.egress_proxy_audit(credential),
                 }))
@@ -3078,7 +3026,7 @@ impl JiraProvider {
         // Set when the upload that stopped the batch may have applied.
         let mut stopped_uncertain = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
-            let upload_audit = attachment_upload_audit(&upload);
+            let upload_metadata = attachment_upload_metadata(&upload);
             match self
                 .backend
                 .add_attachment(&metadata.key, upload, credential)
@@ -3094,9 +3042,9 @@ impl JiraProvider {
                         "size": response.value.size,
                     }));
                     attachment_audit.push(json!({
+                        "inputIndex": index,
                         "status": "created",
                         "attachmentId": response.value.id,
-                        "attachment": upload_audit,
                     }));
                 }
                 // A credential without a route, or delegated access that
@@ -3115,25 +3063,25 @@ impl JiraProvider {
                     stopped_unsent = matches!(error, JiraBackendError::NotSent { .. });
                     stopped_uncertain = upload_may_have_applied(&error);
                     attachment_audit.push(json!({
+                        "inputIndex": index,
                         "status": "failed",
-                        "attachment": upload_audit.clone(),
                         "reason": sanitized_backend_reason(&error),
                     }));
                     failures.push(json!({
                         "status": "failed",
-                        "attachment": upload_audit,
+                        "attachment": upload_metadata,
                         "reason": sanitized_backend_reason(&error),
                     }));
-                    for skipped in uploads.iter().skip(index + 1) {
-                        let skipped_audit = attachment_upload_audit(skipped);
+                    for (skipped_index, skipped) in uploads.iter().enumerate().skip(index + 1) {
+                        let skipped_metadata = attachment_upload_metadata(skipped);
                         attachment_audit.push(json!({
+                            "inputIndex": skipped_index,
                             "status": "skipped",
-                            "attachment": skipped_audit.clone(),
                             "reason": "not_attempted_after_previous_failure",
                         }));
                         failures.push(json!({
                             "status": "skipped",
-                            "attachment": skipped_audit,
+                            "attachment": skipped_metadata,
                             "reason": "not_attempted_after_previous_failure",
                         }));
                     }
@@ -3903,7 +3851,6 @@ const MAX_JIRA_ISSUE_SUMMARY_BYTES: usize = 1024;
 
 #[derive(Debug, Clone)]
 struct ContentWriteAudit {
-    requested_format: String,
     source_bytes: u64,
     final_native_bytes: Option<u64>,
 }
@@ -3972,7 +3919,6 @@ fn prepare_jira_content(
     Ok((
         body,
         ContentWriteAudit {
-            requested_format: content_format.to_string(),
             source_bytes,
             final_native_bytes: None,
         },
@@ -4014,7 +3960,6 @@ fn finalize_jira_content(
 
 fn merge_content_write_audit(audit: &mut Value, content: Option<&ContentWriteAudit>) {
     let Some(content) = content else { return };
-    audit["contentFormat"] = json!(content.requested_format);
     audit["nativeContentFormat"] = json!("adf");
     audit["sourceContentBytes"] = json!(content.source_bytes);
     if let Some(final_native_bytes) = content.final_native_bytes {
@@ -5393,7 +5338,7 @@ fn attachment_body_part_specs(inputs: &[AttachmentInput]) -> Vec<BrokerBodyPartS
         .collect()
 }
 
-fn attachment_upload_audit(upload: &JiraAttachmentUpload) -> Value {
+fn attachment_upload_metadata(upload: &JiraAttachmentUpload) -> Value {
     json!({
         "filename": upload.filename.as_str(),
         "contentType": upload.content_type.as_str(),
@@ -5402,29 +5347,18 @@ fn attachment_upload_audit(upload: &JiraAttachmentUpload) -> Value {
     })
 }
 
-struct IssueCreateAuditContext<'a> {
-    project: &'a str,
-    issue_type_id: &'a str,
-    description_provided: bool,
-}
-
 struct IssueChildCreateAuditContext<'a> {
-    project: &'a str,
-    issue_type_id: &'a str,
-    description_provided: bool,
     parent: &'a JiraIssueMetadata,
 }
 
 fn issue_create_failure_audit(
     request: &ProviderInvocation,
-    context: &IssueCreateAuditContext<'_>,
     failure_phase: &str,
     created: Option<&JiraCreatedIssue>,
     egress_proxy: &Value,
 ) -> Value {
     issue_create_failure_audit_partial(
         request,
-        context,
         failure_phase,
         &PartialJiraCreatedIssue {
             id: created.map(|created| created.id.clone()),
@@ -5436,7 +5370,6 @@ fn issue_create_failure_audit(
 
 fn issue_create_failure_audit_partial(
     request: &ProviderInvocation,
-    context: &IssueCreateAuditContext<'_>,
     failure_phase: &str,
     created: &PartialJiraCreatedIssue,
     egress_proxy: &Value,
@@ -5444,9 +5377,6 @@ fn issue_create_failure_audit_partial(
     let mut audit = json!({
         "provider": "jira",
         "operation": "issue.create",
-        "project": context.project,
-        "issueTypeId": context.issue_type_id,
-        "descriptionProvided": context.description_provided,
         "failurePhase": failure_phase,
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
@@ -5510,11 +5440,8 @@ fn issue_child_create_failure_audit_partial(
     let mut audit = json!({
         "provider": "jira",
         "operation": "issue.child.create",
-        "project": context.project,
-        "issueTypeId": context.issue_type_id,
         "parentIssueKey": context.parent.key,
         "parentProject": context.parent.project,
-        "descriptionProvided": context.description_provided,
         "verificationStatus": "failed",
         "failurePhase": failure_phase,
         "credentialMode": request.credential_mode(),

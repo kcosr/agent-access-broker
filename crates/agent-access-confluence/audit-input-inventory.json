@@ -1,0 +1,2587 @@
+{
+  "actions": [
+    {
+      "action": "page.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "search",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/query/type",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "search.query",
+          "kind": "query",
+          "pointer": "/query/value",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "selection.identities",
+          "kind": "identifier",
+          "pointer": "/spaces",
+          "role": "fact",
+          "shape": "list"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.create",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/space",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/parentPageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/parentUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.move",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/position",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/targetPageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/targetUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "attachment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "records",
+          "display": "primary",
+          "element": "attachment.metadata",
+          "fields": [
+            {
+              "capture": "value",
+              "display": "primary",
+              "element": "attachment.filename",
+              "kind": "path",
+              "pointer": "/filename",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.media_type",
+              "kind": "text",
+              "pointer": "/contentType",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.size",
+              "kind": "bytes",
+              "pointer": "/size",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "omit",
+              "element": "transport.multipart_field",
+              "opaque": true,
+              "pointer": "/field",
+              "reason": "Multipart field names are transport details, excluded from audit."
+            },
+            {
+              "capture": "omit",
+              "element": "content.fingerprint",
+              "opaque": true,
+              "pointer": "/sha256",
+              "reason": "Requested content hashes are excluded; no body fingerprinting."
+            }
+          ],
+          "kind": "records",
+          "pointer": "/attachments",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "attachment.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/attachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "attachment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "verify",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/expectVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/expectTitle",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/expectAttachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.search",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/query/type",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "search.query",
+          "kind": "query",
+          "pointer": "/query/value",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "selection.identities",
+          "kind": "identifier",
+          "pointer": "/spaces",
+          "role": "fact",
+          "shape": "list"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.create",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/space",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "utf8ByteCount",
+          "display": "detail",
+          "element": "content.message",
+          "kind": "bytes",
+          "opaque": true,
+          "pointer": "/versionMessage",
+          "reason": "Message text is excluded; only its original UTF-8 byte count is retained.",
+          "role": "change"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.attachment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "records",
+          "display": "primary",
+          "element": "attachment.metadata",
+          "fields": [
+            {
+              "capture": "value",
+              "display": "primary",
+              "element": "attachment.filename",
+              "kind": "path",
+              "pointer": "/filename",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.media_type",
+              "kind": "text",
+              "pointer": "/contentType",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.size",
+              "kind": "bytes",
+              "pointer": "/size",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "omit",
+              "element": "transport.multipart_field",
+              "opaque": true,
+              "pointer": "/field",
+              "reason": "Multipart field names are transport details, excluded from audit."
+            },
+            {
+              "capture": "omit",
+              "element": "content.fingerprint",
+              "opaque": true,
+              "pointer": "/sha256",
+              "reason": "Requested content hashes are excluded; no body fingerprinting."
+            }
+          ],
+          "kind": "records",
+          "pointer": "/attachments",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.attachment.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/attachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.attachment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.verify",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/expectVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/expectTitle",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/expectAttachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "space.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/pageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.create",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/space",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/parentPageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/parentUrl",
+          "reason": "Raw locator URLs can contain confidential paths or query parameters.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.stage",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.publish",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.discard",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.verify",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/expectVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/expectTitle",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/expectAttachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.attachment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "records",
+          "display": "primary",
+          "element": "attachment.metadata",
+          "fields": [
+            {
+              "capture": "value",
+              "display": "primary",
+              "element": "attachment.filename",
+              "kind": "path",
+              "pointer": "/filename",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.media_type",
+              "kind": "text",
+              "pointer": "/contentType",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.size",
+              "kind": "bytes",
+              "pointer": "/size",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "omit",
+              "element": "transport.multipart_field",
+              "opaque": true,
+              "pointer": "/field",
+              "reason": "Multipart field names are transport details, excluded from audit."
+            },
+            {
+              "capture": "omit",
+              "element": "content.fingerprint",
+              "opaque": true,
+              "pointer": "/sha256",
+              "reason": "Requested content hashes are excluded; no body fingerprinting."
+            }
+          ],
+          "kind": "records",
+          "pointer": "/attachments",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.attachment.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/attachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.draft.attachment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.create",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/space",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.stage",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.publish",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/title",
+          "role": "change",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.discard",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.verify",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/expectVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.title",
+          "kind": "text",
+          "pointer": "/expectTitle",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/expectAttachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.attachment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "records",
+          "display": "primary",
+          "element": "attachment.metadata",
+          "fields": [
+            {
+              "capture": "value",
+              "display": "primary",
+              "element": "attachment.filename",
+              "kind": "path",
+              "pointer": "/filename",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.media_type",
+              "kind": "text",
+              "pointer": "/contentType",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "attachment.size",
+              "kind": "bytes",
+              "pointer": "/size",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "omit",
+              "element": "transport.multipart_field",
+              "opaque": true,
+              "pointer": "/field",
+              "reason": "Multipart field names are transport details, excluded from audit."
+            },
+            {
+              "capture": "omit",
+              "element": "content.fingerprint",
+              "opaque": true,
+              "pointer": "/sha256",
+              "reason": "Requested content hashes are excluded; no body fingerprinting."
+            }
+          ],
+          "kind": "records",
+          "pointer": "/attachments",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.attachment.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/attachmentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.draft.attachment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/draftHandle",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/sort",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.delete",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.reply.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.footer_comment.reply.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.inline_comment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/pageId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/sort",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/resolutionStatus",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.inline_comment.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.inline_comment.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "page.inline_comment.delete",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "page.inline_comment.reply.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "page.inline_comment.reply.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/sort",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.delete",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.reply.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.footer_comment.reply.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.inline_comment.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/blogId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/sort",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/resolutionStatus",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.inline_comment.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.inline_comment.update",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/baseVersion",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "blog.inline_comment.delete",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "blog.inline_comment.reply.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/bodyFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.number",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.opaque",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/nextPageToken",
+          "reason": "Opaque continuations and handles have no captured value or length.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "blog.inline_comment.reply.add",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "object.identity",
+          "kind": "identifier",
+          "pointer": "/commentId",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "operation.control",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.body",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Polymorphic body content is excluded; provider processing byte counts remain.",
+          "role": "change"
+        }
+      ]
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}

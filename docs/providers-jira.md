@@ -9,6 +9,30 @@ guidance are in [providers.md](providers.md); CLI-wide behavior is in
 Service name `jira`. Policy scope type `project`, bound to `jira_project` resources. Every action advertises
 credential modes `[service, per_user]`.
 
+## Request and provider audit
+
+Every action declares the original input facts retained in `requestAudit`:
+identities, relationship references, requested controls, short issue summaries
+(up to 1,024 UTF-8 bytes) and query text (up to 4,096 bytes). Prefix truncation
+is explicit; overlong identities are omitted whole. These retained strings can
+contain confidential business text and are visible to audit readers.
+
+Bodies and arbitrary comment-property values have presence only. Raw locator
+URLs, pagination tokens and continuations also have presence only, without
+values, lengths or hashes. Upload metadata contains a correlated sample of the
+first 20 requested filenames, media types and sizes; multipart fields and
+requested hashes are excluded. All provider upload outcome rows keep their
+zero-based `inputIndex`, including outcomes beyond that metadata sample.
+
+`providerAudit` records effective execution and observed results: resolved
+identities, effective search scope and limits, comment-update defaults,
+content-processing byte counts and transfer/verification outcomes. Requested
+content format appears in `requestAudit`; native format, polymorphic source
+bytes and final native bytes remain provider facts. Existing observed download
+checksums remain available. A requested change does not establish that the
+operation applied it, and omitted controls remain distinct from effective
+defaults.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker
@@ -1052,10 +1076,11 @@ project. Both failures carry the `applied_unverified` receipt. Reconcile the
 created issue id/key from `safeLocators` or failure audit, and update grants to
 the current project key before retrying.
 
-Audit includes issue id/key when available, project, issue type id,
-`descriptionProvided`, credential mode, egress proxy, and attribution metadata
-when configured. It excludes submitted summary text, source content, converted
-ADF, returned description ADF, and raw upstream error bodies.
+`requestAudit` records supplied project, issue type ID, bounded summary, content
+format and content presence. `providerAudit` retains returned issue id/key,
+confirmed project, credential mode, egress proxy and attribution metadata when
+configured. Source content, converted ADF, returned description ADF and raw
+upstream error bodies are excluded.
 
 ## `issue.child.create`
 
@@ -1123,11 +1148,12 @@ upstream validation failures.
 
 Successful results include `operation: "issue.child.create"`, bounded metadata
 for the created child and parent issues, and
-`verification.status: "matched"`. Audit includes child and parent issue keys
-and projects, issue type id, description-provided state, verification status,
-credential mode, egress proxy metadata, and attribution metadata when
-configured. It excludes submitted summary text, source content, converted ADF,
-returned description ADF, and raw upstream error bodies. If Jira accepts the
+`verification.status: "matched"`. `providerAudit` includes confirmed child and
+parent issue keys and projects, verification status, credential mode, egress
+proxy and configured attribution metadata. `requestAudit` separately retains
+supplied identities, bounded summary, content format and content presence.
+Source content, converted ADF, returned description ADF and raw upstream error
+bodies remain excluded. If Jira accepts the
 create request but readback fails or does not confirm the parent, the broker
 returns a failure with side-effect audit details.
 
@@ -1169,10 +1195,12 @@ metadata and description, stable
 The readback omits `customFields`, the detailed-view
 [standard context](#standard-context), `issueLinks`, `parent`, and `subtasks`.
 Readback description content is returned in `result.issue.description` when Jira
-returns it. Audit includes issue id/key, project, changed field names, booleans
-for which fields changed, notification mode, credential mode, and egress proxy
-metadata; it excludes submitted summary text, source content, converted ADF,
-returned description ADF, and raw upstream error bodies. Content attribution for
+returns it. `requestAudit` records the supplied issue locator, bounded summary,
+content format/presence and explicit notification flag, preserving false and
+absence separately. These are supplied fields, not proof of applied changes.
+`providerAudit` retains confirmed issue key/project, credential mode, egress
+proxy and content-processing metadata. Source content, converted ADF, returned
+description ADF and raw upstream error bodies remain excluded. Content attribution for
 `issue.update` applies only when the request supplies `content`; it never
 mutates summaries.
 
@@ -1567,10 +1595,10 @@ format problems without storing the upstream identifiers. Compare fingerprints
 with candidate identifiers only through authorized operator investigation.
 
 The failure also retains upstream HTTP status/duration. Its provider audit
-records `effectiveSearchScope`, `injectedScopePredicate`,
-`canonicalCallerJqlHash`, `queryType`, `pageTokenPresent`, `maxResults`, and
-`resultCount`. Raw JQL, page tokens, issue bodies, and raw rejected identifiers
-are not included. The log-only diagnostic code is not copied into the audit or
+records `effectiveSearchScope`, `injectedScopePredicate`, effective `maxResults`
+and rejected-candidate `resultCount`. The bounded original query, requested
+project list and input-token presence belong to `requestAudit`. Page-token
+values, issue bodies and raw rejected identifiers are not included. The log-only diagnostic code is not copied into the audit or
 agent response. `searchAuthorization.scope` in the audit remains the full
 authorization plan; `effectiveSearchScope` is the scope the composed query uses,
 which reflects narrowing by explicit `projects`. Returned issues are checked

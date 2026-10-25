@@ -27,6 +27,7 @@ tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 bytes.workspace = true
 uuid.workspace = true

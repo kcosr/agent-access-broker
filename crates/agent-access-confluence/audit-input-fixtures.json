@@ -1,0 +1,952 @@
+{
+  "fixture": "audit-inventory-maximal",
+  "cases": [
+    {
+      "action": "space.list",
+      "variant": "metadata",
+      "inputs": {
+        "maxResults": 2,
+        "pageToken": "private-listing-token"
+      }
+    },
+    {
+      "action": "page.view",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456"
+      }
+    },
+    {
+      "action": "page.view",
+      "variant": "url",
+      "inputs": {
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "search",
+      "variant": "metadata",
+      "inputs": {
+        "query": {
+          "type": "cql",
+          "value": "title ~ \"notes\""
+        },
+        "spaces": [
+          "ENG",
+          "DOC"
+        ],
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "page.create",
+      "variant": "metadata",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "parentPageId": "123450",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.create",
+      "variant": "parentUrl",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "parentUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "page.create",
+      "variant": "native-content",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "parentPageId": "123450",
+        "contentFormat": "atlas_doc_format",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "page.update",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.update",
+      "variant": "native-content",
+      "inputs": {
+        "pageId": "123456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "contentFormat": "atlas_doc_format",
+        "content": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "private ADF body"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "attachment.add",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "attachments": [
+          {
+            "field": "private-form-field",
+            "filename": "diagram.txt",
+            "contentType": "text/plain",
+            "size": 5,
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        ]
+      }
+    },
+    {
+      "action": "attachment.download",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "attachmentId": "10100"
+      }
+    },
+    {
+      "action": "attachment.list",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "attachment.list",
+      "variant": "url",
+      "inputs": {
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "verify",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "expectVersion": 3,
+        "expectTitle": "Expected content title",
+        "expectAttachmentId": "10100"
+      }
+    },
+    {
+      "action": "page.draft.create",
+      "variant": "metadata",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "parentPageId": "123450",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.draft.create",
+      "variant": "parentUrl",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured",
+        "parentUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "page.draft.create",
+      "variant": "native-content",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "parentPageId": "123450",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.draft.stage",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.draft.stage",
+      "variant": "native-content",
+      "inputs": {
+        "pageId": "123456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.draft.view",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "page.draft.publish",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "page.draft.update",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.draft.update",
+      "variant": "native-content",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "title": "Requested content title",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.draft.discard",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle"
+      }
+    },
+    {
+      "action": "page.draft.verify",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "expectVersion": 3,
+        "expectTitle": "Expected content title",
+        "expectAttachmentId": "10100"
+      }
+    },
+    {
+      "action": "page.draft.attachment.add",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "attachments": [
+          {
+            "field": "private-form-field",
+            "filename": "diagram.txt",
+            "contentType": "text/plain",
+            "size": 5,
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        ]
+      }
+    },
+    {
+      "action": "page.draft.attachment.download",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "attachmentId": "10100"
+      }
+    },
+    {
+      "action": "page.draft.attachment.list",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "draftHandle": "private-draft-handle",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "page.footer_comment.list",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "bodyFormat": "storage",
+        "sort": "-created-date",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "page.footer_comment.view",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "page.footer_comment.update",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.footer_comment.update",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.footer_comment.delete",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "page.footer_comment.add",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.footer_comment.add",
+      "variant": "native-content",
+      "inputs": {
+        "pageId": "123456",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.footer_comment.reply.list",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "page.footer_comment.reply.add",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.footer_comment.reply.add",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.inline_comment.list",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "bodyFormat": "storage",
+        "sort": "-created-date",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token",
+        "resolutionStatus": "open"
+      }
+    },
+    {
+      "action": "page.inline_comment.view",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "page.inline_comment.update",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.inline_comment.update",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.inline_comment.delete",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "page.inline_comment.reply.list",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "page.inline_comment.reply.add",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "page.inline_comment.reply.add",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.view",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456"
+      }
+    },
+    {
+      "action": "blog.view",
+      "variant": "url",
+      "inputs": {
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "blog.search",
+      "variant": "metadata",
+      "inputs": {
+        "query": {
+          "type": "cql",
+          "value": "title ~ \"notes\""
+        },
+        "spaces": [
+          "ENG",
+          "DOC"
+        ],
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "blog.create",
+      "variant": "metadata",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.create",
+      "variant": "native-content",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.update",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "versionMessage": "private version message",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.update",
+      "variant": "native-content",
+      "inputs": {
+        "blogId": "223456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "versionMessage": "private version message",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.attachment.add",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "attachments": [
+          {
+            "field": "private-form-field",
+            "filename": "diagram.txt",
+            "contentType": "text/plain",
+            "size": 5,
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        ]
+      }
+    },
+    {
+      "action": "blog.attachment.download",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "attachmentId": "10100"
+      }
+    },
+    {
+      "action": "blog.attachment.list",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "blog.attachment.list",
+      "variant": "url",
+      "inputs": {
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "blog.verify",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "expectVersion": 3,
+        "expectTitle": "Expected content title",
+        "expectAttachmentId": "10100"
+      }
+    },
+    {
+      "action": "blog.draft.create",
+      "variant": "metadata",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.draft.create",
+      "variant": "native-content",
+      "inputs": {
+        "space": "ENG",
+        "title": "Requested content title",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.draft.stage",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.draft.stage",
+      "variant": "native-content",
+      "inputs": {
+        "blogId": "223456",
+        "baseVersion": 2,
+        "title": "Requested content title",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.draft.view",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "blog.draft.publish",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "blog.draft.update",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "title": "Requested content title",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.draft.update",
+      "variant": "native-content",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "title": "Requested content title",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.draft.discard",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle"
+      }
+    },
+    {
+      "action": "blog.draft.verify",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "expectVersion": 3,
+        "expectTitle": "Expected content title",
+        "expectAttachmentId": "10100"
+      }
+    },
+    {
+      "action": "blog.draft.attachment.add",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "attachments": [
+          {
+            "field": "private-form-field",
+            "filename": "diagram.txt",
+            "contentType": "text/plain",
+            "size": 5,
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        ]
+      }
+    },
+    {
+      "action": "blog.draft.attachment.download",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "attachmentId": "10100"
+      }
+    },
+    {
+      "action": "blog.draft.attachment.list",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "draftHandle": "private-draft-handle",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "blog.footer_comment.list",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "bodyFormat": "storage",
+        "sort": "-created-date",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "blog.footer_comment.view",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "blog.footer_comment.update",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.footer_comment.update",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.footer_comment.delete",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "blog.footer_comment.add",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.footer_comment.add",
+      "variant": "native-content",
+      "inputs": {
+        "blogId": "223456",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.footer_comment.reply.list",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "blog.footer_comment.reply.add",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.footer_comment.reply.add",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.inline_comment.list",
+      "variant": "metadata",
+      "inputs": {
+        "blogId": "223456",
+        "bodyFormat": "storage",
+        "sort": "-created-date",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token",
+        "resolutionStatus": "open"
+      }
+    },
+    {
+      "action": "blog.inline_comment.view",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage"
+      }
+    },
+    {
+      "action": "blog.inline_comment.update",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.inline_comment.update",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "baseVersion": 2,
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "blog.inline_comment.delete",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042"
+      }
+    },
+    {
+      "action": "blog.inline_comment.reply.list",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "bodyFormat": "storage",
+        "maxResults": 2,
+        "nextPageToken": "private-pagination-token"
+      }
+    },
+    {
+      "action": "blog.inline_comment.reply.add",
+      "variant": "metadata",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "markdown",
+        "content": "private body not captured"
+      }
+    },
+    {
+      "action": "blog.inline_comment.reply.add",
+      "variant": "native-content",
+      "inputs": {
+        "commentId": "10042",
+        "contentFormat": "storage",
+        "content": "<p>private storage body</p>"
+      }
+    },
+    {
+      "action": "page.move",
+      "variant": "metadata",
+      "inputs": {
+        "pageId": "123456",
+        "position": "append",
+        "targetPageId": "123451"
+      }
+    },
+    {
+      "action": "page.move",
+      "variant": "url",
+      "inputs": {
+        "position": "append",
+        "targetPageId": "123451",
+        "url": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    },
+    {
+      "action": "page.move",
+      "variant": "targetUrl",
+      "inputs": {
+        "pageId": "123456",
+        "position": "append",
+        "targetUrl": "https://example.atlassian.net/private-title?token=private-url-token"
+      }
+    }
+  ]
+}

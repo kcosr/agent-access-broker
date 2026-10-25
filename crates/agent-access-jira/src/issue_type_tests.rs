@@ -141,6 +141,10 @@ async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_wi
         let audit = response.audit.unwrap();
         assert_eq!(audit["credentialMode"], mode.as_str());
         assert_eq!(audit["issueTypeCount"], 1);
+        assert!(audit.get("project").is_none());
+        assert_eq!(audit["startAt"], 0);
+        assert_eq!(audit["maxResults"], 1);
+        assert_eq!(response.object_ids.as_ref().unwrap()["project"], "PROJ");
         let metadata = format!("{audit} {:?}", response.object_ids);
         assert!(!metadata.contains("sentinel"));
     }

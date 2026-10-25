@@ -3,6 +3,7 @@
 //! `confluence_space` resources.
 #[cfg(test)]
 mod access_tests;
+mod audit;
 mod backend;
 mod config;
 mod continuation;
@@ -62,7 +63,6 @@ enum ConfluenceWriteTarget {
 
 #[derive(Debug, Clone)]
 struct ConfluenceContentWriteAudit {
-    requested_format: String,
     native_format: String,
     source_bytes: u64,
     final_native_bytes: u64,
@@ -452,7 +452,8 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    action.presentation(presentation)
+                    let projection = audit::projection(&action.action);
+                    action.presentation(presentation).audit_inputs(projection)
                 })
                 .collect(),
         )
@@ -2444,7 +2445,6 @@ impl ConfluenceProvider {
                 value,
             },
             ConfluenceContentWriteAudit {
-                requested_format: content_format.to_string(),
                 native_format: representation.to_string(),
                 source_bytes,
                 final_native_bytes,
@@ -2791,7 +2791,6 @@ impl ConfluenceProvider {
             self.backend.egress_proxy_audit(credential),
         );
         merge_confluence_content_write_audit(&mut audit, &content_audit);
-        audit["previousVersion"] = json!(inputs.base_version);
         audit["version"] = json!(next_version);
         Ok(ProviderResult::new(result)
             .with_audit(audit)
@@ -3227,18 +3226,11 @@ impl ConfluenceProvider {
             .with_audit(url_fallbacks.into_audit(json!({
                 "provider": "confluence",
                 "operation": "search",
-                "requestedSpaces": requested,
                 "effectiveSearchScope": effective_scope.audit_value("space"),
-                "queryType": query.kind,
-                "queryAstVersion": CONFLUENCE_QUERY_AST_VERSION,
-                "canonicalCallerCqlHash": query.canonical_caller_cql_hash,
-                "queryShape": query.query_shape,
-                "textOperandHashes": query.text_operand_hashes,
                 "injectedSpacePredicate": query.injected_space_predicate,
                 "injectedTypePredicate": query.injected_type_predicate,
                 "observedSpaces": observed_spaces,
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
-                "sortFields": query.sort_fields,
                 "maxResults": max_results,
                 "resultCount": response.value.pages.len(),
                 "credentialMode": request.credential_mode(),
@@ -3455,7 +3447,6 @@ impl ConfluenceProvider {
             "placement": if requested_parent_page_id.is_some() { "requested_parent" } else { "space_homepage" },
             "verificationStatus": "matched",
             "returnedUrlFields": ["webUrl", "spaceUrl"],
-            "bodyFormat": content_audit.native_format.as_str(),
             "credentialMode": request.credential_mode(),
             "egressProxy": self.backend.egress_proxy_audit(credential),
         });
@@ -3613,7 +3604,6 @@ impl ConfluenceProvider {
                         &space.id,
                         &effective_parent_page_id,
                     ),
-                    inputs.position,
                     "move_mutation",
                     self.backend.egress_proxy_audit(credential),
                 );
@@ -3654,7 +3644,6 @@ impl ConfluenceProvider {
                         &space.id,
                         &effective_parent_page_id,
                     ),
-                    inputs.position,
                     "move_response",
                     self.backend.egress_proxy_audit(credential),
                 ))
@@ -3683,7 +3672,6 @@ impl ConfluenceProvider {
                             &space.id,
                             &effective_parent_page_id,
                         ),
-                        inputs.position,
                         "post_move_hierarchy_readback",
                         self.backend.egress_proxy_audit(credential),
                     );
@@ -3728,7 +3716,6 @@ impl ConfluenceProvider {
                             &space.id,
                             &effective_parent_page_id,
                         ),
-                        inputs.position,
                         "post_move_hierarchy_readback",
                         self.backend.egress_proxy_audit(credential),
                     ))
@@ -3757,7 +3744,6 @@ impl ConfluenceProvider {
                             &space.id,
                             &effective_parent_page_id,
                         ),
-                        inputs.position,
                         "post_move_order_readback",
                         self.backend.egress_proxy_audit(credential),
                     );
@@ -3803,7 +3789,6 @@ impl ConfluenceProvider {
                                 &space.id,
                                 &effective_parent_page_id,
                             ),
-                            inputs.position,
                             "post_move_order_readback",
                             self.backend.egress_proxy_audit(credential),
                         ))
@@ -3837,7 +3822,6 @@ impl ConfluenceProvider {
                 "provider": "confluence",
                 "operation": "page.move",
                 "pageId": page.id,
-                "position": inputs.position.as_str(),
                 "targetPageId": target.id,
                 "space": space.key,
                 "spaceId": space.id,
@@ -3960,10 +3944,8 @@ impl ConfluenceProvider {
                 "operation": "page.update",
                 "pageId": page.id,
                 "space": page.space,
-                "previousVersion": inputs.base_version,
                 "version": page.version,
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
-                "bodyFormat": content_audit.native_format.as_str(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             });
@@ -4216,7 +4198,6 @@ impl ConfluenceProvider {
                 "page.draft.create",
                 &draft,
                 ConfluenceDraftContentType::Page,
-                Some("storage"),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
@@ -4339,11 +4320,9 @@ impl ConfluenceProvider {
                 "page.draft.stage",
                 &draft,
                 ConfluenceDraftContentType::Page,
-                Some("storage"),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
-            audit["expectedBaseVersion"] = json!(inputs.base_version);
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
@@ -4401,7 +4380,6 @@ impl ConfluenceProvider {
                 "page.draft.view",
                 &response.value,
                 ConfluenceDraftContentType::Page,
-                Some(inputs.body_format.as_str()),
                 false,
                 self.backend.egress_proxy_audit(credential),
             )))
@@ -4474,7 +4452,6 @@ impl ConfluenceProvider {
                 "page.draft.update",
                 &draft,
                 ConfluenceDraftContentType::Page,
-                Some("storage"),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
@@ -4614,7 +4591,6 @@ impl ConfluenceProvider {
                 "page.draft.publish",
                 &published,
                 ConfluenceDraftContentType::Page,
-                Some(inputs.body_format.as_str()),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
@@ -4723,7 +4699,6 @@ impl ConfluenceProvider {
                     "page.draft.discard",
                     &draft,
                     ConfluenceDraftContentType::Page,
-                    None,
                     true,
                     self.backend.egress_proxy_audit(credential),
                 ))
@@ -4945,6 +4920,7 @@ impl ConfluenceProvider {
                         // never as a rate limit whose retry would upload the
                         // attachments again.
                         audit_attachments.push(json!({
+                        "inputIndex": index,
                             "status": "unverified",
                             "attachmentId": attachment.id,
                             "size": attachment.size,
@@ -4957,11 +4933,10 @@ impl ConfluenceProvider {
                             "filename": attachment.filename,
                             "reason": "upstream_rate_limited",
                         }));
-                        for skipped in uploads.iter().skip(index + 1) {
+                        for (skipped_index, _) in uploads.iter().enumerate().skip(index + 1) {
                             audit_attachments.push(json!({
+                            "inputIndex": skipped_index,
                                 "status": "skipped",
-                                "size": skipped.size,
-                                "contentType": skipped.content_type,
                                 "reason": "not_attempted_after_previous_failure",
                             }));
                             failures.push(json!({
@@ -4980,6 +4955,7 @@ impl ConfluenceProvider {
                         "parentStatus": "draft",
                     }));
                     audit_attachments.push(json!({
+                        "inputIndex": index,
                         "status": "created",
                         "attachmentId": attachment.id,
                         "size": attachment.size,
@@ -5003,20 +4979,18 @@ impl ConfluenceProvider {
                     stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     stopped_uncertain = upload_may_have_applied(&error);
                     audit_attachments.push(json!({
+                        "inputIndex": index,
                         "status": "failed",
-                        "size": uploads[index].size,
-                        "contentType": uploads[index].content_type,
                         "reason": sanitized_backend_reason(&error),
                     }));
                     failures.push(json!({
                         "status": "failed",
                         "reason": sanitized_backend_reason(&error),
                     }));
-                    for skipped in uploads.iter().skip(index + 1) {
+                    for (skipped_index, _) in uploads.iter().enumerate().skip(index + 1) {
                         audit_attachments.push(json!({
+                            "inputIndex": skipped_index,
                             "status": "skipped",
-                            "size": skipped.size,
-                            "contentType": skipped.content_type,
                             "reason": "not_attempted_after_previous_failure",
                         }));
                         failures.push(json!({
@@ -5340,7 +5314,7 @@ impl ConfluenceProvider {
         // Set when the upload that stopped the batch may have applied.
         let mut stopped_uncertain = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
-            let upload_audit = attachment_upload_audit(&upload);
+            let upload_metadata = attachment_upload_metadata(&upload);
             match self
                 .backend
                 .add_attachment(&page.id, upload, credential)
@@ -5356,9 +5330,9 @@ impl ConfluenceProvider {
                         "size": response.value.size,
                     }));
                     attachment_audit.push(json!({
+                        "inputIndex": index,
                         "status": "created",
                         "attachmentId": response.value.id,
-                        "attachment": upload_audit,
                     }));
                 }
                 // A credential without a route, or delegated access that
@@ -5378,25 +5352,25 @@ impl ConfluenceProvider {
                     stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     stopped_uncertain = upload_may_have_applied(&error);
                     attachment_audit.push(json!({
+                        "inputIndex": index,
                         "status": "failed",
-                        "attachment": upload_audit.clone(),
                         "reason": sanitized_backend_reason(&error),
                     }));
                     failures.push(json!({
                         "status": "failed",
-                        "attachment": upload_audit,
+                        "attachment": upload_metadata,
                         "reason": sanitized_backend_reason(&error),
                     }));
-                    for skipped in uploads.iter().skip(index + 1) {
-                        let skipped_audit = attachment_upload_audit(skipped);
+                    for (skipped_index, skipped) in uploads.iter().enumerate().skip(index + 1) {
+                        let skipped_metadata = attachment_upload_metadata(skipped);
                         attachment_audit.push(json!({
+                            "inputIndex": skipped_index,
                             "status": "skipped",
-                            "attachment": skipped_audit.clone(),
                             "reason": "not_attempted_after_previous_failure",
                         }));
                         failures.push(json!({
                             "status": "skipped",
-                            "attachment": skipped_audit,
+                            "attachment": skipped_metadata,
                             "reason": "not_attempted_after_previous_failure",
                         }));
                     }
@@ -5930,18 +5904,11 @@ impl ConfluenceProvider {
         Ok(ProviderResult::new(result).with_audit(url_fallbacks.into_audit(json!({
                 "provider": "confluence",
                 "operation": "blog.search",
-                "requestedSpaces": requested,
                 "effectiveSearchScope": effective_scope.audit_value("space"),
-                "queryType": query.kind,
-                "queryAstVersion": CONFLUENCE_QUERY_AST_VERSION,
-                "canonicalCallerCqlHash": query.canonical_caller_cql_hash,
-                "queryShape": query.query_shape,
-                "textOperandHashes": query.text_operand_hashes,
                 "injectedSpacePredicate": query.injected_space_predicate,
                 "injectedTypePredicate": query.injected_type_predicate,
                 "observedSpaces": observed_spaces,
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
-                "sortFields": query.sort_fields,
                 "maxResults": max_results,
                 "resultCount": response.value.blogs.len(),
                 "credentialMode": request.credential_mode(),
@@ -6035,7 +6002,6 @@ impl ConfluenceProvider {
                 "spaceId": blog.space_id,
                 "version": blog.version,
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
-                "bodyFormat": content_audit.native_format.as_str(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             });
@@ -6156,10 +6122,8 @@ impl ConfluenceProvider {
                 "blogId": blog.id,
                 "space": blog.space,
                 "spaceId": blog.space_id,
-                "previousVersion": inputs.base_version,
                 "version": blog.version,
                 "returnedUrlFields": ["webUrl", "spaceUrl"],
-                "bodyFormat": content_audit.native_format.as_str(),
                 "credentialMode": request.credential_mode(),
                 "egressProxy": self.backend.egress_proxy_audit(credential),
             });
@@ -6255,7 +6219,6 @@ impl ConfluenceProvider {
                 "blog.draft.create",
                 &draft,
                 ConfluenceDraftContentType::Blog,
-                Some("storage"),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
@@ -6366,11 +6329,9 @@ impl ConfluenceProvider {
                 "blog.draft.stage",
                 &draft,
                 ConfluenceDraftContentType::Blog,
-                Some("storage"),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
-            audit["expectedBaseVersion"] = json!(inputs.base_version);
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
@@ -6423,7 +6384,6 @@ impl ConfluenceProvider {
                 "blog.draft.view",
                 &response.value,
                 ConfluenceDraftContentType::Blog,
-                Some(inputs.body_format.as_str()),
                 false,
                 self.backend.egress_proxy_audit(credential),
             )))
@@ -6496,7 +6456,6 @@ impl ConfluenceProvider {
                 "blog.draft.update",
                 &draft,
                 ConfluenceDraftContentType::Blog,
-                Some("storage"),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
@@ -6633,7 +6592,6 @@ impl ConfluenceProvider {
                 "blog.draft.publish",
                 &published,
                 ConfluenceDraftContentType::Blog,
-                Some(inputs.body_format.as_str()),
                 true,
                 self.backend.egress_proxy_audit(credential),
             );
@@ -6742,7 +6700,6 @@ impl ConfluenceProvider {
                     "blog.draft.discard",
                     &draft,
                     ConfluenceDraftContentType::Blog,
-                    None,
                     true,
                     self.backend.egress_proxy_audit(credential),
                 ))
@@ -6964,6 +6921,7 @@ impl ConfluenceProvider {
                         // never as a rate limit whose retry would upload the
                         // attachments again.
                         audit_attachments.push(json!({
+                        "inputIndex": index,
                             "status": "unverified",
                             "attachmentId": attachment.id,
                             "size": attachment.size,
@@ -6976,11 +6934,10 @@ impl ConfluenceProvider {
                             "filename": attachment.filename,
                             "reason": "upstream_rate_limited",
                         }));
-                        for skipped in uploads.iter().skip(index + 1) {
+                        for (skipped_index, _) in uploads.iter().enumerate().skip(index + 1) {
                             audit_attachments.push(json!({
+                            "inputIndex": skipped_index,
                                 "status": "skipped",
-                                "size": skipped.size,
-                                "contentType": skipped.content_type,
                                 "reason": "not_attempted_after_previous_failure",
                             }));
                             failures.push(json!({
@@ -6999,6 +6956,7 @@ impl ConfluenceProvider {
                         "parentStatus": "draft",
                     }));
                     audit_attachments.push(json!({
+                        "inputIndex": index,
                         "status": "created",
                         "attachmentId": attachment.id,
                         "size": attachment.size,
@@ -7022,20 +6980,18 @@ impl ConfluenceProvider {
                     stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     stopped_uncertain = upload_may_have_applied(&error);
                     audit_attachments.push(json!({
+                        "inputIndex": index,
                         "status": "failed",
-                        "size": uploads[index].size,
-                        "contentType": uploads[index].content_type,
                         "reason": sanitized_backend_reason(&error),
                     }));
                     failures.push(json!({
                         "status": "failed",
                         "reason": sanitized_backend_reason(&error),
                     }));
-                    for skipped in uploads.iter().skip(index + 1) {
+                    for (skipped_index, _) in uploads.iter().enumerate().skip(index + 1) {
                         audit_attachments.push(json!({
+                            "inputIndex": skipped_index,
                             "status": "skipped",
-                            "size": skipped.size,
-                            "contentType": skipped.content_type,
                             "reason": "not_attempted_after_previous_failure",
                         }));
                         failures.push(json!({
@@ -7359,7 +7315,7 @@ impl ConfluenceProvider {
         // Set when the upload that stopped the batch may have applied.
         let mut stopped_uncertain = false;
         for (index, upload) in uploads.iter().cloned().enumerate() {
-            let upload_audit = attachment_upload_audit(&upload);
+            let upload_metadata = attachment_upload_metadata(&upload);
             match self
                 .backend
                 .add_blog_attachment(&blog.id, upload, credential)
@@ -7382,9 +7338,9 @@ impl ConfluenceProvider {
                         "size": response.value.size,
                     }));
                     attachment_audit.push(json!({
+                        "inputIndex": index,
                         "status": "created",
                         "attachmentId": response.value.id,
-                        "attachment": upload_audit,
                     }));
                 }
                 // A credential without a route, or delegated access that
@@ -7404,25 +7360,25 @@ impl ConfluenceProvider {
                     stopped_unsent = matches!(error, ConfluenceBackendError::NotSent { .. });
                     stopped_uncertain = upload_may_have_applied(&error);
                     attachment_audit.push(json!({
+                        "inputIndex": index,
                         "status": "failed",
-                        "attachment": upload_audit.clone(),
                         "reason": sanitized_backend_reason(&error),
                     }));
                     failures.push(json!({
                         "status": "failed",
-                        "attachment": upload_audit,
+                        "attachment": upload_metadata,
                         "reason": sanitized_backend_reason(&error),
                     }));
-                    for skipped in uploads.iter().skip(index + 1) {
-                        let skipped_audit = attachment_upload_audit(skipped);
+                    for (skipped_index, skipped) in uploads.iter().enumerate().skip(index + 1) {
+                        let skipped_metadata = attachment_upload_metadata(skipped);
                         attachment_audit.push(json!({
+                            "inputIndex": skipped_index,
                             "status": "skipped",
-                            "attachment": skipped_audit.clone(),
                             "reason": "not_attempted_after_previous_failure",
                         }));
                         failures.push(json!({
                             "status": "skipped",
-                            "attachment": skipped_audit,
+                            "attachment": skipped_metadata,
                             "reason": "not_attempted_after_previous_failure",
                         }));
                     }
@@ -10319,7 +10275,6 @@ fn generated_storage_malformed() -> ProviderError {
 }
 
 fn merge_confluence_content_write_audit(audit: &mut Value, content: &ConfluenceContentWriteAudit) {
-    audit["contentFormat"] = json!(content.requested_format);
     audit["nativeContentFormat"] = json!(content.native_format);
     audit["sourceContentBytes"] = json!(content.source_bytes);
     audit["finalNativeContentBytes"] = json!(content.final_native_bytes);
@@ -10447,7 +10402,7 @@ fn attachment_body_part_specs(inputs: &[AttachmentInput]) -> Vec<BrokerBodyPartS
         .collect()
 }
 
-fn attachment_upload_audit(upload: &ConfluenceAttachmentUpload) -> Value {
+fn attachment_upload_metadata(upload: &ConfluenceAttachmentUpload) -> Value {
     json!({
         "filename": upload.filename.as_str(),
         "contentType": upload.content_type.as_str(),
@@ -10703,7 +10658,6 @@ fn verify_page_move_order(
 fn page_move_failure_audit(
     request: &ProviderInvocation,
     target: (&str, &str, &str, &str, &str),
-    position: ConfluencePageMovePosition,
     phase: &str,
     egress_proxy: Value,
 ) -> Value {
@@ -10712,7 +10666,6 @@ fn page_move_failure_audit(
         "provider": "confluence",
         "operation": "page.move",
         "pageId": page_id,
-        "position": position.as_str(),
         "targetPageId": target_page_id,
         "space": space,
         "spaceId": space_id,
@@ -10951,7 +10904,6 @@ fn draft_audit(
     operation: &str,
     content: &ConfluenceDraftContent,
     content_type: ConfluenceDraftContentType,
-    body_format: Option<&str>,
     mutated: bool,
     egress_proxy: Value,
 ) -> Value {
@@ -10969,9 +10921,6 @@ fn draft_audit(
         "egressProxy": egress_proxy,
     });
     audit[content_type.id_field()] = json!(content.id);
-    if let Some(body_format) = body_format {
-        audit["bodyFormat"] = json!(body_format);
-    }
     audit
 }
 
@@ -11037,7 +10986,6 @@ fn draft_version_conflict_error(
             "contentType": content_type.as_str(),
             "space": content.space,
             "spaceId": content.space_id,
-            "expectedBaseVersion": expected_base_version,
             "draftVersion": content.version,
             "credentialMode": request.credential_mode(),
             "egressProxy": egress_proxy,
@@ -11088,7 +11036,7 @@ fn draft_verification_mismatch_error(
             "spaceId": content.space_id,
             "status": "mismatch",
             "checked": checked,
-            "mismatch": mismatch,
+            "mismatch": verification_mismatch_audit(&mismatch),
             "credentialMode": request.credential_mode(),
             "egressProxy": egress_proxy,
         });
@@ -12068,7 +12016,6 @@ fn comment_version_conflict_error(
         None,
         egress_proxy,
     );
-    audit["expectedBaseVersion"] = json!(expected_base_version);
     if let Some(current_version) = evidence.target.version {
         audit["currentVersion"] = json!(current_version);
     }
@@ -12102,7 +12049,6 @@ fn upstream_comment_version_conflict_error(
         None,
         egress_proxy,
     );
-    audit["expectedBaseVersion"] = json!(expected_base_version);
     audit["status"] = json!("upstream_conflict");
     result["status"] = json!("upstream_conflict");
     ProviderError::error(
@@ -12433,7 +12379,6 @@ fn blog_version_conflict_error(
         "blogId": blog.id,
         "space": blog.space,
         "spaceId": blog.space_id,
-        "expectedBaseVersion": expected_base_version,
         "currentVersion": blog.version,
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
@@ -12466,7 +12411,6 @@ fn upstream_blog_version_conflict_error(
         "blogId": blog.id,
         "space": blog.space,
         "spaceId": blog.space_id,
-        "expectedBaseVersion": expected_base_version,
         "status": "upstream_conflict",
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
@@ -12500,7 +12444,6 @@ fn version_conflict_error(
         "operation": "page.update",
         "pageId": page.id,
         "space": page.space,
-        "expectedBaseVersion": expected_base_version,
         "currentVersion": page.version,
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
@@ -12531,7 +12474,6 @@ fn upstream_version_conflict_error(
         "operation": "page.update",
         "pageId": page.id,
         "space": page.space,
-        "expectedBaseVersion": expected_base_version,
         "status": "upstream_conflict",
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
@@ -12540,6 +12482,20 @@ fn upstream_version_conflict_error(
     .with_object_ids(json!({
         "pageId": page.id,
     }))
+}
+
+// Verification response retains the caller's comparison; provider audit holds
+// the performed check and observation, beside the original request snapshot.
+fn verification_mismatch_audit(mismatch: &Value) -> Value {
+    let mut audit = mismatch.clone();
+    if matches!(
+        audit.get("type").and_then(Value::as_str),
+        Some("pageVersion" | "blogVersion")
+    ) && let Some(object) = audit.as_object_mut()
+    {
+        object.remove("expected");
+    }
+    audit
 }
 
 fn confluence_blog_verification_mismatch_result(
@@ -12580,7 +12536,7 @@ fn confluence_blog_verification_mismatch_error(
         "spaceId": blog.space_id,
         "status": "mismatch",
         "checked": checked,
-        "mismatch": mismatch,
+        "mismatch": verification_mismatch_audit(&mismatch),
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     }))
@@ -12626,7 +12582,7 @@ fn confluence_verification_mismatch_error(
         "space": page.space,
         "status": "mismatch",
         "checked": checked,
-        "mismatch": mismatch,
+        "mismatch": verification_mismatch_audit(&mismatch),
         "credentialMode": request.credential_mode(),
         "egressProxy": egress_proxy,
     }))

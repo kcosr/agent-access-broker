@@ -30,7 +30,6 @@ pub(crate) const MAX_JIRA_QUERY_TOKENS: usize = 512;
 pub(crate) const MAX_JIRA_IN_LIST_VALUES: usize = 100;
 pub(crate) const MAX_JIRA_STRING_LITERAL_BYTES: usize = 512;
 pub(crate) const MAX_JIRA_ORDER_TERMS: usize = 5;
-pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,12 +154,14 @@ pub(crate) struct BuiltJiraSearchQuery {
     pub(crate) kind: &'static str,
     pub(crate) injected_scope_predicate: &'static str,
     /// The caller's query re-emitted canonically, before scope composition.
-    /// Continuations bind it; diagnostics carry only its hash.
+    /// Continuations bind the complete canonical query internally.
     pub(crate) canonical_caller_jql: String,
+    #[cfg(test)]
     pub(crate) canonical_caller_jql_hash: String,
+    #[cfg(test)]
     pub(crate) query_shape: Value,
+    #[cfg(test)]
     pub(crate) text_operand_hashes: Vec<String>,
-    pub(crate) sort_fields: Vec<Value>,
 }
 
 pub(crate) fn search_authorization(
@@ -279,18 +280,21 @@ pub(crate) fn build_jira_search_query(
                 (jql, "project_not_in")
             }
         };
+    #[cfg(test)]
     let query_shape = ast.query_shape();
+    #[cfg(test)]
     let text_operand_hashes = ast.text_operand_hashes();
-    let sort_fields = ast.sort_fields();
     Ok(BuiltJiraSearchQuery {
         jql,
         kind,
         injected_scope_predicate,
+        #[cfg(test)]
         canonical_caller_jql_hash: sha256_hex(caller_jql.as_bytes()),
         canonical_caller_jql: caller_jql,
+        #[cfg(test)]
         query_shape,
+        #[cfg(test)]
         text_operand_hashes,
-        sort_fields,
     })
 }
 
@@ -489,6 +493,7 @@ impl JqlQueryAst {
         projects
     }
 
+    #[cfg(test)]
     pub(crate) fn query_shape(&self) -> Value {
         json!({
             "filter": self.filter.as_ref().map(JqlExpr::shape),
@@ -496,6 +501,7 @@ impl JqlQueryAst {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn text_operand_hashes(&self) -> Vec<String> {
         let mut hashes = Vec::new();
         if let Some(filter) = &self.filter {
@@ -504,6 +510,7 @@ impl JqlQueryAst {
         hashes
     }
 
+    #[cfg(test)]
     pub(crate) fn sort_fields(&self) -> Vec<Value> {
         self.order_by
             .iter()
@@ -560,6 +567,7 @@ impl JqlExpr {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn collect_text_operand_hashes(&self, hashes: &mut Vec<String>) {
         match self {
             Self::Clause(clause) => clause.collect_text_operand_hashes(hashes),
@@ -571,6 +579,7 @@ impl JqlExpr {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::Clause(clause) => clause.shape(),
@@ -653,6 +662,7 @@ impl JqlClause {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn collect_text_operand_hashes(&self, hashes: &mut Vec<String>) {
         if self.operator == JqlOperator::Contains
             && let JqlOperand::Single(JqlValue::String(value)) = &self.operand
@@ -661,6 +671,7 @@ impl JqlClause {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         json!({
             "type": "clause",
@@ -927,6 +938,7 @@ impl JqlOperator {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape_name(self) -> &'static str {
         self.emit()
     }
@@ -940,6 +952,7 @@ pub(crate) enum JqlOperand {
 }
 
 impl JqlOperand {
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::Single(value) => json!({
@@ -992,6 +1005,7 @@ impl JqlValue {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::Identifier(_) => json!({ "type": "identifier" }),
@@ -1079,6 +1093,7 @@ impl JqlFunctionArg {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::RelativeDate(_) => json!({ "type": "relativeDate" }),

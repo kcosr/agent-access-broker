@@ -25,7 +25,6 @@ pub(crate) const MAX_CONFLUENCE_QUERY_TOKENS: usize = 512;
 pub(crate) const MAX_CONFLUENCE_IN_LIST_VALUES: usize = 100;
 pub(crate) const MAX_CONFLUENCE_STRING_LITERAL_BYTES: usize = 512;
 pub(crate) const MAX_CONFLUENCE_ORDER_TERMS: usize = 5;
-pub(crate) const CONFLUENCE_QUERY_AST_VERSION: u32 = 2;
 
 fn cql_operator_names(field: CqlField) -> Vec<&'static str> {
     CqlOperator::ALL
@@ -170,10 +169,12 @@ pub(crate) struct BuiltConfluenceSearchQuery {
     pub(crate) injected_type_predicate: &'static str,
     /// The caller's query, canonically re-emitted; continuations bind it.
     pub(crate) canonical_caller_cql: String,
+    #[cfg(test)]
     pub(crate) canonical_caller_cql_hash: String,
+    #[cfg(test)]
     pub(crate) query_shape: Value,
+    #[cfg(test)]
     pub(crate) text_operand_hashes: Vec<String>,
-    pub(crate) sort_fields: Vec<Value>,
 }
 
 pub(crate) fn search_authorization(
@@ -316,18 +317,21 @@ pub(crate) fn build_confluence_search_query_for_kind(
         cql.push(' ');
         cql.push_str(&order_by_cql);
     }
+    #[cfg(test)]
     let query_shape = ast.query_shape();
+    #[cfg(test)]
     let text_operand_hashes = ast.text_operand_hashes();
-    let sort_fields = ast.sort_fields();
     Ok(BuiltConfluenceSearchQuery {
         cql,
         kind,
         injected_space_predicate,
+        #[cfg(test)]
         canonical_caller_cql_hash: sha256_hex(caller_cql.as_bytes()),
         canonical_caller_cql: caller_cql,
+        #[cfg(test)]
         query_shape,
+        #[cfg(test)]
         text_operand_hashes,
-        sort_fields,
         injected_type_predicate: content_kind.injected_type_predicate(),
     })
 }
@@ -478,6 +482,7 @@ impl CqlQueryAst {
         spaces
     }
 
+    #[cfg(test)]
     pub(crate) fn query_shape(&self) -> Value {
         json!({
             "filter": self.filter.as_ref().map(CqlExpr::shape),
@@ -485,6 +490,7 @@ impl CqlQueryAst {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn text_operand_hashes(&self) -> Vec<String> {
         let mut hashes = Vec::new();
         if let Some(filter) = &self.filter {
@@ -493,6 +499,7 @@ impl CqlQueryAst {
         hashes
     }
 
+    #[cfg(test)]
     pub(crate) fn sort_fields(&self) -> Vec<Value> {
         self.order_by
             .iter()
@@ -549,6 +556,7 @@ impl CqlExpr {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::Clause(clause) => clause.shape(),
@@ -563,6 +571,7 @@ impl CqlExpr {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn collect_text_operand_hashes(&self, hashes: &mut Vec<String>) {
         match self {
             Self::Clause(clause) => clause.collect_text_operand_hashes(hashes),
@@ -626,6 +635,7 @@ impl CqlClause {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         json!({
             "type": "clause",
@@ -635,6 +645,7 @@ impl CqlClause {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn collect_text_operand_hashes(&self, hashes: &mut Vec<String>) {
         if !self.field.is_text() || self.operator != CqlOperator::Contains {
             return;
@@ -809,6 +820,7 @@ pub(crate) enum CqlOperand {
 }
 
 impl CqlOperand {
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::Single(value) => json!({
@@ -853,6 +865,7 @@ impl CqlValue {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> Value {
         match self {
             Self::Identifier(_) => json!({ "type": "identifier" }),

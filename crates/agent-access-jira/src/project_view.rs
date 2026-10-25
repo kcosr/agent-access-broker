@@ -178,7 +178,7 @@ impl JiraProvider {
         }
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
         Ok(ProviderResult::new(result)
-            .with_audit(json!({"provider":"jira","operation":"project.view","project":input.project,"include":input.include,"credentialMode":request.credential_mode(),"egressProxy":self.backend.egress_proxy_audit(&credential)}))
+            .with_audit(json!({"provider":"jira","operation":"project.view","include":input.include,"credentialMode":request.credential_mode(),"egressProxy":self.backend.egress_proxy_audit(&credential)}))
             .with_upstream(Some(last_status), Some(elapsed_ms(started)))
             .with_object_ids(json!({"project":input.project,"projectId":id})))
     }
