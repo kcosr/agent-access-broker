@@ -226,6 +226,12 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **GitLab draft-note view, delete and publish name their merge request.**
+  Their input schemas now require `iid`, which the actions always needed;
+  callers that followed the published schema were refused as invalid input.
+  Refresh MCP tool discovery to pick up the corrected schemas.
+  ([#70](https://github.com/kcosr/agent-access-broker/pull/70))
+
 - **Confluence space key validation.** Live listing and content access accept
   ordinary space keys with mixed case, a leading digit, or one character.
   Listings no longer fail when they encounter these keys. Resource grants,
