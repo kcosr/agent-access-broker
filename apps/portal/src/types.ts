@@ -831,6 +831,9 @@ export type AuditRecord = {
     type: string;
     tokenClass?: string | null;
     tokenId?: string | null;
+    /** The header and scheme the credential arrived in; a portal browser session records `Cookie` and `cookie`. */
+    tokenHeader?: string;
+    tokenScheme?: string;
     /** Present for attested identities: whether the admitted access path was read-only. */
     readOnlyAccess?: boolean;
     [key: string]: unknown;

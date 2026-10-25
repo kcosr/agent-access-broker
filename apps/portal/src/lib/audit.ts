@@ -443,7 +443,7 @@ const TOKEN_CLASSES = new Map([
  * sign-in. Unknown types and classes show as recorded.
  */
 export function auditIdentitySourceLabel(source: NonNullable<AuditRecord["identitySource"]>): string {
-  if (source.type === "broker_tokens" && source.name === AUDIT_BROWSER_SESSION_SOURCE) return "Browser session";
+  if (auditIsBrowserSession(source)) return "Browser session";
   const type = IDENTITY_SOURCE_TYPES.get(source.type) ?? source.type;
   const tokenClass = source.tokenClass ? TOKEN_CLASSES.get(source.tokenClass) ?? source.tokenClass : null;
   return tokenClass ? `${type} · ${tokenClass}` : type;
@@ -452,6 +452,29 @@ export function auditIdentitySourceLabel(source: NonNullable<AuditRecord["identi
 /** Group IDs to display names, from the policy catalog's subjects. */
 export function auditGroupNames(groups: PolicyCatalogSubject[]): Map<string, string> {
   return new Map(groups.flatMap((group) => (group.groupId && group.displayName ? [[group.groupId, group.displayName] as const] : [])));
+}
+
+/** A display name that replaces an ID in the Summary: known, non-empty and different from the ID. */
+export function auditDisplayName(names: ReadonlyMap<string, string>, id: string): string | null {
+  const name = names.get(id);
+  return name && name !== id ? name : null;
+}
+
+/**
+ * The IDs that Request › Details repeats because display names replaced them
+ * in the Summary (where an ID is otherwise only a hover title): the
+ * principal's, and every group's when any group showed a name.
+ */
+export function auditReplacedIds(
+  record: Pick<AuditRecord, "principal" | "groups">,
+  principalNames: ReadonlyMap<string, string>,
+  groupNames: ReadonlyMap<string, string>
+): { principalId: string | null; groupIds: string[] } {
+  const groups = record.groups ?? [];
+  return {
+    principalId: auditDisplayName(principalNames, record.principal) ? record.principal : null,
+    groupIds: groups.some((group) => auditDisplayName(groupNames, group)) ? groups : []
+  };
 }
 
 /**
@@ -588,12 +611,27 @@ export function auditTokenNames(tokens: Pick<BrokerTokenRecord, "tokenId" | "nam
 /** The identity source name the broker records for portal browser sessions. */
 export const AUDIT_BROWSER_SESSION_SOURCE = "browser-session";
 
+/**
+ * Whether the record came through a portal browser session: the broker's
+ * `browser-session` source of type `broker_tokens`, presented by cookie
+ * (`tokenHeader` "Cookie", `tokenScheme` "cookie"). A configured token source
+ * may share the name, so the name alone is not enough.
+ */
+export function auditIsBrowserSession(source: AuditRecord["identitySource"]): boolean {
+  return (
+    source?.type === "broker_tokens" &&
+    source.name === AUDIT_BROWSER_SESSION_SOURCE &&
+    source.tokenHeader === "Cookie" &&
+    source.tokenScheme === "cookie"
+  );
+}
+
 /** The record's token: its name when the caller's token list has it, otherwise only its ID.
  * `browserSession` marks records made through a portal sign-in rather than an issued token. */
 export function auditTokenLabel(record: Pick<AuditRecord, "identitySource">, names: Map<string, string>) {
   const id = record.identitySource?.tokenId || null;
   if (!id) return { id: null, name: null, browserSession: false };
-  return { id, name: names.get(id) ?? null, browserSession: record.identitySource?.name === AUDIT_BROWSER_SESSION_SOURCE };
+  return { id, name: names.get(id) ?? null, browserSession: auditIsBrowserSession(record.identitySource) };
 }
 
 /** An RFC 3339 timestamp as UTC epoch microseconds (sub-millisecond digits kept), or null. */

@@ -10,6 +10,7 @@ import {
   auditActiveFilterCount,
   auditContinuationParams,
   auditDayGroups,
+  auditDisplayName,
   auditDisplayText,
   auditFiltersProblem,
   auditFiltersSearch,
@@ -18,6 +19,7 @@ import {
   auditGrantRef,
   auditGroupNames,
   auditIdentitySourceLabel,
+  auditIsBrowserSession,
   auditInputDisplay,
   auditInputPreview,
   auditInputs,
@@ -32,6 +34,7 @@ import {
   auditRangeCovering,
   auditRecordPath,
   auditRecordPhase,
+  auditReplacedIds,
   auditScopeRows,
   auditServiceSuggestions,
   auditTokenPath,
@@ -286,7 +289,9 @@ describe("audit record presentation", () => {
     const names = auditTokenNames([{ tokenId: "tok-1", name: "ci-agent" }]);
     expect(auditTokenLabel(record({ identitySource: { name: "broker", type: "broker_tokens", tokenId: "tok-1" } }), names)).toEqual({ id: "tok-1", name: "ci-agent", browserSession: false });
     expect(auditTokenLabel(record({ identitySource: { name: "broker", type: "broker_tokens", tokenId: "deleted" } }), names)).toEqual({ id: "deleted", name: null, browserSession: false });
-    expect(auditTokenLabel(record({ identitySource: { name: "browser-session", type: "broker_tokens", tokenId: "session-1" } }), names)).toEqual({ id: "session-1", name: null, browserSession: true });
+    expect(auditTokenLabel(record({ identitySource: { name: "browser-session", type: "broker_tokens", tokenHeader: "Cookie", tokenScheme: "cookie", tokenId: "session-1" } }), names)).toEqual({ id: "session-1", name: null, browserSession: true });
+    // A configured Bearer source may share the name; its tokens are not browser sessions.
+    expect(auditTokenLabel(record({ identitySource: { name: "browser-session", type: "broker_tokens", tokenHeader: "Authorization", tokenScheme: "Bearer", tokenId: "tok-1" } }), names)).toEqual({ id: "tok-1", name: "ci-agent", browserSession: false });
     expect(auditTokenLabel(record({ identitySource: null }), names)).toEqual({ id: null, name: null, browserSession: false });
   });
 
@@ -459,16 +464,41 @@ describe("audit record summary rows", () => {
   const types = indexResourceTypes(RESOURCE_TYPES);
 
   test("identity sources read as their type and token class, browser sessions by name; unknown values as recorded", () => {
-    const source = (type: string, tokenClass?: string, name = "configured-source") => ({ name, type, ...(tokenClass ? { tokenClass } : {}) });
+    const source = (type: string, tokenClass?: string, name = "configured-source") => ({ name, type, tokenHeader: "Authorization", tokenScheme: "Bearer", ...(tokenClass ? { tokenClass } : {}) });
+    const session = { name: "browser-session", type: "broker_tokens", tokenHeader: "Cookie", tokenScheme: "cookie", tokenClass: "user_manage" };
     expect(auditIdentitySourceLabel(source("trusted_user", "agent_invoke", "trusted_user"))).toBe("Trusted user · Agent invocation");
     expect(auditIdentitySourceLabel(source("forwarded_identity", "agent_invoke"))).toBe("Forwarded identity · Agent invocation");
     expect(auditIdentitySourceLabel(source("broker_tokens", "agent_invoke"))).toBe("Broker token · Agent invocation");
     expect(auditIdentitySourceLabel(source("broker_tokens", "user_manage"))).toBe("Broker token · User management");
     expect(auditIdentitySourceLabel(source("broker_tokens", "admin"))).toBe("Broker token · Administration");
-    expect(auditIdentitySourceLabel(source("broker_tokens", "user_manage", "browser-session"))).toBe("Browser session");
+    expect(auditIdentitySourceLabel(session)).toBe("Browser session");
+    expect(auditIdentitySourceLabel(source("broker_tokens", "agent_invoke", "browser-session"))).toBe("Broker token · Agent invocation");
     expect(auditIdentitySourceLabel(source("static_principals"))).toBe("Static token");
     expect(auditIdentitySourceLabel(source("custom_source", "custom_class"))).toBe("custom_source · custom_class");
     expect(auditIdentitySourceLabel(source("constructor"))).toBe("constructor");
+  });
+
+  test("only the broker's cookie-presented browser-session source is a browser session", () => {
+    const session = { name: "browser-session", type: "broker_tokens", tokenHeader: "Cookie", tokenScheme: "cookie" };
+    expect(auditIsBrowserSession(session)).toBe(true);
+    expect(auditIsBrowserSession({ ...session, tokenHeader: "Authorization", tokenScheme: "Bearer" })).toBe(false);
+    expect(auditIsBrowserSession({ ...session, tokenScheme: "Cookie" })).toBe(false);
+    expect(auditIsBrowserSession({ name: "browser-session", type: "broker_tokens" })).toBe(false);
+    expect(auditIsBrowserSession({ ...session, type: "static_principals" })).toBe(false);
+    expect(auditIsBrowserSession({ ...session, name: "managed" })).toBe(false);
+    expect(auditIsBrowserSession(null)).toBe(false);
+  });
+
+  test("Details repeats IDs only where display names replaced them", () => {
+    const principals = new Map([["alice", "Alice Example"], ["same", "same"]]);
+    const groups = new Map([["users", "All users"]]);
+    expect(auditReplacedIds(record({ principal: "alice", groups: ["users", "ops-oncall"] }), principals, groups)).toEqual({ principalId: "alice", groupIds: ["users", "ops-oncall"] });
+    expect(auditReplacedIds(record({ principal: "sam.lee", groups: ["ops-oncall"] }), principals, groups)).toEqual({ principalId: null, groupIds: [] });
+    expect(auditReplacedIds(record({ principal: "same" }), principals, groups)).toEqual({ principalId: null, groupIds: [] });
+    expect(auditDisplayName(principals, "alice")).toBe("Alice Example");
+    expect(auditDisplayName(principals, "same")).toBeNull();
+    expect(auditDisplayName(new Map([["empty", ""]]), "empty")).toBeNull();
+    expect(auditDisplayName(principals, "unknown")).toBeNull();
   });
 
   test("keys read as sentence-case words with common acronyms in capitals", () => {

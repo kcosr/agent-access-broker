@@ -7,6 +7,7 @@ import { canViewAdmin } from "../../lib/capabilities";
 import { Fragment, useState, type ReactNode } from "react";
 import type { AuditInputValue, AuditRecord } from "../../types";
 import {
+  auditDisplayName,
   auditDisplayText,
   auditGitRefUpdates,
   auditGrantName,
@@ -19,6 +20,7 @@ import {
   auditObjectIdRows,
   auditRecordPath,
   auditRecordPhase,
+  auditReplacedIds,
   auditScopeRows,
   auditTimelineGaps,
   auditTokenLabel,
@@ -118,8 +120,8 @@ function RecordTime({ timestamp }: { timestamp: string }) {
   );
 }
 
-/** A display name with its ID on hover, or the ID itself when the name is unknown. */
-function Named({ id, name }: { id: string; name: string | undefined }) {
+/** A display name with its ID on hover (Details repeats the ID), or the ID itself when no name replaces it. */
+function Named({ id, name }: { id: string; name: string | null }) {
   return name ? <span title={id}>{name}</span> : <span className="wb-mono" title={id}>{id}</span>;
 }
 
@@ -145,6 +147,7 @@ function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHr
   const management = auditManagement(record);
   const refUpdates = auditGitRefUpdates(record);
   const inputs = auditInputs(record);
+  const replaced = auditReplacedIds(record, principalNames, groupNames);
   // The header carries the decision, reason code and execution context.
   const outcome = [
     phase ? { label: "Phase", value: <Mono>{phase}</Mono> } : null,
@@ -184,7 +187,7 @@ function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHr
         <KeyValue
           labelWidth={132}
           items={[
-            { label: "Principal", value: <Named id={record.principal} name={principalNames.get(record.principal)} /> },
+            { label: "Principal", value: <Named id={record.principal} name={auditDisplayName(principalNames, record.principal)} /> },
             identity ? { label: "Identity source", value: <span title={identity.name}>{auditIdentitySourceLabel(identity)}</span> } : null,
             typeof identity?.readOnlyAccess === "boolean" ? { label: "Access path", value: identity.readOnlyAccess ? "Read-only" : "Full access" } : null,
             token.id
@@ -216,7 +219,7 @@ function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHr
                       {record.groups.map((group, index) => (
                         <Fragment key={group}>
                           {index ? ", " : null}
-                          <Named id={group} name={groupNames.get(group)} />
+                          <Named id={group} name={auditDisplayName(groupNames, group)} />
                         </Fragment>
                       ))}
                     </span>
@@ -268,7 +271,9 @@ function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHr
               { label: "Node", value: <Mono>{record.nodeId}</Mono> },
               record.configGeneration != null ? { label: "Config generation", value: <span className="wb-tabular">{record.configGeneration}</span> } : null,
               record.policyGeneration != null ? { label: "Policy generation", value: <span className="wb-tabular">{record.policyGeneration}</span> } : null,
-              record.principalSubject ? { label: "Principal subject", value: <Mono>{record.principalSubject}</Mono> } : null
+              replaced.principalId ? { label: "Principal ID", value: <Mono>{replaced.principalId}</Mono> } : null,
+              record.principalSubject ? { label: "Principal subject", value: <Mono>{record.principalSubject}</Mono> } : null,
+              replaced.groupIds.length ? { label: "Group IDs", value: <Mono>{replaced.groupIds.join(", ")}</Mono> } : null
             ]}
           />
         </Disclosure>

@@ -81,6 +81,13 @@ async function openRecord(page: Page, record: AuditRecord) {
   return { drawer, section, inputs: section("Inputs"), errors };
 }
 
+/** A section's visible rows as label → value. */
+async function rows(section: Locator) {
+  const labels = await section.getByRole("term").allTextContents();
+  const values = await section.getByRole("definition").allTextContents();
+  return Object.fromEntries(labels.map((label, index) => [label, values[index]]));
+}
+
 /** The drawer's section headings, in order. */
 function headings(drawer: Locator) {
   return drawer.getByRole("heading", { level: 3 }).allTextContents();
@@ -197,14 +204,38 @@ test("Request names each scope and object ID and keeps identifiers under a colla
   await request.getByText("Details", { exact: true }).click();
   await expect(request.getByRole("term")).toHaveText([
     "Time", "Confluence space", "Page ID",
-    "Exact time", "Broker request ID", "Agent request ID", "Audit ID", "Node", "Config generation", "Policy generation", "Principal subject"
+    "Exact time", "Broker request ID", "Agent request ID", "Audit ID", "Node", "Config generation", "Policy generation",
+    "Principal ID", "Principal subject", "Group IDs"
   ]);
   await expect(values).toHaveText([
     /./, "DOCS", "123456789",
     "2026-10-25 18:36:20.518405 UTC", CONFLUENCE_PAGE_VIEW.brokerRequestId, "agent-confluence-page-view", "confluence-page-view",
-    "broker-01.example.internal", "1", "150", "alice@example.test"
+    "broker-01.example.internal", "1", "150", "alice", "alice@example.test", "users"
   ]);
   expect(errors).toEqual([]);
+});
+
+test("Details opens from the keyboard and repeats principal and group IDs only where names replaced them", async ({ page }) => {
+  const openDetails = async (record: AuditRecord) => {
+    const { section } = await openRecord(page, record);
+    const request = section("Request");
+    await request.getByText("Details", { exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(request.getByText("Broker request ID", { exact: true })).toBeVisible();
+    return rows(request);
+  };
+  // Named principal and group: both IDs are repeated.
+  expect(await openDetails(CONFLUENCE_PAGE_VIEW)).toMatchObject({ "Principal ID": "alice", "Group IDs": "users" });
+  // One named group among unnamed ones: every group ID, comma-joined.
+  expect(await openDetails(JIRA_ISSUE_CREATE)).toMatchObject({ "Principal ID": "alice", "Group IDs": "users, ops-oncall" });
+  // An unnamed principal already shows its ID.
+  const management = await openDetails(BROKER_GRANT_UPDATE);
+  expect(management).toMatchObject({ "Group IDs": "admins" });
+  expect(management).not.toHaveProperty("Principal ID");
+  // Nothing was replaced: neither row.
+  const unnamed = await openDetails(JIRA_COMMENT_VIEW);
+  expect(unnamed).not.toHaveProperty("Principal ID");
+  expect(unnamed).not.toHaveProperty("Group IDs");
 });
 
 test("a management record keeps its target rows and shows its phase in Outcome", async ({ page }) => {

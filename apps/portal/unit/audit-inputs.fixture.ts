@@ -26,7 +26,7 @@ function record(id: string, requestId: string, service: string, action: string, 
 }
 
 const NODE = "broker-01.example.internal";
-const TRUSTED_USER = { name: "trusted_user", type: "trusted_user", tokenClass: "agent_invoke", namespace: "managed_linux", readOnlyAccess: true };
+const TRUSTED_USER = { name: "trusted_user", type: "trusted_user", tokenHeader: "x-agent-access-user", tokenScheme: "asserted", tokenClass: "agent_invoke", namespace: "managed_linux", readOnlyAccess: true };
 
 /** An allowed read: a scope, a provider object ID, outcome details and a principal subject. */
 export const CONFLUENCE_PAGE_VIEW = record("confluence-page-view", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e1f2a38", "confluence", "page.view", [
@@ -61,7 +61,7 @@ export const JIRA_SEARCH = record("jira-search", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e
   matchedGrant: { grantId: "ops-readers", subject: "group:users", priority: 100 },
   credentialMode: "service",
   executionContext: "default",
-  identitySource: { name: "managed-agents", type: "broker_tokens", tokenClass: "agent_invoke", tokenId: "4c1d8e2a-6b3f-4a5e-9d7c-1b2a3c4d5e6f" },
+  identitySource: { name: "managed-agents", type: "broker_tokens", tokenHeader: "Authorization", tokenScheme: "Bearer", tokenClass: "agent_invoke", tokenId: "4c1d8e2a-6b3f-4a5e-9d7c-1b2a3c4d5e6f" },
   configGeneration: 1,
   policyGeneration: 150,
 });
@@ -93,7 +93,11 @@ export const JIRA_ISSUE_CREATE = record("jira-issue-create", "5f0c2c3e-6a4b-4a8e
 export const JIRA_COMMENT_VIEW = record("jira-comment-view", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e1f2a33", "jira", "comment.view", [
   { input: "issue", label: "Issue", value: "OPS-42" },
   { input: "commentId", label: "Comment ID", value: "18446744073709551615" },
-]);
+], {
+  // Neither the principal nor the group has a catalog name, so the Summary already shows their IDs.
+  principal: "sam.lee",
+  groups: ["ops-oncall"],
+});
 
 export const GITLAB_ISSUE_SEARCH = record("gitlab-issue-search", "5f0c2c3e-6a4b-4a8e-9a55-0d4c8e1f2a34", "gitlab", "issue.search", [
   { input: "project", label: "Project", value: "platform/api" },
@@ -117,7 +121,7 @@ export const BROKER_GRANT_UPDATE = record("broker-grant-update", "5f0c2c3e-6a4b-
   principal: "sam.lee",
   groups: ["admins"],
   providerAudit: { management: { operation: "admin.policy.grants.update", target: { grantId: "ops-readers" }, targetService: "jira", phase: "completed" } },
-  identitySource: { name: "browser-session", type: "broker_tokens", tokenClass: "user_manage", tokenId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" },
+  identitySource: { name: "browser-session", type: "broker_tokens", tokenHeader: "Cookie", tokenScheme: "cookie", tokenClass: "user_manage", tokenId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" },
   configGeneration: 1,
   policyGeneration: 151,
 });
