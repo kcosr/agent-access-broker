@@ -1960,7 +1960,7 @@ token or OAuth lease, even if policy then denies the call with no credential
 mode; absent when only service credentials are used or for management and
 authentication records), `decision`, `reasonCode`, `upstreamStatus`,
 `upstreamDurationMs`, `objectIds`, `identitySource`, optional `callerId`, `source`,
-`executionContext`, `searchAuthorization` (search actions), and
+`executionContext`, `searchAuthorization` (search actions), optional `requestAudit`, and
 `providerAudit`. When present, `matchedGrant` carries `subject`, `priority`,
 `resources` (the grant's resource selection), `executionContexts`, and optional
 grant metadata. TOML-backed grants include `configIndex`; managed-store grants
@@ -1968,6 +1968,18 @@ include `grantId` and `grantVersion`; all runtime-selected grants include the
 `policyGeneration` for the snapshot used by the authorization decision. Search
 records carry every grant of the matched band in
 `searchAuthorization.matchedGrants`.
+
+`requestAudit` is a host-owned, at-most-16-KiB snapshot of explicitly declared
+original-input facts for native and accepted command actions. The host prepares
+selectors and sensitivity checks with each published contract, then performs
+basic representation checks synchronously at successful invocation preparation.
+Multipart actions wait for body metadata admission. Initial credential and
+preparation failures receive no snapshot; subsequent owned execution and stream
+finalization reuse the captured value. Provider audit JSON cannot replace it.
+The snapshot contains event-time presentation metadata and a schema/declaration
+digest; it renders without a current-catalog lookup. Missing historical fields
+are not backfilled. See [recorded request details](audit-inputs.md) for selection,
+disclosure, sampling, integer encoding and lifecycle limits.
 
 `callerId`, when present, names the authenticated trusted caller. It is separate
 from the end principal and `identitySource`; an ordinary Broker token retains its

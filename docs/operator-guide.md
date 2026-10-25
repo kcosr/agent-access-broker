@@ -836,6 +836,16 @@ surface is added.
 
 ## Audit operations
 
+Native providers and accepted command actions retain bounded original-input
+facts in `requestAudit`: identifiers, supplied titles and queries, email/path
+metadata, controls and admitted upload metadata. Bodies, credentials, arbitrary
+payloads and opaque token values remain excluded. Read the
+[capture and disclosure contract](audit-inputs.md) before assigning audit access:
+all authorized readers receive complete matching records, including raw-only
+fields, and service managers need no upstream grant to read those records.
+Truncation is a storage bound, not anonymization. Failed initial credential
+preparation has no new input snapshot; later failures may retain one.
+
 Agent-token issuance audit includes the authenticated actor, target owner,
 token ID/class/name/expiry, allowed services and contexts, and
 canonical per-service action/resource restrictions. It never includes the raw
@@ -1075,8 +1085,10 @@ verification, and OAuth callbacks stay audited when they succeed. See
 audited. Where per-read access records are required, keep access logs at the
 fronting proxy.
 
-Audit records intentionally omit upstream secret material, request bodies that
-may contain secrets, and raw broker-token values. They do include principal,
+Audit records intentionally omit upstream secret material, body/payload values,
+and raw broker-token values. Reviewed request strings such as queries and titles
+can contain confidential text or mistakenly pasted secrets; they are retained
+under the declared limits. Records also include principal,
 groups, source, service, action, decision, reason code, matched policy grant,
 resource scopes, credential mode, and provider-specific sanitized metadata.
 Git gateway header denials can appear in two shapes. Pre-authentication

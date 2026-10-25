@@ -134,6 +134,14 @@ actions and exposes typed wrappers for supported services.
 
 ## Invocation admission and discovery
 
+Request audit is a host-owned bounded projection of explicitly reviewed original
+inputs. Keep declarations and semantic inventories complete when changing native
+schemas; never capture new fields automatically. Preserve successful-preparation
+timing and the multipart body-admission exception, separate requested facts from
+effective/observed provider audit, and keep raw-only facts out of Summary. The
+compiler checks structural paths and sensitivity, not input enum/pattern/range
+validity. See `docs/audit-inputs.md` for limits and full-record disclosure.
+
 Keep one FIFO rate queue per principal/service across tokens and transports.
 Waiting retains existing request permits and charges quota only at admission;
 post-admission denials still count. Resolve `max_wait` from service, default,

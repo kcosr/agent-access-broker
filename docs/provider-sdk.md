@@ -550,6 +550,31 @@ and SHA-256. At invocation the provider still checks that each part matches the
 metadata it admitted. The default `authorize_body_parts` denies every multipart
 request with `body_malformed`.
 
+### Request audit declarations
+
+Attach an `AuditInputProjection` with `ActionDescriptor::audit_inputs` to opt in
+to host-owned request capture. `AuditInputRule::value` and `values` select scalar
+and list representations; `presence`, `item_count`, `utf8_byte_count`, `records`
+and `omit` express bounded summaries, explicit record children and exclusions.
+Select the kind, role and display placement; string-bearing value rules also
+require `max_bytes` and `overflow`. Declarations without rules are invalid;
+omitting the declaration leaves capture disabled.
+
+The descriptor validator checks the same rule model and bounded schema path/
+sensitivity traversal as the host compiler. It does not validate invocation
+enums, patterns or ranges. The host prepares a plan once, captures original
+inputs after successful preparation, and retains that bounded snapshot across
+existing owned-operation finalization. Multipart actions defer capture until
+body metadata admission. Providers cannot replace the top-level `requestAudit`
+using `ProviderResult::with_audit` or `ProviderError::with_audit`.
+
+Use explicit reviewed selectors, not whole objects or raw input clones. Keep
+effective and observed facts in provider audit, and avoid duplicating requested
+values there. The SDK's `host::prepare_audit_inputs` and `host::AuditInputPlan`
+are host cooperation ports, not native-provider execution helpers. See
+[recorded request details](audit-inputs.md) for the wire contract, limits,
+sensitivity veto, disclosure policy and presentation semantics.
+
 ## Authority and credentials
 
 ### The admitted request
@@ -2041,7 +2066,8 @@ use agent_access_provider::deps::http::Method;
 use agent_access_provider::deps::reqwest::Response;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BuildContext,
+    ActionDescriptor, AuditInputProjection, AuditInputRule, AuditOverflow, AuditValueKind,
+    BackendConfig, BackendRegistration, BodyReadError, BuildContext,
     ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, Provider,
     ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
     ProviderReasonDefinition, ProviderResult, ReasonCode, ResourceScopeCapabilities,
@@ -2189,6 +2215,14 @@ pub fn notes_descriptor() -> ServiceDescriptor {
             )
             .read_only()
             .scope("notebook")
+            .audit_inputs(AuditInputProjection::new([
+                AuditInputRule::value("notebook", "Notebook", "/notebook")
+                    .kind(AuditValueKind::Identifier).max_bytes(1024)
+                    .overflow(AuditOverflow::Omit),
+                AuditInputRule::value("note", "Note", "/note")
+                    .kind(AuditValueKind::Identifier).max_bytes(1024)
+                    .overflow(AuditOverflow::Omit),
+            ]))
             .credential_modes(["service", "per_user"]),
         ])
         .with_credentials(

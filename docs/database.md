@@ -1053,6 +1053,13 @@ there is no audit database; records go to size-rotated JSON Lines files. See
 [configuration](configuration.md#audit) for the settings and
 [design](design.md#audit-storage-backends) for the writer model.
 
+The optional `requestAudit` v1 envelope is stored in the existing record JSON in
+both backends; it adds no table column or managed-store migration. Its separate
+16 KiB limit bounds captured inputs. SQLite indexes approved retained string and
+identifier values after identity/authority terms and before provider facts, within
+the existing text budget. Historical record JSON is never rewritten or enriched
+from current descriptors. See [recorded request details](audit-inputs.md).
+
 ### Files and ownership
 
 - The parent directory must be broker-owned and owner-only (`0700`); startup

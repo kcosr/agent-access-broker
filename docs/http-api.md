@@ -1795,14 +1795,27 @@ Exact-match values are at most 256 bytes without control characters. Results
 are newest first by record timestamp, then insertion order. The full-text index
 covers the principal, subject, groups, identity source and token ID, source
 addresses, service, action, reason code, execution context, resource scopes,
-object IDs, matched grants and subjects, search scopes, and `providerAudit`
-string values (not hashes). Filters so long that their cursor would exceed 4096
+object IDs, matched grants and subjects, search scopes, explicitly captured
+`requestAudit` strings/identifiers, and `providerAudit` string values (not hashes).
+Request labels, digests, summaries and numeric controls are not indexed. The
+existing 32 KiB index budget can omit retained text; unicode61 token matching is
+not arbitrary substring matching. Filters so long that their cursor would exceed 4096
 characters are rejected with `input_invalid`.
 
 **Response.** A successful list returns the management envelope with
 `result = {"items": [...], "nextCursor": "..." | null}`. Each item is the stored
 record exactly as written (the JSONL line). `nextCursor` is `null` on the last
 page.
+
+**Recorded inputs.** A record may include top-level `requestAudit` v1 with the
+declaration digest, event-time field metadata, typed values/statuses and omission
+counters. It is unchanged across admin, manager, self-service, CLI JSON and
+copy/download surfaces. Its `complete`/`partial`/`unavailable` status describes
+capture, not execution. Large integer-backed values use a decimal string with
+`encoding: "decimalInteger"`; preserve that spelling without JavaScript numeric
+conversion. Missing details do not prove that no inputs were supplied. The
+management route's `audit_record_schema` describes the shape; see the
+[complete wire and disclosure contract](audit-inputs.md#stored-version-1).
 
 **Cursors.** A cursor is opaque base64url JSON of at most 4096 characters. It
 holds the route, the caller's principal ID, the audit `database_id`, the first

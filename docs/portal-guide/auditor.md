@@ -54,6 +54,16 @@ loads current results; **Load more** continues through older matching records.
 
 ## Read an outcome and correlate a request
 
+Native and command records with a captured snapshot begin with **Request
+details**. Targets, supplied titles/queries and controls are requested facts;
+**Fields supplied** does not prove a change was applied. Expand **Additional
+request details** or a long value to see the retained information. Truncation and
+sample omissions are labeled explicitly; Copy returns the exact retained text.
+Raw-only fields remain available in **Raw**, and a missing snapshot is not a claim
+that the action had no inputs. The same view appears in personal **Activity**.
+Check Outcome separately, especially for uncertain writes. See
+[recorded request details](../audit-inputs.md).
+
 1. On the drawer's **Summary** tab, inspect **Decision**, **Reason code**, and
    **Phase**. For an invocation, also inspect **Matched grant**,
    **Execution context**, and **Credential mode** when present.

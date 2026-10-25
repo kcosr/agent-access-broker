@@ -183,7 +183,10 @@ services in the portal. Users review their access and manage their own credentia
 and agent tokens. A dedicated token creation page reuses the grant builder’s
 read-only and write-capable action columns, with a live access preview and
 copy-ready HTTP MCP client setup after issuance. Auditors investigate recorded
-activity.
+activity. Native and accepted command actions expose reviewed request details
+such as targets, titles, queries and controls, with bounded capture and explicit
+omissions. [Recorded request details](docs/audit-inputs.md) explains what audit
+readers can see and how requested facts differ from outcomes.
 
 <table>
   <tr>

@@ -232,6 +232,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures-util",
+ "jsonschema",
  "regex",
  "reqwest",
  "serde",
@@ -251,6 +252,7 @@ dependencies = [
  "agent-access-provider",
  "async-trait",
  "futures-util",
+ "jsonschema",
  "reqwest",
  "serde",
  "serde_json",
@@ -330,9 +332,11 @@ version = "0.2.0"
 dependencies = [
  "agent-access-provider",
  "async-trait",
+ "jsonschema",
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
  "url",
 ]
 
@@ -369,6 +373,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "encoding_rs",
+ "jsonschema",
  "reqwest",
  "serde",
  "serde_json",
@@ -387,6 +392,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
+ "jsonschema",
  "percent-encoding",
  "regex",
  "reqwest",

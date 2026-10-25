@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Audit input retention and layout.** Native actions now retain reviewed,
+  bounded supplied queries, titles, email/path and upload metadata in
+  `requestAudit`, visible to every reader of the matching complete record.
+  Requested duplicates and query hashes are removed from new `providerAudit`
+  records; effective and observed facts remain. Collections sample 20 positions.
+  Update audit consumers to the [recorded-input contract](docs/audit-inputs.md).
+  Accepted command audit declarations require a supporting binary or a
+  pre-upgrade backup for rollback. Downstream `AuditRecord` and `ApiActionSpec`
+  struct literals must supply their new optional audit fields.
+
 - **Uploaded import documents add a managed-store migration.** Back up before
   applying `032_imported_source_documents` and upgrade the Broker, CLI and
   portal together. Existing imports are unchanged; rollback across this schema
@@ -69,6 +79,11 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Formatted request details.** Audit and Activity show declared targets,
+  requested changes and controls with explicit truncation/omission states.
+  SDK builders and command manifests share one bounded capture contract;
+  command refresh reviews and quarantines declaration changes.
 
 - **Swagger imports, document uploads and shared OpenAPI request support.** Swagger 2.0 JSON
   and OpenAPI 3.1 JSON share reviewed actions, Basic credentials and scalar
@@ -210,6 +225,9 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- **GitLab draft-note discovery.** View, delete and publish input schemas now
+  declare the parent merge-request `iid` already required by invocation.
 
 - **Confluence space key validation.** Live listing and content access accept
   ordinary space keys with mixed case, a leading digit, or one character.

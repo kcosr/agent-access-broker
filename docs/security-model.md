@@ -795,9 +795,14 @@ Agent Access Broker applies these controls in the request path:
   companions, whole-result Markdown, arbitrary property values, pagination
   tokens, converted provider-native content, mutation readback bodies, parser
   excerpts, extracted links, raw credentials, payload bytes, draft handles,
-  draft body/title values, attachment filenames, and attachment hashes are
-  excluded from audit, tracing, logs, errors, object identifiers, and metric
-  names or labels. Safe requested/effective format names, byte counts,
+  and draft body values are excluded from audit, tracing, logs, errors, object
+  identifiers, and metric names or labels. Bounded `requestAudit` declarations
+  intentionally retain supplied titles (including draft titles), queries,
+  identifiers, account/email/path metadata, controls and admitted upload
+  filenames. They permit reviewed requested-secret presence, never secret
+  values, lengths or hashes. Existing observed download receipts retain their
+  separate metadata/checksum contract. These audit-only allowances do not
+  broaden traces, logs, errors, result or object-ID contracts. Safe requested/effective format names, byte counts,
   conversion state, stable outcome categories, and attribution metadata may be
   recorded; audit construction does not receive rendered strings to derive
   those values. Every management call is audited, including denials and
@@ -812,9 +817,13 @@ Agent Access Broker applies these controls in the request path:
   through `/v1/admin/audit/*`, `/v1/audit/*`, the matching CLI commands, and the
   portal. Records contain principal IDs, groups, source addresses, grant
   details, and resource identifiers, and every reader sees complete records;
-  tiers differ only in which records they see. Global admins and auditors see every record.
+  tiers differ only in which records they see. Captured query/title/email and
+  other strings may contain confidential text or mistakenly pasted secrets;
+  truncation is not anonymization and there is no general DLP guarantee.
+  Raw-only presentation is not redaction. Global admins and auditors see every record.
   Service policy managers see the full records of every principal for the
-  services they manage at request time, including admin actions on those
+  services they manage at request time, without needing upstream resource
+  grants, including admin actions on those
   services (manager assignments, credential and service-limit changes), never
   records without a service scope (users' own token, credential, and login
   activity). Managed users with self-service enabled see only records whose
@@ -1066,7 +1075,10 @@ HTTP exposes JSON actions and passes inline inputs through the canonical action
 schema, including sensitive fields. Such inputs and deliberately issued output
 credentials can enter model/client history. Local stdio MCP provides filesystem
 request and secret sources when needed. The SDK's raw-message tracing is disabled
-by a hard log filter; Broker audit/logging does not record MCP arguments.
+by a hard log filter; Broker logging does not record MCP arguments. Native and
+accepted command calls may retain only their reviewed original-input projection
+in durable audit, regardless of invocation transport. External upstream MCP
+imports do not acquire request-input capture. See [recorded inputs](audit-inputs.md).
 Cancellation and disconnected responses cannot establish that a dispatched
 mutation was rolled back. Inspect the recorded outcome before retrying.
 
