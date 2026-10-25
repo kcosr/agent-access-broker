@@ -658,6 +658,7 @@ mod tests {
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(!control.dispatched());
         assert!(!control.completed());
+        assert!(audit(&dir).get("requestAudit").is_none());
         assert_eq!(
             response.envelope.result.unwrap()["executionState"],
             "not_dispatched"

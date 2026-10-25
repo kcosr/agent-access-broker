@@ -3805,6 +3805,23 @@ struct CompletedStreamProvider;
 struct FailingStreamProvider;
 struct PendingStreamProvider;
 
+fn assert_stream_request_audit_preserved(records: &[Value], terminal_phase: &str) {
+    let started = records
+        .iter()
+        .find(|record| record["providerAudit"]["streamPhase"] == "started")
+        .expect("started record");
+    let terminal = records
+        .iter()
+        .find(|record| record["providerAudit"]["streamPhase"] == terminal_phase)
+        .expect("terminal record");
+    let snapshot = started.get("requestAudit").expect("prepared snapshot");
+    assert_eq!(snapshot["version"], 1);
+    assert_eq!(snapshot["fields"][0]["key"], "project");
+    assert_eq!(snapshot["fields"][0]["value"], "TEST");
+    assert!(!snapshot.to_string().contains("download"));
+    assert_eq!(terminal.get("requestAudit"), Some(snapshot));
+}
+
 impl agent_access_provider::test_support::DescribedProvider for MissingStreamHandleProvider {
     fn descriptor(&self) -> ServiceDescriptor {
         agent_access_fake::fake_descriptor()
@@ -4219,6 +4236,7 @@ async fn required_stream_appends_terminal_failure_audit() {
     let phases = stream_phase_counts(&records);
     assert_eq!(phases.get("started"), Some(&1));
     assert_eq!(phases.get("failed"), Some(&1));
+    assert_stream_request_audit_preserved(&records, "failed");
 }
 
 #[tokio::test]
@@ -4268,6 +4286,7 @@ async fn required_stream_appends_exactly_one_completed_terminal_audit() {
         .unwrap();
     assert_eq!(started["brokerRequestId"], completed["brokerRequestId"]);
     assert_ne!(started["auditId"], completed["auditId"]);
+    assert_stream_request_audit_preserved(&records, "completed");
 }
 
 #[tokio::test]
@@ -4303,6 +4322,7 @@ async fn required_stream_drop_appends_exactly_one_canceled_terminal_audit() {
     assert_eq!(phases.get("started"), Some(&1));
     assert_eq!(phases.get("canceled"), Some(&1));
     assert_eq!(phases.values().sum::<usize>(), 2);
+    assert_stream_request_audit_preserved(&records, "canceled");
 }
 
 #[tokio::test]
