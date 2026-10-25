@@ -1,3 +1,5 @@
+import type { AuditInputRule, RequestAuditV1 } from "./audit-request-types";
+
 export type ThemeMode = "light" | "dark";
 
 export type TokenTtlPolicy = {
@@ -621,6 +623,7 @@ export type PolicyCatalogSubject = {
 export type PolicyScopeCatalog = { resourceType: ResourceType; selectors: string[] };
 
 export type PolicyActionCatalog = {
+  auditInputs?: AuditInputRule[];
   available?: boolean;
   unavailableReason?: string;
   action: string;
@@ -827,6 +830,7 @@ export type AuditRecord = {
   } | null;
   source?: { listener?: string; remote?: string; proxyChain?: string[]; [key: string]: unknown } | null;
   executionContext?: string | null;
+  requestAudit?: RequestAuditV1 | { version: number; [key: string]: unknown } | null;
   providerAudit?: Record<string, unknown> | null;
   configGeneration?: number | null;
   policyGeneration?: number | null;

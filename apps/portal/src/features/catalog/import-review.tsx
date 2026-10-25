@@ -1,3 +1,4 @@
+import { CommandAuditInputs } from "./import-audit-inputs";
 import { useSession } from "../../app/session";
 import { canViewAdmin, canWriteAdmin } from "../../lib/capabilities";
 import { AdminButton } from "../../components/admin-access";
@@ -654,6 +655,7 @@ function ReviewRow({
       <OperationDetails definition={row.tool.definition} />
       <p className="pt-prose wb-small">Output: {row.tool.definition.download ? "File download" : "JSON"}</p>
       {command ? <ResourcesCheckedBy definition={row.tool.definition} types={command.types} caveatId={command.caveatId} /> : null}
+      {command ? <CommandAuditInputs definition={row.tool.definition} accepted={row.existing?.definition} preview /> : null}
       <LongText text={row.tool.definition.description} subject={source} />
       {row.reason ? <p className="pt-prose wb-small">{row.reason}</p> : null}
       <ScopedMcpWarningText warning={row.scopedMcpWarning} />

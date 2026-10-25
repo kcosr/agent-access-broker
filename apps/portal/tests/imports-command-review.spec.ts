@@ -503,3 +503,47 @@ for (const [before, after] of [[false, true], [true, false]] as const) {
     expect(api.errors).toEqual([]);
   });
 }
+
+test("command audit declarations show accepted and proposed selectors without invocation values", async ({ page }) => {
+  const data = commandRefreshed();
+  const prior = data.service.actions[0];
+  const next = data.preview!.manifest.tools[0];
+  const rule = { key: "query", label: "Requested query", pointer: "/query", capture: "value", shape: "scalar", kind: "query", maxBytes: 1024, overflow: "prefix", role: "fact", display: "primary" };
+  prior.definition.annotations = { command: { auditInputs: [rule] } };
+  next.definition.annotations = { command: { auditInputs: [{ ...rule, maxBytes: 4096 }, { key: "body", pointer: "/body", capture: "omit" }, { key: "files", pointer: "/files", capture: "records", kind: "records", label: "Files", role: "fact", display: "detail", fields: [{ ...rule, key: "name", label: "Filename", pointer: "/name", kind: "text" }] }] } };
+  const api = await mockCommandImportApi(page, data);
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing/import`);
+  await page.getByRole("button", { name: "Review preview", exact: true }).click();
+  const row = actionRow(page, "issue.view");
+  await expect(row.getByRole("checkbox", { name: "Accept issue.view", exact: true })).not.toBeChecked();
+  await row.getByText("Audit inputs", { exact: true }).click();
+  await expect(row).toContainText("Unlisted inputs are omitted");
+  await expect(row).toContainText("including service managers");
+  await expect(row).toContainText("Audit declaration changed");
+  await expect(row.getByRole("list", { name: "Audit declaration changes", exact: true })).toContainText("Changed: Requested query");
+  await expect(row.getByRole("table", { name: "Accepted audit inputs", exact: true })).toContainText("1024 bytes / prefix");
+  const proposed = row.getByRole("table", { name: "Proposed audit inputs", exact: true });
+  await expect(proposed).toContainText("4096 bytes / prefix");
+  await expect(proposed).toContainText("scalar / query");
+  await expect(proposed).toContainText("/files [each item]");
+  await expect(proposed).toContainText("/name");
+  await expect(proposed).toContainText("/body");
+  await expect(proposed).not.toContainText("inputSchema");
+  expect(api.errors).toEqual([]);
+});
+
+test("installed command action details retain the accepted audit declaration", async ({ page }) => {
+  const data = commandAccepted();
+  const action = data.service.actions.find(action => action.definition.action === "issue.search")!;
+  action.definition.annotations = { command: { auditInputs: [{ key: "query", label: "Requested query", pointer: "/query", capture: "value", shape: "scalar", kind: "query", maxBytes: 4096, overflow: "prefix", role: "fact", display: "primary" }] } };
+  const api = await mockCommandImportApi(page, data);
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/ticketing`);
+  await page.getByRole("table", { name: "Ticketing actions", exact: true }).getByRole("link", { name: "issue.search", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Action issue.search", exact: true });
+  await drawer.getByText("Audit inputs", { exact: true }).click();
+  const table = drawer.getByRole("table", { name: "Accepted audit inputs", exact: true });
+  await expect(table).toContainText("/query");
+  await expect(table).toContainText("4096 bytes / prefix");
+  await expect(drawer.getByRole("table", { name: "Proposed audit inputs", exact: true })).toHaveCount(0);
+  expect(api.errors).toEqual([]);
+});

@@ -1,3 +1,4 @@
+import { CommandAuditInputs } from "./import-audit-inputs";
 import { AdminIconButton, AdminButton } from "../../components/admin-access";
 // A service page's Actions tab: every action from the policy catalog; for an
 // imported service, every accepted action record with its status, OpenAPI
@@ -583,6 +584,7 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
           </p>
         </DrawerSection>
       ) : null}
+      {check && open.record ? <DrawerSection title="Request audit"><CommandAuditInputs definition={open.record.definition} /></DrawerSection> : null}
       {inputSchema || open.record ? (
         <DrawerSection title="Schemas">
           {inputSchema ? (

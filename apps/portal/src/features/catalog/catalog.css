@@ -274,3 +274,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.pt-import-audit-scroll { overflow-x: auto; max-width: 100%; margin: 10px 0; }
+.pt-import-audit-table { width: 100%; border-collapse: collapse; font-size: var(--wb-fs-12); text-align: left; }
+.pt-import-audit-table caption { text-align: left; font-weight: var(--wb-fw-strong); padding: 6px 0; }
+.pt-import-audit-table th, .pt-import-audit-table td { padding: 7px; vertical-align: top; border-bottom: 1px solid var(--wb-border); overflow-wrap: anywhere; min-width: 80px; }
+.pt-import-audit-table thead { color: var(--wb-muted); }

@@ -1,3 +1,5 @@
+import { AuditAttachmentOutcomes, AuditExecutionDetails, AuditRequestDetails } from "./audit-request";
+import { auditOutcomeWarning } from "../../lib/audit-request";
 import { auditResourceCompletionMissing, auditResourcePresentation } from "../../lib/audit-resources";
 import { useResourceTypes } from "../../lib/resource-types";
 import { AuditResourceDetails } from "./audit-resources";
@@ -111,6 +113,8 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
     : [];
   return (
     <>
+      {auditOutcomeWarning(record) ? <div className="pt-audit-drawer-pad"><Banner tone="warning" title="Outcome unverified">{auditOutcomeWarning(record)}</Banner></div> : null}
+      <AuditRequestDetails key={record.auditId} record={record} />
       <AuditResourceDetails record={record} />
       <DrawerSection title="Outcome">
         <KeyValue
@@ -119,28 +123,10 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
             { label: "Decision", value: <Badge tone={presentation?.outcome.tone ?? decision.tone} icon={presentation?.outcome.icon ?? decision.icon}>{presentation?.outcome.label ?? decision.label}</Badge> },
             record.reasonCode ? { label: "Reason code", value: <Mono>{record.reasonCode}</Mono> } : null,
             phase ? { label: "Phase", value: <Mono>{phase}</Mono> } : null,
-            upstream ? { label: "Upstream", value: <span className="wb-tabular">{upstream}</span> } : null,
-            grant
-              ? {
-                  label: "Matched grant",
-                  value: (
-                    <>
-                      {grantRef && canOpenGrant ? (
-                        <AppLink className="wb-link wb-mono" href={paths.grant(grantRef)} title="Open this grant in Policies">
-                          {auditGrantName(grant)}
-                        </AppLink>
-                      ) : (
-                        <Mono>{auditGrantName(grant)}</Mono>
-                      )}
-                      {grantExtra.length ? <span className="wb-muted">· {grantExtra.join(" · ")}</span> : null}
-                    </>
-                  )
-                }
-              : null,
-            record.executionContext ? { label: "Execution context", value: <Mono>{record.executionContext}</Mono> } : null,
-            typeof record.credentialMode === "string" ? { label: "Credential mode", value: record.credentialMode } : null
+            upstream ? { label: "Upstream", value: <span className="wb-tabular">{upstream}</span> } : null
           ]}
         />
+        <AuditAttachmentOutcomes record={record} />
       </DrawerSection>
       <DrawerSection title="Identity">
         <KeyValue
@@ -197,7 +183,48 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
           ]}
         />
       </DrawerSection>
-      <DrawerSection title="Request">
+      <div className="wb-drawer-section">
+        <Disclosure summary="Authorization">
+          <KeyValue labelWidth={132} items={[
+            grant
+              ? {
+                  label: "Matched grant",
+                  value: (
+                    <>
+                      {grantRef && canOpenGrant ? (
+                        <AppLink className="wb-link wb-mono" href={paths.grant(grantRef)} title="Open this grant in Policies">
+                          {auditGrantName(grant)}
+                        </AppLink>
+                      ) : (
+                        <Mono>{auditGrantName(grant)}</Mono>
+                      )}
+                      {grantExtra.length ? <span className="wb-muted">· {grantExtra.join(" · ")}</span> : null}
+                    </>
+                  )
+                }
+              : null,
+            record.executionContext ? { label: "Execution context", value: <Mono>{record.executionContext}</Mono> } : null,
+            typeof record.credentialMode === "string" ? { label: "Credential mode", value: record.credentialMode } : null,
+            scopes.length
+              ? {
+                  label: "Policy scope",
+                  value: (
+                    <span className="pt-audit-stack">
+                      {scopes.map(([type, values]) => (
+                        <span key={type}>
+                          <span className="wb-muted">{type}:</span> <span className="wb-mono">{values.join(", ")}</span>
+                        </span>
+                      ))}
+                    </span>
+                  )
+                }
+              : null,
+          ]} />
+        </Disclosure>
+      </div>
+      <AuditExecutionDetails record={record} />
+      <div className="wb-drawer-section">
+        <Disclosure summary="Request identifiers and timing">
         <KeyValue
           labelWidth={132}
           items={[
@@ -212,20 +239,6 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
             },
             { label: "Broker request ID", value: <Mono>{record.brokerRequestId}</Mono> },
             { label: "Agent request ID", value: <Mono>{record.agentRequestId}</Mono> },
-            scopes.length
-              ? {
-                  label: "Resource scopes",
-                  value: (
-                    <span className="pt-audit-stack">
-                      {scopes.map(([type, values]) => (
-                        <span key={type}>
-                          <span className="wb-muted">{type}:</span> <span className="wb-mono">{values.join(", ")}</span>
-                        </span>
-                      ))}
-                    </span>
-                  )
-                }
-              : null,
             management?.target != null ? { label: "Management target", value: <Mono>{compactJson(management.target)}</Mono> } : null,
             management?.targetService ? { label: "Target service", value: <Mono>{management.targetService}</Mono> } : null,
             record.objectIds != null ? { label: "Object IDs", value: <Mono>{compactJson(record.objectIds)}</Mono> } : null,
@@ -236,7 +249,8 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
             { label: "Audit ID", value: <Mono>{record.auditId}</Mono> }
           ]}
         />
-      </DrawerSection>
+        </Disclosure>
+      </div>
       {refUpdates.length ? (
         <DrawerSection title="Git ref updates" count={refUpdates.length}>
           <ul className="pt-audit-refs">
