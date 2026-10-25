@@ -82,6 +82,18 @@ impl ImportedAdapter for PlannedCommand {
     fn validate_action(&self, _: &ImportedActionDefinition) -> Result<(), String> {
         Ok(())
     }
+    fn action_audit_inputs(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<Option<agent_access_provider::AuditInputProjection>, String> {
+        action.annotations["command"]
+            .get("auditInputs")
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .map_err(|_| "invalid fixture audit declaration".to_owned())
+            })
+            .transpose()
+    }
     fn action_authority(
         &self,
         action: &ImportedActionDefinition,
@@ -1883,6 +1895,147 @@ fn credentials_present(runtime: &mut BrokerRuntime) {
     descriptor.credentials.execution_required = false;
     services.insert(SERVICE.into(), Arc::new(descriptor));
     runtime.services = Arc::new(services);
+}
+
+fn audit_inputs() -> Value {
+    json!([{"key":"query","pointer":"/query","capture":"value","shape":"scalar",
+        "label":"Requested query","display":"primary","role":"fact","kind":"query",
+        "maxBytes":4096,"overflow":"prefix"}])
+}
+
+#[tokio::test]
+async fn command_audit_snapshot_survives_credential_resolution_after_preparation() {
+    let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let audit_path = directory.path().join("audit.jsonl");
+    let mut base_config = config();
+    base_config.audit = Some(crate::AuditConfig::new(
+        crate::AuditStoreType::Jsonl,
+        audit_path.display().to_string(),
+    ));
+    let mut base = BrokerRuntime::new(base_config.clone()).unwrap();
+    let mut config = import_config();
+    config.audit = base_config.audit;
+    base.config = Arc::new(config.clone());
+    let mut record = record(
+        &[ImportedCredentialMode::Service],
+        vec![action("issue.stats", json!({"auditInputs":audit_inputs()}))],
+    );
+    record.slot_versions.insert(
+        crate::imports::ImportedCredentialPurpose::Execution,
+        "fixture".into(),
+    );
+    let prepared = base.prepare_imported_service_change(&record, None).unwrap();
+    let mut runtime = base
+        .with_imported_catalog(
+            ImportedCatalog {
+                revision: 1,
+                services: vec![record],
+            },
+            prepared,
+        )
+        .unwrap();
+    // As in the planner tests, presence is simulated. Actual material resolution
+    // after the command permit still fails without a credential store.
+    credentials_present(&mut runtime);
+    config.policy.grants = vec![grant(
+        "group:engineering",
+        "issue.stats",
+        "service",
+        0,
+        &[],
+        &[],
+    )];
+    runtime
+        .policy_snapshot
+        .store(Arc::new(PolicySnapshot::from_config(&config, 2)));
+    let prepared = prepare(
+        &runtime,
+        &identity(None),
+        "issue.stats",
+        json!({"query":"retained requested text"}),
+    )
+    .await
+    .unwrap();
+    let snapshot = serde_json::to_value(&prepared.finalize_context.request_audit).unwrap();
+    assert_eq!(snapshot["fields"][0]["value"], "retained requested text");
+    let response = runtime.finish_prepared_invoke(prepared, vec![]).await;
+    assert_eq!(
+        response.envelope.reason_code,
+        Some(ReasonCode::CredentialNotProvisioned.into())
+    );
+    let records =
+        crate::test_support::read_audit_records(crate::AuditStoreType::Jsonl, &audit_path);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["requestAudit"], snapshot);
+    assert_eq!(records[0]["providerAudit"]["command"]["spawned"], false);
+}
+
+#[test]
+fn failed_audit_hook_blocks_real_provider_build_and_proposed_changes_but_retains_metadata() {
+    let mut base = BrokerRuntime::new(config()).unwrap();
+    let mut config = import_config();
+    config.policy.grants = vec![grant(
+        "group:engineering",
+        "issue.stats",
+        "service",
+        0,
+        &[],
+        &[],
+    )];
+    let mut record = record(
+        &[],
+        vec![action("issue.stats", json!({"auditInputs":audit_inputs()}))],
+    );
+    let types = published_types(&record);
+    let build = |record: &ImportedServiceRecord| {
+        let catalog = ImportedCatalog {
+            revision: 1,
+            services: vec![record.clone()],
+        };
+        let contracts = imports::resolve_credential_contracts(&config, &catalog);
+        imports::build_providers(
+            &config,
+            &catalog,
+            &contracts,
+            &types,
+            None,
+            None,
+            &base.network,
+        )
+        .unwrap()
+    };
+    assert!(build(&record).contains_key(SERVICE));
+    record.actions[0].definition.annotations["command"]["auditInputs"] = json!("unreadable");
+    assert!(
+        PLANNED_COMMAND
+            .validate_action(&record.actions[0].definition)
+            .is_ok()
+    );
+    assert!(
+        PLANNED_COMMAND
+            .action_audit_inputs(&record.actions[0].definition)
+            .is_err()
+    );
+    assert!(!build(&record).contains_key(SERVICE));
+    let descriptor = imports::descriptor(&record, &config, &types);
+    assert_eq!(descriptor.service, SERVICE);
+    assert_eq!(descriptor.actions[0].action, "issue.stats");
+    assert!(descriptor.actions[0].audit_inputs.is_none());
+    assert_eq!(
+        record.actions[0].definition.annotations["command"]["auditInputs"],
+        "unreadable"
+    );
+    assert_eq!(config.policy.grants[0].actions, ["issue.stats"]);
+    assert!(base.providers.contains_key("fake"));
+    base.config = Arc::new(config);
+    assert!(base.prepare_imported_service_change(&record, None).is_err());
+    assert!(base.imported_catalog.services.is_empty());
+    assert!(base.providers.contains_key("fake"));
 }
 
 /// Publishes the import, binding both modes, with `actions` while `grants`
