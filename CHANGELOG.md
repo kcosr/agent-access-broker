@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
   Accepted command audit declarations require a supporting binary or a
   pre-upgrade backup for rollback. Downstream `AuditRecord` and `ApiActionSpec`
   struct literals must supply their new optional audit fields.
+  ([#68](https://github.com/kcosr/agent-access-broker/pull/68))
 
 - **Uploaded import documents add a managed-store migration.** Back up before
   applying `032_imported_source_documents` and upgrade the Broker, CLI and
@@ -84,6 +85,7 @@ All notable changes to this project are documented in this file.
   requested changes and controls with explicit truncation/omission states.
   SDK builders and command manifests share one bounded capture contract;
   command refresh reviews and quarantines declaration changes.
+  ([#68](https://github.com/kcosr/agent-access-broker/pull/68))
 
 - **Swagger imports, document uploads and shared OpenAPI request support.** Swagger 2.0 JSON
   and OpenAPI 3.1 JSON share reviewed actions, Basic credentials and scalar
@@ -228,6 +230,7 @@ All notable changes to this project are documented in this file.
 
 - **GitLab draft-note discovery.** View, delete and publish input schemas now
   declare the parent merge-request `iid` already required by invocation.
+  ([#68](https://github.com/kcosr/agent-access-broker/pull/68))
 
 - **Confluence space key validation.** Live listing and content access accept
   ordinary space keys with mixed case, a leading digit, or one character.
