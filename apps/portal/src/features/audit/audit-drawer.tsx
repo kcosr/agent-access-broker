@@ -4,22 +4,26 @@ import { AuditResourceDetails } from "./audit-resources";
 import { canViewAdmin } from "../../lib/capabilities";
 // The audit record drawer: one record of a broker request (Summary), every
 // record of that request (Timeline), and the stored JSON (Raw).
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import type { AuditInputValue, AuditRecord } from "../../types";
 import {
   auditDisplayText,
   auditGitRefUpdates,
   auditGrantName,
   auditGrantRef,
+  auditIdentitySourceLabel,
   auditInputDisplay,
   auditInputPreview,
   auditInputs,
   auditManagement,
+  auditObjectIdRows,
   auditRecordPath,
   auditRecordPhase,
+  auditScopeRows,
   auditTimelineGaps,
   auditTokenLabel,
   auditUpstreamSummary,
+  compactJson,
   formatAuditGap,
   formatAuditUtc,
   showAuditNodeColumn,
@@ -46,6 +50,8 @@ import {
   Tabs,
   Time,
   cx,
+  formatDateTime,
+  toDate,
   toneClass,
   useToast,
   type MenuEntry
@@ -65,6 +71,8 @@ export type AuditDrawerProps = {
   onClose: () => void;
   returnFocus: () => HTMLElement | null;
   principalNames: Map<string, string>;
+  /** Group IDs to display names, when the viewer can read them. */
+  groupNames: Map<string, string>;
   tokenNames: Map<string, string>;
   /**
    * Applies a filter in place (Audit and Activity). Without it (a principal's
@@ -81,42 +89,52 @@ function Mono({ children }: { children: ReactNode }) {
   return <span className="wb-num">{children}</span>;
 }
 
-function compactJson(value: unknown) {
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
 /**
- * A captured input value: an escaped preview of each display line (a search
- * query's language as a badge), and the full escaped stored text (compact JSON
- * for non-strings) on hover.
+ * A captured input value: an escaped preview (a search query's language as a
+ * badge after it), and the full escaped stored text (compact JSON for
+ * non-strings) on hover.
  */
 function InputValue({ entry }: { entry: AuditInputValue }) {
   const display = auditInputDisplay(entry.value);
   return (
     <span className="pt-audit-stack">
-      <span className={cx("pt-audit-stack", display.json && "wb-mono")} title={auditDisplayText(compactJson(entry.value))}>
-        {display.lines.map((line, index) => (
-          <span key={index}>
-            {display.badge ? <><Badge variant="outline">{auditInputPreview(display.badge)}</Badge> </> : null}
-            {auditInputPreview(line)}
-          </span>
-        ))}
+      <span className={display.json ? "wb-mono" : undefined} title={auditDisplayText(compactJson(entry.value))}>
+        {auditInputPreview(display.text)}
+        {display.badge ? <> <Badge variant="outline">{auditInputPreview(display.badge)}</Badge></> : null}
       </span>
       {entry.truncated ? <span className="wb-muted wb-small">Truncated in record</span> : null}
     </span>
   );
 }
 
-function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenGrant }: {
+/** Local date and time, with the exact UTC timestamp on hover. */
+function RecordTime({ timestamp }: { timestamp: string }) {
+  const date = toDate(timestamp);
+  if (!date) return <Mono>{timestamp}</Mono>;
+  return (
+    <time dateTime={date.toISOString()} title={formatAuditUtc(timestamp)}>
+      {formatDateTime(date)}
+    </time>
+  );
+}
+
+/** A display name with its ID on hover, or the ID itself when the name is unknown. */
+function Named({ id, name }: { id: string; name: string | undefined }) {
+  return name ? <span title={id}>{name}</span> : <span className="wb-mono" title={id}>{id}</span>;
+}
+
+const SCOPE_ROW_HINT = "Resource scope the request was authorized against";
+const OBJECT_ID_ROW_HINT = "Identifier the provider reported";
+
+function RecordSummary({ record, principalNames, groupNames, tokenNames, tokenHref, canOpenGrant }: {
   record: AuditRecord;
   principalNames: Map<string, string>;
+  groupNames: Map<string, string>;
   tokenNames: Map<string, string>;
   tokenHref: AuditDrawerProps["tokenHref"];
   canOpenGrant: boolean;
 }) {
-  const decision = decisionMeta(record.decision);
   const types = useResourceTypes();
-  const presentation = auditResourcePresentation(record, types);
   const phase = auditRecordPhase(record);
   const upstream = auditUpstreamSummary(record);
   const grant = record.matchedGrant;
@@ -125,67 +143,49 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
   const token = auditTokenLabel(record, tokenNames);
   const tokenLink = token.id && tokenHref ? tokenHref(token.id) : null;
   const management = auditManagement(record);
-  const scopes = Object.entries(record.resourceScopes ?? {});
   const refUpdates = auditGitRefUpdates(record);
   const inputs = auditInputs(record);
-  const principalName = principalNames.get(record.principal);
-  const grantExtra = grant
-    ? [
-        grant.subject ? `subject ${grant.subject}` : null,
-        grant.priority != null ? `priority ${grant.priority}` : null,
-        grant.grantVersion != null ? `version ${grant.grantVersion}` : null
-      ].filter(Boolean)
-    : [];
+  // The header carries the decision, reason code and execution context.
+  const outcome = [
+    phase ? { label: "Phase", value: <Mono>{phase}</Mono> } : null,
+    upstream ? { label: "Upstream", value: <span className="wb-tabular">{upstream}</span> } : null,
+    grant
+      ? {
+          label: "Matched grant",
+          value:
+            grantRef && canOpenGrant ? (
+              <AppLink className="wb-link wb-mono" href={paths.grant(grantRef)} title="Open this grant in Policies">
+                {auditGrantName(grant)}
+              </AppLink>
+            ) : (
+              <Mono>{auditGrantName(grant)}</Mono>
+            )
+        }
+      : null,
+    typeof record.credentialMode === "string" ? { label: "Credential mode", value: record.credentialMode } : null
+  ];
   return (
     <>
+      {inputs.length ? (
+        <DrawerSection title="Inputs">
+          <KeyValue
+            labelWidth={132}
+            items={inputs.map((entry, index) => ({ key: `${index}:${entry.input}`, label: auditDisplayText(entry.label), value: <InputValue entry={entry} /> }))}
+          />
+        </DrawerSection>
+      ) : null}
       <AuditResourceDetails record={record} />
-      <DrawerSection title="Outcome">
-        <KeyValue
-          labelWidth={132}
-          items={[
-            { label: "Decision", value: <Badge tone={presentation?.outcome.tone ?? decision.tone} icon={presentation?.outcome.icon ?? decision.icon}>{presentation?.outcome.label ?? decision.label}</Badge> },
-            record.reasonCode ? { label: "Reason code", value: <Mono>{record.reasonCode}</Mono> } : null,
-            phase ? { label: "Phase", value: <Mono>{phase}</Mono> } : null,
-            upstream ? { label: "Upstream", value: <span className="wb-tabular">{upstream}</span> } : null,
-            grant
-              ? {
-                  label: "Matched grant",
-                  value: (
-                    <>
-                      {grantRef && canOpenGrant ? (
-                        <AppLink className="wb-link wb-mono" href={paths.grant(grantRef)} title="Open this grant in Policies">
-                          {auditGrantName(grant)}
-                        </AppLink>
-                      ) : (
-                        <Mono>{auditGrantName(grant)}</Mono>
-                      )}
-                      {grantExtra.length ? <span className="wb-muted">· {grantExtra.join(" · ")}</span> : null}
-                    </>
-                  )
-                }
-              : null,
-            record.executionContext ? { label: "Execution context", value: <Mono>{record.executionContext}</Mono> } : null,
-            typeof record.credentialMode === "string" ? { label: "Credential mode", value: record.credentialMode } : null
-          ]}
-        />
-      </DrawerSection>
+      {outcome.some(Boolean) ? (
+        <DrawerSection title="Outcome">
+          <KeyValue labelWidth={132} items={outcome} />
+        </DrawerSection>
+      ) : null}
       <DrawerSection title="Identity">
         <KeyValue
           labelWidth={132}
           items={[
-            {
-              label: "Principal",
-              value: (
-                <>
-                  {principalName && principalName !== record.principal ? <span>{principalName}</span> : null}
-                  <Mono>{record.principal}</Mono>
-                  {record.principalSubject ? <span className="wb-muted">subject <span className="wb-mono">{record.principalSubject}</span></span> : null}
-                </>
-              )
-            },
-            identity
-              ? { label: "Identity source", value: `${identity.name} · ${identity.type}${identity.tokenClass ? ` · ${identity.tokenClass}` : ""}` }
-              : null,
+            { label: "Principal", value: <Named id={record.principal} name={principalNames.get(record.principal)} /> },
+            identity ? { label: "Identity source", value: <span title={identity.name}>{auditIdentitySourceLabel(identity)}</span> } : null,
             typeof identity?.readOnlyAccess === "boolean" ? { label: "Access path", value: identity.readOnlyAccess ? "Read-only" : "Full access" } : null,
             token.id
               ? {
@@ -208,7 +208,21 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
                   )
                 }
               : null,
-            record.groups?.length ? { label: "Groups", value: <span className="wb-mono">{record.groups.join(", ")}</span> } : null,
+            record.groups?.length
+              ? {
+                  label: "Groups",
+                  value: (
+                    <span>
+                      {record.groups.map((group, index) => (
+                        <Fragment key={group}>
+                          {index ? ", " : null}
+                          <Named id={group} name={groupNames.get(group)} />
+                        </Fragment>
+                      ))}
+                    </span>
+                  )
+                }
+              : null,
             record.source
               ? {
                   label: "Source",
@@ -228,50 +242,37 @@ function RecordSummary({ record, principalNames, tokenNames, tokenHref, canOpenG
         <KeyValue
           labelWidth={132}
           items={[
-            {
-              label: "Time",
-              value: (
-                <span className="pt-audit-stack">
-                  <Time value={record.timestamp} format="datetime" />
-                  <span className="wb-num wb-muted">{formatAuditUtc(record.timestamp)}</span>
-                </span>
-              )
-            },
-            { label: "Broker request ID", value: <Mono>{record.brokerRequestId}</Mono> },
-            { label: "Agent request ID", value: <Mono>{record.agentRequestId}</Mono> },
-            scopes.length
-              ? {
-                  label: "Resource scopes",
-                  value: (
-                    <span className="pt-audit-stack">
-                      {scopes.map(([type, values]) => (
-                        <span key={type}>
-                          <span className="wb-muted">{type}:</span> <span className="wb-mono">{values.join(", ")}</span>
-                        </span>
-                      ))}
-                    </span>
-                  )
-                }
-              : null,
+            { label: "Time", value: <RecordTime timestamp={record.timestamp} /> },
+            ...auditScopeRows(record, types).map((row) => ({
+              key: `scope:${row.key}`,
+              label: <span title={SCOPE_ROW_HINT}>{row.label}</span>,
+              value: <span className="wb-mono">{row.value}</span>
+            })),
+            ...auditObjectIdRows(record).map((row) => ({
+              key: `object:${row.key}`,
+              label: <span title={OBJECT_ID_ROW_HINT}>{row.label}</span>,
+              value: <span className="wb-mono">{row.value}</span>
+            })),
             management?.target != null ? { label: "Management target", value: <Mono>{compactJson(management.target)}</Mono> } : null,
-            management?.targetService ? { label: "Target service", value: <Mono>{management.targetService}</Mono> } : null,
-            record.objectIds != null ? { label: "Object IDs", value: <Mono>{compactJson(record.objectIds)}</Mono> } : null,
-            record.configGeneration != null || record.policyGeneration != null
-              ? { label: "Generations", value: `config ${record.configGeneration ?? "none"} · policy ${record.policyGeneration ?? "none"}` }
-              : null,
-            { label: "Node", value: <Mono>{record.nodeId}</Mono> },
-            { label: "Audit ID", value: <Mono>{record.auditId}</Mono> }
+            management?.targetService ? { label: "Target service", value: <Mono>{management.targetService}</Mono> } : null
           ]}
         />
-      </DrawerSection>
-      {inputs.length ? (
-        <DrawerSection title="Inputs">
+        <Disclosure summary="Details" className="pt-audit-details">
           <KeyValue
             labelWidth={132}
-            items={inputs.map((entry, index) => ({ key: `${index}:${entry.input}`, label: auditDisplayText(entry.label), value: <InputValue entry={entry} /> }))}
+            items={[
+              { label: "Exact time", value: <Mono>{formatAuditUtc(record.timestamp)}</Mono> },
+              { label: "Broker request ID", value: <Mono>{record.brokerRequestId}</Mono> },
+              { label: "Agent request ID", value: <Mono>{record.agentRequestId}</Mono> },
+              { label: "Audit ID", value: <Mono>{record.auditId}</Mono> },
+              { label: "Node", value: <Mono>{record.nodeId}</Mono> },
+              record.configGeneration != null ? { label: "Config generation", value: <span className="wb-tabular">{record.configGeneration}</span> } : null,
+              record.policyGeneration != null ? { label: "Policy generation", value: <span className="wb-tabular">{record.policyGeneration}</span> } : null,
+              record.principalSubject ? { label: "Principal subject", value: <Mono>{record.principalSubject}</Mono> } : null
+            ]}
           />
-        </DrawerSection>
-      ) : null}
+        </Disclosure>
+      </DrawerSection>
       {refUpdates.length ? (
         <DrawerSection title="Git ref updates" count={refUpdates.length}>
           <ul className="pt-audit-refs">
@@ -395,7 +396,7 @@ function RawRecord({ record }: { record: AuditRecord }) {
 }
 
 /** Drawer for `?request=…&record=…`: render it in the page's AppShell drawer slot. */
-export function AuditDrawer({ scope, open, onSelect, onClose, returnFocus, principalNames, tokenNames, applyFilter, principalId, tokenHref }: AuditDrawerProps) {
+export function AuditDrawer({ scope, open, onSelect, onClose, returnFocus, principalNames, groupNames, tokenNames, applyFilter, principalId, tokenHref }: AuditDrawerProps) {
   const { session } = useSession();
   const types = useResourceTypes();
   const timeline = useAuditRequest(scope, open.request);
@@ -547,7 +548,7 @@ export function AuditDrawer({ scope, open, onSelect, onClose, returnFocus, princ
         ]}
       >
         {tab === "summary" ? (
-          <RecordSummary record={record} principalNames={principalNames} tokenNames={tokenNames} tokenHref={tokenHref} canOpenGrant={canOpenGrant} />
+          <RecordSummary record={record} principalNames={principalNames} groupNames={groupNames} tokenNames={tokenNames} tokenHref={tokenHref} canOpenGrant={canOpenGrant} />
         ) : tab === "timeline" ? (
           <DrawerSection title="Request timeline" count={timeline.query.isSuccess ? records.length : undefined}>
             <p className="pt-prose pt-audit-note">Every record of this broker request that you can see, oldest first.</p>

@@ -77,6 +77,10 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Request › Details: the kit disclosure under the request rows. */
+.pt-audit-details {
+  margin-top: 10px;
+}
 .pt-audit-raw {
   display: flex;
   flex-direction: column;

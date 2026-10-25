@@ -1,8 +1,9 @@
 // Pure helpers for the Audit and Activity views: filter and drawer URL state,
 // paging session ranges, suggestions, and presentation of stored audit records
 // (no JSX).
-import type { AuditInputValue, AuditOptions, AuditRecord, BrokerTokenRecord } from "../types";
+import type { AuditInputValue, AuditOptions, AuditRecord, BrokerTokenRecord, PolicyCatalogSubject } from "../types";
 import { formatBytes, uniqueSortedOptions } from "./helpers";
+import type { ResourceTypes } from "./resource-types";
 
 /** `admin` reads `/v1/admin/audit/*` (Audit); `self` reads `/v1/audit/*` (Activity). */
 export type AuditScope = "admin" | "self";
@@ -377,6 +378,82 @@ export function auditManagement(record: Pick<AuditRecord, "providerAudit">) {
   };
 }
 
+/** A stored value as one line of text: strings as is, anything else as compact JSON. */
+export function compactJson(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+const KEY_ACRONYMS = new Map([["id", "ID"], ["iid", "IID"], ["url", "URL"], ["uuid", "UUID"], ["sha", "SHA"], ["api", "API"], ["ci", "CI"]]);
+
+/**
+ * An identifier as a sentence-case label: camelCase and `_`, `-` or `.`
+ * separated words, with common acronyms in capitals (`mergeRequestIid` is
+ * "Merge request IID", `jira_project` is "Jira project").
+ */
+export function auditKeyLabel(key: string): string {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_.-]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  if (!words.length) return key;
+  return words.map((word, index) => KEY_ACRONYMS.get(word) ?? (index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word)).join(" ");
+}
+
+export type AuditLabeledValue = { key: string; label: string; value: string };
+
+/** One row per resource scope type: the type's registry label (else its ID as words) and its comma-joined values. */
+export function auditScopeRows(record: Pick<AuditRecord, "resourceScopes">, types: ResourceTypes): AuditLabeledValue[] {
+  return Object.entries(record.resourceScopes ?? {}).map(([type, values]) => ({
+    key: type,
+    label: types.get(type)?.label ?? auditKeyLabel(type),
+    value: values.join(", ")
+  }));
+}
+
+/**
+ * One row per top-level key of the provider-reported object IDs, labeled by
+ * the key as words: scalars as text, nested values as compact JSON. A value
+ * that is not an object is one "Object IDs" row.
+ */
+export function auditObjectIdRows(record: Pick<AuditRecord, "objectIds">): AuditLabeledValue[] {
+  const ids = record.objectIds;
+  if (ids == null) return [];
+  if (typeof ids !== "object" || Array.isArray(ids)) return [{ key: "objectIds", label: "Object IDs", value: compactJson(ids) }];
+  return Object.entries(ids).map(([key, value]) => ({ key, label: auditKeyLabel(key), value: compactJson(value) }));
+}
+
+const IDENTITY_SOURCE_TYPES = new Map([
+  ["broker_tokens", "Broker token"],
+  ["static_principals", "Static token"],
+  ["trusted_user", "Trusted user"],
+  ["forwarded_identity", "Forwarded identity"]
+]);
+
+const TOKEN_CLASSES = new Map([
+  ["agent_invoke", "Agent invocation"],
+  ["user_manage", "User management"],
+  ["admin", "Administration"]
+]);
+
+/**
+ * The record's identity source in words: its type and token class
+ * ("Trusted user · Agent invocation"), or "Browser session" for a portal
+ * sign-in. Unknown types and classes show as recorded.
+ */
+export function auditIdentitySourceLabel(source: NonNullable<AuditRecord["identitySource"]>): string {
+  if (source.type === "broker_tokens" && source.name === AUDIT_BROWSER_SESSION_SOURCE) return "Browser session";
+  const type = IDENTITY_SOURCE_TYPES.get(source.type) ?? source.type;
+  const tokenClass = source.tokenClass ? TOKEN_CLASSES.get(source.tokenClass) ?? source.tokenClass : null;
+  return tokenClass ? `${type} · ${tokenClass}` : type;
+}
+
+/** Group IDs to display names, from the policy catalog's subjects. */
+export function auditGroupNames(groups: PolicyCatalogSubject[]): Map<string, string> {
+  return new Map(groups.flatMap((group) => (group.groupId && group.displayName ? [[group.groupId, group.displayName] as const] : [])));
+}
+
 /**
  * The record's captured action inputs, in declaration order. Entries that are
  * not objects, lack a non-empty `input` or `label`, or have no `value` key are
@@ -405,39 +482,32 @@ function isFlatScalar(value: unknown): value is string | number | boolean {
 
 /** How the Summary shows an audit input value; the hover text stays the stored compact JSON. */
 export type AuditInputDisplay = {
-  /** A `{type, value}` search query's language in upper case ("JQL"); null for `text` queries and other values. */
+  /** The text to preview. */
+  text: string;
+  /** A `{type, value}` search query's language in upper case ("JQL"), shown after the query; null for `text` queries and other values. */
   badge: string | null;
-  /** The text to preview: one line, or one `key: value` line per key of a flat object. */
-  lines: string[];
-  /** The line is compact JSON: a number, boolean, null or nested value. */
+  /** The text is compact JSON: a number, boolean, null, object or nested value. */
   json: boolean;
 };
 
 /**
  * An audit input value for the Summary. Strings show as is. A `{type, value}`
  * search query (both strings, no other keys) shows its value, with its type as
- * a badge unless it is `text`. Other non-empty objects of strings, numbers,
- * booleans and null show one `key: value` line per key, in key order, strings
- * literal. Arrays of strings, numbers and booleans are joined with ", "
- * ("(none)" when empty). Everything else is compact JSON.
+ * a badge unless it is `text`. Arrays of strings, numbers and booleans are
+ * joined with ", " ("(none)" when empty). Everything else is compact JSON.
  */
 export function auditInputDisplay(value: unknown): AuditInputDisplay {
-  const line = (text: string, json = false): AuditInputDisplay => ({ badge: null, lines: [text], json });
-  if (typeof value === "string") return line(value);
+  if (typeof value === "string") return { text: value, badge: null, json: false };
   if (Array.isArray(value)) {
-    if (!value.length) return line("(none)");
-    if (value.every(isFlatScalar)) return line(value.map(String).join(", "));
+    if (!value.length) return { text: "(none)", badge: null, json: false };
+    if (value.every(isFlatScalar)) return { text: value.map(String).join(", "), badge: null, json: false };
   } else if (value && typeof value === "object") {
-    const entries = Object.entries(value);
     const { type, value: query } = value as Record<string, unknown>;
-    if (entries.length === 2 && typeof type === "string" && typeof query === "string") {
-      return { badge: type && type !== "text" ? type.toUpperCase() : null, lines: [query], json: false };
-    }
-    if (entries.length && entries.every(([, item]) => item === null || isFlatScalar(item))) {
-      return { badge: null, lines: entries.map(([key, item]) => `${key}: ${String(item)}`), json: false };
+    if (Object.keys(value).length === 2 && typeof type === "string" && typeof query === "string") {
+      return { text: query, badge: type && type !== "text" ? type.toUpperCase() : null, json: false };
     }
   }
-  return line(JSON.stringify(value), true);
+  return { text: compactJson(value), badge: null, json: true };
 }
 
 /** Code points in an audit input's one-line preview, including the trailing ellipsis when cut. */

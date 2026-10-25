@@ -54,17 +54,21 @@ loads current results; **Load more** continues through older matching records.
 
 ## Read an outcome and correlate a request
 
-1. On the drawer's **Summary** tab, inspect **Decision**, **Reason code**, and
-   **Phase**. For an invocation, also inspect **Matched grant**,
-   **Execution context**, and **Credential mode** when present. **Inputs** lists
-   what the request concerned, such as its project, issue, path or query, as
-   the action records them; long values are shortened there, and **Raw** shows
-   each stored value. **Truncated in record** means the stored value itself was
-   cut at 1 KiB.
-2. Confirm the principal and token under **Identity**. A known token name is a
-   convenient label; its ID identifies the actual token record.
-3. Record **Broker request ID**, **Agent request ID**, timestamp, and **Audit ID**
-   when handing the finding to an operator.
+1. The drawer header shows the decision, any reason code, and the execution
+   context. On the **Summary** tab, **Inputs** comes first when the action
+   records any: what the request concerned, such as its project, issue, path or
+   query. Long values are shortened there, and **Raw** shows each stored value.
+   **Truncated in record** means the stored value itself was cut at 1 KiB.
+   **Outcome** then shows **Phase**, **Upstream**, **Matched grant**, and
+   **Credential mode** when present; it is omitted when the header already says
+   everything, as for a denial before any grant matched.
+2. Confirm the principal and token under **Identity**. Principals and groups
+   show their display names when the portal knows them; hover a name for its
+   ID. A known token name is a convenient label; its ID identifies the actual
+   token record.
+3. Under **Request**, open **Details** and record the **Exact time**,
+   **Broker request ID**, **Agent request ID**, and **Audit ID** when handing
+   the finding to an operator.
 4. Use **Request ID** in the list, or the drawer's **Filter to this request**
    action, to isolate the request. Open **Timeline** to inspect its stored phases.
 5. Use **Raw** and **Copy JSON** when the operator needs the stored record.
@@ -119,7 +123,8 @@ mutation.
 ## Investigate a denied request
 
 1. Choose **Denied** and select the relevant record.
-2. Read **Reason code** and the recorded context/resource information.
+2. Read the reason code in the drawer header and the recorded resource rows
+   under **Request**.
 3. Inspect the principal's current **Access**, **Grants**, **Groups**, and
    **Tokens** under **Admin > Principals**.
 4. Open the relevant grant under **Policies** and inspect its subjects, actions,
@@ -133,8 +138,9 @@ upstream change is implied.*
 
 Expected result: the reviewer can explain the recorded decision and compare it
 with current policy. Current grants and group membership can change after a
-request; retain the request's recorded grant/version and IDs rather than assuming
-today's access exactly reproduces the earlier evaluation.
+request; retain the request's recorded grant and IDs (**Raw** holds the grant
+version) rather than assuming today's access exactly reproduces the earlier
+evaluation.
 
 For the policy controls being reviewed, see
 [create and review a grant](admin-grants.md) and

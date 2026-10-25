@@ -16,18 +16,23 @@ import {
   auditGitRefUpdates,
   auditGrantName,
   auditGrantRef,
+  auditGroupNames,
+  auditIdentitySourceLabel,
   auditInputDisplay,
   auditInputPreview,
   auditInputs,
   auditInstantToLocalInput,
+  auditKeyLabel,
   auditListParams,
   auditListPath,
   auditLocalInputToInstant,
+  auditObjectIdRows,
   auditPageSearch,
   auditPrincipalSuggestions,
   auditRangeCovering,
   auditRecordPath,
   auditRecordPhase,
+  auditScopeRows,
   auditServiceSuggestions,
   auditTokenPath,
   auditTimelineGaps,
@@ -43,6 +48,8 @@ import {
   showAuditNodeColumn,
   type AuditFilters,
 } from "../src/lib/audit";
+import { indexResourceTypes } from "../src/lib/resource-types";
+import { RESOURCE_TYPES } from "./resource-types.fixture";
 import { ADVERSARIAL_SEARCH, GITLAB_ISSUE_SEARCH, GITLAB_ISSUE_VIEW, JIRA_COMMENT_VIEW, JIRA_ISSUE_CREATE, JIRA_PROJECT_LIST, JIRA_SEARCH, TRUNCATED_SUMMARY } from "./audit-inputs.fixture";
 
 const admin: Session = { role: "admin", selfServiceEnabled: true, authenticated: true, principal: "admin",  auditQueryable: true };
@@ -399,37 +406,35 @@ describe("audit inputs", () => {
   });
 
   test("search queries show their value, with the language as a badge except for text", () => {
-    expect(auditInputDisplay({ type: "jql", value: 'project = OPS AND status = "In Progress"' })).toEqual({ badge: "JQL", lines: ['project = OPS AND status = "In Progress"'], json: false });
-    expect(auditInputDisplay({ type: "cql", value: 'space = DOCS AND title ~ "runbook"' })).toEqual({ badge: "CQL", lines: ['space = DOCS AND title ~ "runbook"'], json: false });
-    expect(auditInputDisplay({ type: "text", value: "checkout timeout" })).toEqual({ badge: null, lines: ["checkout timeout"], json: false });
-    expect(auditInputDisplay({ value: "project = OPS", type: "jql" })).toEqual({ badge: "JQL", lines: ["project = OPS"], json: false });
+    expect(auditInputDisplay({ type: "jql", value: 'project = OPS AND status = "In Progress"' })).toEqual({ text: 'project = OPS AND status = "In Progress"', badge: "JQL", json: false });
+    expect(auditInputDisplay({ type: "cql", value: 'space = DOCS AND title ~ "runbook"' })).toEqual({ text: 'space = DOCS AND title ~ "runbook"', badge: "CQL", json: false });
+    expect(auditInputDisplay({ type: "text", value: "checkout timeout" })).toEqual({ text: "checkout timeout", badge: null, json: false });
+    expect(auditInputDisplay({ value: "project = OPS", type: "jql" })).toEqual({ text: "project = OPS", badge: "JQL", json: false });
     expect(auditInputDisplay({ type: "", value: "checkout timeout" }).badge).toBeNull();
   });
 
-  test("other flat objects show one key: value line per key, strings literal; nested values fall back to compact JSON", () => {
-    expect(auditInputDisplay({ type: "jql", value: "project = OPS", validate: true })).toEqual({ badge: null, lines: ["type: jql", "value: project = OPS", "validate: true"], json: false });
-    expect(auditInputDisplay({ type: "jql", value: 42 })).toEqual({ badge: null, lines: ["type: jql", "value: 42"], json: false });
-    expect(auditInputDisplay({ state: "opened", count: 3, confidential: false, milestone: null, title: 'Fix "login"' }).lines).toEqual(["state: opened", "count: 3", "confidential: false", "milestone: null", 'title: Fix "login"']);
-    expect(auditInputDisplay({ summary: "x".repeat(120), state: "opened" }).lines.map(auditInputPreview)).toEqual([`summary: ${"x".repeat(90)}…`, "state: opened"]);
-    expect(auditInputDisplay({ type: "jql", filter: { project: "OPS" } })).toEqual({ badge: null, lines: ['{"type":"jql","filter":{"project":"OPS"}}'], json: true });
-    expect(auditInputDisplay({ type: "jql", value: ["OPS"] }).lines).toEqual(['{"type":"jql","value":["OPS"]}']);
-    expect(auditInputDisplay({}).lines).toEqual(["{}"]);
+  test("other objects, including query-like ones with another key or a non-string value, show as compact JSON", () => {
+    expect(auditInputDisplay({ type: "jql", value: "project = OPS", validate: true })).toEqual({ text: '{"type":"jql","value":"project = OPS","validate":true}', badge: null, json: true });
+    expect(auditInputDisplay({ type: "jql", value: 42 })).toEqual({ text: '{"type":"jql","value":42}', badge: null, json: true });
+    expect(auditInputDisplay({ state: "opened", title: 'Fix "login"' }).text).toBe('{"state":"opened","title":"Fix \\"login\\""}');
+    expect(auditInputDisplay({ type: "jql", filter: { project: "OPS" } }).text).toBe('{"type":"jql","filter":{"project":"OPS"}}');
+    expect(auditInputDisplay({})).toEqual({ text: "{}", badge: null, json: true });
   });
 
   test("arrays of strings, numbers and booleans read as lists; empty arrays as (none); others as compact JSON", () => {
-    expect(auditInputDisplay(["OPS", "SEC"])).toEqual({ badge: null, lines: ["OPS, SEC"], json: false });
-    expect(auditInputDisplay(["OPS", 42, true, false]).lines).toEqual(["OPS, 42, true, false"]);
-    expect(auditInputDisplay([])).toEqual({ badge: null, lines: ["(none)"], json: false });
-    expect(auditInputDisplay(["OPS", { key: "SEC" }])).toEqual({ badge: null, lines: ['["OPS",{"key":"SEC"}]'], json: true });
-    expect(auditInputDisplay(["OPS", ["SEC"]]).lines).toEqual(['["OPS",["SEC"]]']);
-    expect(auditInputDisplay(["OPS", null]).lines).toEqual(['["OPS",null]']);
+    expect(auditInputDisplay(["OPS", "SEC"])).toEqual({ text: "OPS, SEC", badge: null, json: false });
+    expect(auditInputDisplay(["OPS", 42, true, false]).text).toBe("OPS, 42, true, false");
+    expect(auditInputDisplay([])).toEqual({ text: "(none)", badge: null, json: false });
+    expect(auditInputDisplay(["OPS", { key: "SEC" }])).toEqual({ text: '["OPS",{"key":"SEC"}]', badge: null, json: true });
+    expect(auditInputDisplay(["OPS", ["SEC"]]).text).toBe('["OPS",["SEC"]]');
+    expect(auditInputDisplay(["OPS", null]).text).toBe('["OPS",null]');
   });
 
   test("strings stay as stored; numbers, booleans and null read as JSON", () => {
-    expect(auditInputDisplay('status = "In Progress"')).toEqual({ badge: null, lines: ['status = "In Progress"'], json: false });
-    expect(auditInputDisplay(42)).toEqual({ badge: null, lines: ["42"], json: true });
-    expect(auditInputDisplay(false).lines).toEqual(["false"]);
-    expect(auditInputDisplay(null)).toEqual({ badge: null, lines: ["null"], json: true });
+    expect(auditInputDisplay('status = "In Progress"')).toEqual({ text: 'status = "In Progress"', badge: null, json: false });
+    expect(auditInputDisplay(42)).toEqual({ text: "42", badge: null, json: true });
+    expect(auditInputDisplay(false).text).toBe("false");
+    expect(auditInputDisplay(null)).toEqual({ text: "null", badge: null, json: true });
   });
 
   test("display text shows controls, bidi overrides and separators as escapes, keeping newlines", () => {
@@ -447,5 +452,61 @@ describe("audit inputs", () => {
     expect(emoji).toBe(`${"😀".repeat(AUDIT_INPUT_PREVIEW_CHARS - 1)}…`);
     expect(Array.from(emoji)).toHaveLength(AUDIT_INPUT_PREVIEW_CHARS);
     expect(auditInputPreview(ADVERSARIAL_SEARCH)).toBe(`login timeout <script>alert("never")</script>\\u{1}\\u{202E}${"é".repeat(41)}…`);
+  });
+});
+
+describe("audit record summary rows", () => {
+  const types = indexResourceTypes(RESOURCE_TYPES);
+
+  test("identity sources read as their type and token class, browser sessions by name; unknown values as recorded", () => {
+    const source = (type: string, tokenClass?: string, name = "configured-source") => ({ name, type, ...(tokenClass ? { tokenClass } : {}) });
+    expect(auditIdentitySourceLabel(source("trusted_user", "agent_invoke", "trusted_user"))).toBe("Trusted user · Agent invocation");
+    expect(auditIdentitySourceLabel(source("forwarded_identity", "agent_invoke"))).toBe("Forwarded identity · Agent invocation");
+    expect(auditIdentitySourceLabel(source("broker_tokens", "agent_invoke"))).toBe("Broker token · Agent invocation");
+    expect(auditIdentitySourceLabel(source("broker_tokens", "user_manage"))).toBe("Broker token · User management");
+    expect(auditIdentitySourceLabel(source("broker_tokens", "admin"))).toBe("Broker token · Administration");
+    expect(auditIdentitySourceLabel(source("broker_tokens", "user_manage", "browser-session"))).toBe("Browser session");
+    expect(auditIdentitySourceLabel(source("static_principals"))).toBe("Static token");
+    expect(auditIdentitySourceLabel(source("custom_source", "custom_class"))).toBe("custom_source · custom_class");
+    expect(auditIdentitySourceLabel(source("constructor"))).toBe("constructor");
+  });
+
+  test("keys read as sentence-case words with common acronyms in capitals", () => {
+    expect(auditKeyLabel("pageId")).toBe("Page ID");
+    expect(auditKeyLabel("issueKey")).toBe("Issue key");
+    expect(auditKeyLabel("mergeRequestIid")).toBe("Merge request IID");
+    expect(auditKeyLabel("gitlab_project")).toBe("Gitlab project");
+    expect(auditKeyLabel("webhook-url")).toBe("Webhook URL");
+    expect(auditKeyLabel("HTTPStatus")).toBe("Http status");
+    expect(auditKeyLabel("_")).toBe("_");
+  });
+
+  test("each resource scope type is its own row, labeled from the registry or by its ID as words", () => {
+    expect(auditScopeRows(record({ resourceScopes: { jira_project: ["OPS", "SEC"], ticketing_queue: ["*"] } }), types)).toEqual([
+      { key: "jira_project", label: "Jira project", value: "OPS, SEC" },
+      { key: "ticketing_queue", label: "Ticketing queue", value: "*" },
+    ]);
+    expect(auditScopeRows(record(), types)).toEqual([]);
+  });
+
+  test("each provider object ID is its own row: scalars as text, nested values as compact JSON", () => {
+    expect(auditObjectIdRows(record({ objectIds: { pageId: "123456789", mergeRequestIid: 42, labels: ["ops"], parent: { issueKey: "OPS-1" } } }))).toEqual([
+      { key: "pageId", label: "Page ID", value: "123456789" },
+      { key: "mergeRequestIid", label: "Merge request IID", value: "42" },
+      { key: "labels", label: "Labels", value: '["ops"]' },
+      { key: "parent", label: "Parent", value: '{"issueKey":"OPS-1"}' },
+    ]);
+    expect(auditObjectIdRows(record({ objectIds: ["OPS-1", "OPS-2"] }))).toEqual([{ key: "objectIds", label: "Object IDs", value: '["OPS-1","OPS-2"]' }]);
+    expect(auditObjectIdRows(record({ objectIds: null }))).toEqual([]);
+    expect(auditObjectIdRows(record())).toEqual([]);
+  });
+
+  test("group names come from catalog groups with a display name", () => {
+    const names = auditGroupNames([
+      { groupId: "users", displayName: "All users", status: "active" },
+      { groupId: "ops", displayName: null, status: "active" },
+      { principalId: "alice", displayName: "Alice Example", status: "active" },
+    ]);
+    expect([...names]).toEqual([["users", "All users"]]);
   });
 });
