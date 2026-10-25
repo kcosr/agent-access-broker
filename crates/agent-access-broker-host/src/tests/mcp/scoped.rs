@@ -429,6 +429,8 @@ impl agent_access_provider::test_support::DescribedProvider for ScopedCatalogPro
     fn descriptor(&self) -> ServiceDescriptor {
         let mut descriptor = agent_access_fake::fake_descriptor();
         descriptor.credentials = CredentialDescriptor::default();
+        // This discovery-only fixture replaces the fake input contract below.
+        descriptor.actions[0].audit_inputs = None;
         if self.file_only {
             descriptor.actions[0] = descriptor.actions[0].clone().raw_download();
         }
