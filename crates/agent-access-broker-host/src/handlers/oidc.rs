@@ -1329,6 +1329,7 @@ async fn append_oidc_audit(
         identity_source: identity.source.clone(),
         source: source.clone(),
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: Some(json!({"oidc": details})),
     };
     snapshot

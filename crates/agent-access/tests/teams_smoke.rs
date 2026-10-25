@@ -165,12 +165,16 @@ upload_spool_dir = {spool}
 [mcp]
 enabled = true
 public_url = {mcp_public_url}
+[audit]
+type = "jsonl"
+path = {audit}
 "#,
         store = toml_string(directory.join("store.sqlite").display()),
         hash_key = toml_string(format_args!("file:{}", key.display())),
         key = toml_string(key.display()),
         spool = toml_string(directory.join("spool").display()),
         mcp_public_url = toml_string(mcp_public_url),
+        audit = toml_string(directory.join("audit.jsonl").display()),
     )
 }
 
@@ -672,6 +676,25 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
         .status
         .success()
     );
+    // Each notification records only its destination: never its content or
+    // the destination's signed URL.
+    let audit = f.broker.audit().unwrap();
+    let destination =
+        |name: &str| json!([{"input": "destination", "label": "Destination", "value": name}]);
+    let records = audit.require_action("teams", "notification.send");
+    // The eight accepted notifications and the denials.
+    assert!(records.len() > 8, "{records:?}");
+    for record in &records {
+        assert!(
+            record["auditInputs"] == destination("release-alerts")
+                || record["auditInputs"] == destination("unknown"),
+            "{record}"
+        );
+    }
+    let audit = audit.text();
+    for content in ["Version 2.3", "008000", "SYNTHETIC_SIGNED_SECRET"] {
+        assert!(!audit.contains(content), "{content}");
+    }
     drop(mcp);
     f.broker.shutdown();
     f.broker.join().await.unwrap();

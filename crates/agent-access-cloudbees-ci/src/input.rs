@@ -774,6 +774,34 @@ pub(crate) fn schema(action: &str) -> Value {
     schema
 }
 
+/// Declares the inputs an action's audit records keep: the job locator
+/// (`controller` and `job`, or `url`), the build, and the action's own target
+/// or log search. Result counts, output budgets and cursors are left out.
+pub(crate) fn with_audit_inputs(descriptor: ActionDescriptor) -> ActionDescriptor {
+    let action = descriptor.action.clone();
+    let shape = shape(&action).expect("declared action");
+    let mut descriptor = descriptor
+        .audit_input("controller", "Controller")
+        .audit_input("job", "Job")
+        .audit_input("url", "URL");
+    if shape.build {
+        descriptor = descriptor
+            .audit_input("buildNumber", "Build number")
+            .audit_input("buildSelector", "Build selector");
+    }
+    match action.as_str() {
+        "queue.view" => descriptor.audit_input("queueId", "Queue ID"),
+        "build.artifact.download" => descriptor.audit_input("artifactPath", "Artifact path"),
+        "build.pipeline.node.view" | "build.pipeline.node.log.read" => {
+            descriptor.audit_input("nodeId", "Node ID")
+        }
+        "build.log.read" => descriptor
+            .audit_input("mode", "Mode")
+            .audit_input("query", "Query"),
+        _ => descriptor,
+    }
+}
+
 /// Extended usage for an action, kept out of MCP `tools/list`.
 pub(crate) fn documentation(action: &str) -> Value {
     let shape = shape(action).expect("declared action");

@@ -281,6 +281,7 @@ its builder methods:
 | `.raw_download()`, `.multipart_upload(plan)` | Streamed response bodies, or admitted file uploads. |
 | `.resource_attributes()` | That dispatch needs the private attributes of the one admitted exact resource. |
 | `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. The host sends such responses with `Cache-Control: no-store`. |
+| `.audit_input(input, label)` | A top-level input whose supplied value the host records, under `label`, in the action's audit records. See [audit inputs](#audit-inputs). |
 | `.requires_stable_signing_key()` | That the action issues durable handles, so the Broker must hold a stable key. |
 | `.documentation(json)`, `.presentation(..)`, `.attribution(..)`, `.upstream_resource_ownership(..)` | Extended usage text, rich rendering, attribution footers and static ownership metadata. |
 
@@ -347,6 +348,27 @@ canonical spelling, since it is compared exactly. An OAuth connection's dialect
 checks each consumer's authority (see [delegated access](#delegated-access)). A
 service that declares none cannot share a token connection with another
 service.
+
+### Audit inputs
+
+`.audit_input(input, label)` opts one top-level input into the action's audit
+records. The host copies its supplied value, under `label`, into `auditInputs`
+on every record written after the action is resolved, including denials,
+provider failures and interrupted operations. Absent inputs add nothing. Each
+value keeps at most 1 KiB: a longer string, or a longer compact JSON value, is
+cut and marked `truncated`. The labels and string values are searchable, and
+every audit reader of the record sees them. The declaration is not part of
+discovery, MCP tool definitions, OpenAPI or the send schema.
+
+Declare the few inputs that say what the request concerned: its targets and
+scope (project, space, issue or page identifiers, branch, path), search
+queries, short titles on create, and controls that change the meaning of the
+operation. Never declare content bodies, descriptions, comments, messages,
+file contents, credentials or pagination tokens. Descriptor validation rejects
+an input that is not a top-level `input_schema` property, a repeated input, a
+label that is empty, longer than 64 bytes or holds control characters, and an
+input whose schema contains `x-agent-access-sensitive` or a reference, or whose
+whole input schema is marked sensitive.
 
 ### Token-only actions
 
@@ -2189,7 +2211,9 @@ pub fn notes_descriptor() -> ServiceDescriptor {
             )
             .read_only()
             .scope("notebook")
-            .credential_modes(["service", "per_user"]),
+            .credential_modes(["service", "per_user"])
+            .audit_input("notebook", "Notebook")
+            .audit_input("note", "Note"),
         ])
         .with_credentials(
             CredentialDescriptor::default()

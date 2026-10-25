@@ -12,6 +12,7 @@ import {
   auditActionSuggestions,
   auditContinuationParams,
   auditFiltersSearch,
+  auditGroupNames,
   auditListParams,
   auditPrincipalSuggestions,
   auditServiceSuggestions,
@@ -171,6 +172,7 @@ export function useAuditSuggestions(scope: AuditScope) {
     () => new Map((catalog?.subjects.users ?? []).flatMap((user) => (user.principalId && user.displayName ? [[user.principalId, user.displayName] as const] : []))),
     [catalog]
   );
+  const groupNames = useMemo(() => auditGroupNames(catalog?.subjects.groups ?? []), [catalog]);
   const actions = useCallback(
     (service: string): AuditSuggestion[] => auditActionSuggestions(actionSources, service).map((action) => ({ value: action, label: action })),
     [actionSources]
@@ -181,6 +183,8 @@ export function useAuditSuggestions(scope: AuditScope) {
     actions,
     principals,
     principalNames,
+    /** Group display names (Audit), from the same catalog as principal names. */
+    groupNames,
     /** The broker could not return suggestions; filters stay editable. */
     unavailable: options.isError || options.data === null,
     refetch: options.refetch
@@ -188,6 +192,12 @@ export function useAuditSuggestions(scope: AuditScope) {
 }
 
 export type AuditSuggestions = ReturnType<typeof useAuditSuggestions>;
+
+/** Group display names from the policy catalog, for a viewer who can read it. */
+export function useAuditGroupNames(enabled: boolean) {
+  const catalog = usePolicyCatalog(enabled).data ?? null;
+  return useMemo(() => auditGroupNames(catalog?.subjects.groups ?? []), [catalog]);
+}
 
 /**
  * Token names for records: the signed-in user's own tokens (Activity), or an

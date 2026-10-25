@@ -205,7 +205,9 @@ impl BackendConfig for TeamsConfig {
 
 pub fn descriptor() -> ServiceDescriptor {
     ServiceDescriptor::new("teams", "Microsoft Teams notifications").with_resource_scopes(BTreeMap::from([("destination".into(), ResourceScopeCapabilities::new(TEAMS_DESTINATION_RESOURCE.id().clone(), vec!["exact".into(), "all".into()]))])).with_actions(vec![ActionDescriptor::new(ACTION, "Submit a notification to a configured Teams Workflow; acceptance does not confirm delivery", payload::schema())
-            .scope("destination").credential_modes(["service"]).resource_attributes()]).with_credentials(CredentialDescriptor::without_execution_credential())
+            .scope("destination").credential_modes(["service"]).resource_attributes()
+            // The managed destination only: the notification content is never recorded.
+            .audit_input("destination", "Destination")]).with_credentials(CredentialDescriptor::without_execution_credential())
 }
 
 /// What the Workflow endpoint answered: its status and, for HTTP 429, the

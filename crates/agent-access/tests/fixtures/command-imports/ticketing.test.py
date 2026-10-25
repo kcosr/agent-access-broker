@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import time
+import unicodedata
 import unittest
 
 sys.dont_write_bytecode = True
@@ -152,7 +153,8 @@ def check_manifest(test, manifest):
     for action in manifest["actions"]:
         test.assertLessEqual(len(json.dumps(action).encode()), 256 * 1024)
         test.assertLessEqual(set(action), {"name", "description", "inputSchema", "outputSchema",
-                                           "readOnly", "credentialModes", "resources", "listingOf"})
+                                           "readOnly", "credentialModes", "resources", "listingOf",
+                                           "audit"})
         test.assertNotIn(action["name"], names)
         names.add(action["name"])
         test.assertLessEqual(len(action["description"].encode()), 16 * 1024)
@@ -179,6 +181,15 @@ def check_manifest(test, manifest):
             test.assertTrue(action["readOnly"])
             test.assertEqual(action["listingOf"], action["resources"]["type"])
             test.assertNotIn("inputs", action["resources"])
+        inputs = [entry["input"] for entry in action.get("audit", ())]
+        test.assertEqual(len(set(inputs)), len(inputs))
+        for entry in action.get("audit", ()):
+            test.assertEqual(set(entry), {"input", "label"})
+            prop = schema["properties"][entry["input"]]
+            test.assertNotIn("x-agent-access-sensitive", json.dumps(prop))
+            test.assertNotIn("$ref", json.dumps(prop))
+            test.assertTrue(entry["label"].strip() and len(entry["label"].encode()) <= 64)
+            test.assertFalse(any(unicodedata.category(c) == "Cc" for c in entry["label"]))
     return {action["name"]: action for action in manifest["actions"]}, types
 
 
@@ -199,6 +210,14 @@ class ManifestTests(unittest.TestCase):
         self.assertNotIn("resources", actions["whoami"])
         self.assertFalse(actions["issue.create"]["readOnly"])
         self.assertEqual([a["name"] for a in types["project"]["attributes"]], ["region", "webhookSecret"])
+        self.assertEqual({name: [(entry["input"], entry["label"]) for entry in action.get("audit", ())]
+                          for name, action in actions.items()},
+                         {"issue.view": [("project", "Project"), ("issue", "Issue")],
+                          "issue.search": [("query", "Query")],
+                          "project.list": [],
+                          "issue.create": [("project", "Project"), ("summary", "Summary")],
+                          "issue.close": [("key", "Issue")],
+                          "whoami": []})
 
     def test_no_credential_manifest(self):
         manifest = one_document(self, run("describe", profile="no_credential"))
@@ -218,6 +237,9 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(after["issue.view"], before["issue.view"])
         self.assertEqual(after["issue.comment"]["credentialModes"], ["per_user"])
         self.assertEqual(after["issue.comment"]["resources"], {"type": "project", "inputs": ["/project"]})
+        self.assertEqual(after["issue.comment"]["audit"], [{"input": "project", "label": "Project"},
+                                                            {"input": "issue", "label": "Issue"}])
+        self.assertEqual(after["issue.search"]["audit"], before["issue.search"]["audit"])
         added = after_types["project"]["attributes"][len(before_types["project"]["attributes"]):]
         self.assertEqual([(a["name"], a["required"]) for a in added], [("owner", False)])
 

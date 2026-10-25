@@ -140,7 +140,8 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
             )
             .read_only()
             .scope("collection")
-            .credential_modes(["per_user"]),
+            .credential_modes(["per_user"])
+            .audit_input("collection", "Collection"),
             ActionDescriptor::new(
                 "record.view",
                 "Read one record in an authorized test collection",
@@ -154,7 +155,9 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
             )
             .read_only()
             .scope("collection")
-            .credential_modes(["per_user"]),
+            .credential_modes(["per_user"])
+            .audit_input("collection", "Collection")
+            .audit_input("id", "Record ID"),
             ActionDescriptor::new(
                 "account.view",
                 "Read the connected test account identity",
@@ -440,6 +443,27 @@ mod tests {
                 .is_err()
         );
         assert_eq!(host.built_clients().len(), 1);
+    }
+
+    #[test]
+    fn the_descriptor_validates_and_audits_the_collection_and_record() {
+        let descriptor = oauth_stub_descriptor();
+        assert_eq!(descriptor.validate(), Ok(()));
+        let audited = |name: &str| {
+            descriptor
+                .action(name)
+                .unwrap()
+                .audit_inputs
+                .iter()
+                .map(|input| (input.input(), input.label()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(audited("record.list"), [("collection", "Collection")]);
+        assert_eq!(
+            audited("record.view"),
+            [("collection", "Collection"), ("id", "Record ID")]
+        );
+        assert!(audited("account.view").is_empty());
     }
 
     #[test]

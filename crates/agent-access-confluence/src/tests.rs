@@ -51,6 +51,69 @@ fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
 }
 
 #[test]
+fn descriptor_audits_targets_searches_and_create_titles_only() {
+    let descriptor = confluence_descriptor(&confluence_config());
+    assert_eq!(descriptor.validate(), Ok(()));
+    let declared = |name: &str| {
+        descriptor
+            .action(name)
+            .unwrap()
+            .audit_inputs
+            .iter()
+            .map(|input| (input.input(), input.label()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        declared("page.create"),
+        [
+            ("space", "Space"),
+            ("title", "Title"),
+            ("parentPageId", "Parent page ID"),
+            ("parentUrl", "Parent URL")
+        ]
+    );
+    assert_eq!(declared("blog.update"), [("blogId", "Blog post ID")]);
+    assert_eq!(
+        declared("blog.search"),
+        [("query", "Query"), ("spaces", "Spaces")]
+    );
+    assert_eq!(declared("page.draft.publish"), [("pageId", "Page ID")]);
+    assert_eq!(
+        declared("blog.inline_comment.reply.add"),
+        [("commentId", "Comment ID")]
+    );
+    for action in &descriptor.actions {
+        assert_eq!(
+            action.audit_inputs.is_empty(),
+            action.action == "space.list",
+            "{}",
+            action.action
+        );
+        for input in &action.audit_inputs {
+            assert!(
+                !matches!(
+                    input.input(),
+                    "content"
+                        | "contentFormat"
+                        | "attachments"
+                        | "draftHandle"
+                        | "versionMessage"
+                        | "bodyFormat"
+                        | "baseVersion"
+                        | "sort"
+                        | "maxResults"
+                        | "nextPageToken"
+                        | "pageToken"
+                ),
+                "{}.{}",
+                action.action,
+                input.input()
+            );
+        }
+    }
+}
+
+#[test]
 fn descriptor_requires_stable_signing_key_for_exactly_the_draft_actions() {
     let descriptor = confluence_descriptor(&confluence_config());
     let signed = descriptor

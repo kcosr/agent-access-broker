@@ -346,9 +346,9 @@ can disclose coarse search density; authorized free text may mention other
 repositories. The feature does not redact those references.
 
 Search audit records retain admitted authority, selected mode, engines, route
-class, returned count, status, continuation presence, and distinct released
-project paths. They omit query text, previews, denied candidates, scan counts,
-and cursor bytes. Sensitive-output/no-store handling applies before all JSON,
+class, returned count, status, continuation presence, distinct released project
+paths, and the supplied search text in `auditInputs`. They omit previews,
+denied candidates, scan counts, and cursor bytes. Sensitive-output/no-store handling applies before all JSON,
 Markdown, CLI, and MCP delivery.
 
 ## Project uploads

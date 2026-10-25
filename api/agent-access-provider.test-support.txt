@@ -1944,6 +1944,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionCapab
 #[non_exhaustive] pub struct agent_access_provider::ActionDescriptor
 pub agent_access_provider::ActionDescriptor::action: alloc::string::String
 pub agent_access_provider::ActionDescriptor::attribution: core::option::Option<agent_access_provider::AttributionCapability>
+pub agent_access_provider::ActionDescriptor::audit_inputs: alloc::vec::Vec<agent_access_provider::AuditInput>
 pub agent_access_provider::ActionDescriptor::credential_modes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::description: alloc::string::String
 pub agent_access_provider::ActionDescriptor::documentation: core::option::Option<serde_json::value::Value>
@@ -1964,6 +1965,7 @@ pub agent_access_provider::ActionDescriptor::token_only: bool
 pub agent_access_provider::ActionDescriptor::upstream_resource_ownership: core::option::Option<agent_access_provider::UpstreamResourceOwnership>
 impl agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::attribution(self, agent_access_provider::AttributionCapability) -> Self
+pub fn agent_access_provider::ActionDescriptor::audit_input(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::capabilities(&self) -> agent_access_provider::ActionCapabilities
 pub fn agent_access_provider::ActionDescriptor::credential_modes<I, S>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::documentation(self, serde_json::value::Value) -> Self
@@ -2126,6 +2128,26 @@ impl core::marker::Unpin for agent_access_provider::AttributionMutation
 impl core::marker::UnsafeUnpin for agent_access_provider::AttributionMutation
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionMutation
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionMutation
+pub struct agent_access_provider::AuditInput
+impl agent_access_provider::AuditInput
+pub fn agent_access_provider::AuditInput::input(&self) -> &str
+pub fn agent_access_provider::AuditInput::label(&self) -> &str
+pub fn agent_access_provider::AuditInput::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::AuditInput
+pub fn agent_access_provider::AuditInput::clone(&self) -> agent_access_provider::AuditInput
+impl core::cmp::Eq for agent_access_provider::AuditInput
+impl core::cmp::PartialEq for agent_access_provider::AuditInput
+pub fn agent_access_provider::AuditInput::eq(&self, &agent_access_provider::AuditInput) -> bool
+impl core::fmt::Debug for agent_access_provider::AuditInput
+pub fn agent_access_provider::AuditInput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::AuditInput
+impl core::marker::Freeze for agent_access_provider::AuditInput
+impl core::marker::Send for agent_access_provider::AuditInput
+impl core::marker::Sync for agent_access_provider::AuditInput
+impl core::marker::Unpin for agent_access_provider::AuditInput
+impl core::marker::UnsafeUnpin for agent_access_provider::AuditInput
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AuditInput
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AuditInput
 #[non_exhaustive] pub struct agent_access_provider::AuthorizationRequest<'a>
 pub agent_access_provider::AuthorizationRequest::code_challenge_s256: &'a str
 pub agent_access_provider::AuthorizationRequest::state: &'a str
@@ -4516,6 +4538,7 @@ struct agent_access_provider::AdmittedRequest: named fields, private fields
 struct agent_access_provider::AttachmentLimitsConfig: named fields
 struct agent_access_provider::AttributionCapability: named fields, non-exhaustive
 struct agent_access_provider::AttributionMutation: named fields, non-exhaustive
+struct agent_access_provider::AuditInput: named fields, private fields
 struct agent_access_provider::AuthorizationRequest: named fields, non-exhaustive
 struct agent_access_provider::BackendRegistration: named fields, private fields, non-exhaustive
 struct agent_access_provider::BodyAdmission: named fields, private fields

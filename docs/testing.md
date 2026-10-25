@@ -2365,7 +2365,9 @@ the last one are accepted and the next call, without a reload, carries
 exactly the remaining attributes. It also checks the caller block (kind,
 groups and token ID), the request's `network` object under
 `network = "inherit"` without a configured proxy, and the absence of
-supplied secrets from responses and the audit log. Both it and the portal's
+supplied secrets from responses and the audit log. After a refresh to the
+`v2` profile it invokes `issue.comment` and checks that the record's
+`auditInputs` holds the declared project and issue and no comment text. Both it and the portal's
 real-service spec run the command through `python3`; a missing interpreter
 fails them rather than skipping them.
 

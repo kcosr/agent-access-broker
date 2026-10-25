@@ -1107,6 +1107,7 @@ fn audit_record(
             agent_request_id_generated: Some(flight.request_id.is_none()),
         },
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: Some(json!({ "oidc": details })),
     }
 }

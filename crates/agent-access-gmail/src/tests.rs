@@ -204,6 +204,42 @@ fn action_inputs_are_bounded_and_never_accept_mailboxes_urls_or_unsupported_effe
     }
 }
 #[test]
+fn descriptor_audits_the_query_and_mail_ids_only() {
+    let descriptor = descriptor();
+    assert_eq!(descriptor.validate(), Ok(()));
+    let declared = descriptor
+        .actions
+        .iter()
+        .map(|action| {
+            let inputs = action
+                .audit_inputs
+                .iter()
+                .map(|input| (input.input(), input.label()))
+                .collect::<Vec<_>>();
+            (action.action.as_str(), inputs)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let message = vec![("id", "Message ID")];
+    let thread = vec![("id", "Thread ID")];
+    assert_eq!(
+        declared,
+        BTreeMap::from([
+            ("account.view", vec![]),
+            ("label.list", vec![]),
+            ("message.search", vec![("query", "Query")]),
+            ("message.view", message.clone()),
+            ("message.archive", message.clone()),
+            ("message.trash", message.clone()),
+            ("message.restore", message),
+            ("thread.view", thread.clone()),
+            ("thread.archive", thread.clone()),
+            ("thread.trash", thread.clone()),
+            ("thread.restore", thread),
+        ])
+    );
+}
+
+#[test]
 fn mime_projection_decodes_text_marks_omissions_and_rejects_invalid_base64() {
     let result = mail::message(&message(), true).unwrap();
     assert_eq!(result["textParts"][0]["text"], "private body");

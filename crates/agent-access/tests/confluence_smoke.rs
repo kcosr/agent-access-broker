@@ -287,14 +287,30 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         0
     );
 
+    // The supplied page ID, URL or search query is recorded; returned URLs
+    // and page content are not.
+    let page_url = |url: &str| serde_json::json!([audit_input("url", "URL", url)]);
+    assert_eq!(
+        audited_inputs(&broker, "page.view"),
+        [
+            serde_json::json!([audit_input("pageId", "Page ID", "123456")]),
+            page_url("https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"),
+            page_url("https://example.atlassian.net/wiki/spaces/OPS/pages/123456/Runbook"),
+        ]
+    );
+    let query = serde_json::json!([audit_input(
+        "query",
+        "Query",
+        serde_json::json!({"type": "text", "value": "runbook"})
+    )]);
+    assert_eq!(audited_inputs(&broker, "search"), [query.clone(), query]);
     let audit = broker.audit().unwrap().text();
     assert!(audit.contains("\"service\":\"confluence\""));
-    assert!(audit.contains("\"action\":\"page.view\""));
-    assert!(audit.contains("\"action\":\"search\""));
     assert!(audit.contains("\"objectIds\""));
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
-    assert!(!audit.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(!audit.contains("https://example.atlassian.net/wiki/spaces/ENG"));
+    let outside_inputs = audit_text_without_inputs(&broker);
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG"));
     assert!(!audit.contains("private deploy steps"));
     assert!(!audit.contains("<p>"));
 
@@ -2584,8 +2600,31 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert!(audit.contains("\"action\":\"blog.inline_comment.reply.add\""));
     assert!(audit.contains("\"action\":\"blog.verify\""));
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
-    assert!(!audit.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(!audit.contains("https://example.atlassian.net/wiki/spaces/ENG"));
+    // Creation records its space, title and parent; bodies, returned URLs
+    // and draft handles are never recorded.
+    assert_eq!(
+        audited_inputs(&broker, "page.create"),
+        [serde_json::json!([
+            audit_input("space", "Space", "ENG"),
+            audit_input("title", "Title", "Created Page"),
+            audit_input("parentPageId", "Parent page ID", "123456")
+        ])]
+    );
+    assert_eq!(
+        audited_inputs(&broker, "page.draft.create"),
+        [serde_json::json!([
+            audit_input("space", "Space", "ENG"),
+            audit_input("title", "Title", "Draft Page"),
+            audit_input(
+                "parentUrl",
+                "Parent URL",
+                "https://example.atlassian.net/wiki/spaces/ENG/pages/654321/Operations"
+            )
+        ])]
+    );
+    let outside_inputs = audit_text_without_inputs(&broker);
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG"));
     assert!(!audit.contains("create secret body"));
     assert!(!audit.contains("updated secret body"));
     assert!(!audit.contains("comment secret body"));
@@ -4441,6 +4480,38 @@ where
         .start()
         .await
         .unwrap()
+}
+
+/// One `auditInputs` entry.
+fn audit_input(input: &str, label: &str, value: impl Into<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"input": input, "label": label, "value": value.into()})
+}
+
+/// The `auditInputs` of each audit record of the Confluence `action`, in
+/// write order; `null` for a record without them.
+fn audited_inputs(broker: &RunningBroker, action: &str) -> Vec<serde_json::Value> {
+    broker
+        .audit()
+        .unwrap()
+        .require_action("confluence", action)
+        .into_iter()
+        .map(|record| record["auditInputs"].clone())
+        .collect()
+}
+
+/// The audit records as JSONL text without their `auditInputs`, which keep
+/// the supplied locators verbatim.
+fn audit_text_without_inputs(broker: &RunningBroker) -> String {
+    broker
+        .audit()
+        .unwrap()
+        .records()
+        .into_iter()
+        .map(|mut record| {
+            record.as_object_mut().unwrap().remove("auditInputs");
+            format!("{record}\n")
+        })
+        .collect()
 }
 
 async fn stop(broker: RunningBroker) {

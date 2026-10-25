@@ -1960,7 +1960,7 @@ token or OAuth lease, even if policy then denies the call with no credential
 mode; absent when only service credentials are used or for management and
 authentication records), `decision`, `reasonCode`, `upstreamStatus`,
 `upstreamDurationMs`, `objectIds`, `identitySource`, optional `callerId`, `source`,
-`executionContext`, `searchAuthorization` (search actions), and
+`executionContext`, `searchAuthorization` (search actions), `auditInputs`, and
 `providerAudit`. When present, `matchedGrant` carries `subject`, `priority`,
 `resources` (the grant's resource selection), `executionContexts`, and optional
 grant metadata. TOML-backed grants include `configIndex`; managed-store grants
@@ -1987,6 +1987,17 @@ path-changing reload's records in the new and the old store) share
 records from several brokers distinguishable and safe to de-duplicate. Both
 storage backends hold the same JSON: a SQLite row stores the record exactly as
 the JSONL backend writes the line.
+
+`auditInputs` lists the supplied values of the inputs an invocation's action
+opts into audit (`ActionDescriptor::audit_input` for native providers, a command
+action's `audit` list for command imports), in declaration order. Each entry has
+`input`, `label` and `value`. A string longer than 1 KiB, or any other value
+whose compact JSON is, is cut to 1 KiB as a string and marked `truncated: true`.
+Integers beyond 2^53 are kept exact as decimal strings. The runtime captures
+them once the action is resolved, so every later record of the request carries
+them, including both records of a stream and owned interruption records;
+records written earlier, such as rate-limit, body and identity rejections, have
+none. The field is absent when there are no values.
 
 `identitySource` carries name, type, header, scheme, plus `tokenClass` and
 `tokenId`; attested identities add `readOnlyAccess`. `token_scopes` is

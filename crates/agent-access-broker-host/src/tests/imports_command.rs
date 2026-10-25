@@ -1008,6 +1008,110 @@ async fn refresh_keeps_grants_and_reacceptance_requires_confirming_them() {
     broker.stop().await;
 }
 
+/// Adding, changing or removing an action's `audit` list is a behavioral
+/// change that a refresh quarantines until acceptance; an empty list is no
+/// change.
+#[cfg(unix)]
+#[tokio::test]
+async fn refresh_quarantines_audit_declaration_changes() {
+    let mut manifest = clock_manifest();
+    manifest["actions"][0]["inputSchema"] = json!({"type": "object",
+        "properties": {"zone": {"type": "string"}}, "additionalProperties": false});
+    let fixture = CommandFixture::new("clock", &manifest);
+    let token = fixture.admin_token();
+    let broker = import_broker(&fixture.config).await;
+    let app = broker.app();
+    let mut current = enabled_clock(&app, &token).await;
+    let zone = json!([{"input": "zone", "label": "Zone"}]);
+    for (audit, changed, stored) in [
+        (Some(json!([])), false, None),
+        (Some(zone.clone()), true, Some(zone.clone())),
+        (
+            Some(json!([{"input": "zone", "label": "Time zone"}])),
+            true,
+            Some(json!([{"input": "zone", "label": "Time zone"}])),
+        ),
+        (None, true, None),
+    ] {
+        let mut refreshed = manifest.clone();
+        if let Some(audit) = &audit {
+            refreshed["actions"][0]["audit"] = audit.clone();
+        }
+        fixture.write_manifest(&refreshed);
+        let (status, discovered) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/clock/discover",
+            Some(versions(&current)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{discovered}");
+        let discovered = discovered["result"].clone();
+        let statuses = discovered["service"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|action| {
+                (
+                    action["definition"]["action"].as_str().unwrap().to_owned(),
+                    action["status"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let expected = if changed { "quarantined" } else { "enabled" };
+        assert_eq!(statuses["time.now"], expected, "{audit:?}: {discovered}");
+        assert_eq!(statuses["time.zone"], "enabled", "{audit:?}");
+        if !changed {
+            current = discovered;
+            continue;
+        }
+        let tool = discovered["preview"]["manifest"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["definition"]["action"] == "time.now")
+            .unwrap()
+            .clone();
+        assert!(tool["unsupportedReason"].is_null(), "{tool}");
+        let mut accept = versions(&discovered);
+        accept["manifestHash"] = discovered["preview"]["manifestHash"].clone();
+        accept["selections"] = json!([{"source": tool["definition"]["source"],
+            "action": "time.now", "readOnly": true}]);
+        let (status, accepted) = request(
+            &app,
+            &token,
+            Method::POST,
+            "/v1/admin/imports/clock/accept",
+            Some(accept),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{accepted}");
+        current = accepted["result"].clone();
+        let published = broker.runtime();
+        let action = published
+            .imported_catalog()
+            .service("clock")
+            .unwrap()
+            .actions
+            .iter()
+            .find(|action| action.definition.action == "time.now")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            action.status,
+            agent_access_core::ImportedActionStatus::Enabled
+        );
+        assert_eq!(
+            action.definition.annotations["command"].get("audit"),
+            stored.as_ref(),
+            "{audit:?}"
+        );
+    }
+    drop(app);
+    broker.stop().await;
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn credential_modes_stay_within_the_accepted_declaration() {

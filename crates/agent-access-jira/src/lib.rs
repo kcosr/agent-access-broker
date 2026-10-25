@@ -236,7 +236,8 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "pagination": "startAt defaults to 0; maxResults defaults to 50 and must be 1-100. Follow nextStartAt until it is null (isLast=true). Each page is independently authorized; metadata can change between calls.",
             "issueTypes": "Each entry contains id, name, description and subtask. IDs are decimal strings: pass id directly as issueTypeId to issue.create or issue.child.create. A missing upstream description is returned as an empty string.",
             "creation": "Discovery does not authorize a create action. Keep discovery and creation credential selection aligned. Required fields and parent hierarchy constraints can still prevent creation; the broker's create actions do not accept arbitrary custom fields."
-        })),
+        }))
+        .audit_input("project", "Project"),
         jira_read_action(
             "issue.view",
             "View Jira issue context, ADF description, custom fields and eligible embedded references",
@@ -262,7 +263,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "issueLinks": "Included only when effective issue.view authority in the selected credential mode covers every Jira project and Jira returns the requested field. Each entry contains key, type (link type name), direction (inward/outward), relationship (directional label), summary and issueType. Read the relationship as <viewed issue> <relationship> <key>, such as PROJ-1 blocks CM-42 or PROJ-1 is blocked by CM-42. Optional summary and issueType are null when unavailable. Order and multiplicity match Jira's embedded list; keys and linked content are not independently resolved. No extra Jira requests are made.",
             "hierarchy": "Parent and subtasks use the same effective universal same-mode authority as issueLinks. When eligible, parent is always present: null means Jira returned no parent to the execution credential, otherwise it contains key, nullable summary and nullable issueType. Subtasks is omitted if not returned; otherwise it is an ordered array of those reference objects, preserving duplicates and []. Only canonical fields.parent is used, including a direct epic parent when Jira supplies one. No Epic Link fallback, ancestry traversal, parent classification or linked-issue lookup occurs. A subtask's direct parent may be a story, and subtasks is not a complete epic-child or descendant search.",
             "omission": "Missing parent means hierarchy was withheld. A null parent is not independent proof that the issue has no parent. Missing subtasks or issueLinks means withheld or not returned; an explicit empty list only describes that returned field. Any gap in universal same-mode authority withholds all links, parent and subtasks. A listed reference does not guarantee a later issue.view succeeds, including when lookup and execution credentials differ."
-        })),
+        }))
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL"),
         jira_action(
             "issue.create",
             "Create a Jira issue in an authorized project with bounded summary and optional explicitly formatted content",
@@ -309,7 +312,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             AttributionVerb::Add,
             "description",
             AttributionRepresentation::Adf,
-        )),
+        ))
+        .audit_input("project", "Project")
+        .audit_input("summary", "Summary"),
         jira_action(
             "issue.child.create",
             "Create a Jira issue under an authorized parent issue using Jira parent",
@@ -356,7 +361,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             AttributionVerb::Add,
             "description",
             AttributionRepresentation::Adf,
-        )),
+        ))
+        .audit_input("project", "Project")
+        .audit_input("parentIssue", "Parent issue")
+        .audit_input("parentUrl", "Parent URL")
+        .audit_input("summary", "Summary"),
         jira_action(
             "issue.update",
             "Update a Jira issue summary and/or explicitly formatted content after project confirmation",
@@ -396,7 +405,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             AttributionVerb::Update,
             "description",
             AttributionRepresentation::Adf,
-        )),
+        ))
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL"),
         jira_action(
             "issue.parent.set",
             "Assign one authorized Jira issue to an authorized parent issue",
@@ -425,7 +436,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("parentIssue", "Parent issue")
+        .audit_input("parentUrl", "Parent URL"),
         jira_action(
             "issue.dependency.add",
             "Declare that one authorized Jira issue blocks another authorized Jira issue",
@@ -454,7 +469,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("blockingIssue", "Blocking issue")
+        .audit_input("blockingUrl", "Blocking URL")
+        .audit_input("blockedIssue", "Blocked issue")
+        .audit_input("blockedUrl", "Blocked URL"),
         jira_read_action(
             "search",
             "Search Jira issues using authorized projects; omit projects to use effective access. Empty or ORDER BY-only JQL requires a finite project scope.",
@@ -484,7 +503,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             }),
         )
         .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained)
-        .documentation(jql_documentation()),
+        .documentation(jql_documentation())
+        .audit_input("query", "Query")
+        .audit_input("projects", "Projects"),
         jira_read_action(
             "comment.list",
             "List Jira issue comment metadata after project confirmation",
@@ -504,7 +525,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL"),
         jira_read_action(
             "comment.view",
             "View one Jira issue comment body after project confirmation",
@@ -523,7 +546,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID"),
         jira_action(
             "comment.add",
             "Add an explicitly formatted Jira issue comment after project confirmation",
@@ -562,7 +588,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             AttributionVerb::Add,
             "body",
             AttributionRepresentation::Adf,
-        )),
+        ))
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL"),
         jira_action(
             "comment.reply",
             "Reply to a Jira issue comment after project confirmation",
@@ -602,7 +630,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             AttributionVerb::Add,
             "body",
             AttributionRepresentation::Adf,
-        )),
+        ))
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("parentCommentId", "Parent comment ID"),
         jira_action(
             "comment.update",
             "Update an explicitly formatted Jira issue comment after project confirmation",
@@ -644,7 +675,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             AttributionVerb::Update,
             "body",
             AttributionRepresentation::Adf,
-        )),
+        ))
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID"),
         jira_action(
             "comment.delete",
             "Delete a Jira issue comment after project confirmation",
@@ -663,7 +697,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID"),
         jira_read_action(
             "comment.property.list",
             "List broker-allowed Jira issue comment property keys",
@@ -682,7 +719,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID"),
         jira_read_action(
             "comment.property.get",
             "Get one broker-allowed Jira issue comment property",
@@ -702,7 +742,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID")
+        .audit_input("propertyKey", "Property key"),
         jira_action(
             "comment.property.set",
             "Set one broker-allowed Jira issue comment property",
@@ -723,7 +767,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID")
+        .audit_input("propertyKey", "Property key"),
         jira_action(
             "comment.property.delete",
             "Delete one broker-allowed Jira issue comment property",
@@ -743,7 +791,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL")
+        .audit_input("commentId", "Comment ID")
+        .audit_input("propertyKey", "Property key"),
         jira_action(
             "attachment.add",
             "Upload bounded Jira issue attachments after project confirmation",
@@ -773,7 +825,8 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             }),
         )
         .lookup(LookupRequirement::ScopeResolution)
-        .multipart_upload(attachment_upload_plan(&["issue"], None)),
+        .multipart_upload(attachment_upload_plan(&["issue"], None))
+        .audit_input("issue", "Issue"),
         jira_read_action(
             "attachment.download",
             "Download a bounded Jira issue attachment after membership checks",
@@ -788,7 +841,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             }),
         )
         .lookup(LookupRequirement::ScopeResolution)
-        .raw_download(),
+        .raw_download()
+        .audit_input("issue", "Issue")
+        .audit_input("attachmentId", "Attachment ID"),
         jira_read_action(
             "attachment.list",
             "List bounded Jira issue attachment metadata after project confirmation",
@@ -805,7 +860,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("url", "URL"),
         jira_read_action(
             "verify",
             "Verify Jira comment or attachment existence on an issue",
@@ -820,7 +877,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "additionalProperties": false
             }),
         )
-        .lookup(LookupRequirement::ScopeResolution),
+        .lookup(LookupRequirement::ScopeResolution)
+        .audit_input("issue", "Issue")
+        .audit_input("expectCommentId", "Expected comment ID")
+        .audit_input("expectAttachmentId", "Expected attachment ID"),
     ];
     actions.push(project_list::descriptor(&config.listing));
     actions.push(project_view::descriptor());

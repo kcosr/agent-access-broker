@@ -126,6 +126,14 @@ actions and exposes typed wrappers for supported services.
   from one fresh caller catalog; it must not retry after stale discovery.
   Downloads preserve explicit mutation outcomes on local/transfer failure, and
   native read headers alone never prove completed delivery.
+- Actions opt top-level inputs into audit records (`auditInputs`) with
+  `ActionDescriptor::audit_input(input, label)`; command imports declare an
+  action-level `audit` list. Declare only what the request concerned: targets,
+  scope, search queries, titles supplied on create, and controls that change
+  the operation's meaning. Never declare content bodies, descriptions,
+  comments, messages, file contents, credentials or pagination tokens. Keep the
+  declaration out of discovery, MCP, OpenAPI and send projections, and never
+  let MCP or OpenAPI upstream schemas opt inputs in.
 - When making changes, audit whether `README.md`, `docs/`, `skills/`, sample
   configs, `CHANGELOG.md`, and this `AGENTS.md` need updates. Update them in
   the same change when behavior, commands, config, architecture, security

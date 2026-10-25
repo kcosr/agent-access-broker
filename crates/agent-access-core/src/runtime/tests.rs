@@ -32,7 +32,7 @@ fn default_execution_context() -> ExecutionContext {
         .expect("built-in default execution context is valid")
 }
 
-fn governed(operation: OperationContext) -> GovernedOperationContext {
+pub(super) fn governed(operation: OperationContext) -> GovernedOperationContext {
     GovernedOperationContext {
         admission: None,
         operation,
@@ -687,11 +687,14 @@ async fn retention_prune_runs_after_triggering_append_ack() {
 }
 
 /// Both audit backends, for the backend-neutral shared-writer tests.
-const AUDIT_STORE_TYPES: [crate::AuditStoreType; 2] =
+pub(super) const AUDIT_STORE_TYPES: [crate::AuditStoreType; 2] =
     [crate::AuditStoreType::Jsonl, crate::AuditStoreType::Sqlite];
 
 /// An `[audit]` table of type `kind` at a fresh private path.
-fn audit_config_for(kind: crate::AuditStoreType, name: &str) -> (crate::AuditConfig, PathBuf) {
+pub(super) fn audit_config_for(
+    kind: crate::AuditStoreType,
+    name: &str,
+) -> (crate::AuditConfig, PathBuf) {
     let path = temp_path(&format!("{name}.audit.{}", kind.as_str()));
     (
         crate::AuditConfig::new(kind, path.display().to_string()),
@@ -1438,6 +1441,7 @@ pub(super) fn test_audit_record() -> AuditRecord {
         identity_source: None,
         source: SourceContext::unknown(),
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: None,
     }
 }
@@ -4217,6 +4221,23 @@ async fn required_stream_appends_terminal_failure_audit() {
     let phases = stream_phase_counts(&records);
     assert_eq!(phases.get("started"), Some(&1));
     assert_eq!(phases.get("failed"), Some(&1));
+    assert_stream_audit_inputs(&records);
+}
+
+/// Both records of a streamed fake echo carry its declared input.
+fn assert_stream_audit_inputs(records: &[Value]) {
+    let streamed: Vec<_> = records
+        .iter()
+        .filter(|record| record["providerAudit"].get("streamPhase").is_some())
+        .collect();
+    assert_eq!(streamed.len(), 2, "{records:?}");
+    for record in streamed {
+        assert_eq!(
+            record["auditInputs"],
+            json!([{"input": "project", "label": "Project", "value": "TEST"}]),
+            "{record}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -4266,6 +4287,7 @@ async fn required_stream_appends_exactly_one_completed_terminal_audit() {
         .unwrap();
     assert_eq!(started["brokerRequestId"], completed["brokerRequestId"]);
     assert_ne!(started["auditId"], completed["auditId"]);
+    assert_stream_audit_inputs(&records);
 }
 
 #[tokio::test]

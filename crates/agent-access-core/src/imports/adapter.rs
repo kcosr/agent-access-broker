@@ -6,8 +6,8 @@ use super::{
 };
 use crate::CommandImportConfig;
 use agent_access_provider::{
-    BuildContext, DelegatedCredential, ExecutionCredential, Provider, ProviderBuildError,
-    ProviderError,
+    AuditInput, BuildContext, DelegatedCredential, ExecutionCredential, Provider,
+    ProviderBuildError, ProviderError,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -224,6 +224,14 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         _action: &ImportedActionDefinition,
     ) -> Result<ImportedActionAuthority, String> {
         Ok(ImportedActionAuthority::default())
+    }
+    /// The top-level inputs whose supplied values core copies into the
+    /// action's audit records, read offline from its accepted definition and
+    /// checked by the descriptor rules. The default declares none, so an
+    /// upstream schema or annotation never opts an input in. An error makes
+    /// the action authorize nothing, as for [`Self::action_authority`].
+    fn audit_inputs(&self, _action: &ImportedActionDefinition) -> Result<Vec<AuditInput>, String> {
+        Ok(Vec::new())
     }
     /// Exact accepted source name, derived offline without applying the narrower
     /// scoped MCP profile. Must succeed for every action accepted by validation.

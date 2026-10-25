@@ -99,6 +99,10 @@ pub struct ActionDescriptor {
     /// JSON pointers into sensitive response values, including deliberate secret
     /// exports and opaque imported payloads; these responses are never cached.
     pub sensitive_output_pointers: Vec<String>,
+    /// Top-level inputs whose supplied values the host copies into the
+    /// action's audit records, in declaration order; see
+    /// [`Self::audit_input`]. Agents never see these declarations.
+    pub audit_inputs: Vec<AuditInput>,
     pub attribution: Option<AttributionCapability>,
     /// Handles issued by this action must survive restarts and reloads, so
     /// the broker must hold a stable signing key.
@@ -107,6 +111,38 @@ pub struct ActionDescriptor {
     /// supports; `None` means JSON results only.
     pub presentation: Option<ActionPresentation>,
 }
+
+/// One top-level action input whose supplied value the host copies into the
+/// action's audit records, with the label people see beside it. Declared
+/// with [`ActionDescriptor::audit_input`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditInput {
+    input: String,
+    label: String,
+}
+
+impl AuditInput {
+    /// Records the top-level input `input`, shown as `label`.
+    pub fn new(input: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            input: input.into(),
+            label: label.into(),
+        }
+    }
+
+    /// The name of the top-level input property.
+    pub fn input(&self) -> &str {
+        &self.input
+    }
+
+    /// The label shown beside the recorded value.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+/// The longest audit input label, in UTF-8 bytes.
+const AUDIT_INPUT_LABEL_MAX_BYTES: usize = 64;
 
 /// How a reviewed native search enforces its admitted resource boundary.
 /// Imports cannot declare native search enforcement.
@@ -311,6 +347,7 @@ impl ActionDescriptor {
             upstream_resource_ownership: None,
             io: ActionIo::Json,
             sensitive_output_pointers: Vec::new(),
+            audit_inputs: Vec::new(),
             attribution: None,
             requires_stable_signing_key: false,
             presentation: None,
@@ -416,6 +453,16 @@ impl ActionDescriptor {
 
     pub fn sensitive_output(mut self, pointer: impl Into<String>) -> Self {
         self.sensitive_output_pointers.push(pointer.into());
+        self
+    }
+
+    /// Records the supplied value of the top-level input `input` in the
+    /// action's audit records, shown as `label`. Declare only what the call
+    /// concerns, such as its target or search, never bodies or secrets;
+    /// [`ServiceDescriptor::validate`] rejects an input whose schema is
+    /// marked sensitive.
+    pub fn audit_input(mut self, input: impl Into<String>, label: impl Into<String>) -> Self {
+        self.audit_inputs.push(AuditInput::new(input, label));
         self
     }
 
@@ -808,6 +855,56 @@ impl ServiceDescriptor {
                     ));
                 }
             }
+            let mut audit_inputs = BTreeSet::new();
+            for audit_input in &action.audit_inputs {
+                let input = audit_input.input();
+                if !audit_inputs.insert(input) {
+                    errors.push(format!(
+                        "{service}.{name} declares audit input {input} more than once"
+                    ));
+                }
+                let label = audit_input.label();
+                if label.trim().is_empty()
+                    || label.len() > AUDIT_INPUT_LABEL_MAX_BYTES
+                    || label.chars().any(char::is_control)
+                {
+                    errors.push(format!(
+                        "{service}.{name} audit input {input} needs a label of at most {AUDIT_INPUT_LABEL_MAX_BYTES} bytes without control characters"
+                    ));
+                }
+                let Some(schema) = action
+                    .input_schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(input))
+                else {
+                    errors.push(format!(
+                        "{service}.{name} audit input {input} is not a top-level input property"
+                    ));
+                    continue;
+                };
+                // A sensitive input schema root marks every input sensitive.
+                if action
+                    .input_schema
+                    .get("x-agent-access-sensitive")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    || schema_has_key(schema, &|key, value| {
+                        key == "x-agent-access-sensitive" && value.as_bool() == Some(true)
+                    })
+                {
+                    errors.push(format!(
+                        "{service}.{name} audit input {input} has a sensitive schema"
+                    ));
+                }
+                if schema_has_key(schema, &|key, _| {
+                    matches!(key, "$ref" | "$dynamicRef" | "$recursiveRef")
+                }) {
+                    errors.push(format!(
+                        "{service}.{name} audit input {input} schema uses a reference"
+                    ));
+                }
+            }
         }
         if errors.is_empty() {
             Ok(())
@@ -853,6 +950,17 @@ fn is_json_pointer(pointer: &str) -> bool {
         }
     }
     true
+}
+
+/// Whether any object anywhere in `schema` has a member that `matches`.
+fn schema_has_key(schema: &Value, matches: &dyn Fn(&str, &Value) -> bool) -> bool {
+    match schema {
+        Value::Object(object) => object
+            .iter()
+            .any(|(key, value)| matches(key, value) || schema_has_key(value, matches)),
+        Value::Array(items) => items.iter().any(|value| schema_has_key(value, matches)),
+        _ => false,
+    }
 }
 
 /// Whether any `properties` object in a schema (including `oneOf`/`anyOf`
@@ -1234,6 +1342,125 @@ mod tests {
             errors[1],
             "example.item.list input schema must describe an object"
         );
+    }
+
+    #[test]
+    fn audit_inputs_are_declared_in_order_and_hidden_from_capabilities() {
+        let plain = action("item.comment");
+        let declared = plain
+            .clone()
+            .audit_input("project", "Project")
+            .audit_input(String::from("body"), String::from("Body"));
+        assert_eq!(
+            declared.audit_inputs,
+            [
+                AuditInput::new("project", "Project"),
+                AuditInput::new("body", "Body")
+            ]
+        );
+        assert_eq!(declared.audit_inputs[0].input(), "project");
+        assert_eq!(declared.audit_inputs[0].label(), "Project");
+        assert!(plain.audit_inputs.is_empty());
+        assert_eq!(plain.capabilities(), declared.capabilities());
+        assert_eq!(errors(vec![declared]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn audit_inputs_name_unique_top_level_properties() {
+        let mut nested = action("item.nested");
+        nested.input_schema = json!({
+            "type": "object",
+            "properties": {"target": {
+                "type": "object",
+                "properties": {"project": {"type": "string"}}
+            }}
+        });
+        assert_eq!(
+            errors(vec![
+                action("item.view").audit_input("issue", "Issue"),
+                nested.audit_input("project", "Project"),
+                action("item.edit")
+                    .audit_input("project", "Project")
+                    .audit_input("project", "Other project"),
+            ]),
+            [
+                "example.item.view audit input issue is not a top-level input property",
+                "example.item.nested audit input project is not a top-level input property",
+                "example.item.edit declares audit input project more than once",
+            ]
+        );
+    }
+
+    #[test]
+    fn audit_input_labels_are_short_printable_text() {
+        let longest = "x".repeat(64);
+        assert!(errors(vec![action("item.view").audit_input("project", longest)]).is_empty());
+        // 63 ASCII bytes plus a two-byte character: 65 bytes in 64 characters.
+        let too_long = format!("{}é", "x".repeat(63));
+        for label in ["", "   ", too_long.as_str(), "Pro\nject", "Pro\u{7}ject"] {
+            assert_eq!(
+                errors(vec![action("item.view").audit_input("project", label)]),
+                [
+                    "example.item.view audit input project needs a label of at most 64 bytes without control characters"
+                ],
+                "{label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn audit_inputs_reject_sensitive_or_referenced_schemas() {
+        let with_property = |property: Value| {
+            let mut action = action("item.view").audit_input("project", "Project");
+            action.input_schema = json!({
+                "type": "object",
+                "$defs": {"key": {"$dynamicAnchor": "key", "type": "string"}},
+                "properties": {"project": property, "token": {
+                    "type": "string", "x-agent-access-sensitive": true
+                }}
+            });
+            errors(vec![action])
+        };
+        // A sensitive sibling does not affect the declared property, and an
+        // explicit false marker is not sensitive.
+        assert!(
+            with_property(json!({"type": "string", "x-agent-access-sensitive": false})).is_empty()
+        );
+        for sensitive in [
+            json!({"type": "string", "x-agent-access-sensitive": true}),
+            json!({"type": "object", "properties": {
+                "secret": {"type": "string", "x-agent-access-sensitive": true}
+            }}),
+            json!({"anyOf": [
+                {"type": "string"},
+                {"type": "array", "items": {"x-agent-access-sensitive": true}}
+            ]}),
+        ] {
+            assert_eq!(
+                with_property(sensitive),
+                ["example.item.view audit input project has a sensitive schema"]
+            );
+        }
+        let mut root_sensitive = action("item.view").audit_input("project", "Project");
+        root_sensitive.input_schema = json!({
+            "type": "object",
+            "x-agent-access-sensitive": true,
+            "properties": {"project": {"type": "string"}}
+        });
+        assert_eq!(
+            errors(vec![root_sensitive]),
+            ["example.item.view audit input project has a sensitive schema"]
+        );
+        for referenced in [
+            json!({"$ref": "#/$defs/key"}),
+            json!({"type": "array", "items": {"$ref": "#/$defs/key"}}),
+            json!({"oneOf": [{"type": "string"}, {"$dynamicRef": "#key"}]}),
+        ] {
+            assert_eq!(
+                with_property(referenced),
+                ["example.item.view audit input project schema uses a reference"]
+            );
+        }
     }
 
     #[test]

@@ -554,6 +554,7 @@ fn admin_audit_record(snapshot: &RuntimeSnapshot, input: &AdminAuditInput<'_>) -
         identity_source,
         source: input.source.clone(),
         execution_context: None,
+        audit_inputs: Vec::new(),
         provider_audit: Some(provider_audit),
     }
 }

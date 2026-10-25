@@ -164,6 +164,43 @@ impl GitlabProvisioningOperation {
     }
 }
 
+/// Declares the inputs each provisioning action records in audit: its project
+/// and target identity and, for issued or rotated tokens, the requested grant
+/// and lifetime. No input carries a token.
+pub(crate) fn with_audit_inputs(action: &str, descriptor: ActionDescriptor) -> ActionDescriptor {
+    const PROJECT: (&str, &str) = ("project", "Project");
+    const USER_ID: (&str, &str) = ("userId", "User ID");
+    const TOKEN_ID: (&str, &str) = ("tokenId", "Token ID");
+    const TOKEN_NAME: (&str, &str) = ("name", "Token name");
+    const SCOPES: (&str, &str) = ("scopes", "Scopes");
+    const ACCESS_LEVEL: (&str, &str) = ("accessLevel", "Access level");
+    const EXPIRES_AT: (&str, &str) = ("expiresAt", "Expires at");
+    let inputs: &[(&str, &str)] = match action {
+        "project.access_token.list" | "service_account.list" => &[PROJECT],
+        "project.access_token.view" | "project.access_token.revoke" => &[PROJECT, TOKEN_ID],
+        "project.access_token.create" => &[PROJECT, TOKEN_NAME, SCOPES, ACCESS_LEVEL, EXPIRES_AT],
+        "project.access_token.rotate" => &[PROJECT, TOKEN_ID, EXPIRES_AT],
+        "service_account.view" | "service_account.delete" | "service_account.token.list" => {
+            &[PROJECT, USER_ID]
+        }
+        "service_account.create" => &[
+            PROJECT,
+            ("name", "Service account name"),
+            ("username", "Username"),
+        ],
+        "service_account.member.set" => &[PROJECT, USER_ID, ACCESS_LEVEL],
+        "service_account.token.create" => &[PROJECT, USER_ID, TOKEN_NAME, SCOPES, EXPIRES_AT],
+        "service_account.token.rotate" => &[PROJECT, USER_ID, TOKEN_ID, EXPIRES_AT],
+        "service_account.token.revoke" => &[PROJECT, USER_ID, TOKEN_ID],
+        _ => &[],
+    };
+    inputs
+        .iter()
+        .fold(descriptor, |descriptor, (input, label)| {
+            descriptor.audit_input(*input, *label)
+        })
+}
+
 pub(crate) fn provisioning_schema(action: &str, config: &GitlabProviderConfig) -> Value {
     let mut properties = serde_json::Map::new();
     properties.insert("project".into(), json!({"type":"string", "minLength":1}));

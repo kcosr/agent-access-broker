@@ -256,10 +256,10 @@ pub use delegated::{
     DelegatedAccess, DelegatedAccessError, DelegatedBindingId, DelegatedCredential, DelegatedLease,
 };
 pub use descriptor::{
-    ActionDescriptor, ActionIo, CredentialDescriptor, CredentialProfile, DelegatedConnection,
-    HeaderEncoding, LookupRequirement, MultipartUploadSpec, NativeSearchEnforcement,
-    RESULT_METADATA_HEADER, ScopedMcpNameSource, ServiceDescriptor, ServiceSurface,
-    attachment_upload_plan, raw_download_io,
+    ActionDescriptor, ActionIo, AuditInput, CredentialDescriptor, CredentialProfile,
+    DelegatedConnection, HeaderEncoding, LookupRequirement, MultipartUploadSpec,
+    NativeSearchEnforcement, RESULT_METADATA_HEADER, ScopedMcpNameSource, ServiceDescriptor,
+    ServiceSurface, attachment_upload_plan, raw_download_io,
 };
 pub use domain_reason::{
     ProviderFailureStatus, ProviderReason, ProviderReasonDefinition, domain_reason_prefix,

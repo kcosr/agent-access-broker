@@ -1,8 +1,9 @@
 // Pure helpers for the Audit and Activity views: filter and drawer URL state,
 // paging session ranges, suggestions, and presentation of stored audit records
 // (no JSX).
-import type { AuditOptions, AuditRecord, BrokerTokenRecord } from "../types";
+import type { AuditInputValue, AuditOptions, AuditRecord, BrokerTokenRecord, PolicyCatalogSubject } from "../types";
 import { formatBytes, uniqueSortedOptions } from "./helpers";
+import type { ResourceTypes } from "./resource-types";
 
 /** `admin` reads `/v1/admin/audit/*` (Audit); `self` reads `/v1/audit/*` (Activity). */
 export type AuditScope = "admin" | "self";
@@ -377,6 +378,182 @@ export function auditManagement(record: Pick<AuditRecord, "providerAudit">) {
   };
 }
 
+/** A stored value as one line of text: strings as is, anything else as compact JSON. */
+export function compactJson(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+const KEY_ACRONYMS = new Map([["id", "ID"], ["iid", "IID"], ["url", "URL"], ["uuid", "UUID"], ["sha", "SHA"], ["api", "API"], ["ci", "CI"]]);
+
+/**
+ * An identifier as a sentence-case label: camelCase and `_`, `-` or `.`
+ * separated words, with common acronyms in capitals (`mergeRequestIid` is
+ * "Merge request IID", `jira_project` is "Jira project").
+ */
+export function auditKeyLabel(key: string): string {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_.-]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  if (!words.length) return key;
+  return words.map((word, index) => KEY_ACRONYMS.get(word) ?? (index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word)).join(" ");
+}
+
+export type AuditLabeledValue = { key: string; label: string; value: string };
+
+/** One row per resource scope type: the type's registry label (else its ID as words) and its comma-joined values. */
+export function auditScopeRows(record: Pick<AuditRecord, "resourceScopes">, types: ResourceTypes): AuditLabeledValue[] {
+  return Object.entries(record.resourceScopes ?? {}).map(([type, values]) => ({
+    key: type,
+    label: types.get(type)?.label ?? auditKeyLabel(type),
+    value: values.join(", ")
+  }));
+}
+
+/**
+ * One row per top-level key of the provider-reported object IDs, labeled by
+ * the key as words: scalars as text, nested values as compact JSON. A value
+ * that is not an object is one "Object IDs" row. Null IDs and IDs that repeat
+ * a `shown` row (a scope row with the same key and value) are left out.
+ */
+export function auditObjectIdRows(record: Pick<AuditRecord, "objectIds">, shown: AuditLabeledValue[] = []): AuditLabeledValue[] {
+  const ids = record.objectIds;
+  if (ids == null) return [];
+  if (typeof ids !== "object" || Array.isArray(ids)) return [{ key: "objectIds", label: "Object IDs", value: compactJson(ids) }];
+  // An absent ID says nothing, and one that repeats a scope row (the same
+  // key with the same value) adds nothing. Equal values under different keys
+  // can name different things, such as a numeric space key and a page ID.
+  const repeated = (row: AuditLabeledValue) => shown.some((scope) => scope.key === row.key && scope.value === row.value);
+  return Object.entries(ids)
+    .filter(([, value]) => value != null)
+    .map(([key, value]) => ({ key, label: auditKeyLabel(key), value: compactJson(value) }))
+    .filter((row) => !repeated(row));
+}
+
+const IDENTITY_SOURCE_TYPES = new Map([
+  ["broker_tokens", "Broker token"],
+  ["static_principals", "Static token"],
+  ["trusted_user", "Trusted user"],
+  ["forwarded_identity", "Forwarded identity"]
+]);
+
+const TOKEN_CLASSES = new Map([
+  ["agent_invoke", "Agent invocation"],
+  ["user_manage", "User management"],
+  ["admin", "Administration"]
+]);
+
+/**
+ * The record's identity source in words: its type and token class
+ * ("Trusted user · Agent invocation"), or "Browser session" for a portal
+ * sign-in. Unknown types and classes show as recorded.
+ */
+export function auditIdentitySourceLabel(source: NonNullable<AuditRecord["identitySource"]>): string {
+  if (auditIsBrowserSession(source)) return "Browser session";
+  const type = IDENTITY_SOURCE_TYPES.get(source.type) ?? source.type;
+  const tokenClass = source.tokenClass ? TOKEN_CLASSES.get(source.tokenClass) ?? source.tokenClass : null;
+  return tokenClass ? `${type} · ${tokenClass}` : type;
+}
+
+/** Group IDs to display names, from the policy catalog's subjects. */
+export function auditGroupNames(groups: PolicyCatalogSubject[]): Map<string, string> {
+  return new Map(groups.flatMap((group) => (group.groupId && group.displayName ? [[group.groupId, group.displayName] as const] : [])));
+}
+
+/** A display name that replaces an ID in the Summary: known, non-empty and different from the ID. */
+export function auditDisplayName(names: ReadonlyMap<string, string>, id: string): string | null {
+  const name = names.get(id);
+  return name && name !== id ? name : null;
+}
+
+/**
+ * The IDs that Request › Details repeats because display names replaced them
+ * in the Summary (where an ID is otherwise only a hover title): the
+ * principal's, and every group's when any group showed a name.
+ */
+export function auditReplacedIds(
+  record: Pick<AuditRecord, "principal" | "groups">,
+  principalNames: ReadonlyMap<string, string>,
+  groupNames: ReadonlyMap<string, string>
+): { principalId: string | null; groupIds: string[] } {
+  const groups = record.groups ?? [];
+  return {
+    principalId: auditDisplayName(principalNames, record.principal) ? record.principal : null,
+    groupIds: groups.some((group) => auditDisplayName(groupNames, group)) ? groups : []
+  };
+}
+
+/**
+ * The record's captured action inputs, in declaration order. Entries that are
+ * not objects, lack a non-empty `input` or `label`, or have no `value` key are
+ * skipped; `truncated` holds only when the record says `true`.
+ */
+export function auditInputs(record: Pick<AuditRecord, "auditInputs">): AuditInputValue[] {
+  const entries: unknown = record.auditInputs;
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry: unknown) => {
+    const input = stringField(entry, "input");
+    const label = stringField(entry, "label");
+    if (!input || !label || !Object.hasOwn(entry as object, "value")) return [];
+    const { value, truncated } = entry as Record<string, unknown>;
+    return [{ input, label, value, truncated: truncated === true }];
+  });
+}
+
+/** Visible notation for control, format (bidi) and line/paragraph separator characters, except newlines. */
+export function auditDisplayText(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (char) => (char === "\n" ? char : `\\u{${char.codePointAt(0)!.toString(16).toUpperCase()}}`));
+}
+
+function isFlatScalar(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+/** How the Summary shows an audit input value; the hover text stays the stored compact JSON. */
+export type AuditInputDisplay = {
+  /** The text to preview. */
+  text: string;
+  /** A `{type, value}` search query's language in upper case ("JQL"), shown after the query; null for `text` queries and other values. */
+  badge: string | null;
+  /** The text is compact JSON: a number, boolean, null, object or nested value. */
+  json: boolean;
+};
+
+/**
+ * An audit input value for the Summary. Strings show as is. A `{type, value}`
+ * search query (both strings, no other keys) shows its value, with its type as
+ * a badge unless it is `text`. Arrays of strings, numbers and booleans are
+ * joined with ", " ("(none)" when empty). Everything else is compact JSON.
+ */
+export function auditInputDisplay(value: unknown): AuditInputDisplay {
+  if (typeof value === "string") return { text: value, badge: null, json: false };
+  if (Array.isArray(value)) {
+    if (!value.length) return { text: "(none)", badge: null, json: false };
+    if (value.every(isFlatScalar)) return { text: value.map(String).join(", "), badge: null, json: false };
+  } else if (value && typeof value === "object") {
+    const { type, value: query } = value as Record<string, unknown>;
+    if (Object.keys(value).length === 2 && typeof type === "string" && typeof query === "string") {
+      return { text: query, badge: type && type !== "text" ? type.toUpperCase() : null, json: false };
+    }
+  }
+  return { text: compactJson(value), badge: null, json: true };
+}
+
+/** Code points in an audit input's one-line preview, including the trailing ellipsis when cut. */
+export const AUDIT_INPUT_PREVIEW_CHARS = 100;
+
+/**
+ * An audit input's one-line preview: whitespace runs (newlines included)
+ * become one space, controls are escaped, and longer text is cut by code
+ * point with a trailing "…".
+ */
+export function auditInputPreview(text: string): string {
+  const chars = Array.from(auditDisplayText(text.replace(/\s+/g, " ")));
+  return chars.length > AUDIT_INPUT_PREVIEW_CHARS ? `${chars.slice(0, AUDIT_INPUT_PREVIEW_CHARS - 1).join("")}…` : chars.join("");
+}
+
 /**
  * The policy grant reference of a matched grant (what the Policies drawer
  * opens): the grant ID for managed grants, `toml:<index>` for config grants.
@@ -442,12 +619,27 @@ export function auditTokenNames(tokens: Pick<BrokerTokenRecord, "tokenId" | "nam
 /** The identity source name the broker records for portal browser sessions. */
 export const AUDIT_BROWSER_SESSION_SOURCE = "browser-session";
 
+/**
+ * Whether the record came through a portal browser session: the broker's
+ * `browser-session` source of type `broker_tokens`, presented by cookie
+ * (`tokenHeader` "Cookie", `tokenScheme` "cookie"). A configured token source
+ * may share the name, so the name alone is not enough.
+ */
+export function auditIsBrowserSession(source: AuditRecord["identitySource"]): boolean {
+  return (
+    source?.type === "broker_tokens" &&
+    source.name === AUDIT_BROWSER_SESSION_SOURCE &&
+    source.tokenHeader === "Cookie" &&
+    source.tokenScheme === "cookie"
+  );
+}
+
 /** The record's token: its name when the caller's token list has it, otherwise only its ID.
  * `browserSession` marks records made through a portal sign-in rather than an issued token. */
 export function auditTokenLabel(record: Pick<AuditRecord, "identitySource">, names: Map<string, string>) {
   const id = record.identitySource?.tokenId || null;
   if (!id) return { id: null, name: null, browserSession: false };
-  return { id, name: names.get(id) ?? null, browserSession: record.identitySource?.name === AUDIT_BROWSER_SESSION_SOURCE };
+  return { id, name: names.get(id) ?? null, browserSession: auditIsBrowserSession(record.identitySource) };
 }
 
 /** An RFC 3339 timestamp as UTC epoch microseconds (sub-millisecond digits kept), or null. */

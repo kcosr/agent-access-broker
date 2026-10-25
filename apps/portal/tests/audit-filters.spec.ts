@@ -67,7 +67,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
   const service = { service: "jira", displayName: "Jira", actions: [{ action: "issue.view", description: "View issue", requiredScopeTypes: [], credentialModes: [] }], resourceScopes: {} };
   const initialRecords = options.emptyHistory ? [] : [
     record("login", "broker", "auth.local.login"), record("grant", "broker", "admin.policy.grants.create", "jira"),
-    record("issue", "jira", "issue.view", undefined, { identitySource: { name: "managed", type: "broker_token", tokenClass: "agent_invoke", tokenId: TOKEN_ID } }),
+    record("issue", "jira", "issue.view", undefined, { identitySource: { name: "managed", type: "broker_tokens", tokenClass: "agent_invoke", tokenId: TOKEN_ID } }),
     ...(options.extraHistory ? [
       record("retired", "retired", "historical.read", undefined, { nodeId: "node-b", upstreamStatus: 200, upstreamDurationMs: 42 }),
       record("junk", "jira", "unsupported.junk", undefined, { decision: "deny", reasonCode: "service_action_unknown" }),
@@ -420,8 +420,12 @@ test("records open in a URL-addressable drawer with summary, request timeline, a
   const drawer = page.getByRole("complementary", { name: "Allowed: issue.view on jira" });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
-  await expect(drawer).toContainText("Broker request ID");
-  await expect(drawer).toContainText(REQUEST_ID);
+  // Request identifiers are under the collapsed Details.
+  const request = drawer.getByRole("region", { name: "Request", exact: true });
+  await expect(request.getByText("Broker request ID", { exact: true })).toBeHidden();
+  await request.getByText("Details", { exact: true }).click();
+  await expect(request.getByText("Broker request ID", { exact: true })).toBeVisible();
+  await expect(request.getByText(REQUEST_ID, { exact: true })).toBeVisible();
   await expect(drawer.getByRole("link", { name: "Open principal", exact: true })).toHaveAttribute("href", "/ui/admin/principals/alice");
 
   // Filter actions apply in place and keep the drawer open.
@@ -468,21 +472,22 @@ test("attested identity records show whether their access path was read-only", a
   await fixture(page, { resourceRecords: [
     record("read-only", "jira", "issue.view", undefined, { identitySource: { name: "trusted_user", type: "trusted_user", tokenClass: "agent_invoke", namespace: "managed_linux", readOnlyAccess: true } }),
     record("full", "jira", "search", undefined, { identitySource: { name: "forwarded_identity", type: "forwarded_identity", tokenClass: "agent_invoke", readOnlyAccess: false } }),
-    record("token", "jira", "issue.comment", undefined, { identitySource: { name: "managed", type: "broker_token", tokenClass: "agent_invoke", tokenId: TOKEN_ID } })
+    record("token", "jira", "issue.comment", undefined, { identitySource: { name: "managed", type: "broker_tokens", tokenClass: "agent_invoke", tokenId: TOKEN_ID } })
   ] });
   const accessPath = (drawer: Locator) => drawer.getByText("Access path", { exact: true });
   await rowLinks(page).filter({ hasText: "issue.view on jira" }).click();
   let drawer = page.getByRole("complementary", { name: "Allowed: issue.view on jira" });
-  await expect(drawer).toContainText("trusted_user · trusted_user · agent_invoke");
+  await expect(drawer.getByTitle("trusted_user", { exact: true })).toHaveText("Trusted user · Agent invocation");
   await expect(accessPath(drawer)).toBeVisible();
   await expect(drawer).toContainText(/Access path\s*Read-only/);
   await rowLinks(page).filter({ hasText: "search on jira" }).click();
   drawer = page.getByRole("complementary", { name: "Allowed: search on jira" });
+  await expect(drawer.getByTitle("forwarded_identity", { exact: true })).toHaveText("Forwarded identity · Agent invocation");
   await expect(drawer).toContainText(/Access path\s*Full access/);
   // Issued Broker tokens carry no access-path setting.
   await rowLinks(page).filter({ hasText: "issue.comment on jira" }).click();
   drawer = page.getByRole("complementary", { name: "Allowed: issue.comment on jira" });
-  await expect(drawer).toContainText("managed · broker_token · agent_invoke");
+  await expect(drawer.getByTitle("managed", { exact: true })).toHaveText("Broker token · Agent invocation");
   await expect(accessPath(drawer)).toHaveCount(0);
 });
 

@@ -338,6 +338,7 @@ export function AuditView({ scope }: { scope: AuditScope }) {
       onClose={() => url.setOpen(null)}
       returnFocus={() => (url.open.record ? findRowTarget(url.open.record) : null)}
       principalNames={suggestions.principalNames}
+      groupNames={suggestions.groupNames}
       tokenNames={tokenNames}
       applyFilter={(patch) => url.setFilters(patch)}
       tokenHref={scope === "self" ? (tokenId) => (tokenNames.has(tokenId) ? paths.tokens(tokenId) : null) : undefined}

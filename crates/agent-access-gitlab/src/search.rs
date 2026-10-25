@@ -211,7 +211,8 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
         "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are absent from resource_access_describe registeredResources.items",
         discovery,
         json!({"query":"Omit search to browse. A supplied query must contain 1–512 UTF-8 bytes after trimming; GitLab matches name, path, description and optionally ancestor namespaces. * has no special Broker meaning. Current upstream projects, including new namespace descendants, supply the inventory.","ordering":"Ascending project ID with keyset pagination; no snapshot isolation.","pagination":pagination,"previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."}),
-    )];
+    )
+    .audit_input("search", "Search")];
     let mut listing = base();
     listing["properties"]
         .as_object_mut()
@@ -287,12 +288,21 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
                 "Returns bounded snippets supplied by GitLab, not full wiki pages. A snippet may omit the matching passage. A returned GitLab URL can be used to locate the page. Full wiki-page reading is not currently supported by the Broker; file.view reads source-repository files and cannot read wiki pages."
             );
         }
-        actions.push(common(
+        let regex = schema["properties"].get("regex").is_some();
+        let descriptor = common(
             &action,
             &format!("Native full-text search of GitLab {category} across authorized repositories or one explicit project"),
             schema,
             documentation,
-        ));
+        )
+        .audit_input("project", "Project")
+        .audit_input("search", "Search");
+        // Zoekt's regex flag changes how the recorded search is read.
+        actions.push(if regex {
+            descriptor.audit_input("regex", "Regex")
+        } else {
+            descriptor
+        });
     }
     actions
 }

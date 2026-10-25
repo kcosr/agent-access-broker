@@ -112,9 +112,10 @@ pub fn descriptor() -> ServiceDescriptor {
             ),
         )
         .read_only()
-        .credential_modes(["per_user"]),
+        .credential_modes(["per_user"])
+        .audit_input("query", "Query"),
     ];
-    for entity in ["message", "thread"] {
+    for (entity, id_label) in [("message", "Message ID"), ("thread", "Thread ID")] {
         actions.push(
             ActionDescriptor::new(
                 format!("{entity}.view"),
@@ -122,7 +123,8 @@ pub fn descriptor() -> ServiceDescriptor {
                 id(),
             )
             .read_only()
-            .credential_modes(["per_user"]),
+            .credential_modes(["per_user"])
+            .audit_input("id", id_label),
         );
         for (verb, description) in [
             ("archive", "Remove INBOX from the selected mail"),
@@ -137,7 +139,8 @@ pub fn descriptor() -> ServiceDescriptor {
         ] {
             actions.push(
                 ActionDescriptor::new(format!("{entity}.{verb}"), description, id())
-                    .credential_modes(["per_user"]),
+                    .credential_modes(["per_user"])
+                    .audit_input("id", id_label),
             );
         }
     }

@@ -441,6 +441,8 @@ impl agent_access_provider::test_support::DescribedProvider for ScopedCatalogPro
             descriptor.actions[0].description = "x".repeat(55_600);
             descriptor.actions[0].input_schema =
                 json!({"type":"object","properties":{"revision":{"const":self.revision}}});
+            // The replaced schema no longer has the declared audit input.
+            descriptor.actions[0].audit_inputs.clear();
         }
         descriptor
     }

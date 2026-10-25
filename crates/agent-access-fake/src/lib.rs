@@ -160,7 +160,9 @@ pub fn fake_descriptor() -> ServiceDescriptor {
             )
             .read_only()
             .scope("project")
-            .credential_modes(["service", "per_user"]),
+            .credential_modes(["service", "per_user"])
+            // The echoed message is content, which audit never records.
+            .audit_input("project", "Project"),
         ])
         .with_credentials(CredentialDescriptor::without_execution_credential())
 }

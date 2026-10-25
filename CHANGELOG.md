@@ -70,6 +70,21 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Audit records show what a request concerned.** Invocation audit records
+  carry `auditInputs`: the supplied values of the few inputs each action opts
+  in, such as its project, issue, path, search query or a title supplied on
+  create, under display labels. Each value keeps at most 1 KiB, is searchable,
+  and appears first in the portal's audit Summary under **Inputs**. Content
+  bodies, comments, messages, file contents and credentials are never recorded.
+  The Summary also shows principal and group display names, gives each resource
+  scope and object ID its own row, keeps request identifiers under **Details**,
+  and no longer repeats the header's decision, reason and context.
+  Provider authors declare inputs with `ActionDescriptor::audit_input`; command
+  manifests add an action-level `audit` list, which a Broker before this
+  release refuses on rollback. See [audit records](docs/design.md) and
+  [command imports](docs/command-imports.md#audit-and-logs).
+  ([#69](https://github.com/kcosr/agent-access-broker/pull/69))
+
 - **Swagger imports, document uploads and shared OpenAPI request support.** Swagger 2.0 JSON
   and OpenAPI 3.1 JSON share reviewed actions, Basic credentials and scalar
   URL-encoded forms through CLI, HTTP MCP and stdio MCP. Credential forms use

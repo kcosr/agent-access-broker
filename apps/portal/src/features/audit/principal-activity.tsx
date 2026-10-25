@@ -38,7 +38,7 @@ import {
   plural
 } from "../../workbench";
 import { paths } from "../../app/paths";
-import { useAuditEvents, useAuditTokenNames } from "./audit-data";
+import { useAuditEvents, useAuditGroupNames, useAuditTokenNames } from "./audit-data";
 import { AuditDrawer } from "./audit-drawer";
 import { AuditTable } from "./audit-table";
 import { DECISIONS, RangeSentence } from "./audit-parts";
@@ -76,6 +76,7 @@ export function PrincipalActivity({ principalId, frame }: { principalId: string;
   const url = useAuditUrl({ scope: "admin", principalId });
   const model = useAuditEvents("admin", url.filters, Boolean(principalId));
   const tokenNames = useAuditTokenNames({ principalId });
+  const groupNames = useAuditGroupNames(true);
   const { filters } = url;
   const { events, records } = model;
   const tokenHref = (tokenId: string) =>
@@ -129,6 +130,7 @@ export function PrincipalActivity({ principalId, frame }: { principalId: string;
       onClose={() => url.setOpen(null)}
       returnFocus={() => (url.open.record ? findRowTarget(url.open.record) : null)}
       principalNames={NO_NAMES}
+      groupNames={groupNames}
       tokenNames={tokenNames}
       principalId={principalId}
       tokenHref={tokenHref}

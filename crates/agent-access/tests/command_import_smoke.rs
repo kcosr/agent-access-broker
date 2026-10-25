@@ -3,7 +3,8 @@
 //! acceptance, credentials, invocation in both authorization modes with write
 //! receipts, error and receipt mapping and contract violations, mixed-mode
 //! command-checked grants and independent live listing against discovery, attribute removal without a
-//! reload, personal verification and the HTTP MCP listing. The command runs
+//! reload, an upgrade whose new write records only its declared audit inputs,
+//! personal verification and the HTTP MCP listing. The command runs
 //! under Python 3; a missing interpreter fails the test.
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_core::{
@@ -25,6 +26,8 @@ mod downloads;
 const SERVICE_TOKEN: &str = "svc-smoke-service-token";
 const PERSONAL_TOKEN: &str = "pat-smoke-personal-token";
 const WEBHOOK_SECRET: &str = "s3cr3t-smoke-webhook";
+/// A comment body, which `issue.comment` does not declare for audit.
+const COMMENT_BODY: &str = "smoke comment body kept out of audit";
 const MCP_VERSION: &str = "2025-11-25";
 
 /// The reference command, run directly through its `#!/usr/bin/env python3`.
@@ -1160,6 +1163,64 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
         );
     }
 
+    // The upgraded command adds the personal write `issue.comment`, whose
+    // audit records hold the project and issue it names, never the body.
+    profile("v2");
+    let current = run(&admin, &["admin", "imports", "get", "ticketing"]);
+    let (version, revision) = versions(&current);
+    let refreshed = run(
+        &admin,
+        &[
+            "admin",
+            "imports",
+            "discover",
+            "ticketing",
+            "--expected-version",
+            &version,
+            "--expected-catalog-revision",
+            &revision,
+        ],
+    );
+    let declared = json!([{"input": "project", "label": "Project"},
+        {"input": "issue", "label": "Issue"}]);
+    assert_eq!(
+        refreshed["result"]["preview"]["manifest"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["definition"]["action"] == "issue.comment")
+            .unwrap()["definition"]["annotations"]["command"]["audit"],
+        declared
+    );
+    accept_confirming(&admin, files, &refreshed);
+    grant(
+        "ticketing-comment",
+        &["issue.comment"],
+        "per_user",
+        &["ops"],
+        &[],
+    );
+    let commented = invoke(
+        &agent,
+        "issue.comment",
+        json!({"project": "OPS", "issue": 42, "body": COMMENT_BODY}),
+    );
+    assert_eq!(
+        commented["result"]["upstreamCommand"]["issue"], "OPS-42",
+        "{commented}"
+    );
+    let records = audited(files, commented["brokerRequestId"].as_str().unwrap());
+    assert!(!records.is_empty(), "{commented}");
+    for record in &records {
+        assert_eq!(
+            record["auditInputs"],
+            json!([{"input": "project", "label": "Project", "value": "OPS"},
+                {"input": "issue", "label": "Issue", "value": 42}]),
+            "{record}"
+        );
+        assert!(!record.to_string().contains(COMMENT_BODY), "{record}");
+    }
+
     // Without the personal credential, the personal grant is omitted: the
     // search passes the service grant alone, and personal-only actions leave
     // discovery and the MCP listing.
@@ -1191,6 +1252,15 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
 
 /// Accepts every action of a discovery, the writes as write-capable.
 fn accept_all(admin: &Path, files: &Path, discovered: &Value) -> Value {
+    accept(admin, files, discovered, false)
+}
+
+/// [`accept_all`], confirming the existing grants the changes affect.
+fn accept_confirming(admin: &Path, files: &Path, discovered: &Value) -> Value {
+    accept(admin, files, discovered, true)
+}
+
+fn accept(admin: &Path, files: &Path, discovered: &Value, confirm: bool) -> Value {
     let (version, revision) = versions(discovered);
     let selections = discovered["result"]["preview"]["manifest"]["tools"]
         .as_array()
@@ -1199,7 +1269,7 @@ fn accept_all(admin: &Path, files: &Path, discovered: &Value) -> Value {
         .map(|tool| {
             let action = tool["definition"]["action"].as_str().unwrap();
             json!({"source": tool["definition"]["source"], "action": action,
-                "readOnly": !matches!(action, "issue.create" | "issue.close")})
+                "readOnly": !matches!(action, "issue.create" | "issue.close" | "issue.comment")})
         })
         .collect::<Vec<_>>();
     run(
@@ -1216,7 +1286,8 @@ fn accept_all(admin: &Path, files: &Path, discovered: &Value) -> Value {
                 json!({"expectedVersion": version.parse::<u64>().unwrap(),
                     "expectedCatalogRevision": revision.parse::<u64>().unwrap(),
                     "manifestHash": discovered["result"]["preview"]["manifestHash"],
-                    "selections": selections})
+                    "selections": selections,
+                    "confirmAffectedGrants": confirm})
                 .to_string(),
             ),
         ],

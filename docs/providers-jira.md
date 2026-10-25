@@ -1054,8 +1054,9 @@ the current project key before retrying.
 
 Audit includes issue id/key when available, project, issue type id,
 `descriptionProvided`, credential mode, egress proxy, and attribution metadata
-when configured. It excludes submitted summary text, source content, converted
-ADF, returned description ADF, and raw upstream error bodies.
+when configured, and the submitted project and summary in `auditInputs`. It
+excludes source content, converted ADF, returned description ADF, and raw
+upstream error bodies.
 
 ## `issue.child.create`
 
@@ -1126,8 +1127,9 @@ for the created child and parent issues, and
 `verification.status: "matched"`. Audit includes child and parent issue keys
 and projects, issue type id, description-provided state, verification status,
 credential mode, egress proxy metadata, and attribution metadata when
-configured. It excludes submitted summary text, source content, converted ADF,
-returned description ADF, and raw upstream error bodies. If Jira accepts the
+configured, and the submitted project, parent and summary in `auditInputs`. It
+excludes source content, converted ADF, returned description ADF, and raw
+upstream error bodies. If Jira accepts the
 create request but readback fails or does not confirm the parent, the broker
 returns a failure with side-effect audit details.
 

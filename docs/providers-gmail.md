@@ -203,7 +203,7 @@ follows it, report the same code. Google 5xx and `server_error` token responses 
 failures, not throttling: the cooldown after one reports `upstream_connection_failed`
 with `retryAfterSeconds` and `retryAt`.
 See [http-api.md](http-api.md#reason-code-table).
-Audit records include operation/outcome and opaque message or thread IDs for direct reads and mutations, including failures; they never include bodies, headers, subjects or search text.
+Audit records include operation/outcome and opaque message or thread IDs for direct reads and mutations, including failures, and a search's supplied query in `auditInputs`; they never include bodies, headers or subjects.
 
 ## Other agent interfaces
 
