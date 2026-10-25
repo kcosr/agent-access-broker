@@ -138,6 +138,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 "List records in an authorized test collection",
                 schema(json!(["collection"]), json!({"collection": collection()})),
             )
+            .audit_inputs(crate::audit::records(false))
             .read_only()
             .scope("collection")
             .credential_modes(["per_user"]),
@@ -152,6 +153,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                     }),
                 ),
             )
+            .audit_inputs(crate::audit::records(true))
             .read_only()
             .scope("collection")
             .credential_modes(["per_user"]),

@@ -1,0 +1,70 @@
+{
+  "actions": [
+    {
+      "action": "fake.echo",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.project",
+          "kind": "identifier",
+          "pointer": "/project",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "utf8ByteCount",
+          "display": "detail",
+          "element": "content.echo",
+          "kind": "bytes",
+          "opaque": true,
+          "pointer": "/message",
+          "reason": "Arbitrary echo body; UTF-8 byte count only, never text or hash.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "oauth_stub.record.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.collection",
+          "kind": "identifier",
+          "pointer": "/collection",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "oauth_stub.record.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.collection",
+          "kind": "identifier",
+          "pointer": "/collection",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.record.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "oauth_stub.account.view",
+      "noInputs": true
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}

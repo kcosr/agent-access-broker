@@ -144,6 +144,14 @@ records both. Log cursors bind to the numeric build: continue a
 `build.log.read` page with the returned `buildNumber`. A `cursor` with
 `buildSelector` or a permalink URL is rejected.
 
+The bounded `requestAudit` records supplied controller/job/folder identities,
+build and queue selectors, artifact/node identities, log queries and requested
+controls. Raw locator URLs and opaque continuation tokens record presence only.
+Provider audit separately retains normalized job/build identities and resolved
+selectors, including URL-only selection, plus returned trigger queue IDs. A
+`queue.view` request's queue ID appears in request audit and existing object IDs.
+Log, test and artifact contents are never copied into request audit.
+
 ## Live job listing
 
 `job.list` recursively lists current jobs and containers below a configured

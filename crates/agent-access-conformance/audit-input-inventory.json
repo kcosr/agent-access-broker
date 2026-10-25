@@ -1,0 +1,126 @@
+{
+  "actions": [
+    {
+      "action": "item.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.item.path",
+          "kind": "path",
+          "pointer": "/item",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "item.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.item.path",
+          "kind": "path",
+          "pointer": "/item",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "item.upload",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.item.path",
+          "kind": "path",
+          "pointer": "/item",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "records",
+          "display": "primary",
+          "element": "upload.attachments",
+          "fields": [
+            {
+              "capture": "omit",
+              "element": "upload.transport_field",
+              "opaque": true,
+              "pointer": "/field",
+              "reason": "Internal multipart correlation field; not content identity."
+            },
+            {
+              "capture": "value",
+              "display": "primary",
+              "element": "upload.filename",
+              "kind": "path",
+              "pointer": "/filename",
+              "role": "target",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "upload.media_type",
+              "kind": "text",
+              "pointer": "/contentType",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "value",
+              "display": "detail",
+              "element": "upload.supplied_bytes",
+              "kind": "bytes",
+              "pointer": "/size",
+              "role": "fact",
+              "shape": "scalar"
+            },
+            {
+              "capture": "omit",
+              "element": "content.fingerprint",
+              "opaque": true,
+              "pointer": "/sha256",
+              "reason": "Requested upload digest is excluded; no new content fingerprinting."
+            }
+          ],
+          "kind": "records",
+          "pointer": "/attachments",
+          "role": "change"
+        }
+      ]
+    },
+    {
+      "action": "item.list",
+      "noInputs": true
+    },
+    {
+      "action": "endpoint.ping",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "fixture.endpoint",
+          "kind": "identifier",
+          "pointer": "/endpoint",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "utf8ByteCount",
+          "display": "detail",
+          "element": "content.notification",
+          "kind": "bytes",
+          "opaque": true,
+          "pointer": "/message",
+          "reason": "Arbitrary ping body; UTF-8 byte count only, never text or hash.",
+          "role": "change"
+        }
+      ]
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}

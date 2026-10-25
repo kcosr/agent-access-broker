@@ -348,7 +348,19 @@ async fn search_is_one_page_with_explicit_trash_and_metadata_only_details() {
     assert_ne!(token, "next");
     assert!(token.len() <= MAX_PAGE_TOKEN_BYTES);
     assert_eq!(r.result["messages"][0]["textParts"], json!([]));
-    assert!(!r.audit.unwrap().to_string().contains("trash"));
+    let audit = r.audit.unwrap();
+    assert_eq!(
+        audit,
+        json!({"provider":"gmail","operation":"message.search"})
+    );
+    for excluded in [
+        "in:trash",
+        "private snippet",
+        "private subject",
+        "private body",
+    ] {
+        assert!(!audit.to_string().contains(excluded));
+    }
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 #[tokio::test]

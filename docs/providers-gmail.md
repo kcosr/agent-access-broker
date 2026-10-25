@@ -225,6 +225,13 @@ never MCP arguments. Existing grants apply equally on every surface.
 
 ## Validation and live smoke
 
+The bounded `requestAudit` records supplied message/thread IDs, the Gmail search
+query, requested result limit and spam/trash flag. Page tokens record presence
+only; omitted controls remain absent even when execution uses defaults. The
+argument-free account and label reads have no request snapshot. Returned mail
+snippets, subjects, headers, bodies and account data are not request inputs and
+are never added to this capture.
+
 Automated tests use a local Google-shaped server with production dialect logic,
 managed login, consent callback, encrypted connections, refresh and real Gmail routes.
 Test endpoint injection is available only in test support; production configuration

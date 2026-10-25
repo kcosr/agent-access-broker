@@ -9,6 +9,7 @@
 //!
 //! Every fixture is development-only: configuring one requires a
 //! non-production deployment with `deployment.enable_fake_service`.
+mod audit;
 mod oauth_records;
 mod oauth_stub;
 
@@ -124,7 +125,6 @@ impl Provider for FakeProvider {
         .with_audit(json!({
             "provider": "fake",
             "operation": "echo",
-            "messageLength": message.len(),
         })))
     }
 }
@@ -158,6 +158,7 @@ pub fn fake_descriptor() -> ServiceDescriptor {
                     "additionalProperties": false
                 }),
             )
+            .audit_inputs(audit::echo())
             .read_only()
             .scope("project")
             .credential_modes(["service", "per_user"]),

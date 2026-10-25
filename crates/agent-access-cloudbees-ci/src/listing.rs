@@ -80,7 +80,7 @@ pub(super) fn descriptor(config: &CloudbeesCiListingConfig) -> ActionDescriptor 
             "maxResults":{"type":"integer","minimum":1,"maximum":config.max_results},
             "pageToken":{"type":"string","minLength":1,"maxLength":TOKENS.max_token_bytes()}
         }
-    })).scope("job").credential_modes(["service","per_user"]).read_only()
+    })).audit_inputs(audit::projection("job.list")).scope("job").credential_modes(["service","per_user"]).read_only()
     .native_search(NativeSearchEnforcement::ResultFiltered)
     .listing_of(CLOUDBEES_CI_JOB_RESOURCE.id().clone())
     .sensitive_output("/result/items").sensitive_output("/result/nextPageToken")

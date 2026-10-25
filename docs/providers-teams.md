@@ -164,8 +164,11 @@ bounded wait (`retryAfterSeconds`, `retryAt`). See
 [http-api.md](http-api.md#reason-code-table).
 
 Response bodies, headers, signed URLs and message content are excluded from provider
-results and audit. Audit and upstream traces retain the destination alias, safe
-origin, status and timing. URL validation and transport errors use fixed messages.
+results and audit. The bounded `requestAudit` records the supplied destination alias,
+content format and content presence. Notification titles, text and complete card
+trees remain opaque, with no serialized size or content fingerprint. Provider audit
+retains the safe endpoint origin; the operation's object IDs retain the destination.
+Status and timing remain execution facts. URL validation and transport errors use fixed messages.
 
 ## Deployment validation
 

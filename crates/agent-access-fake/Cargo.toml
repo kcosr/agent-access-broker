@@ -16,4 +16,6 @@ serde_json.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
+tokio.workspace = true
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }

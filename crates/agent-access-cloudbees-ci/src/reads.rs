@@ -43,6 +43,7 @@ pub(super) fn descriptors() -> Vec<ActionDescriptor> {
         .iter()
         .map(|(name, description)| {
             let descriptor = ActionDescriptor::new(*name, *description, input::schema(name))
+                .audit_inputs(audit::projection(name))
                 .documentation(input::documentation(name))
                 .read_only()
                 .scope("job")

@@ -1,5 +1,6 @@
 //! Notifications to exact, managed Microsoft Teams Workflows destinations.
 //! Signed endpoints arrive only through broker-admitted private attributes.
+mod audit;
 mod payload;
 #[cfg(test)]
 mod tests;
@@ -205,7 +206,7 @@ impl BackendConfig for TeamsConfig {
 
 pub fn descriptor() -> ServiceDescriptor {
     ServiceDescriptor::new("teams", "Microsoft Teams notifications").with_resource_scopes(BTreeMap::from([("destination".into(), ResourceScopeCapabilities::new(TEAMS_DESTINATION_RESOURCE.id().clone(), vec!["exact".into(), "all".into()]))])).with_actions(vec![ActionDescriptor::new(ACTION, "Submit a notification to a configured Teams Workflow; acceptance does not confirm delivery", payload::schema())
-            .scope("destination").credential_modes(["service"]).resource_attributes()]).with_credentials(CredentialDescriptor::without_execution_credential())
+            .audit_inputs(audit::projection()).scope("destination").credential_modes(["service"]).resource_attributes()]).with_credentials(CredentialDescriptor::without_execution_credential())
 }
 
 /// What the Workflow endpoint answered: its status and, for HTTP 429, the
@@ -362,7 +363,7 @@ impl Provider for TeamsProvider {
                 "Teams destination is outside allowed origins",
             ));
         }
-        let audit = json!({"destination":destination,"upstreamOrigin":endpoint.origin().ascii_serialization()});
+        let audit = json!({"upstreamOrigin":endpoint.origin().ascii_serialization()});
         let started = Instant::now();
         let receipt = self.transport.send(endpoint, body).await.map_err(|error| {
             error

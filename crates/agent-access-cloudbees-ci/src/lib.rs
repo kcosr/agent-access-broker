@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
 
+mod audit;
 mod input;
 mod listing;
 mod logs;
@@ -545,9 +546,12 @@ impl CloudbeesCiProvider {
         let mut audit = json!({
             "provider": "cloudbees_ci", "operation": action,
             "job": format!("{}/{}", input.controller, input.job),
-            "buildNumber": input.build_number, "queueId": queue_id,
+            "buildNumber": input.build_number,
             "egressProxy": proxy.audit_value(),
         });
+        if action == "build.trigger" {
+            audit["queueId"] = json!(value.get("queueId").and_then(Value::as_u64));
+        }
         // Build-level results always name the numeric build they read.
         if let (Some(number), Some(object)) = (input.build_number, value.as_object_mut()) {
             object.entry("buildNumber").or_insert(json!(number));
@@ -610,6 +614,7 @@ fn cloudbees_ci_service_descriptor(config: &CloudbeesCiListingConfig) -> Service
         ("build.trigger", "Trigger a non-parameterized job"),
     ] {
         let action = ActionDescriptor::new(name, description, input::schema(name))
+            .audit_inputs(audit::projection(name))
             .documentation(input::documentation(name))
             .scope("job")
             .credential_modes(["service", "per_user"]);
@@ -1858,6 +1863,8 @@ mod tests {
             .unwrap();
         assert_eq!(result.result["queueId"], queue_id);
         assert_eq!(result.result["buildNumber"], 17);
+        assert!(result.audit.as_ref().unwrap().get("queueId").is_none());
+        assert_eq!(result.object_ids.as_ref().unwrap()["queueId"], queue_id);
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(
@@ -1917,6 +1924,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.result["queueId"], 42);
         assert_eq!(result.result["mutationStatus"], "applied");
+        assert_eq!(result.audit.as_ref().unwrap()["queueId"], 42);
     }
 
     #[tokio::test]
@@ -2116,6 +2124,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.result["contentType"], "text/plain");
+        assert_eq!(result.audit.as_ref().unwrap()["buildNumber"], 42);
+        assert_eq!(
+            result.audit.as_ref().unwrap()["job"],
+            "team-ci/payments/build-api"
+        );
+        assert!(
+            !result
+                .audit
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("artifact body")
+        );
         let source = result.stream.unwrap().source;
         let agent_access_provider::ProviderResultStreamSource::Stream(source) = source else {
             panic!("expected stream")
@@ -2527,39 +2548,49 @@ mod tests {
 
     #[tokio::test]
     async fn build_selector_resolves_with_one_projected_job_read() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(JOB_API))
-            .and(query_param(
-                "tree",
-                "fullName,_class,builds[number]{0,0},lastFailedBuild[number]",
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob",
-                "fullName":"payments/build-api","builds":[],"lastFailedBuild":{"number":41}
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/team-ci/job/payments/job/build-api/41/api/json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"number":41})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let result = provider(&server)
+        for url_only in [false, true] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(JOB_API))
+                .and(query_param(
+                    "tree",
+                    "fullName,_class,builds[number]{0,0},lastFailedBuild[number]",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob",
+                    "fullName":"payments/build-api","builds":[],"lastFailedBuild":{"number":41}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/team-ci/job/payments/job/build-api/41/api/json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"number":41})))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = provider(&server)
             .invoke(invocation(
                 "build.view",
-                job_inputs(json!({"buildSelector":"lastFailedBuild"})),
+                if url_only {
+                    json!({"url":format!("{}/team-ci/job/%70ayments/job/build-api/lastFailedBuild/console?secret=PRIVATE_URL", server.uri())})
+                } else {
+                    job_inputs(json!({"buildSelector":"lastFailedBuild"}))
+                },
             ))
             .await
             .unwrap();
-        assert_eq!(result.result["number"], 41);
-        assert_eq!(result.result["buildNumber"], 41);
-        assert_eq!(result.result["buildSelector"], "lastFailedBuild");
-        assert_eq!(result.audit.unwrap()["buildSelector"], "lastFailedBuild");
-        assert_eq!(result.object_ids.unwrap()["buildNumber"], 41);
-        server.verify().await;
+            assert_eq!(result.result["number"], 41);
+            assert_eq!(result.result["buildNumber"], 41);
+            assert_eq!(result.result["buildSelector"], "lastFailedBuild");
+            let audit = result.audit.unwrap();
+            assert_eq!(audit["buildSelector"], "lastFailedBuild");
+            assert_eq!(audit["buildNumber"], 41);
+            assert_eq!(audit["job"], "team-ci/payments/build-api");
+            assert!(!audit.to_string().contains("PRIVATE_URL"));
+            assert_eq!(result.object_ids.unwrap()["buildNumber"], 41);
+            server.verify().await;
+        }
     }
 
     #[tokio::test]

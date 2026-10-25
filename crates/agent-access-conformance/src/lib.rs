@@ -4,13 +4,16 @@
 //! managed credential profile, JSON, raw-download, and multipart-upload
 //! actions (the upload token-only), an explicitly declared live collection
 //! filtered by native search authority, a presenter with an embedded body and a
-//! whole-result Markdown renderer, and (when `endpoints` is enabled) a
+//! whole-result Markdown renderer, bounded request-audit targets and correlated
+//! upload metadata with content summaries and explicit exclusions, and (when `endpoints` is enabled) a
 //! resource type whose entries keep a private attribute that a
 //! single-attempt action consumes. Its writes
 //! report a request the SDK proved unsent with a mutation receipt. Broker
 //! acceptance tests register it beside the linked
 //! backends; that it needs nothing outside this crate and the registration
 //! list is the point.
+mod audit;
+
 use agent_access_provider::presentation::{
     ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, ReadContentFormat,
     RenderBudget, RenderContext, RenderError, RenderedBody,
@@ -262,10 +265,12 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     )]);
     let mut actions = vec![
         action("item.view", "View an item and its text body", &locator)
+            .audit_inputs(audit::item(false))
             .read_only()
             .reports_universal_reach()
             .presentation(Some(ITEM_PRESENTATION)),
         action("item.download", "Download an item's content", &locator)
+            .audit_inputs(audit::item(false))
             .read_only()
             .raw_download(),
         // A write the upstream accepts only with a token, never with
@@ -275,6 +280,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             "Replace an item's content with one file",
             &upload,
         )
+        .audit_inputs(audit::item(true))
         .multipart_upload(attachment_upload_plan(&["item"], Some(1)))
         .token_only(),
         action(
@@ -307,6 +313,7 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
                     "additionalProperties": false
                 }),
             )
+            .audit_inputs(audit::ping())
             .scope("endpoint")
             .credential_modes(["service"])
             .resource_attributes(),
@@ -623,7 +630,7 @@ impl ConformanceProvider {
         started: Instant,
     ) -> ProviderResult {
         ProviderResult::new(result)
-            .with_audit(json!({"provider": SERVICE, "operation": action, "item": item}))
+            .with_audit(json!({"provider": SERVICE, "operation": action}))
             .with_upstream(Some(status), Some(started.elapsed().as_millis() as u64))
             .with_object_ids(json!({"item": item}))
     }
@@ -670,9 +677,12 @@ impl ConformanceProvider {
                     })
             })
             .await?;
-        Ok(ProviderResult::new(json!({"endpoint": inputs.endpoint, "receipt": receipt})).with_audit(
-                json!({"provider": SERVICE, "operation": "endpoint.ping", "endpoint": inputs.endpoint}),
-            ).with_upstream(Some(status), Some(started.elapsed().as_millis() as u64)).with_object_ids(json!({"endpoint": inputs.endpoint})))
+        Ok(
+            ProviderResult::new(json!({"endpoint": inputs.endpoint, "receipt": receipt}))
+                .with_audit(json!({"provider": SERVICE, "operation": "endpoint.ping"}))
+                .with_upstream(Some(status), Some(started.elapsed().as_millis() as u64))
+                .with_object_ids(json!({"endpoint": inputs.endpoint})),
+        )
     }
 
     /// The test upstream exposes a finite inventory. Validate it before
@@ -1194,6 +1204,11 @@ mod tests {
             result.result,
             json!({"endpoint": "alerts", "receipt": "r-1"})
         );
+        assert_eq!(
+            result.audit,
+            Some(json!({"provider":SERVICE,"operation":"endpoint.ping"}))
+        );
+        assert_eq!(result.object_ids, Some(json!({"endpoint":"alerts"})));
         let visible = format!(
             "{} {:?} {:?}",
             result.result, result.audit, result.object_ids

@@ -1,0 +1,38 @@
+{
+  "actions": [
+    {
+      "action": "notification.send",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "notification.destination",
+          "kind": "identifier",
+          "pointer": "/destination",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "content.format",
+          "kind": "text",
+          "pointer": "/contentFormat",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "content.notification",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/content",
+          "reason": "Entire notification body including title, text, card fields and arbitrary descendants is presence-only; no serialized size.",
+          "role": "change"
+        }
+      ]
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}

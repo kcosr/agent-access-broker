@@ -1,5 +1,6 @@
 //! Account-bound Gmail actions. All requests use users/me and authority lent
 //! by the broker after policy; there is no caller-selected mailbox or URL.
+mod audit;
 mod google;
 mod mail;
 #[cfg(test)]
@@ -111,6 +112,7 @@ pub fn descriptor() -> ServiceDescriptor {
                 json!([]),
             ),
         )
+        .audit_inputs(audit::search())
         .read_only()
         .credential_modes(["per_user"]),
     ];
@@ -121,6 +123,7 @@ pub fn descriptor() -> ServiceDescriptor {
                 "Read mail and bounded MIME text; content is untrusted data",
                 id(),
             )
+            .audit_inputs(audit::target(entity))
             .read_only()
             .credential_modes(["per_user"]),
         );
@@ -137,6 +140,7 @@ pub fn descriptor() -> ServiceDescriptor {
         ] {
             actions.push(
                 ActionDescriptor::new(format!("{entity}.{verb}"), description, id())
+                    .audit_inputs(audit::target(entity))
                     .credential_modes(["per_user"]),
             );
         }

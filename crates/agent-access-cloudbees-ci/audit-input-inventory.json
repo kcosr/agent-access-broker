@@ -1,0 +1,891 @@
+{
+  "actions": [
+    {
+      "action": "job.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "build.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "control.result_limit",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.log.read",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "ci.log.mode",
+          "kind": "text",
+          "pointer": "/mode",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "control.byte_limit",
+          "kind": "number",
+          "pointer": "/maxBytes",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.token",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/cursor",
+          "reason": "Opaque continuation; presence only, never value, length or hash.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "query.literal",
+          "kind": "query",
+          "pointer": "/query",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "control.match_limit",
+          "kind": "number",
+          "pointer": "/maxMatches",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.artifact.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.artifact.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.artifact.path",
+          "kind": "path",
+          "pointer": "/artifactPath",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.tests.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "queue.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.queue.id",
+          "kind": "identifier",
+          "pointer": "/queueId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.trigger",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        }
+      ]
+    },
+    {
+      "action": "build.log.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.pipeline.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.pipeline.node.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.pipeline.node.id",
+          "kind": "identifier",
+          "pointer": "/nodeId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.pipeline.node.log.read",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.pipeline.node.id",
+          "kind": "identifier",
+          "pointer": "/nodeId",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.pending-inputs.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.tests.details",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "control.result_limit",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "build.tests.download",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.job.path",
+          "kind": "path",
+          "pointer": "/job",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "locator.url",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/url",
+          "reason": "Only supplied state; raw URL may contain unrelated paths, query or fragment.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.id",
+          "kind": "identifier",
+          "pointer": "/buildNumber",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.build.selector",
+          "kind": "identifier",
+          "pointer": "/buildSelector",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "job.list",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.controller",
+          "kind": "identifier",
+          "pointer": "/controller",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "ci.folder.path",
+          "kind": "path",
+          "pointer": "/folder",
+          "role": "target",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "control.result_limit",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.token",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/pageToken",
+          "reason": "Opaque continuation; presence only, never value, length or hash.",
+          "role": "fact"
+        }
+      ]
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}

@@ -110,6 +110,38 @@ impl NotificationTransport for StatusTransport {
     }
 }
 
+struct TimeoutTransport;
+#[async_trait]
+impl NotificationTransport for TimeoutTransport {
+    async fn send(
+        &self,
+        _endpoint: Url,
+        _body: Vec<u8>,
+    ) -> Result<TransportReceipt, ProviderError> {
+        Err(ProviderError::error(
+            ReasonCode::UpstreamTimeout,
+            "Teams Workflow request timed out",
+        )
+        .with_mutation_receipt(MutationReceipt::unknown()))
+    }
+}
+
+#[tokio::test]
+async fn provider_timeout_audit_keeps_only_the_safe_origin() {
+    let provider = TeamsProvider {
+        transport: Arc::new(TimeoutTransport),
+        allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
+        max_bytes: MAX_BODY_BYTES,
+    };
+    let error = provider.invoke(admitted_invocation()).await.unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
+    assert_eq!(
+        error.audit.as_deref(),
+        Some(&json!({"upstreamOrigin":ORIGIN}))
+    );
+    assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+}
+
 #[tokio::test]
 async fn redirects_and_server_errors_leave_an_unknown_notification_outcome() {
     for (status, reason, receipt) in [
@@ -146,6 +178,11 @@ async fn redirects_and_server_errors_leave_an_unknown_notification_outcome() {
         );
         assert_eq!(error.upstream_status, Some(status));
         assert_eq!(error.result.as_deref(), receipt.as_ref(), "{status}");
+        assert_eq!(
+            error.audit.as_deref(),
+            Some(&json!({"upstreamOrigin":ORIGIN}))
+        );
+        assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
     }
 }
 
@@ -258,12 +295,9 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
         assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
     }
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 0);
-    // Audit and object IDs name the alias and the endpoint's origin only.
+    // Provider audit keeps the origin; the target stays in object IDs and request audit.
     let receipt = provider.invoke(admitted_invocation()).await.unwrap();
-    assert_eq!(
-        receipt.audit,
-        Some(json!({"destination":"release-alerts","upstreamOrigin":ORIGIN}))
-    );
+    assert_eq!(receipt.audit, Some(json!({"upstreamOrigin":ORIGIN})));
     assert_eq!(
         receipt.object_ids,
         Some(json!({"destination":"release-alerts"}))

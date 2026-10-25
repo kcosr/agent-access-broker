@@ -1,0 +1,167 @@
+{
+  "actions": [
+    {
+      "action": "account.view",
+      "noInputs": true
+    },
+    {
+      "action": "label.list",
+      "noInputs": true
+    },
+    {
+      "action": "message.search",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "query.gmail",
+          "kind": "query",
+          "pointer": "/query",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "control.result_limit",
+          "kind": "number",
+          "pointer": "/maxResults",
+          "role": "fact",
+          "shape": "scalar"
+        },
+        {
+          "capture": "presence",
+          "display": "detail",
+          "element": "continuation.token",
+          "kind": "boolean",
+          "opaque": true,
+          "pointer": "/pageToken",
+          "reason": "Opaque page token; presence only, never value, length or hash.",
+          "role": "fact"
+        },
+        {
+          "capture": "value",
+          "display": "detail",
+          "element": "mail.include_spam_trash",
+          "kind": "boolean",
+          "pointer": "/includeSpamTrash",
+          "role": "fact",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "message.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.message.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "message.archive",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.message.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "message.trash",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.message.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "message.restore",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.message.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "thread.view",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.thread.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "thread.archive",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.thread.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "thread.trash",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.thread.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    },
+    {
+      "action": "thread.restore",
+      "fields": [
+        {
+          "capture": "value",
+          "display": "primary",
+          "element": "mail.thread.id",
+          "kind": "identifier",
+          "pointer": "/id",
+          "role": "target",
+          "shape": "scalar"
+        }
+      ]
+    }
+  ],
+  "fixture": "audit-inventory-maximal"
+}
