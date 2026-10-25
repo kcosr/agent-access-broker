@@ -75,6 +75,8 @@ pub struct ActionDescriptor {
     /// Explicitly reviewed read operation; defaults to false for new actions.
     pub read_only: bool,
     pub input_schema: Value,
+    /// Reviewed capture of original caller inputs, independent of schema validation.
+    pub audit_inputs: Option<crate::AuditInputProjection>,
     /// Scope the action is authorized against; unscoped actions need an
     /// explicit grant without a resource selection.
     pub resource_scope: Option<String>,
@@ -300,6 +302,7 @@ impl ActionDescriptor {
             documentation: None,
             read_only: false,
             input_schema,
+            audit_inputs: None,
             resource_scope: None,
             listing_of: None,
             requires_resource_attributes: false,
@@ -315,6 +318,12 @@ impl ActionDescriptor {
             requires_stable_signing_key: false,
             presentation: None,
         }
+    }
+
+    /// Declare the reviewed facts the host may capture after admission.
+    pub fn audit_inputs(mut self, projection: crate::AuditInputProjection) -> Self {
+        self.audit_inputs = Some(projection);
+        self
     }
 
     /// Request private attributes from one authorized exact resource at dispatch.
@@ -456,6 +465,7 @@ impl ActionDescriptor {
             lookup_required: self.lookup.credential_required(),
             upstream_resource_ownership: self.upstream_resource_ownership,
             input_schema: self.input_schema.clone(),
+            audit_inputs: self.audit_inputs.clone(),
         }
     }
 }

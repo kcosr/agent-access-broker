@@ -27,7 +27,8 @@ impl<'a> ScopeRequest<'a> {
         self.action
     }
 
-    /// Inputs already validated against the action's schema.
+    /// Original caller inputs. Providers validate the shapes and semantics their
+    /// scope resolver needs; native admission does not establish whole-schema validity.
     pub fn inputs(&self) -> &'a Value {
         self.inputs
     }

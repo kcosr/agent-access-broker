@@ -468,6 +468,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unicode-general-category",
  "url",
  "wiremock",
 ]

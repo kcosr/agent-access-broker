@@ -173,6 +173,7 @@
 
 mod admitted;
 mod attribution;
+mod audit_inputs;
 mod authority;
 mod authorization;
 mod backend;
@@ -220,6 +221,12 @@ pub use attribution::{
     AttributionCapability, AttributionMutation, AttributionRepresentation, AttributionVerb,
     ProviderAttributionConfig, attribution_audit_applied, attribution_skip_target_absent_audit,
     matching_attribution_capabilities, merge_attribution_audit, validate_attribution_pattern,
+};
+pub use audit_inputs::{
+    AuditCapture, AuditCapturedValue, AuditDisplay, AuditFieldMetadata, AuditInputProjection,
+    AuditInputRule, AuditOverflow, AuditRecordRow, AuditRole, AuditValueEncoding, AuditValueItem,
+    AuditValueKind, AuditValueShape, AuditValueState, RequestAudit, RequestAuditFailure,
+    RequestAuditField, RequestAuditStatus,
 };
 pub use authority::UpstreamAuthority;
 pub use authorization::{CredentialPlacement, CredentialPlacementError, UpstreamAuthorization};

@@ -73,4 +73,7 @@ pub struct ActionCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_resource_ownership: Option<UpstreamResourceOwnership>,
     pub input_schema: Value,
+    /// Reviewed descriptive metadata, never an executable input or schema annotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_inputs: Option<crate::AuditInputProjection>,
 }
