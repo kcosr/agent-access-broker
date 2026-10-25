@@ -378,12 +378,12 @@ fn list_item(
         truncated: None,
         original_bytes: None,
     };
-    let item_base = encoded_len(&base, allowance)?;
+    let item_base = encoded_len(&base, usize::MAX)?;
     let scalar_base = encoded_len(&empty(AuditValueState::Captured, Some(true)), usize::MAX)?;
     let data = scalar(
         rule,
         value,
-        allowance.checked_sub(item_base)?.checked_add(scalar_base)?,
+        allowance.checked_add(scalar_base)?.checked_sub(item_base)?,
     )?;
     let item = AuditValueItem {
         index,
@@ -494,4 +494,36 @@ fn encoded_len<T: Serialize + ?Sized>(value: &T, limit: usize) -> Option<usize> 
     let mut counter = Counter { length: 0, limit };
     serde_json::to_writer(&mut counter, value).ok()?;
     Some(counter.length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shorter_list_statuses_fit_their_actual_encoded_boundary() {
+        let rule =
+            AuditInputRule::values("values", "Values", "/values").kind(AuditValueKind::Number);
+        for value in [Value::Null, Value::Bool(false)] {
+            let full = list_item(&rule, &value, 0, 1024).unwrap();
+            let size = serde_json::to_vec(&full).unwrap().len();
+            assert!(list_item(&rule, &value, 0, size - 1).is_none());
+            assert_eq!(list_item(&rule, &value, 0, size), Some(full.clone()));
+            assert_eq!(list_item(&rule, &value, 0, size + 1), Some(full));
+        }
+    }
+
+    #[test]
+    fn unavailable_snapshot_contains_only_fixed_failure_metadata() {
+        let plan = AuditInputPlan {
+            rules: Vec::new(),
+            declaration_sha256: "a".repeat(64),
+        };
+        let snapshot = unavailable(&plan);
+        assert_eq!(
+            serde_json::to_value(&snapshot).unwrap(),
+            serde_json::json!({"version":1,"declarationSha256":"a".repeat(64),"status":"unavailable","fields":[],"budgetOmittedFields":0,"absentOmittedFields":0,"reason":"projectionFailed"})
+        );
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() <= ENVELOPE_RESERVE);
+    }
 }
