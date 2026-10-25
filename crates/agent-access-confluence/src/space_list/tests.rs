@@ -169,6 +169,50 @@ async fn mixed_case_space_keys_survive_full_and_small_pages() {
 }
 
 #[tokio::test]
+async fn request_token_presence_is_separate_from_output_continuation_audit() {
+    use crate::audit::inventory::{action, field, project};
+
+    let server = MockServer::start().await;
+    mount(&server, None, 1, json!([space("1", "ENG")]), Some("page-2")).await;
+    mount(&server, Some("page-2"), 1, json!([space("2", "OPS")]), None).await;
+    let cfg = config(&server);
+    let descriptor = crate::confluence_descriptor(&cfg);
+    let p = provider(&server, cfg, ProviderLimits::default());
+    let mut inputs = json!({"maxResults":1});
+    for (input_token_present, output_continuation_present, released) in
+        [(false, true, "ENG"), (true, false, "OPS")]
+    {
+        let input_token = inputs.get("pageToken").cloned();
+        let request = invocation(inputs, scope());
+        let request_audit = project(action(&descriptor, "space.list"), request.inputs());
+        let result = p.invoke(request).await.unwrap();
+        assert_eq!(
+            field(&request_audit, "pageToken")["value"],
+            input_token_present
+        );
+        assert_eq!(field(&request_audit, "pageToken")["capture"], "presence");
+        let provider_audit = result.audit.as_ref().unwrap();
+        assert_eq!(
+            provider_audit["confluence"]["continuationPresent"],
+            output_continuation_present
+        );
+        assert_eq!(provider_audit["confluence"]["spaces"], json!([released]));
+        assert_eq!(provider_audit["confluence"]["returnedCount"], 1);
+        assert_eq!(result.result["items"][0]["key"], released);
+        for token in input_token.iter().chain(result.result.get("nextPageToken")) {
+            assert!(!request_audit.to_string().contains(token.as_str().unwrap()));
+            assert!(!provider_audit.to_string().contains(token.as_str().unwrap()));
+        }
+        inputs = if let Some(token) = result.result.get("nextPageToken") {
+            json!({"maxResults":1,"pageToken":token})
+        } else {
+            json!({"maxResults":1})
+        };
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn mixed_case_listing_keys_use_exact_inclusions_and_exclusions() {
     let server = MockServer::start().await;
     mount(

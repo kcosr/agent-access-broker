@@ -70,11 +70,11 @@
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/issueTypeId",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
@@ -121,11 +121,11 @@
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/issueTypeId",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
@@ -511,20 +511,20 @@
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/visibility/value",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/visibility/identifier",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         }
       ]
@@ -590,20 +590,20 @@
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/visibility/value",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/visibility/identifier",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         }
       ]
@@ -678,20 +678,20 @@
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/visibility/value",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/visibility/identifier",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
@@ -1033,20 +1033,20 @@
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/expectCommentId",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         },
         {
           "capture": "value",
-          "display": "primary",
-          "element": "object.identity",
+          "display": "detail",
+          "element": "operation.control",
           "kind": "identifier",
           "pointer": "/expectAttachmentId",
-          "role": "target",
+          "role": "fact",
           "shape": "scalar"
         }
       ]

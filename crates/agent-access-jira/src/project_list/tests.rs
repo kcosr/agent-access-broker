@@ -178,6 +178,50 @@ async fn current_keys_are_filtered_before_metadata_and_empty_pages_resume() {
 }
 
 #[tokio::test]
+async fn request_token_presence_is_separate_from_output_continuation_audit() {
+    use crate::audit::inventory::{action, field, project as project_audit};
+
+    let server = MockServer::start().await;
+    mount(&server, 0, 1, false, json!([project("1", "ENG")])).await;
+    mount(&server, 1, 1, true, json!([project("2", "OPS")])).await;
+    let cfg = config(&server);
+    let descriptor = crate::jira_descriptor(&cfg);
+    let p = provider(&server, cfg, ProviderLimits::default());
+    let mut inputs = json!({"maxResults":1});
+    for (input_token_present, output_continuation_present, released) in
+        [(false, true, "ENG"), (true, false, "OPS")]
+    {
+        let input_token = inputs.get("pageToken").cloned();
+        let request = invocation(inputs, scope());
+        let request_audit = project_audit(action(&descriptor, "project.list"), request.inputs());
+        let result = p.invoke(request).await.unwrap();
+        assert_eq!(
+            field(&request_audit, "pageToken")["value"],
+            input_token_present
+        );
+        assert_eq!(field(&request_audit, "pageToken")["capture"], "presence");
+        let provider_audit = result.audit.as_ref().unwrap();
+        assert_eq!(
+            provider_audit["jira"]["continuationPresent"],
+            output_continuation_present
+        );
+        assert_eq!(provider_audit["jira"]["projects"], json!([released]));
+        assert_eq!(provider_audit["jira"]["returnedCount"], 1);
+        assert_eq!(result.result["items"][0]["key"], released);
+        for token in input_token.iter().chain(result.result.get("nextPageToken")) {
+            assert!(!request_audit.to_string().contains(token.as_str().unwrap()));
+            assert!(!provider_audit.to_string().contains(token.as_str().unwrap()));
+        }
+        inputs = if let Some(token) = result.result.get("nextPageToken") {
+            json!({"maxResults":1,"pageToken":token})
+        } else {
+            json!({"maxResults":1})
+        };
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn independent_allow_preserves_an_excluded_project_and_previews_are_bounded() {
     let server = MockServer::start().await;
     let p = provider(&server, config(&server), ProviderLimits::default());

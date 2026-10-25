@@ -78,6 +78,54 @@ fn original_input_fixtures_cover_every_action_and_configured_shape() {
 }
 
 #[test]
+fn requested_identifier_controls_are_facts_without_target_presentation() {
+    let descriptor = maximal();
+    for (action_name, inputs, keys) in [
+        (
+            "issue.create",
+            json!({"issueTypeId":"10001"}),
+            vec!["issueTypeId"],
+        ),
+        (
+            "issue.child.create",
+            json!({"issueTypeId":"10002"}),
+            vec!["issueTypeId"],
+        ),
+        (
+            "comment.add",
+            json!({"visibility":{"value":"Reviewers","identifier":"group-id"}}),
+            vec!["visibility.value", "visibility.identifier"],
+        ),
+        (
+            "comment.reply",
+            json!({"visibility":{"value":"Reviewers","identifier":"group-id"}}),
+            vec!["visibility.value", "visibility.identifier"],
+        ),
+        (
+            "comment.update",
+            json!({"visibility":{"value":"Reviewers","identifier":"group-id"}}),
+            vec!["visibility.value", "visibility.identifier"],
+        ),
+        (
+            "verify",
+            json!({"expectCommentId":"10042","expectAttachmentId":"10055"}),
+            vec!["expectCommentId", "expectAttachmentId"],
+        ),
+    ] {
+        let snapshot = project(action(&descriptor, action_name), &inputs);
+        for key in keys {
+            let captured = field(&snapshot, key);
+            let pointer = format!("/{}", key.replace('.', "/"));
+            assert_eq!(captured["value"], *inputs.pointer(&pointer).unwrap());
+            assert_eq!(captured["kind"], "identifier");
+            assert_eq!(captured["role"], "fact");
+            assert_eq!(captured["display"], "detail");
+            assert_eq!(semantic(action_name, &pointer).0, "operation.control");
+        }
+    }
+}
+
+#[test]
 fn attachment_projection_preserves_association_and_excludes_transport_hashes() {
     let descriptor = maximal();
     let action = action(&descriptor, "attachment.add");

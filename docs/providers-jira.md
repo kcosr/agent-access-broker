@@ -16,6 +16,8 @@ identities, relationship references, requested controls, short issue summaries
 (up to 1,024 UTF-8 bytes) and query text (up to 4,096 bytes). Prefix truncation
 is explicit; overlong identities are omitted whole. These retained strings can
 contain confidential business text and are visible to audit readers.
+Issue type selection, comment visibility group/role references and expected
+comment/attachment IDs are requested controls shown in additional details.
 
 Bodies and arbitrary comment-property values have presence only. Raw locator
 URLs, pagination tokens and continuations also have presence only, without

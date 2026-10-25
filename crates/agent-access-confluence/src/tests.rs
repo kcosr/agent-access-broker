@@ -8986,6 +8986,60 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
 }
 
 #[tokio::test]
+async fn upload_outcomes_keep_all_21_input_indices_beyond_request_metadata_sample() {
+    let server = MockServer::start().await;
+    let names: Vec<_> = (0..21).map(|index| format!("file{index}")).collect();
+    for (index, name) in names.iter().enumerate() {
+        Mock::given(method("POST"))
+            .and(path("/wiki/rest/api/content/123456/child/attachment"))
+            .and(wiremock::matchers::body_string_contains(format!(
+                "filename=\"{name}.txt\""
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{
+                    "id": format!("att{index}"),
+                    "title": format!("{name}.txt"),
+                    "metadata": {"mediaType": "text/plain"},
+                    "extensions": {"fileSize": name.len()}
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let mut config = confluence_config();
+    config.attachments.media_types = vec!["text/plain".to_string()];
+    let descriptor = confluence_descriptor(&config);
+    let provider = ConfluenceProvider::with_backend(
+        config,
+        ProviderLimits::default(),
+        Arc::new(http_confluence_backend_for_server(&server)),
+    );
+    let references: Vec<_> = names.iter().map(String::as_str).collect();
+    let invocation = page_attachment_add_invocation(&references);
+    let request_audit = audit::inventory::project(
+        audit::inventory::action(&descriptor, "attachment.add"),
+        invocation.inputs(),
+    );
+    let response = provider.invoke(invocation).await.unwrap();
+    let provider_audit = response.audit.as_ref().unwrap();
+    assert_upload_audit_rows(provider_audit, &["created"; 21], false);
+    assert_eq!(provider_audit["attachments"][20]["inputIndex"], 20);
+    assert_eq!(provider_audit["attachments"][20]["attachmentId"], "att20");
+    let projected = audit::inventory::field(&request_audit, "attachments");
+    assert_eq!(projected["totalCount"], 21);
+    assert_eq!(projected["limitedCount"], 1);
+    assert_eq!(projected["rows"].as_array().unwrap().len(), 20);
+    assert_eq!(projected["rows"][19]["index"], 19);
+    assert_eq!(
+        projected["rows"][19]["cells"]["filename"]["value"],
+        "file19.txt"
+    );
+    assert!(!request_audit.to_string().contains("file20.txt"));
+    assert_eq!(server.received_requests().await.unwrap().len(), 21);
+}
+
+#[tokio::test]
 async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_limited() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

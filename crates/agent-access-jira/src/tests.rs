@@ -4651,6 +4651,7 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
         ] {
             assert!(audit.get(retired).is_none(), "{retired}: {audit}");
         }
+        assert_eq!(audit["maxResults"], 50);
         assert_eq!(audit["resultCount"], 2);
         assert_eq!(backend.credential_observations.lock().unwrap().len(), 2);
         let serialized = format!("{audit} {}", error.message);
@@ -4673,7 +4674,7 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
 
 #[tokio::test]
 async fn successful_search_returns_bounded_sanitized_issue_fields() {
-    let backend = StubJiraBackend {
+    let backend = Arc::new(StubJiraBackend {
         search_page: Mutex::new(Some(JiraSearchPage {
             issues: vec![JiraIssue {
                 id: "10001".to_string(),
@@ -4698,30 +4699,47 @@ async fn successful_search_returns_bounded_sanitized_issue_fields() {
             is_last: Some(true),
         })),
         ..StubJiraBackend::default()
-    };
+    });
     let provider =
-        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
-    let response = provider
-        .invoke(
-            InvocationBuilder::new("jira", "search")
-                .inputs(json!({
-                    "projects": ["PROJ"],
-                    "query": {
-                        "type": "jql",
-                        "value": "key in (PROJ-1)"
-                    }
-                }))
-                .resources(BTreeMap::from([(
-                    "project".to_string(),
-                    vec!["PROJ".to_string()],
-                )]))
-                .search(search_preflight(["PROJ"]))
-                .credential(test_credential())
-                .lookup_credential(test_lookup_credential())
-                .build(),
-        )
-        .await
-        .unwrap();
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+    let invocation = InvocationBuilder::new("jira", "search")
+        .inputs(json!({
+            "projects": ["PROJ"],
+            "query": {
+                "type": "jql",
+                "value": "key in (PROJ-1)"
+            }
+        }))
+        .resources(BTreeMap::from([(
+            "project".to_string(),
+            vec!["PROJ".to_string()],
+        )]))
+        .search(search_preflight(["PROJ"]))
+        .credential(test_credential())
+        .lookup_credential(test_lookup_credential())
+        .build();
+    let descriptor = jira_descriptor(&jira_config());
+    let request_audit = audit::inventory::project(
+        audit::inventory::action(&descriptor, "search"),
+        invocation.inputs(),
+    );
+    let response = provider.invoke(invocation).await.unwrap();
+
+    assert_eq!(
+        audit::inventory::field(&request_audit, "query.value")["value"],
+        "key in (PROJ-1)"
+    );
+    assert_eq!(
+        audit::inventory::field(&request_audit, "query.type")["value"],
+        "jql"
+    );
+    assert_eq!(
+        audit::inventory::field(&request_audit, "maxResults")["state"],
+        "absent"
+    );
+    let sent = backend.last_search.lock().unwrap().clone().unwrap();
+    assert_eq!(sent.jql, "(key IN (PROJ-1)) AND project IN (PROJ)");
+    assert_eq!(sent.max_results, 50);
 
     assert_eq!(response.result["issues"][0]["key"], "PROJ-1");
     assert_eq!(

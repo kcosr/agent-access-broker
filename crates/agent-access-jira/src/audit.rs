@@ -36,6 +36,18 @@ fn id(key: &str, label: &str, pointer: &str) -> Field {
         None,
     )
 }
+fn identifier_control(key: &str, label: &str, pointer: &str) -> Field {
+    field(
+        AuditInputRule::value(key, label, pointer)
+            .kind(AuditValueKind::Identifier)
+            .role(AuditRole::Fact)
+            .display(AuditDisplay::Detail)
+            .max_bytes(1024)
+            .overflow(AuditOverflow::Omit),
+        "operation.control",
+        None,
+    )
+}
 fn ids(key: &str, label: &str, pointer: &str) -> Field {
     field(
         AuditInputRule::values(key, label, pointer)
@@ -200,7 +212,7 @@ fn fields(action: &str) -> Vec<Field> {
         ],
         "issue.create" => vec![
             id("project", "Project", "/project"),
-            id("issueTypeId", "Issue type", "/issueTypeId"),
+            identifier_control("issueTypeId", "Issue type", "/issueTypeId"),
             title("summary", "Summary", "/summary"),
             control("contentFormat", "Content format", "/contentFormat"),
             presence(
@@ -213,7 +225,7 @@ fn fields(action: &str) -> Vec<Field> {
         ],
         "issue.child.create" => vec![
             id("project", "Project", "/project"),
-            id("issueTypeId", "Issue type", "/issueTypeId"),
+            identifier_control("issueTypeId", "Issue type", "/issueTypeId"),
             id("parentIssue", "Parent issue", "/parentIssue"),
             presence(
                 "parentUrl",
@@ -343,12 +355,12 @@ fn fields(action: &str) -> Vec<Field> {
                 "Polymorphic body content is excluded; provider processing byte counts remain.",
             ),
             control("visibility.type", "Visibility type", "/visibility/type"),
-            id(
+            identifier_control(
                 "visibility.value",
                 "Visibility group or role",
                 "/visibility/value",
             ),
-            id(
+            identifier_control(
                 "visibility.identifier",
                 "Visibility identifier",
                 "/visibility/identifier",
@@ -373,12 +385,12 @@ fn fields(action: &str) -> Vec<Field> {
                 "Polymorphic body content is excluded; provider processing byte counts remain.",
             ),
             control("visibility.type", "Visibility type", "/visibility/type"),
-            id(
+            identifier_control(
                 "visibility.value",
                 "Visibility group or role",
                 "/visibility/value",
             ),
-            id(
+            identifier_control(
                 "visibility.identifier",
                 "Visibility identifier",
                 "/visibility/identifier",
@@ -404,12 +416,12 @@ fn fields(action: &str) -> Vec<Field> {
             ),
             control("visibilityMode", "Visibility mode", "/visibilityMode"),
             control("visibility.type", "Visibility type", "/visibility/type"),
-            id(
+            identifier_control(
                 "visibility.value",
                 "Visibility group or role",
                 "/visibility/value",
             ),
-            id(
+            identifier_control(
                 "visibility.identifier",
                 "Visibility identifier",
                 "/visibility/identifier",
@@ -498,8 +510,8 @@ fn fields(action: &str) -> Vec<Field> {
         ],
         "verify" => vec![
             id("issue", "Issue", "/issue"),
-            id("expectCommentId", "Expected comment", "/expectCommentId"),
-            id(
+            identifier_control("expectCommentId", "Expected comment", "/expectCommentId"),
+            identifier_control(
                 "expectAttachmentId",
                 "Expected attachment",
                 "/expectAttachmentId",
