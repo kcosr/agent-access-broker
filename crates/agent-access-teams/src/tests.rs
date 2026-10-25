@@ -274,8 +274,17 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
 #[test]
 fn descriptor_and_schema_preserve_mutation_authority_and_content_union() {
     let descriptor = descriptor();
+    assert_eq!(descriptor.validate(), Ok(()));
     assert!(!descriptor.credentials.execution_required);
     let action = &descriptor.actions[0];
+    assert_eq!(
+        action
+            .audit_inputs
+            .iter()
+            .map(|input| (input.input(), input.label()))
+            .collect::<Vec<_>>(),
+        [("destination", "Destination")]
+    );
     assert!(!action.read_only);
     assert!(action.requires_resource_attributes);
     assert_eq!(action.credential_modes, vec!["service"]);

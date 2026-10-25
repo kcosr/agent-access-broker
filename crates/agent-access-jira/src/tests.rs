@@ -9377,6 +9377,70 @@ fn jira_descriptor_declares_lookup_and_io_per_action() {
 }
 
 #[test]
+fn jira_descriptor_audits_targets_searches_and_create_summaries_only() {
+    let descriptor = jira_descriptor(&jira_config());
+    assert_eq!(descriptor.validate(), Ok(()));
+    let declared = |name: &str| {
+        descriptor
+            .action(name)
+            .unwrap()
+            .audit_inputs
+            .iter()
+            .map(|input| (input.input(), input.label()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        declared("issue.create"),
+        [("project", "Project"), ("summary", "Summary")]
+    );
+    assert_eq!(
+        declared("issue.update"),
+        [("issue", "Issue"), ("url", "URL")]
+    );
+    assert_eq!(
+        declared("search"),
+        [("query", "Query"), ("projects", "Projects")]
+    );
+    assert_eq!(
+        declared("comment.reply"),
+        [
+            ("issue", "Issue"),
+            ("url", "URL"),
+            ("parentCommentId", "Parent comment ID")
+        ]
+    );
+    for action in &descriptor.actions {
+        assert_eq!(
+            action.audit_inputs.is_empty(),
+            action.action == "project.list",
+            "{}",
+            action.action
+        );
+        for input in &action.audit_inputs {
+            assert!(
+                !matches!(
+                    input.input(),
+                    "content"
+                        | "contentFormat"
+                        | "visibility"
+                        | "value"
+                        | "attachments"
+                        | "notifyUsers"
+                        | "maxResults"
+                        | "startAt"
+                        | "nextPageToken"
+                        | "pageToken"
+                        | "orderBy"
+                ),
+                "{}.{}",
+                action.action,
+                input.input()
+            );
+        }
+    }
+}
+
+#[test]
 fn native_adf_validation_has_a_depth_bound() {
     let mut node = json!({"type":"text","text":"leaf"});
     for _ in 0..130 {

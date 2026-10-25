@@ -200,8 +200,11 @@ Refresh applies the [import rules](imported-services.md#administrative-workflow)
 new actions stay unselected; missing, unsupported or behaviorally changed
 actions are quarantined; grants are retained; and accepting a change that
 affects grants requires confirming them. An action's behavior is its input
-schema, output schema, download behavior, and the resource declaration and
-credential modes the adapter records in its annotations. The manifest `version`
+schema, output schema, download behavior, and the resource declaration,
+credential modes, `listingOf` and `audit` inputs the adapter records in its
+annotations. Adding, relabeling, reordering or removing `audit` inputs
+therefore quarantines the action; an empty `audit` list is recorded as no list
+and changes nothing. The manifest `version`
 and `verify` flag take effect on acceptance. An older Broker cannot load a service containing an
 accepted download definition; see [upgrade and rollback](operator-guide.md#upgrade-and-rollback).
 
@@ -495,7 +498,8 @@ must:
       "inputSchema": { "type": "object", "required": ["project", "issue"],
         "properties": { "project": { "type": "string" }, "issue": { "type": "integer", "minimum": 1 } },
         "additionalProperties": false },
-      "resources": { "type": "project", "inputs": ["/project"] }
+      "resources": { "type": "project", "inputs": ["/project"] },
+      "audit": [{ "input": "project", "label": "Project" }, { "input": "issue", "label": "Issue" }]
     },
     {
       "name": "issue.search", "description": "Search issues with a query expression.",
@@ -503,7 +507,8 @@ must:
       "inputSchema": { "type": "object", "required": ["query"],
         "properties": { "query": { "type": "string", "maxLength": 2000 } },
         "additionalProperties": false },
-      "resources": { "type": "project" }
+      "resources": { "type": "project" },
+      "audit": [{ "input": "query", "label": "Query" }]
     },
     {
       "name": "project.list", "description": "List visible projects.",
@@ -519,7 +524,8 @@ must:
         "properties": { "project": { "type": "string" },
           "summary": { "type": "string", "minLength": 1, "maxLength": 200 } },
         "additionalProperties": false },
-      "resources": { "type": "project", "inputs": ["/project"] }
+      "resources": { "type": "project", "inputs": ["/project"] },
+      "audit": [{ "input": "project", "label": "Project" }, { "input": "summary", "label": "Summary" }]
     }
   ]
 }
@@ -552,6 +558,7 @@ must:
 | `.credentialModes` | Optional subset of `credential.modes`; absent without `credential` |
 | `.resources.type` | A declared type ID; an action has at most one resource type |
 | `.resources.inputs` | 1–4 JSON pointers to required string or string-array inputs; their presence makes the action Broker-enforced |
+| `.audit` | Optional ordered list of `{"input", "label"}` objects without other fields, naming the inputs whose supplied values [audit records](#audit-and-logs) keep. Each `input` is a distinct top-level `inputSchema` property whose subschema has no `"x-agent-access-sensitive": true` and no `$ref`, `$dynamicRef` or `$recursiveRef`; each `label` has 1–64 bytes, is not blank and has no control characters. Declare what a call concerns, such as its target or query, never bodies or secrets. An empty list declares none |
 | `oauth` | Reserved; see [not supported](#not-supported-in-this-version) |
 
 Other fields are rejected. The [import limits](imported-services.md#limits-and-admission)
@@ -1127,7 +1134,18 @@ boundary. A command-enforced call records
 `{"mode": "command", "resourceType"?, "grants"}`: the grants passed, with
 their IDs, versions, credential modes and boundaries. Both are captured by the
 Broker, so an interrupted call keeps them, with facts not yet known, such as
-the exit status of a killed process, recorded as `null`. Audit never holds inputs, results, attributes or stderr.
+the exit status of a killed process, recorded as `null`.
+
+Audit records hold no results, attributes or stderr, and no inputs except
+those the accepted action declares in `audit`. Once the Broker resolves the
+action, each declared input the call supplies is recorded in declaration
+order under `auditInputs`, as `{"input", "label", "value"}`, on the call's
+records, including denials, failures and interruptions. A value whose
+encoding exceeds 1 KiB is cut to at most 1 KiB, as a string, and marked
+`"truncated": true`; this bounds storage and is not redaction. Auditors see
+them in the audit record's summary and can search their labels and string
+values. The Broker records them before the command runs, whoever enforces
+the action's resources.
 A call that passes a personal grant also records `credentialConnection`, the
 imported service ID of the import's credential connection, even when mixed
 modes leave `credentialMode` null; a call passing only service grants omits it.
@@ -1199,6 +1217,8 @@ not isolation. See [command imports in the security model](security-model.md#com
 is a complete command in Python's standard library: the `ticketing` manifest
 above, with output schemas, plus `issue.close`, a write the command checks
 against the passed grants, and `whoami`, an action without a resource type.
+Its actions declare `audit` inputs; `issue.comment` records its project and
+issue, never the comment body.
 It has deterministic fake data, filters searches by grant, returns write
 receipts in both authorization modes and verifies personal credentials. It
 never contacts a network. Its header documents alternative manifests for

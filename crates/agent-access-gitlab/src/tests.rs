@@ -1958,6 +1958,145 @@ fn gitlab_webhook_actions_do_not_advertise_content_attribution() {
 }
 
 #[test]
+fn audit_inputs_record_targets_and_never_content_or_secrets() {
+    let mut config = config();
+    // Zoekt adds search.code's regex flag, so every declaration is validated.
+    config.search.engines.zoekt.project_categories = vec!["code".into()];
+    let descriptor = gitlab_descriptor(&config);
+    assert_eq!(descriptor.validate(), Ok(()));
+    let declared = |action: &str| {
+        descriptor
+            .action(action)
+            .unwrap_or_else(|| panic!("{action} missing"))
+            .audit_inputs
+            .iter()
+            .map(|input| (input.input(), input.label()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        declared("issue.update"),
+        [
+            ("project", "Project"),
+            ("iid", "Issue"),
+            ("stateEvent", "State event")
+        ]
+    );
+    assert_eq!(
+        declared("merge_request.view"),
+        [
+            ("project", "Project"),
+            ("iid", "Merge request"),
+            ("url", "URL")
+        ]
+    );
+    assert_eq!(
+        declared("search.code"),
+        [
+            ("project", "Project"),
+            ("search", "Search"),
+            ("regex", "Regex")
+        ]
+    );
+    assert_eq!(
+        declared("project.access_token.create"),
+        [
+            ("project", "Project"),
+            ("name", "Token name"),
+            ("scopes", "Scopes"),
+            ("accessLevel", "Access level"),
+            ("expiresAt", "Expires at")
+        ]
+    );
+    assert_eq!(
+        declared("service_account.token.rotate"),
+        [
+            ("project", "Project"),
+            ("userId", "User ID"),
+            ("tokenId", "Token ID"),
+            ("expiresAt", "Expires at")
+        ]
+    );
+    assert_eq!(
+        declared("webhook.create"),
+        [("project", "Project"), ("name", "Webhook name")]
+    );
+    assert_eq!(
+        declared("webhook.custom_header.set"),
+        [
+            ("project", "Project"),
+            ("webhookId", "Webhook ID"),
+            ("key", "Header name")
+        ]
+    );
+
+    // Bodies, messages, author identity, attachments, secrets, webhook
+    // destinations and paging or ordering controls are never recorded.
+    const NEVER: &[&str] = &[
+        "content",
+        "contentFormat",
+        "commitMessage",
+        "mergeCommitMessage",
+        "squashCommitMessage",
+        "description",
+        "customWebhookTemplate",
+        "authorName",
+        "authorEmail",
+        "actions",
+        "attachments",
+        "position",
+        "suggestions",
+        "token",
+        "signingToken",
+        "value",
+        "pageToken",
+        "maxResults",
+        "sort",
+        "orderBy",
+        "projection",
+    ];
+    let mut undeclared = BTreeSet::new();
+    let mut labels = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for action in &descriptor.actions {
+        let name = action.action.as_str();
+        if action.audit_inputs.is_empty() {
+            undeclared.insert(name);
+        }
+        for input in &action.audit_inputs {
+            assert!(
+                !NEVER.contains(&input.input()),
+                "{name} records {}",
+                input.input()
+            );
+            assert!(
+                !(name.starts_with("webhook.") && input.input() == "url"),
+                "{name} records the webhook destination"
+            );
+            if input.input() == "iid" {
+                let expected = if name.starts_with("issue.") {
+                    "Issue"
+                } else {
+                    "Merge request"
+                };
+                assert_eq!(input.label(), expected, "{name}");
+            }
+            labels
+                .entry(input.input())
+                .or_default()
+                .insert(input.label());
+        }
+    }
+    // Only project.list, which takes nothing but paging, records no input.
+    assert_eq!(undeclared, BTreeSet::from(["project.list"]));
+    // Apart from iid (labeled by context) and name (by the object named), an
+    // input keeps one label everywhere.
+    for (input, labels) in labels {
+        if !matches!(input, "iid" | "name") {
+            assert_eq!(labels.len(), 1, "{input} has labels {labels:?}");
+        }
+    }
+}
+
+#[test]
 fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
     let descriptor = gitlab_descriptor(&config());
     assert_eq!(descriptor.validate(), Ok(()));

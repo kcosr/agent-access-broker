@@ -141,6 +141,46 @@ fn live_listing_survives_preview_and_persistence_but_requires_reviewed_read_only
 }
 
 #[test]
+fn audit_inputs_come_only_from_the_accepted_annotation() {
+    let mut manifest = manifest::tests::sample();
+    manifest["actions"][0]["audit"] = serde_json::json!([
+        {"input": "project", "label": "Project"},
+        {"input": "issue", "label": "Issue"}
+    ]);
+    let manifest = manifest::parse(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let preview = mapping::discovery(
+        &definition(&[ImportedCredentialMode::Service]),
+        "ticketing",
+        &manifest,
+        None,
+        false,
+    )
+    .unwrap();
+    let view = &preview.tools[0].definition;
+    assert_eq!(
+        CommandAdapter.audit_inputs(view).unwrap(),
+        [
+            AuditInput::new("project", "Project"),
+            AuditInput::new("issue", "Issue")
+        ]
+    );
+    // The search declares none, whatever its schema names.
+    assert!(
+        CommandAdapter
+            .audit_inputs(&preview.tools[1].definition)
+            .unwrap()
+            .is_empty()
+    );
+    // A corrupt stored declaration fails like an unreadable authority, so
+    // core binds the action to nothing.
+    let mut corrupt = view.clone();
+    corrupt.annotations["command"]["audit"][1]["label"] = serde_json::json!("");
+    assert!(CommandAdapter.audit_inputs(&corrupt).is_err());
+    assert!(CommandAdapter.action_authority(&corrupt).is_err());
+    assert!(CommandAdapter.validate_action(&corrupt).is_err());
+}
+
+#[test]
 fn definitions_use_command_endpoints_anonymous_discovery_and_static_credentials() {
     let both = [
         ImportedCredentialMode::Service,

@@ -547,7 +547,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("pageId", "Page ID")
+        .audit_input("url", "URL"),
         confluence_read_action(
             "search",
             "Search Confluence pages with CQL or title text; omitted spaces use effective authorized spaces; empty CQL and ORDER BY alone are supported",
@@ -577,7 +579,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             }),
         )
         .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained)
-        .documentation(cql_documentation(ConfluenceSearchContentKind::Page)),
+        .documentation(cql_documentation(ConfluenceSearchContentKind::Page))
+        .audit_input("query", "Query")
+        .audit_input("spaces", "Spaces"),
         confluence_action(
             "page.create",
             "Create a Confluence page in an authorized space with optional parent placement",
@@ -597,7 +601,11 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 &page_write_formats,
             ),
         )
-        .attribution(confluence_body_attribution(AttributionVerb::Add)),
+        .attribution(confluence_body_attribution(AttributionVerb::Add))
+        .audit_input("space", "Space")
+        .audit_input("title", "Title")
+        .audit_input("parentPageId", "Parent page ID")
+        .audit_input("parentUrl", "Parent URL"),
         confluence_action(
             "page.move",
             "Move an authorized Confluence page before, after, or under another authorized page",
@@ -630,7 +638,12 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("pageId", "Page ID")
+        .audit_input("url", "URL")
+        .audit_input("position", "Position")
+        .audit_input("targetPageId", "Target page ID")
+        .audit_input("targetUrl", "Target URL"),
         confluence_action(
             "page.update",
             "Update a Confluence page after page-to-space confirmation and base-version check",
@@ -648,7 +661,8 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 &page_write_formats,
             ),
         )
-        .attribution(confluence_body_attribution(AttributionVerb::Update)),
+        .attribution(confluence_body_attribution(AttributionVerb::Update))
+        .audit_input("pageId", "Page ID"),
         confluence_action(
             "attachment.add",
             "Upload bounded Confluence page attachments after page-to-space confirmation",
@@ -677,7 +691,8 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "additionalProperties": false
             }),
         )
-        .multipart_upload(attachment_upload_plan(&["pageId"], None)),
+        .multipart_upload(attachment_upload_plan(&["pageId"], None))
+        .audit_input("pageId", "Page ID"),
         confluence_read_action(
             "attachment.download",
             "Download a bounded Confluence page attachment after membership checks",
@@ -691,7 +706,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "additionalProperties": false
             }),
         )
-        .raw_download(),
+        .raw_download()
+        .audit_input("pageId", "Page ID")
+        .audit_input("attachmentId", "Attachment ID"),
         confluence_read_action(
             "attachment.list",
             "List bounded Confluence page attachment metadata after page-to-space confirmation",
@@ -709,7 +726,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("pageId", "Page ID")
+        .audit_input("url", "URL"),
         confluence_read_action(
             "verify",
             "Verify Confluence page state or attachment membership",
@@ -724,7 +743,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("pageId", "Page ID")
+        .audit_input("expectAttachmentId", "Expected attachment ID"),
         confluence_read_action(
             "blog.view",
             "View a current Confluence blog post after blog-to-space confirmation",
@@ -740,7 +761,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("blogId", "Blog post ID")
+        .audit_input("url", "URL"),
         confluence_read_action(
             "blog.search",
             "Search Confluence blog posts with CQL or title text; omitted spaces use effective authorized spaces; empty CQL and ORDER BY alone are supported",
@@ -770,7 +793,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             }),
         )
         .native_search(agent_access_provider::NativeSearchEnforcement::UpstreamConstrained)
-        .documentation(cql_documentation(ConfluenceSearchContentKind::BlogPost)),
+        .documentation(cql_documentation(ConfluenceSearchContentKind::BlogPost))
+        .audit_input("query", "Query")
+        .audit_input("spaces", "Spaces"),
         confluence_action(
             "blog.create",
             "Create a current Confluence blog post in an authorized space",
@@ -787,7 +812,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 &blog_write_formats,
             ),
         )
-        .attribution(confluence_body_attribution(AttributionVerb::Add)),
+        .attribution(confluence_body_attribution(AttributionVerb::Add))
+        .audit_input("space", "Space")
+        .audit_input("title", "Title"),
         confluence_action(
             "blog.update",
             "Update a current Confluence blog post after blog-to-space confirmation and base-version check",
@@ -806,7 +833,8 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 &blog_write_formats,
             ),
         )
-        .attribution(confluence_body_attribution(AttributionVerb::Update)),
+        .attribution(confluence_body_attribution(AttributionVerb::Update))
+        .audit_input("blogId", "Blog post ID"),
         confluence_action(
             "blog.attachment.add",
             "Upload bounded Confluence blog attachments after blog-to-space confirmation",
@@ -835,7 +863,8 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "additionalProperties": false
             }),
         )
-        .multipart_upload(attachment_upload_plan(&["blogId"], None)),
+        .multipart_upload(attachment_upload_plan(&["blogId"], None))
+        .audit_input("blogId", "Blog post ID"),
         confluence_read_action(
             "blog.attachment.download",
             "Download a bounded Confluence blog attachment after membership checks",
@@ -849,7 +878,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "additionalProperties": false
             }),
         )
-        .raw_download(),
+        .raw_download()
+        .audit_input("blogId", "Blog post ID")
+        .audit_input("attachmentId", "Attachment ID"),
         confluence_read_action(
             "blog.attachment.list",
             "List bounded Confluence blog attachment metadata after blog-to-space confirmation",
@@ -867,7 +898,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("blogId", "Blog post ID")
+        .audit_input("url", "URL"),
         confluence_read_action(
             "blog.verify",
             "Verify Confluence blog state or attachment membership",
@@ -882,7 +915,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 },
                 "additionalProperties": false
             }),
-        ),
+        )
+        .audit_input("blogId", "Blog post ID")
+        .audit_input("expectAttachmentId", "Expected attachment ID"),
     ];
     actions.retain(|action| {
         if matches!(action.action.as_str(), "page.create" | "page.update") {
@@ -898,9 +933,19 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
 
 fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDescriptor> {
     let mut actions = Vec::new();
-    for (prefix, id_field, write_target) in [
-        ("page", "pageId", ConfluenceWriteTarget::PageDraft),
-        ("blog", "blogId", ConfluenceWriteTarget::Blog),
+    for (prefix, id_field, id_label, write_target) in [
+        (
+            "page",
+            "pageId",
+            "Page ID",
+            ConfluenceWriteTarget::PageDraft,
+        ),
+        (
+            "blog",
+            "blogId",
+            "Blog post ID",
+            ConfluenceWriteTarget::Blog,
+        ),
     ] {
         let write_formats = confluence_write_formats(write_target, config);
         let content_label = if prefix == "page" {
@@ -931,14 +976,21 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
             });
         }
         if !write_formats.is_empty() {
-            actions.push(
-                confluence_action(
-                    format!("{prefix}.draft.create"),
-                    format!("Create a broker-managed Confluence {content_label} draft"),
-                    create_schema,
-                )
-                .attribution(confluence_body_attribution(AttributionVerb::Add)),
-            );
+            let create = confluence_action(
+                format!("{prefix}.draft.create"),
+                format!("Create a broker-managed Confluence {content_label} draft"),
+                create_schema,
+            )
+            .attribution(confluence_body_attribution(AttributionVerb::Add))
+            .audit_input("space", "Space")
+            .audit_input("title", "Title");
+            actions.push(if prefix == "page" {
+                create
+                    .audit_input("parentPageId", "Parent page ID")
+                    .audit_input("parentUrl", "Parent URL")
+            } else {
+                create
+            });
         }
         if !write_formats.is_empty() {
             actions.push(
@@ -959,7 +1011,8 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
                         &write_formats,
                     ),
                 )
-                .attribution(confluence_body_attribution(AttributionVerb::Add)),
+                .attribution(confluence_body_attribution(AttributionVerb::Add))
+                .audit_input(id_field, id_label),
             );
         }
         for action in ["view", "publish"] {
@@ -976,7 +1029,8 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
                     },
                     "additionalProperties": false
                 }),
-            );
+            )
+            .audit_input(id_field, id_label);
             actions.push(if action == "view" {
                 descriptor.read_only()
             } else {
@@ -1002,38 +1056,46 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
                         &write_formats,
                     ),
                 )
-                .attribution(confluence_body_attribution(AttributionVerb::Update)),
+                .attribution(confluence_body_attribution(AttributionVerb::Update))
+                .audit_input(id_field, id_label),
             );
         }
-        actions.push(confluence_action(
-            format!("{prefix}.draft.discard"),
-            format!("Discard a broker-created Confluence {content_label} draft"),
-            json!({
-                "type": "object",
-                "required": [id_field, "draftHandle"],
-                "properties": {
-                    id_field: { "type": "string" },
-                    "draftHandle": { "type": "string" }
-                },
-                "additionalProperties": false
-            }),
-        ));
-        actions.push(confluence_read_action(
-            format!("{prefix}.draft.verify"),
-            format!("Verify broker-managed Confluence {content_label} draft state"),
-            json!({
-                "type": "object",
-                "required": [id_field, "draftHandle"],
-                "properties": {
-                    id_field: { "type": "string" },
-                    "draftHandle": { "type": "string" },
-                    "expectVersion": { "type": "integer", "minimum": 1 },
-                    "expectTitle": { "type": "string" },
-                    "expectAttachmentId": { "type": "string" }
-                },
-                "additionalProperties": false
-            }),
-        ));
+        actions.push(
+            confluence_action(
+                format!("{prefix}.draft.discard"),
+                format!("Discard a broker-created Confluence {content_label} draft"),
+                json!({
+                    "type": "object",
+                    "required": [id_field, "draftHandle"],
+                    "properties": {
+                        id_field: { "type": "string" },
+                        "draftHandle": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+            )
+            .audit_input(id_field, id_label),
+        );
+        actions.push(
+            confluence_read_action(
+                format!("{prefix}.draft.verify"),
+                format!("Verify broker-managed Confluence {content_label} draft state"),
+                json!({
+                    "type": "object",
+                    "required": [id_field, "draftHandle"],
+                    "properties": {
+                        id_field: { "type": "string" },
+                        "draftHandle": { "type": "string" },
+                        "expectVersion": { "type": "integer", "minimum": 1 },
+                        "expectTitle": { "type": "string" },
+                        "expectAttachmentId": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+            )
+            .audit_input(id_field, id_label)
+            .audit_input("expectAttachmentId", "Expected attachment ID"),
+        );
         actions.push(
             confluence_action(
                 format!("{prefix}.draft.attachment.add"),
@@ -1064,7 +1126,8 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
                     "additionalProperties": false
                 }),
             )
-            .multipart_upload(attachment_upload_plan(&[id_field, "draftHandle"], None)),
+            .multipart_upload(attachment_upload_plan(&[id_field, "draftHandle"], None))
+            .audit_input(id_field, id_label),
         );
         actions.push(
             confluence_read_action(
@@ -1083,23 +1146,28 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
                     "additionalProperties": false
                 }),
             )
-            .raw_download(),
+            .raw_download()
+            .audit_input(id_field, id_label)
+            .audit_input("attachmentId", "Attachment ID"),
         );
-        actions.push(confluence_read_action(
-            format!("{prefix}.draft.attachment.list"),
-            format!("List bounded broker-created Confluence {content_label} draft attachments"),
-            json!({
-                "type": "object",
-                "required": [id_field, "draftHandle"],
-                "properties": {
-                    id_field: { "type": "string" },
-                    "draftHandle": { "type": "string" },
-                    "maxResults": { "type": "integer", "minimum": 1 },
-                    "nextPageToken": { "type": "string" }
-                },
-                "additionalProperties": false
-            }),
-        ));
+        actions.push(
+            confluence_read_action(
+                format!("{prefix}.draft.attachment.list"),
+                format!("List bounded broker-created Confluence {content_label} draft attachments"),
+                json!({
+                    "type": "object",
+                    "required": [id_field, "draftHandle"],
+                    "properties": {
+                        id_field: { "type": "string" },
+                        "draftHandle": { "type": "string" },
+                        "maxResults": { "type": "integer", "minimum": 1 },
+                        "nextPageToken": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+            )
+            .audit_input(id_field, id_label),
+        );
     }
     actions
         .into_iter()
@@ -1115,9 +1183,9 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
         ConfluenceCommentContainerType::Blog,
     ] {
         let container_prefix = container_type.as_str();
-        let container_id_field = match container_type {
-            ConfluenceCommentContainerType::Page => "pageId",
-            ConfluenceCommentContainerType::Blog => "blogId",
+        let (container_id_field, container_id_label) = match container_type {
+            ConfluenceCommentContainerType::Page => ("pageId", "Page ID"),
+            ConfluenceCommentContainerType::Blog => ("blogId", "Blog post ID"),
         };
         for kind in [ConfluenceCommentKind::Footer, ConfluenceCommentKind::Inline] {
             let family = kind.action_segment();
@@ -1151,16 +1219,19 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                     }),
                 );
             }
-            actions.push(confluence_read_action(
-                list_action,
-                format!("List current {comment_label}s after container-to-space confirmation"),
-                json!({
-                    "type": "object",
-                    "required": [container_id_field],
-                    "properties": list_properties,
-                    "additionalProperties": false
-                }),
-            ));
+            actions.push(
+                confluence_read_action(
+                    list_action,
+                    format!("List current {comment_label}s after container-to-space confirmation"),
+                    json!({
+                        "type": "object",
+                        "required": [container_id_field],
+                        "properties": list_properties,
+                        "additionalProperties": false
+                    }),
+                )
+                .audit_input(container_id_field, container_id_label),
+            );
 
             let view_action = format!("{container_prefix}.{family}.view");
             actions.push(confluence_read_action(
@@ -1177,7 +1248,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                     },
                     "additionalProperties": false
                 }),
-            ));
+            )
+            .audit_input("commentId", "Comment ID"));
 
             let update_action = format!("{container_prefix}.{family}.update");
             if !write_formats.is_empty() {
@@ -1198,7 +1270,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                         }),
                         &write_formats,
                     ),
-                ));
+                )
+                .audit_input("commentId", "Comment ID"));
             }
 
             let delete_action = format!("{container_prefix}.{family}.delete");
@@ -1215,7 +1288,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                     },
                     "additionalProperties": false
                 }),
-            ));
+            )
+            .audit_input("commentId", "Comment ID"));
 
             if kind == ConfluenceCommentKind::Footer && !write_formats.is_empty() {
                 let add_action = format!("{container_prefix}.{family}.add");
@@ -1237,7 +1311,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                             &write_formats,
                         ),
                     )
-                    .attribution(confluence_body_attribution(AttributionVerb::Add)),
+                    .attribution(confluence_body_attribution(AttributionVerb::Add))
+                    .audit_input(container_id_field, container_id_label),
                 );
             }
 
@@ -1256,7 +1331,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                     },
                     "additionalProperties": false
                 }),
-            ));
+            )
+            .audit_input("commentId", "Comment ID"));
 
             let reply_add_action = format!("{container_prefix}.{family}.reply.add");
             if !write_formats.is_empty() {
@@ -1276,7 +1352,8 @@ fn confluence_comment_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                             &write_formats,
                         ),
                     )
-                    .attribution(confluence_body_attribution(AttributionVerb::Add)),
+                    .attribution(confluence_body_attribution(AttributionVerb::Add))
+                    .audit_input("commentId", "Comment ID"),
                 );
             }
         }

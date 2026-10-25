@@ -56,7 +56,11 @@ loads current results; **Load more** continues through older matching records.
 
 1. On the drawer's **Summary** tab, inspect **Decision**, **Reason code**, and
    **Phase**. For an invocation, also inspect **Matched grant**,
-   **Execution context**, and **Credential mode** when present.
+   **Execution context**, and **Credential mode** when present. **Inputs** lists
+   what the request concerned, such as its project, issue, path or query, as
+   the action records them; long values are shortened there, and **Raw** shows
+   each stored value. **Truncated in record** means the stored value itself was
+   cut at 1 KiB.
 2. Confirm the principal and token under **Identity**. A known token name is a
    convenient label; its ID identifies the actual token record.
 3. Record **Broker request ID**, **Agent request ID**, timestamp, and **Audit ID**

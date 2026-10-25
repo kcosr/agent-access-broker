@@ -3,6 +3,7 @@
 //! them, and per-action credential modes.
 use super::*;
 use crate::imports::{ImportedActionAuthority, ImportedAdapter, ImportedCredentialMode};
+use agent_access_provider::AuditInput;
 
 /// The selector forms imported resource types support.
 const IMPORTED_SELECTORS: [&str; 2] = ["exact", "all"];
@@ -12,13 +13,16 @@ const IMPORTED_SELECTORS: [&str; 2] = ["exact", "all"];
 /// declared type.
 const UNREADABLE_SCOPE: &str = "unresolved-resource";
 
-/// One imported action's scope and credential modes.
+/// One imported action's scope, credential modes and audit inputs.
 pub(super) struct ImportedActionShape {
     /// The resource scope (the declared source type id), its Broker type,
     /// and whether the import enforces it from the passed grants.
     pub scope: Option<ImportedActionScope>,
     pub credential_modes: Vec<&'static str>,
     pub listing_of: Option<ResourceType>,
+    /// The inputs the adapter declares for audit; none for an unreadable
+    /// declaration, which authorizes nothing.
+    pub audit_inputs: Vec<AuditInput>,
 }
 
 pub(super) struct ImportedActionScope {
@@ -59,11 +63,12 @@ fn broker_type(
 /// Maps `definition`'s declaration. Credential modes are the import's
 /// declared modes the action supports; acceptance requires one, so an
 /// action whose modes the import does not bind keeps its own and no grant
-/// can select it.
+/// can select it. Audit inputs come only from the adapter.
 ///
-/// An unreadable declaration authorizes nothing, and neither does any
-/// action of a command import whose adapter this Broker does not link (the
-/// import is unavailable): both bind an unresolved scope, under which every
+/// An unreadable declaration, its audit inputs included, authorizes
+/// nothing, and neither does any action of a command import whose adapter
+/// this Broker does not link (the import is unavailable): both bind an
+/// unresolved scope and record no audit inputs. Under that scope every
 /// retained grant, with or without resources, stays valid. A command
 /// import's unresolved scope is command-enforced, so retained grants mixing
 /// modes stay valid too; its boundary is always empty. Other imports declare
@@ -82,11 +87,17 @@ pub(super) fn action_shape(
         }),
         credential_modes: declared_modes.to_vec(),
         listing_of: None,
+        audit_inputs: Vec::new(),
     };
     let authority = match adapter.map(|adapter| adapter.action_authority(definition)) {
         Some(Ok(authority)) => authority,
         None if !command_endpoint(&record.definition) => ImportedActionAuthority::default(),
         Some(Err(_)) | None => return unresolved(),
+    };
+    let audit_inputs = match adapter.map(|adapter| adapter.audit_inputs(definition)) {
+        Some(Ok(inputs)) => inputs,
+        None => Vec::new(),
+        Some(Err(_)) => return unresolved(),
     };
     let credential_modes = match &authority.credential_modes {
         None => declared_modes.to_vec(),
@@ -117,6 +128,7 @@ pub(super) fn action_shape(
             name: resources.resource_type,
         }),
         credential_modes,
+        audit_inputs,
     }
 }
 

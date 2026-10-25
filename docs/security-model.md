@@ -800,7 +800,15 @@ Agent Access Broker applies these controls in the request path:
   names or labels. Safe requested/effective format names, byte counts,
   conversion state, stable outcome categories, and attribution metadata may be
   recorded; audit construction does not receive rendered strings to derive
-  those values. Every management call is audited, including denials and
+  those values. The one deliberate exception is `auditInputs`: an action may
+  opt a few top-level inputs into its audit records, such as targets, scope,
+  search queries and titles supplied on create, including draft titles. Their
+  supplied values are retained up to 1 KiB each, are full-text searchable, and
+  are visible to every reader of the record; truncation is a storage bound, not
+  redaction, and a query or title can contain confidential text. Actions never
+  opt in content bodies, descriptions, comments, messages, file contents,
+  credentials or pagination tokens, and an input whose schema is marked
+  sensitive cannot be opted in. Every management call is audited, including denials and
   failures, except successful read-only operations (see Unaudited management
   reads). Password change and authenticated logout require a durable preflight
   before mutation. If their supplemental completion record fails after commit,

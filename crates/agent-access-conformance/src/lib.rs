@@ -264,10 +264,12 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         action("item.view", "View an item and its text body", &locator)
             .read_only()
             .reports_universal_reach()
-            .presentation(Some(ITEM_PRESENTATION)),
+            .presentation(Some(ITEM_PRESENTATION))
+            .audit_input("item", "Item"),
         action("item.download", "Download an item's content", &locator)
             .read_only()
-            .raw_download(),
+            .raw_download()
+            .audit_input("item", "Item"),
         // A write the upstream accepts only with a token, never with
         // delegated access.
         action(
@@ -276,7 +278,8 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             &upload,
         )
         .multipart_upload(attachment_upload_plan(&["item"], Some(1)))
-        .token_only(),
+        .token_only()
+        .audit_input("item", "Item"),
         action(
             "item.list",
             "List live items within effective item grants",
@@ -309,7 +312,9 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             )
             .scope("endpoint")
             .credential_modes(["service"])
-            .resource_attributes(),
+            .resource_attributes()
+            // The ping message is content, which audit never records.
+            .audit_input("endpoint", "Endpoint"),
         );
     }
     let descriptor = ServiceDescriptor::new(SERVICE, "Conformance")
@@ -1573,6 +1578,18 @@ mod tests {
             ActionIo::MultipartUpload { .. }
         ));
         assert!(action("item.upload").token_only && !action("item.view").token_only);
+        let audited = |name: &str| {
+            action(name)
+                .audit_inputs
+                .iter()
+                .map(|input| (input.input(), input.label()))
+                .collect::<Vec<_>>()
+        };
+        for name in ["item.view", "item.download", "item.upload"] {
+            assert_eq!(audited(name), [("item", "Item")], "{name}");
+        }
+        assert!(audited("item.list").is_empty());
+        assert_eq!(audited("endpoint.ping"), [("endpoint", "Endpoint")]);
         assert_eq!(
             descriptor.credential_profile_kind("api_token"),
             Some("bearer_token")

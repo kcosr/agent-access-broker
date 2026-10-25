@@ -1148,8 +1148,10 @@ so JSON keys do not become search terms. It holds the principal, subject,
 groups, identity source name and token ID, source addresses and proxy chain,
 service, action, reason code, execution context, resource-scope keys and
 values, object IDs, matched grant IDs and subjects (every grant of a search
-band), search scope values, and the string values of `providerAudit` except
-fields ending in `Sha256`, capped at 32 KiB per record at a token boundary. It
+band), search scope values, the labels and string values of `auditInputs`, and
+the string values of `providerAudit` except fields ending in `Sha256`, capped at
+32 KiB per record at a token boundary; `providerAudit` comes last, so the cap
+shortens it first. It
 uses the `unicode61` tokenizer with diacritics removed. A delete trigger removes
 a record's full-text row with it.
 

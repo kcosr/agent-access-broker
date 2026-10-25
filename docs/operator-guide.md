@@ -1429,6 +1429,15 @@ matching configuration and keys. Disabling a download alone does not remove its
 stored definition. Existing ordinary JSON definitions retain their previous
 serialized form.
 
+Command actions that declare `audit` store it as `annotations.command.audit` in
+their accepted definitions; actions without it keep their previous serialized
+form, and no migration is needed. A Broker predating the field refuses such a
+definition: an enabled action carrying it makes its whole import unavailable on
+load and reload, and a disabled or quarantined one authorizes nothing. Before
+rollback, refresh with a command build that declares no `audit` and accept it
+on the newer Broker, or restore a compatible database backup with matching
+configuration and keys.
+
 Every raw download, including native downloads, has a 16,384-byte encoded
 metadata-header cap. A refusal returns JSON `operation_failed` and leaves a
 started/canceled transfer audit pair. Inspect the static

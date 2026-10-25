@@ -14,8 +14,9 @@ use crate::{
     ImportedServiceRecord, ImportedServiceStatus, ImportsConfig, PolicyGrantConfig,
 };
 use agent_access_provider::{
-    BuildContext, ExecutionCredential, ProviderBuildError, ProviderCredentialVerification,
-    ProviderInvocation, ProviderResult, ScopeRequest, ScopeResolution,
+    AuditInput, BuildContext, ExecutionCredential, ProviderBuildError,
+    ProviderCredentialVerification, ProviderInvocation, ProviderResult, ScopeRequest,
+    ScopeResolution,
 };
 
 const SERVICE: &str = "ticketing";
@@ -90,6 +91,23 @@ impl ImportedAdapter for PlannedCommand {
             return Err("unreadable declaration".into());
         }
         Ok(declared_authority(action))
+    }
+    /// A list of `{input, label}` objects, as the command adapter stores it;
+    /// anything else is unreadable.
+    fn audit_inputs(&self, action: &ImportedActionDefinition) -> Result<Vec<AuditInput>, String> {
+        match action.annotations["command"].get("audit") {
+            None => Ok(Vec::new()),
+            Some(Value::Array(inputs)) => Ok(inputs
+                .iter()
+                .map(|input| {
+                    AuditInput::new(
+                        input["input"].as_str().unwrap(),
+                        input["label"].as_str().unwrap(),
+                    )
+                })
+                .collect()),
+            Some(_) => Err("unreadable audit declaration".into()),
+        }
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         Ok(action.action.replace('.', "_"))
@@ -413,6 +431,150 @@ fn imported_listing_metadata_maps_the_accepted_type_id_and_preserves_unscoped_ac
     );
     assert!(descriptor.actions[1].listing_of.is_none());
     assert!(descriptor.actions[1].resource_scope.is_none());
+}
+
+#[test]
+fn imported_descriptors_carry_the_adapter_declared_audit_inputs_and_fail_closed() {
+    let declaring = record(
+        &[ImportedCredentialMode::Service],
+        vec![
+            action(
+                "issue.view",
+                json!({"resources": {"type": "project", "inputs": ["/project"]},
+                    "audit": [{"input": "project", "label": "Project"},
+                        {"input": "query", "label": "Query"}]}),
+            ),
+            action("issue.search", json!({"resources": {"type": "project"}})),
+            action(
+                "issue.unreadable",
+                json!({"resources": {"type": "project", "inputs": ["/project"]},
+                    "audit": {"input": "project"}}),
+            ),
+        ],
+    );
+    let config = import_config();
+    let descriptor = imports::descriptor(&declaring, &config, &published_types(&declaring));
+    descriptor.validate().unwrap();
+    let view = descriptor.action("issue.view").unwrap();
+    assert_eq!(
+        view.audit_inputs,
+        [
+            AuditInput::new("project", "Project"),
+            AuditInput::new("query", "Query")
+        ]
+    );
+    assert_eq!(view.resource_scope.as_deref(), Some("project"));
+    // Agents never see the declaration.
+    let mut undeclared = view.clone();
+    undeclared.audit_inputs.clear();
+    assert_eq!(view.capabilities(), undeclared.capabilities());
+    assert!(
+        descriptor
+            .action("issue.search")
+            .unwrap()
+            .audit_inputs
+            .is_empty()
+    );
+    // An unreadable audit declaration records nothing and, like an
+    // unreadable authority, binds the unresolved type: it authorizes nothing.
+    let unreadable = descriptor.action("issue.unreadable").unwrap();
+    assert!(unreadable.audit_inputs.is_empty());
+    assert_eq!(
+        descriptor.resource_scopes[unreadable.resource_scope.as_deref().unwrap()].resource_type,
+        *UNRESOLVED_RESOURCE_TYPE.id()
+    );
+}
+
+/// An HTTP import adapter double that keeps the trait defaults, as the MCP
+/// and OpenAPI adapters do.
+#[derive(Debug)]
+struct UpstreamImport;
+static UPSTREAM_IMPORT: UpstreamImport = UpstreamImport;
+
+#[async_trait::async_trait]
+impl ImportedAdapter for UpstreamImport {
+    fn credential_contract(
+        &self,
+        definition: &ImportedServiceDefinition,
+        import: &ImportedAdapterContext<'_>,
+    ) -> Result<crate::imports::ImportedCredentialContract, String> {
+        crate::imports::test_credential_contract(definition, import)
+    }
+    fn kind(&self) -> &'static str {
+        "upstream_fixture"
+    }
+    fn development_only(&self) -> bool {
+        false
+    }
+    fn sensitive_output_pointers(&self) -> &'static [&'static str] {
+        &["/result/upstreamMcp"]
+    }
+    fn validate_action(&self, _: &ImportedActionDefinition) -> Result<(), String> {
+        Ok(())
+    }
+    fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
+        Ok(action.action.replace('.', "_"))
+    }
+    fn build(
+        &self,
+        _: &ImportedServiceDefinition,
+        _: &[ImportedActionDefinition],
+        _: Option<ExecutionCredential>,
+        _: &ImportedAdapterContext<'_>,
+        _: &BuildContext<'_>,
+    ) -> Result<ImportedProvider, ProviderBuildError> {
+        unreachable!("descriptor tests never build")
+    }
+    async fn discover(
+        &self,
+        _: &ImportedServiceDefinition,
+        _: &crate::imports::ImportedDiscoveryAuthentication,
+        _: Option<ExecutionCredential>,
+        _: &ImportedAdapterContext<'_>,
+        _: &BuildContext<'_>,
+    ) -> Result<crate::imports::ImportedDiscovery, crate::imports::AdapterDiscoveryError> {
+        unreachable!("descriptor tests never discover")
+    }
+}
+
+#[test]
+fn upstream_schemas_and_annotations_never_declare_audit_inputs() {
+    let mut config = crate::runtime::tests::base_fake_config();
+    config.providers = crate::ProvidersConfig::new(Arc::new(
+        crate::BackendRegistry::new([&agent_access_fake::FAKE_BACKEND])
+            .unwrap()
+            .with_imported_adapters([imported_adapter_registration(
+                agent_access_provider::module_metadata!(),
+                &UPSTREAM_IMPORT,
+                None,
+            )])
+            .unwrap(),
+    ))
+    .with(agent_access_fake::FakeProviderConfig::default());
+    let audit = json!([{"input": "project", "label": "Project"}]);
+    let mut upstream = record(&[ImportedCredentialMode::Service], Vec::new());
+    upstream.accepted_metadata = None;
+    upstream.definition.adapter_kind = "upstream_fixture".into();
+    upstream.definition.endpoint = "https://tools.example.test/mcp".into();
+    upstream.definition.execution_bindings = vec![ImportedCredentialBinding::token(
+        ImportedCredentialMode::Service,
+        ImportedCredentialDelivery::Bearer,
+    )];
+    let mut tool = action("issue.view", json!({"audit": audit}));
+    tool.definition.annotations["audit"] = audit.clone();
+    tool.definition.annotations["x-agent-access-audit"] = audit.clone();
+    tool.definition.input_schema = json!({"type": "object",
+    "x-agent-access-audit": audit,
+    "properties": {
+        "project": {"type": "string", "x-agent-access-audit": true},
+        "audit": {"type": "array", "default": audit}
+    }});
+    upstream.actions.push(tool);
+    let descriptor = imports::descriptor(&upstream, &config, &published_types(&upstream));
+    descriptor.validate().unwrap();
+    let view = descriptor.action("issue.view").unwrap();
+    assert!(view.audit_inputs.is_empty(), "{:?}", view.audit_inputs);
+    assert!(view.resource_scope.is_none());
 }
 
 fn import_config() -> BrokerConfig {

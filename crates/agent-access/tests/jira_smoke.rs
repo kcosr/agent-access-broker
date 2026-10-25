@@ -2595,15 +2595,50 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert_eq!(verify_json["reasonCode"], "verification_mismatch");
     assert_eq!(verify_json["result"]["verification"]["status"], "mismatch");
 
+    // Creation records its project and summary; an update records only its
+    // target. Descriptions, bodies, property values and bytes never appear.
+    let project = audit_input("project", "Project", "PROJ");
+    let parent = audit_input("parentIssue", "Parent issue", "PROJ-1");
+    assert_eq!(
+        audited_inputs(&broker, "issue.create"),
+        [serde_json::json!([
+            project,
+            audit_input("summary", "Summary", "secret created summary")
+        ])]
+    );
+    assert_eq!(
+        audited_inputs(&broker, "issue.child.create"),
+        [
+            serde_json::json!([
+                project,
+                parent,
+                audit_input("summary", "Summary", "secret child summary")
+            ]),
+            serde_json::json!([
+                project,
+                parent,
+                audit_input("summary", "Summary", "secret child invoke summary")
+            ]),
+        ]
+    );
+    assert_eq!(
+        audited_inputs(&broker, "issue.update"),
+        [
+            serde_json::json!([audit_input("issue", "Issue", "PROJ-1")]),
+            serde_json::json!([audit_input(
+                "url",
+                "URL",
+                "https://example.atlassian.net/browse/PROJ-1"
+            )]),
+        ]
+    );
+    assert_eq!(
+        audited_inputs(&broker, "comment.add"),
+        [serde_json::json!([audit_input("issue", "Issue", "PROJ-1")])]
+    );
     let audit = broker.audit().unwrap().text();
-    assert!(audit.contains("\"action\":\"issue.create\""));
-    assert!(audit.contains("\"action\":\"issue.child.create\""));
-    assert!(audit.contains("\"action\":\"issue.update\""));
     assert!(audit.contains("\"action\":\"issue.parent.set\""));
-    assert!(!audit.contains("secret created summary"));
     assert!(!audit.contains("secret created description"));
-    assert!(!audit.contains("secret child summary"));
-    assert!(!audit.contains("secret child invoke summary"));
     assert!(!audit.contains("secret issue summary"));
     assert!(!audit.contains("secret issue description"));
     assert!(!audit.contains("secret comment body"));
@@ -2836,9 +2871,14 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
         assert_eq!(created_issues.len(), 1);
         assert_eq!(created_issues[0].parent_issue.as_deref(), Some("PROJ-1"));
     }
-    let audit = broker.audit().unwrap().text();
-    assert!(audit.contains("\"action\":\"issue.child.create\""));
-    assert!(!audit.contains("send child summary"));
+    assert_eq!(
+        audited_inputs(&broker, "issue.child.create"),
+        [serde_json::json!([
+            audit_input("project", "Project", "PROJ"),
+            audit_input("parentIssue", "Parent issue", "PROJ-1"),
+            audit_input("summary", "Summary", "send child summary")
+        ])]
+    );
 
     stop(broker).await;
 }
@@ -4277,6 +4317,23 @@ fn jira_parent_readback(
             key: Some(parent.key),
         }),
     }
+}
+
+/// One `auditInputs` entry.
+fn audit_input(input: &str, label: &str, value: &str) -> serde_json::Value {
+    serde_json::json!({"input": input, "label": label, "value": value})
+}
+
+/// The `auditInputs` of each audit record of the Jira `action`, in write
+/// order; `null` for a record without them.
+fn audited_inputs(broker: &RunningBroker, action: &str) -> Vec<serde_json::Value> {
+    broker
+        .audit()
+        .unwrap()
+        .require_action("jira", action)
+        .into_iter()
+        .map(|record| record["auditInputs"].clone())
+        .collect()
 }
 
 fn assert_success(label: &str, output: &std::process::Output) {

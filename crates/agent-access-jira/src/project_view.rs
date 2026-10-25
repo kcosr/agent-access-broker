@@ -18,6 +18,8 @@ pub(crate) fn descriptor() -> ActionDescriptor {
             "query":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive name, ID or JQL reference substring filter, at most 256 characters"}
         }
     }))
+    .audit_input("project", "Project")
+    .audit_input("query", "Query")
     .sensitive_output("/result/project/name")
     .sensitive_output("/result/project/description")
     .sensitive_output("/result/fields/items")

@@ -263,6 +263,7 @@ pub(super) fn descriptor_with_contract(
             }
             action.read_only = definition.read_only;
             action.sensitive_output_pointers = sensitive_output_pointers.clone();
+            action.audit_inputs = shape.audit_inputs;
             action
         })
         .collect();

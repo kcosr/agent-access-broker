@@ -6713,149 +6713,220 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             "Upload one bounded attachment to an authorized GitLab project",
             project_upload_schema(&config.attachments),
         )
+        .audit_input("project", "Project")
+        .audit_input("url", "URL")
         .multipart_upload(attachment_upload_plan(&["project", "url"], Some(1))),
         gitlab_read_action(
             "project.view",
             "View GitLab project metadata after repository-scope confirmation",
             project_locator_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("url", "URL"),
         gitlab_read_action(
             "issue.view",
             "View a GitLab issue after repository-scope confirmation",
             issue_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue")
+        .audit_input("url", "URL"),
         gitlab_read_action(
             "issue.search",
             "List and filter GitLab issues within one required authorized project. Omit search text to browse; use structured filters and sorting.",
             issue_search_schema(config.search.max_results),
         )
+        .audit_input("project", "Project")
+        .audit_input("search", "Search")
+        .audit_input("state", "State")
         .documentation(gitlab_search_documentation(false, config.search.max_results)),
         gitlab_action(
             "issue.create",
             "Create a GitLab issue inside one authorized project",
             issue_create_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("title", "Title")
         .attribution(ADD_DESCRIPTION),
         gitlab_action(
             "issue.update",
             "Update a GitLab issue inside one authorized project",
             issue_update_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue")
+        .audit_input("stateEvent", "State event")
         .attribution(UPDATE_DESCRIPTION),
         gitlab_read_action(
             "issue.note.list",
             "List GitLab issue notes inside one authorized project",
             note_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue"),
         gitlab_read_action(
             "issue.note.view",
             "View one GitLab issue note inside one authorized project",
             note_delete_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue")
+        .audit_input("noteId", "Note ID"),
         gitlab_action(
             "issue.note.add",
             "Add a GitLab issue note inside one authorized project",
             issue_note_add_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue")
         .attribution(ADD_BODY),
         gitlab_action(
             "issue.note.update",
             "Update one GitLab issue note inside one authorized project",
             note_update_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue")
+        .audit_input("noteId", "Note ID"),
         gitlab_action(
             "issue.note.delete",
             "Delete one GitLab issue note inside one authorized project",
             note_delete_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Issue")
+        .audit_input("noteId", "Note ID"),
         gitlab_read_action(
             "merge_request.view",
             "View a GitLab merge request after repository-scope confirmation",
             merge_request_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("url", "URL"),
         gitlab_read_action(
             "merge_request.search",
             "List and filter GitLab merge requests within one required authorized project. Omit search text to browse; use structured filters and sorting.",
             merge_request_search_schema(config.search.max_results),
         )
+        .audit_input("project", "Project")
+        .audit_input("search", "Search")
+        .audit_input("state", "State")
         .documentation(gitlab_search_documentation(true, config.search.max_results)),
         gitlab_action(
             "merge_request.create",
             "Create a GitLab merge request inside one authorized project",
             merge_request_create_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("sourceBranch", "Source branch")
+        .audit_input("targetBranch", "Target branch")
+        .audit_input("title", "Title")
         .attribution(ADD_DESCRIPTION),
         gitlab_action(
             "merge_request.update",
             "Update a GitLab merge request inside one authorized project",
             merge_request_update_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("stateEvent", "State event")
         .attribution(UPDATE_DESCRIPTION),
         gitlab_read_action(
             "merge_request.note.list",
             "List GitLab merge request notes inside one authorized project",
             note_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.note.view",
             "View one GitLab merge request note inside one authorized project",
             note_delete_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("noteId", "Note ID"),
         gitlab_action(
             "merge_request.note.add",
             "Add a GitLab merge request note inside one authorized project",
             note_add_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .attribution(ADD_BODY),
         gitlab_action(
             "merge_request.note.update",
             "Update one GitLab merge request note inside one authorized project",
             note_update_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("noteId", "Note ID"),
         gitlab_action(
             "merge_request.note.delete",
             "Delete one GitLab merge request note inside one authorized project",
             note_delete_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("noteId", "Note ID"),
         gitlab_read_action(
             "merge_request.discussion.list",
             "List GitLab merge request discussions inside one authorized project",
             discussion_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.discussion.view",
             "View one GitLab merge request discussion with exact review position metadata",
             discussion_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("discussionId", "Discussion ID"),
         gitlab_action(
             "merge_request.discussion.inline.add",
             "Add a current-version inline GitLab merge request discussion",
             positioned_discussion_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .attribution(ADD_BODY),
         gitlab_action(
             "merge_request.discussion.note.add",
             "Reply to one GitLab merge request discussion",
             discussion_reply_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("discussionId", "Discussion ID")
         .attribution(ADD_BODY),
         gitlab_read_action(
             "merge_request.draft_note.list",
             "List the current GitLab user's pending merge request draft notes",
             draft_note_list_schema(config.search.max_results),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_read_action(
             "merge_request.draft_note.view",
             "View one current-owner GitLab merge request draft note",
             draft_note_object_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
             "merge_request.draft_note.add",
             "Add a general, positioned, or reply GitLab merge request draft note",
             draft_note_add_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("inReplyToDiscussionId", "Discussion ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser)
         .attribution(ADD_BODY),
         gitlab_action(
@@ -6863,24 +6934,33 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             "Update a current-owner GitLab merge request draft note",
             draft_note_update_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
             "merge_request.draft_note.delete",
             "Delete a current-owner GitLab merge request draft note",
             draft_note_object_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
             "merge_request.draft_note.publish",
             "Publish one current-owner GitLab merge request draft note",
             draft_note_object_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("draftNoteId", "Draft note ID")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser),
         gitlab_action(
             "merge_request.draft_note.publish_all",
             "Publish all current-owner GitLab merge request draft notes",
             draft_publication_schema(false),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser)
         .attribution(ADD_BODY),
         gitlab_action(
@@ -6888,150 +6968,221 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             "Publish current-owner drafts and set the acting reviewer's state",
             draft_publication_schema(true),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("reviewerState", "Reviewer state")
         .upstream_resource_ownership(UpstreamResourceOwnership::ActingUser)
         .attribution(ADD_BODY),
         gitlab_read_action(
             "merge_request.reviewer.list",
             "List GitLab merge request reviewers and reviewer state",
             merge_request_collection_schema(config.search.max_results, false),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.approval.view",
             "View aggregate GitLab merge request approval state",
             merge_request_subresource_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.approval_state.view",
             "View GitLab merge request approval rule satisfaction state",
             merge_request_subresource_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.approval_rule.list",
             "List GitLab merge request approval rules",
             merge_request_collection_schema(config.search.max_results, false),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.approval_rule.view",
             "View one GitLab merge request approval rule",
             merge_request_approval_rule_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("approvalRuleId", "Approval rule ID"),
         gitlab_action(
             "merge_request.approve",
             "Approve an exact prepared GitLab merge request head",
             merge_request_approve_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_action(
             "merge_request.unapprove",
             "Remove the acting GitLab user's merge request approval",
             merge_request_subresource_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_action(
             "merge_request.suggestion.apply",
             "Apply one proven GitLab merge request suggestion",
             suggestion_apply_schema(false, config.content.max_body_bytes),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("suggestionId", "Suggestion ID"),
         gitlab_action(
             "merge_request.suggestion.batch_apply",
             "Apply up to 100 proven GitLab merge request suggestions",
             suggestion_apply_schema(true, config.content.max_body_bytes),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.commit.list",
             "List commits belonging to one GitLab merge request",
             merge_request_collection_schema(config.search.max_results, false),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.pipeline.list",
             "List pipelines belonging to one GitLab merge request",
             merge_request_collection_schema(config.search.max_results, false),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.diff.list",
             "List bounded structured current diffs for one GitLab merge request",
             merge_request_collection_schema(config.search.max_results, true),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.diff.raw.download",
             "Download the bounded raw current diff for one GitLab merge request",
             merge_request_subresource_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .raw_download(),
         gitlab_read_action(
             "merge_request.diff_version.list",
             "List historical diff versions for one GitLab merge request",
             merge_request_collection_schema(config.search.max_results, false),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "merge_request.diff_version.view",
             "View one exact GitLab merge request diff version with bounded commits and diffs",
             merge_request_diff_version_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("diffVersionId", "Diff version ID"),
         gitlab_action(
             "merge_request.discussion.add",
             "Add a general GitLab merge request discussion inside one authorized project",
             note_add_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
         .attribution(ADD_BODY),
         gitlab_action(
             "merge_request.discussion.note.update",
             "Update one note inside a GitLab merge request discussion",
             discussion_note_update_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("discussionId", "Discussion ID")
+        .audit_input("noteId", "Note ID"),
         gitlab_action(
             "merge_request.discussion.note.delete",
             "Delete one note inside a GitLab merge request discussion",
             discussion_note_delete_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("discussionId", "Discussion ID")
+        .audit_input("noteId", "Note ID"),
         gitlab_action(
             "merge_request.discussion.resolve",
             "Resolve one GitLab merge request discussion",
             discussion_state_change_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("discussionId", "Discussion ID"),
         gitlab_action(
             "merge_request.discussion.reopen",
             "Reopen one GitLab merge request discussion",
             discussion_state_change_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request")
+        .audit_input("discussionId", "Discussion ID"),
         gitlab_action(
             "merge_request.merge",
             "Merge one GitLab merge request through the GitLab REST API",
             merge_request_merge_schema(config.content.max_body_bytes),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("iid", "Merge request"),
         gitlab_read_action(
             "branch.list",
             "List GitLab repository branches inside one authorized project",
             branch_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("search", "Search")
+        .audit_input("regex", "Regex"),
         gitlab_read_action(
             "branch.view",
             "View one GitLab repository branch inside an authorized project",
             branch_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("branch", "Branch"),
         gitlab_action(
             "branch.create",
             "Create a non-default, unprotected GitLab repository branch",
             branch_create_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("branch", "Branch")
+        .audit_input("ref", "Ref"),
         gitlab_read_action(
             "protected_branch.list",
             "List GitLab protected branch rules inside one authorized project",
             protected_branch_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("search", "Search"),
         gitlab_read_action(
             "protected_branch.view",
             "View one GitLab protected branch rule inside an authorized project",
             protected_branch_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("branchOrWildcardName", "Branch"),
         gitlab_read_action(
             "protected_branch.verify",
             "Verify required GitLab protected branch rule coverage",
             protected_branch_verify_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("requiredPatterns", "Required patterns"),
         gitlab_read_action(
             "file.view",
             "View bounded GitLab repository file metadata and inline content",
             file_view_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("path", "File path")
+        .audit_input("ref", "Ref")
         .documentation(json!({
             "content":"Reads files from a project's source repository. Wiki pages are separate and cannot be read through this action. Full wiki-page reading is not currently supported by the Broker."
         })),
@@ -7040,147 +7191,214 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
             "Download a bounded GitLab repository file as a raw stream",
             file_view_schema(),
         )
+        .audit_input("project", "Project")
+        .audit_input("path", "File path")
+        .audit_input("ref", "Ref")
         .raw_download(),
         gitlab_action(
             "file.create",
             "Create one file on a non-default, unprotected GitLab branch",
             file_create_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("path", "File path")
+        .audit_input("branch", "Branch"),
         gitlab_action(
             "file.update",
             "Update one file on a non-default, unprotected GitLab branch",
             file_update_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("path", "File path")
+        .audit_input("branch", "Branch"),
         gitlab_action(
             "file.delete",
             "Delete one file on a non-default, unprotected GitLab branch",
             file_delete_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("path", "File path")
+        .audit_input("branch", "Branch"),
         gitlab_read_action(
             "commit.list",
             "List GitLab repository commits inside one authorized project",
             commit_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("refName", "Ref")
+        .audit_input("path", "File path"),
         gitlab_read_action(
             "commit.view",
             "View one GitLab repository commit inside an authorized project",
             commit_view_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("sha", "Commit SHA"),
         gitlab_action(
             "commit.create",
             "Create a bounded GitLab REST commit on a non-default, unprotected branch",
             commit_create_schema(config.content.max_commit_actions),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("branch", "Branch"),
         gitlab_read_action(
             "pipeline.list",
             "List GitLab CI pipelines inside one authorized project",
             pipeline_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("ref", "Ref")
+        .audit_input("status", "Status"),
         gitlab_read_action(
             "pipeline.view",
             "View one GitLab CI pipeline inside an authorized project",
             pipeline_object_schema("pipelineId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("pipelineId", "Pipeline ID"),
         gitlab_action(
             "pipeline.run",
             "Run a GitLab CI pipeline on a non-default, unprotected branch",
             pipeline_run_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("ref", "Ref"),
         gitlab_action(
             "pipeline.retry",
             "Retry one GitLab CI pipeline inside an authorized project",
             pipeline_object_schema("pipelineId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("pipelineId", "Pipeline ID"),
         gitlab_action(
             "pipeline.cancel",
             "Cancel one GitLab CI pipeline inside an authorized project",
             pipeline_object_schema("pipelineId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("pipelineId", "Pipeline ID"),
         gitlab_read_action(
             "job.list",
             "List GitLab CI jobs inside one authorized project",
             job_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("pipelineId", "Pipeline ID")
+        .audit_input("scope", "Status"),
         gitlab_read_action(
             "job.view",
             "View one GitLab CI job inside an authorized project",
             job_object_schema("jobId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("jobId", "Job ID"),
         gitlab_read_action(
             "job.trace.download",
             "Download a bounded GitLab CI job trace as a raw stream",
             job_object_schema("jobId"),
         )
+        .audit_input("project", "Project")
+        .audit_input("jobId", "Job ID")
         .raw_download(),
         gitlab_action(
             "job.retry",
             "Retry one GitLab CI job inside an authorized project",
             job_object_schema("jobId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("jobId", "Job ID"),
         gitlab_action(
             "job.cancel",
             "Cancel one GitLab CI job inside an authorized project",
             job_object_schema("jobId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("jobId", "Job ID"),
         gitlab_action(
             "job.play",
             "Play one GitLab manual CI job on a non-default, unprotected branch",
             job_object_schema("jobId"),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("jobId", "Job ID"),
         gitlab_read_action(
             "webhook.list",
             "List GitLab project webhooks inside one authorized project",
             webhook_list_schema(config.search.max_results),
-        ),
+        )
+        .audit_input("project", "Project"),
         gitlab_read_action(
             "webhook.view",
             "View one GitLab project webhook inside one authorized project",
             webhook_object_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID"),
         gitlab_action(
             "webhook.create",
             "Create a GitLab project webhook at an operator-authorized destination",
             webhook_create_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("name", "Webhook name"),
         gitlab_action(
             "webhook.update",
             "Update one GitLab project webhook",
             webhook_update_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID"),
         gitlab_action(
             "webhook.delete",
             "Delete one GitLab project webhook",
             webhook_object_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID"),
         gitlab_action(
             "webhook.test",
             "Send one synthetic GitLab project webhook delivery",
             webhook_test_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID")
+        .audit_input("event", "Event"),
         gitlab_read_action(
             "webhook.event.list",
             "List recent GitLab project webhook delivery records",
             webhook_event_list_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID")
+        .audit_input("status", "Status"),
         gitlab_action(
             "webhook.event.resend",
             "Resend one GitLab project webhook delivery",
             webhook_event_resend_schema(),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID")
+        .audit_input("webhookEventId", "Webhook event ID"),
         gitlab_action(
             "webhook.custom_header.set",
             "Set one masked GitLab project webhook custom header",
             webhook_custom_header_schema(true),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID")
+        .audit_input("key", "Header name"),
         gitlab_action(
             "webhook.custom_header.delete",
             "Delete one GitLab project webhook custom header",
             webhook_custom_header_schema(false),
-        ),
+        )
+        .audit_input("project", "Project")
+        .audit_input("webhookId", "Webhook ID")
+        .audit_input("key", "Header name"),
     ];
     actions.extend(PROVISIONING_ACTIONS.iter().map(|action| {
         let schema = provisioning::provisioning_schema(action, config);
-        if issues_token(action) {
+        let descriptor = if issues_token(action) {
             // GitLab documents project token creation and rotation as
             // personal-access-token only; service-account tokens are
             // treated alike. OAuth access never reaches them.
@@ -7203,7 +7421,8 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 "Manage GitLab project automation identities and token metadata",
                 schema,
             )
-        }
+        };
+        provisioning::with_audit_inputs(action, descriptor)
     }));
     actions.extend(search::descriptors(config));
     let descriptor = ServiceDescriptor::new("gitlab", "GitLab")

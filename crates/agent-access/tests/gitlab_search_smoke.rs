@@ -323,7 +323,21 @@ async fn project_collections_and_all_six_categories_use_selected_credentials_thr
             assert_no_hidden_ids(&record["providerAudit"]);
         }
         assert_private(&audit.text());
-        assert!(!audit.text().contains(QUERY), "raw query reached audit");
+        // The query is a declared audit input of every content search.
+        let recorded_query = json!({"input":"search","label":"Search","value":QUERY});
+        for action in ACTIONS
+            .iter()
+            .filter(|action| action.starts_with("search."))
+        {
+            for record in audit.require_action("gitlab", action) {
+                assert!(
+                    record["auditInputs"]
+                        .as_array()
+                        .is_some_and(|inputs| inputs.contains(&recorded_query)),
+                    "{action} did not record its query: {record}"
+                );
+            }
+        }
         fixture.stop().await;
     }
 }
@@ -500,13 +514,18 @@ async fn confidential_empty_pages_resume_without_losing_hits_and_reject_stale_au
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_projects(&fresh["result"], &[FIRST_PROJECT]);
-    let audit = fixture.broker.audit().unwrap().text();
+    let audit_store = fixture.broker.audit().unwrap();
+    let audit = audit_store.text();
     assert_private(&audit);
-    for private in [
-        "empty-page-query",
-        first_token.as_str(),
-        second_token.as_str(),
-    ] {
+    // The search text is a declared audit input; continuation tokens are not.
+    assert!(
+        audit_store
+            .require_action("gitlab", "search.issues")
+            .iter()
+            .any(|record| record["auditInputs"]
+                == json!([{"input":"search","label":"Search","value":"empty-page-query"}]))
+    );
+    for private in [first_token.as_str(), second_token.as_str()] {
         assert!(!audit.contains(private));
     }
     fixture.stop().await;

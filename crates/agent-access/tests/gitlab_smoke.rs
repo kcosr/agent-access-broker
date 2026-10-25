@@ -5375,6 +5375,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
             "update",
             "sip/service",
             "7",
+            "--title",
+            "issue update secret title",
             "--state-event",
             "close",
             "--add-label",
@@ -5390,6 +5392,10 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     let observed = backend.last_issue_update.lock().unwrap().clone().unwrap();
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.iid, 7);
+    assert_eq!(
+        observed.request.title.as_deref(),
+        Some("issue update secret title")
+    );
     assert_eq!(observed.request.state_event.as_deref(), Some("close"));
     assert_eq!(observed.request.add_labels, vec!["triaged".to_string()]);
     assert_eq!(
@@ -6130,7 +6136,21 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         .unwrap();
     assert_eq!(observed.request.page, 2);
 
-    let audit = broker.audit().unwrap().text();
+    let audit_store = broker.audit().unwrap();
+    // An update records its declared target and state change; the new title
+    // and the description stay out of the record.
+    let issue_updates = audit_store.require_action("gitlab", "issue.update");
+    assert_eq!(issue_updates.len(), 1);
+    assert_eq!(
+        issue_updates[0]["auditInputs"],
+        serde_json::json!([
+            { "input": "project", "label": "Project", "value": "sip/service" },
+            { "input": "iid", "label": "Issue", "value": 7 },
+            { "input": "stateEvent", "label": "State event", "value": "close" }
+        ])
+    );
+    let audit = audit_store.text();
+    assert!(!audit.contains("issue update secret title"));
     assert!(audit.contains("\"action\":\"issue.create\""));
     assert!(audit.contains("\"action\":\"issue.note.add\""));
     assert!(audit.contains("\"action\":\"issue.note.update\""));

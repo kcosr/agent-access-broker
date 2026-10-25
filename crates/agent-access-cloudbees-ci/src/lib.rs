@@ -609,10 +609,12 @@ fn cloudbees_ci_service_descriptor(config: &CloudbeesCiListingConfig) -> Service
         ("queue.view", "View a queued build for a job"),
         ("build.trigger", "Trigger a non-parameterized job"),
     ] {
-        let action = ActionDescriptor::new(name, description, input::schema(name))
-            .documentation(input::documentation(name))
-            .scope("job")
-            .credential_modes(["service", "per_user"]);
+        let action = input::with_audit_inputs(
+            ActionDescriptor::new(name, description, input::schema(name))
+                .documentation(input::documentation(name))
+                .scope("job")
+                .credential_modes(["service", "per_user"]),
+        );
         let action = match name {
             "job.view"
             | "build.list"
@@ -1749,6 +1751,43 @@ mod tests {
         assert_eq!(
             descriptor.credential_profile_kind("cloudbees-ci-api-token"),
             Some("basic_api_token")
+        );
+        let declared = |name: &str| {
+            descriptor
+                .action(name)
+                .unwrap()
+                .audit_inputs
+                .iter()
+                .map(|input| (input.input(), input.label()))
+                .collect::<Vec<_>>()
+        };
+        let job = [("controller", "Controller"), ("job", "Job"), ("url", "URL")];
+        let build = [
+            ("buildNumber", "Build number"),
+            ("buildSelector", "Build selector"),
+        ];
+        assert_eq!(declared("build.trigger"), job);
+        assert_eq!(declared("build.list"), job);
+        assert_eq!(
+            declared("queue.view"),
+            [&job[..], &[("queueId", "Queue ID")]].concat()
+        );
+        assert_eq!(
+            declared("build.log.read"),
+            [&job[..], &build, &[("mode", "Mode"), ("query", "Query")]].concat()
+        );
+        assert_eq!(
+            declared("build.pipeline.node.log.read"),
+            [&job[..], &build, &[("nodeId", "Node ID")]].concat()
+        );
+        assert_eq!(
+            declared("build.artifact.download"),
+            [&job[..], &build, &[("artifactPath", "Artifact path")]].concat()
+        );
+        assert_eq!(declared("build.tests.details"), [&job[..], &build].concat());
+        assert_eq!(
+            declared("job.list"),
+            [("controller", "Controller"), ("folder", "Folder")]
         );
     }
 

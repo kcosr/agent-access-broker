@@ -1273,12 +1273,21 @@ async fn large_log_head_returns_cursor_and_trigger_returns_queue_receipt() {
     );
 
     let audit = broker.audit().unwrap();
-    audit.require_request("cloudbees-smoke-head", "cloudbees_ci", "build.log.read");
+    // The job, build and mode are recorded; the output budget and cursor are
+    // not.
+    let head = json!([
+        {"input": "controller", "label": "Controller", "value": "team-ci"},
+        {"input": "job", "label": "Job", "value": JOB},
+        {"input": "buildNumber", "label": "Build number", "value": 42},
+        {"input": "mode", "label": "Mode", "value": "head"}
+    ]);
+    let records = audit.require_request("cloudbees-smoke-head", "cloudbees_ci", "build.log.read");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["auditInputs"], head);
     // The HTTP head read and the CLI continuation.
-    assert_eq!(
-        audit.require_action("cloudbees_ci", "build.log.read").len(),
-        2
-    );
+    let reads = audit.require_action("cloudbees_ci", "build.log.read");
+    assert_eq!(reads.len(), 2);
+    assert_eq!(reads[1]["auditInputs"], head);
     let audit = audit.text();
     assert!(!audit.contains(&"x".repeat(128)));
     assert!(!audit.contains(cursor));
@@ -1490,11 +1499,23 @@ async fn cli_reads_log_and_queue_without_auditing_log_or_other_jobs_queue_detail
         }));
     }
     let audit = broker.audit().unwrap();
-    audit.require_action("cloudbees_ci", "build.log.read");
+    // The search records its literal query, which here names the log line;
+    // the log text itself is never recorded.
+    let reads = audit.require_action("cloudbees_ci", "build.log.read");
+    assert_eq!(
+        reads.last().unwrap()["auditInputs"],
+        json!([
+            {"input": "controller", "label": "Controller", "value": "team-ci"},
+            {"input": "job", "label": "Job", "value": JOB},
+            {"input": "buildNumber", "label": "Build number", "value": 42},
+            {"input": "mode", "label": "Mode", "value": "search"},
+            {"input": "query", "label": "Query", "value": "log-secret-never-audit"}
+        ])
+    );
     audit.require_action("cloudbees_ci", "queue.view");
     let audit = audit.text();
     assert!(audit.contains("\"reasonCode\":\"scope_unresolved\""));
-    assert!(!audit.contains("log-secret-never-audit"));
+    assert!(!audit.contains("build output"));
     assert!(!audit.contains("queue-secret-never-audit"));
     assert!(!audit.contains("basic-secret"));
     stop(broker).await;
@@ -1805,10 +1826,17 @@ async fn large_log_reads_work_through_http_and_stdio_mcp_with_bounded_wire_outpu
         );
     }
     let audit = broker.audit().unwrap();
-    audit.require_action("cloudbees_ci", "build.log.read");
+    // A search records its literal query, never the matched log text.
+    let query = json!({"input": "query", "label": "Query", "value": "ERROR:"});
+    let reads = audit.require_action("cloudbees_ci", "build.log.read");
+    assert!(reads.iter().any(|record| {
+        record["auditInputs"]
+            .as_array()
+            .is_some_and(|inputs| inputs.contains(&query))
+    }));
     let audit = audit.text();
     assert!(!audit.contains("BEGIN123"));
-    assert!(!audit.contains("ERROR:"));
+    assert!(!audit.contains("ERROR: finished"));
     assert!(!audit.contains("basic-secret"));
     stop(broker).await;
 }

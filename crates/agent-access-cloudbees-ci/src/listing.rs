@@ -81,6 +81,7 @@ pub(super) fn descriptor(config: &CloudbeesCiListingConfig) -> ActionDescriptor 
             "pageToken":{"type":"string","minLength":1,"maxLength":TOKENS.max_token_bytes()}
         }
     })).scope("job").credential_modes(["service","per_user"]).read_only()
+    .audit_input("controller", "Controller").audit_input("folder", "Folder")
     .native_search(NativeSearchEnforcement::ResultFiltered)
     .listing_of(CLOUDBEES_CI_JOB_RESOURCE.id().clone())
     .sensitive_output("/result/items").sensitive_output("/result/nextPageToken")

@@ -59,6 +59,11 @@ Actions:
                  caller block and execution context
   issue.comment  write (v2 only); checked by the Broker, from /project
 
+Each action's `audit` names the inputs the Broker records in its audit
+records: the project and issue of views and comments (never a comment's
+body), the search query, the project and summary of a create, and the key
+of a close. project.list and whoami declare none.
+
 Data: projects OPS (Operations), SEC (Security) and WEB (Web); issues OPS-41
 (closed), OPS-42, SEC-7, WEB-12 and WEB-13 (closed). Results carry an
 `access` object so tests can see what the Broker passed: the credential mode
@@ -284,6 +289,7 @@ def actions(profile):
                 "properties": {"issue": ISSUE_SCHEMA, "access": {"type": "object"}},
             },
             "resources": {"type": "project", "inputs": ["/project"]},
+            "audit": [{"input": "project", "label": "Project"}, {"input": "issue", "label": "Issue"}],
         },
         {
             "name": "issue.search",
@@ -302,6 +308,7 @@ def actions(profile):
                                "access": {"type": "object"}},
             },
             "resources": {"type": "project"},
+            "audit": [{"input": "query", "label": "Query"}],
         },
         {
             "name": "project.list",
@@ -342,6 +349,7 @@ def actions(profile):
                                "access": {"type": "object"}},
             },
             "resources": {"type": "project", "inputs": ["/project"]},
+            "audit": [{"input": "project", "label": "Project"}, {"input": "summary", "label": "Summary"}],
         },
         {
             "name": "issue.close",
@@ -359,6 +367,7 @@ def actions(profile):
                                "access": {"type": "object"}},
             },
             "resources": {"type": "project"},
+            "audit": [{"input": "key", "label": "Issue"}],
         },
     ]
     if profile == "v2":
@@ -375,6 +384,7 @@ def actions(profile):
                 "additionalProperties": False,
             },
             "resources": {"type": "project", "inputs": ["/project"]},
+            "audit": [{"input": "project", "label": "Project"}, {"input": "issue", "label": "Issue"}],
         })
     else:
         listed.append({

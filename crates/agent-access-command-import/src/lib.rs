@@ -11,7 +11,8 @@
 //! Each accepted action declares how its resources are checked: through
 //! input pointers the Broker resolves and checks before dispatch, or by the
 //! command from the grants it is passed (see
-//! [`ImportedActionAuthority`]).
+//! [`ImportedActionAuthority`]). It may also name top-level inputs whose
+//! supplied values the Broker records in its audit records.
 //!
 //! The adapter builds a [`CommandProvider`]: core calls its command hook
 //! instead of `Provider::invoke` with a request it assembles after the
@@ -36,7 +37,7 @@ use agent_access_core::imports::{
 };
 use agent_access_core::imports::{ImportedCredentialContract, ImportedCredentialRequirement};
 use agent_access_provider::{
-    BuildContext, ExecutionCredential, MutationReceipt, Provider, ProviderBuildError,
+    AuditInput, BuildContext, ExecutionCredential, MutationReceipt, Provider, ProviderBuildError,
     ProviderCredentialVerification, ProviderError, ProviderInvocation, ProviderResult, ReasonCode,
     ScopeRequest, ScopeResolution,
 };
@@ -150,6 +151,9 @@ impl ImportedAdapter for CommandAdapter {
         action: &ImportedActionDefinition,
     ) -> Result<ImportedActionAuthority, String> {
         CompiledAction::new(action).map(|compiled| compiled.authority)
+    }
+    fn audit_inputs(&self, action: &ImportedActionDefinition) -> Result<Vec<AuditInput>, String> {
+        mapping::audit_inputs(action)
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         mapping::source_name(action).map(str::to_owned)

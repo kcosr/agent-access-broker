@@ -10,7 +10,7 @@ use agent_access_core::imports::{
     IMPORT_MAX_TOOLS, ImportedCredentialDeclaration, ImportedCredentialKind,
     ImportedCredentialMode, ImportedResourceAttributeDeclaration,
 };
-use agent_access_provider::ResourcePattern;
+use agent_access_provider::{AuditInput, ResourcePattern};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
@@ -77,6 +77,9 @@ pub(crate) struct ActionDeclaration {
     pub resources: Option<ResourceDeclaration>,
     /// Source type ID this action explicitly enumerates live.
     pub listing_of: Option<String>,
+    /// Top-level inputs whose supplied values the Broker records in audit,
+    /// in declaration order; empty when `audit` is absent or empty.
+    pub audit: Vec<AuditInput>,
 }
 
 /// `resources`: the declared type and, for a Broker-enforced action, the
@@ -453,6 +456,7 @@ fn action(
             "credentialModes",
             "resources",
             "listingOf",
+            "audit",
         ],
         "the action",
     )?;
@@ -515,6 +519,11 @@ fn action(
         .get("listingOf")
         .map(|value| listing_type(value, resources.as_ref()))
         .transpose()?;
+    let audit = object
+        .get("audit")
+        .map(|value| audit_entries(value, "audit"))
+        .transpose()?
+        .unwrap_or_default();
     Ok(ActionDeclaration {
         download,
         description,
@@ -523,7 +532,33 @@ fn action(
         credential_modes,
         resources,
         listing_of,
+        audit,
     })
+}
+
+/// An `audit` list in the manifest or in `annotations.command`: objects of
+/// exactly the `input` and `label` strings, in order. Mapping then checks
+/// them against the input schema with the SDK's descriptor rules.
+pub(crate) fn audit_entries(value: &Value, label: &str) -> Result<Vec<AuditInput>, String> {
+    value
+        .as_array()
+        .ok_or_else(|| format!("{label} must be an array"))?
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let label = format!("{label}[{index}]");
+            let entry = object(entry, &label)?;
+            only_fields(entry, &["input", "label"], &label)?;
+            let field = |name: &str| {
+                entry
+                    .get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("{label}.{name} must be a string"))
+            };
+            Ok(AuditInput::new(field("input")?, field("label")?))
+        })
+        .collect()
 }
 
 /// Listing is a collection over the same type whose authority the command
@@ -985,6 +1020,29 @@ pub(crate) mod tests {
                 Box::new(|a| a["description"] = json!("x".repeat(16 * 1024 + 1))),
                 "description",
             ),
+            (
+                Box::new(|a| a["audit"] = json!({"input": "project"})),
+                "audit must be an array",
+            ),
+            (
+                Box::new(|a| a["audit"] = json!(["project"])),
+                "audit[0] must be an object",
+            ),
+            (
+                Box::new(|a| a["audit"] = json!([{"input": "project"}])),
+                "audit[0].label must be a string",
+            ),
+            (
+                Box::new(|a| a["audit"] = json!([{"input": 1, "label": "Project"}])),
+                "audit[0].input must be a string",
+            ),
+            (
+                Box::new(|a| {
+                    a["audit"] = json!([{"input": "project", "label": "Project"},
+                        {"input": "issue", "label": "Issue", "pointer": "/issue"}])
+                }),
+                "audit[1] has the unsupported field",
+            ),
         ];
         for (mutate, expected) in cases {
             let mut manifest = sample();
@@ -1100,6 +1158,34 @@ pub(crate) mod tests {
         let mut manifest = sample();
         manifest["resourceTypes"][0]["attributes"][0]["pattern"] = json!("(?<=x)y");
         assert!(parse_value(&manifest).unwrap_err().contains("pattern"));
+    }
+
+    #[test]
+    fn audit_lists_keep_their_order_and_an_empty_list_declares_none() {
+        let mut value = sample();
+        value["actions"][0]["audit"] = json!([
+            {"input": "project", "label": "Project"},
+            {"input": "issue", "label": "Issue"}
+        ]);
+        value["actions"][1]["audit"] = json!([]);
+        let parsed = parse_value(&value).unwrap();
+        assert_eq!(
+            parsed.actions[0].declaration.as_ref().unwrap().audit,
+            [
+                AuditInput::new("project", "Project"),
+                AuditInput::new("issue", "Issue")
+            ]
+        );
+        assert!(
+            parsed.actions[1]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .audit
+                .is_empty()
+        );
+        let plain = parse_value(&sample()).unwrap();
+        assert_eq!(parsed.actions[1], plain.actions[1]);
     }
 
     #[test]

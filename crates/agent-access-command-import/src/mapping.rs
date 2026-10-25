@@ -8,14 +8,16 @@ use agent_access_core::imports::{
     ImportedResourceTypeDeclaration, ImportedServiceDefinition, ImportedServiceMetadata,
     credential_admits_bindings,
 };
+use agent_access_provider::{ActionDescriptor, AuditInput, ServiceDescriptor};
 use serde_json::{Map, Value, json};
 
 /// Shown in the preview when a manifest declares phase-2 OAuth.
 pub(crate) const OAUTH_NOTICE: &str = "This command declares OAuth, which this Broker does not support yet; static credentials still work.";
 
-/// `annotations.command`: the action's resource declaration and credential
-/// modes. Discovery's behavioral diff compares annotations, so a change to
-/// either quarantines the accepted action.
+/// `annotations.command`: the action's resource declaration, credential
+/// modes, live listing and audit inputs. Discovery's behavioral diff compares
+/// annotations, so a change to any of them quarantines the accepted action.
+/// An empty `audit` list is stored as absent.
 pub(crate) fn command_annotations(declaration: &ActionDeclaration) -> Value {
     let mut command = Map::new();
     if let Some(resources) = &declaration.resources {
@@ -39,6 +41,18 @@ pub(crate) fn command_annotations(declaration: &ActionDeclaration) -> Value {
     }
     if let Some(listing_of) = &declaration.listing_of {
         command.insert("listingOf".into(), json!(listing_of));
+    }
+    if !declaration.audit.is_empty() {
+        command.insert(
+            "audit".into(),
+            Value::Array(
+                declaration
+                    .audit
+                    .iter()
+                    .map(|input| json!({"input": input.input(), "label": input.label()}))
+                    .collect(),
+            ),
+        );
     }
     json!({"command": command})
 }
@@ -307,22 +321,12 @@ pub(crate) struct CompiledAction {
 
 impl CompiledAction {
     /// Checks an accepted or proposed definition offline: the `{name}` source,
-    /// `annotations.command`, and both schemas in the import profile.
+    /// `annotations.command`, its audit inputs, and both schemas in the
+    /// import profile.
     pub(crate) fn new(definition: &ImportedActionDefinition) -> Result<Self, String> {
         source_name(definition)?;
-        let command = definition
-            .annotations
-            .as_object()
-            .filter(|annotations| annotations.len() == 1)
-            .and_then(|annotations| annotations.get("command"))
-            .and_then(Value::as_object)
-            .ok_or("command action annotations must hold only annotations.command")?;
-        if command
-            .keys()
-            .any(|key| key != "resources" && key != "credentialModes" && key != "listingOf")
-        {
-            return Err("annotations.command has unsupported fields".into());
-        }
+        let command = command_annotation(definition)?;
+        audit_declaration(command, &definition.input_schema)?;
         let resources = command
             .get("resources")
             .map(|resources| resource_declaration(resources, &definition.input_schema))
@@ -375,6 +379,81 @@ impl CompiledAction {
             },
         })
     }
+}
+
+/// `annotations.command`, the only annotation a command action holds, with
+/// only the fields this adapter records.
+fn command_annotation(
+    definition: &ImportedActionDefinition,
+) -> Result<&Map<String, Value>, String> {
+    let command = definition
+        .annotations
+        .as_object()
+        .filter(|annotations| annotations.len() == 1)
+        .and_then(|annotations| annotations.get("command"))
+        .and_then(Value::as_object)
+        .ok_or("command action annotations must hold only annotations.command")?;
+    if command.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "resources" | "credentialModes" | "listingOf" | "audit"
+        )
+    }) {
+        return Err("annotations.command has unsupported fields".into());
+    }
+    Ok(command)
+}
+
+/// The audit inputs of an accepted or proposed definition.
+pub(crate) fn audit_inputs(
+    definition: &ImportedActionDefinition,
+) -> Result<Vec<AuditInput>, String> {
+    audit_declaration(command_annotation(definition)?, &definition.input_schema)
+}
+
+/// `annotations.command.audit`, a nonempty list when present, checked
+/// against the action's input schema; none when absent.
+fn audit_declaration(
+    command: &Map<String, Value>,
+    input_schema: &Value,
+) -> Result<Vec<AuditInput>, String> {
+    let Some(audit) = command.get("audit") else {
+        return Ok(Vec::new());
+    };
+    let inputs = crate::manifest::audit_entries(audit, "annotations.command.audit")?;
+    if inputs.is_empty() {
+        return Err("annotations.command.audit must not be empty".into());
+    }
+    check_audit_inputs(input_schema, &inputs)?;
+    Ok(inputs)
+}
+
+/// The service and action names of the descriptor [`check_audit_inputs`]
+/// validates; its error messages start with `command.action `.
+const AUDIT_CHECK_SERVICE: &str = "command";
+const AUDIT_CHECK_ACTION: &str = "action";
+
+/// Checks audit inputs with the SDK's descriptor rules, the same ones a
+/// native action and the loaded import descriptor pass: each names a
+/// distinct top-level input property whose subschema has no sensitive
+/// marker or reference, with a label of 1–64 bytes without control
+/// characters.
+fn check_audit_inputs(input_schema: &Value, inputs: &[AuditInput]) -> Result<(), String> {
+    let mut action = ActionDescriptor::new(AUDIT_CHECK_ACTION, "", input_schema.clone())
+        .credential_modes(["service"]);
+    action.audit_inputs = inputs.to_vec();
+    ServiceDescriptor::new(AUDIT_CHECK_SERVICE, "")
+        .with_actions(vec![action])
+        .validate()
+        .map_err(|errors| {
+            let prefix = format!("{AUDIT_CHECK_SERVICE}.{AUDIT_CHECK_ACTION} ");
+            let reason = errors
+                .iter()
+                .map(|error| error.strip_prefix(&prefix).unwrap_or(error))
+                .collect::<Vec<_>>()
+                .join("; ");
+            reason.chars().take(512).collect()
+        })
 }
 
 /// `annotations.command.resources`: a declared type and, for a
@@ -883,5 +962,156 @@ mod tests {
             definition.annotations = annotations;
             assert!(CompiledAction::new(&definition).is_err());
         }
+        for audit in [
+            json!([]),
+            json!({"input": "project", "label": "Project"}),
+            json!([{"input": "project"}]),
+            json!([{"input": "project", "label": "Project", "extra": 1}]),
+            json!([{"input": "missing", "label": "Missing"}]),
+        ] {
+            let mut definition = accepted.clone();
+            definition.annotations["command"]["audit"] = audit;
+            assert!(CompiledAction::new(&definition).is_err());
+            assert!(audit_inputs(&definition).is_err());
+        }
+        let mut audited = accepted.clone();
+        audited.annotations["command"]["audit"] = json!([{"input": "project", "label": "Project"}]);
+        CompiledAction::new(&audited).unwrap();
+        assert_eq!(
+            audit_inputs(&audited).unwrap(),
+            [AuditInput::new("project", "Project")]
+        );
+    }
+
+    /// The first tool of the sample manifest with `audit` set on its first
+    /// action, and the issue input's schema replaced when given.
+    fn audited_view(audit: Option<Value>, issue: Option<Value>) -> ImportedDiscoveredTool {
+        let mut value = crate::manifest::tests::sample();
+        if let Some(audit) = audit {
+            value["actions"][0]["audit"] = audit;
+        }
+        if let Some(issue) = issue {
+            value["actions"][0]["inputSchema"]["properties"]["issue"] = issue;
+            value["actions"][0]["inputSchema"]["$defs"] = json!({"issue": {"type": "integer"}});
+        }
+        let manifest = parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        discovery(
+            &definition(&[ImportedCredentialMode::Service]),
+            "ticketing",
+            &manifest,
+            None,
+            false,
+        )
+        .unwrap()
+        .tools
+        .remove(0)
+    }
+
+    #[test]
+    fn audit_lists_are_stored_as_annotations_and_an_empty_list_changes_nothing() {
+        let plain = audited_view(None, None);
+        assert_eq!(audited_view(Some(json!([])), None), plain);
+        assert!(audit_inputs(&plain.definition).unwrap().is_empty());
+        let both = json!([{"input": "project", "label": "Project"},
+            {"input": "issue", "label": "Issue"}]);
+        let view = audited_view(Some(both.clone()), None);
+        assert!(view.unsupported_reason.is_none(), "{view:?}");
+        assert_eq!(
+            view.definition.annotations,
+            json!({"command": {"resources": {"type": "project", "inputs": ["/project"]},
+                "credentialModes": ["service", "per_user"], "audit": both}})
+        );
+        assert_eq!(
+            audit_inputs(&view.definition).unwrap(),
+            [
+                AuditInput::new("project", "Project"),
+                AuditInput::new("issue", "Issue")
+            ]
+        );
+        // Adding, relabeling, reordering or removing an input changes the
+        // annotations a refresh compares, so it quarantines the action.
+        for changed in [
+            plain,
+            audited_view(
+                Some(json!([{"input": "project", "label": "Project key"},
+                    {"input": "issue", "label": "Issue"}])),
+                None,
+            ),
+            audited_view(
+                Some(json!([{"input": "issue", "label": "Issue"},
+                    {"input": "project", "label": "Project"}])),
+                None,
+            ),
+            audited_view(
+                Some(json!([{"input": "project", "label": "Project"}])),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                changed.definition.input_schema,
+                view.definition.input_schema
+            );
+            assert_ne!(changed.definition.annotations, view.definition.annotations);
+        }
+    }
+
+    #[test]
+    fn audit_lists_follow_the_descriptor_rules() {
+        let project = |label: Value| json!([{"input": "project", "label": label}]);
+        let issue = json!([{"input": "issue", "label": "Issue"}]);
+        let label = "needs a label of at most 64 bytes without control characters";
+        for (audit, schema, reason) in [
+            (
+                json!([{"input": "summary", "label": "Summary"}]),
+                None,
+                "audit input summary is not a top-level input property".to_owned(),
+            ),
+            (
+                json!([{"input": "project", "label": "Project"},
+                    {"input": "project", "label": "Project key"}]),
+                None,
+                "declares audit input project more than once".to_owned(),
+            ),
+            (
+                project(json!(" ")),
+                None,
+                format!("audit input project {label}"),
+            ),
+            (
+                project(json!(format!("{}é", "x".repeat(63)))),
+                None,
+                format!("audit input project {label}"),
+            ),
+            (
+                project(json!("Pro\nject")),
+                None,
+                format!("audit input project {label}"),
+            ),
+            (
+                issue.clone(),
+                Some(json!({"type": "integer", "x-agent-access-sensitive": true})),
+                "audit input issue has a sensitive schema".to_owned(),
+            ),
+            (
+                issue.clone(),
+                Some(json!({"$ref": "#/$defs/issue"})),
+                "audit input issue schema uses a reference".to_owned(),
+            ),
+        ] {
+            let tool = audited_view(Some(audit), schema);
+            assert_eq!(tool.unsupported_reason.as_ref(), Some(&reason), "{tool:?}");
+            assert_eq!(audit_inputs(&tool.definition).err(), Some(reason.clone()));
+            assert_eq!(CompiledAction::new(&tool.definition).err(), Some(reason));
+        }
+        // Without the declaration the same schemas are supported.
+        for schema in [
+            json!({"type": "integer", "x-agent-access-sensitive": true}),
+            json!({"$ref": "#/$defs/issue"}),
+        ] {
+            let tool = audited_view(None, Some(schema));
+            assert!(tool.unsupported_reason.is_none(), "{tool:?}");
+        }
+        let longest = audited_view(Some(project(json!("x".repeat(64)))), None);
+        assert!(longest.unsupported_reason.is_none(), "{longest:?}");
     }
 }
