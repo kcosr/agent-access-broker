@@ -888,6 +888,22 @@ state.
 Audit storage and query coverage is deterministic and uses temporary audit
 databases and files:
 
+- SDK `audit_inputs` tests cover strict declarations, selector and sensitivity
+  traversal, integer fidelity, collection association and encoded byte budgets.
+  Each native provider's audit tests compare a maximal descriptor with its
+  checked-in `audit-input-inventory.json`; review every semantic decision before
+  using `UPDATE_AUDIT_INVENTORY=1` to regenerate it. Schema-valid fixtures guard
+  against capture-kind drift without adding invocation validation to the engine.
+- Core `runtime/request_audit/tests.rs` checks preparation failures, provider
+  errors, upload admission and persistence through JSONL and SQLite. Owned
+  operation tests retain prepared snapshots on timeout; command authority tests
+  cover later credential failure and rejected import hooks. SQLite row tests
+  check the explicit retained-value search projection. The command CLI smoke
+  exercises accepted declarations and refresh quarantine through real processes.
+- Portal `unit/audit-request.test.ts` and `tests/audit-inputs.spec.ts` cover the
+  event-time Summary renderer, exact copied text, raw-only facts, truncation and
+  collection association. Those browser cases use synthetic audit records;
+  command import and other browser suites separately exercise real Broker APIs.
 - Core config tests (`lib_tests.rs`) cover `[audit]` `type`/`path`, unknown-field
   rejection, `rotate_bytes` only for JSONL, an audit path equal to the
   managed-store database, and offline `deployment.node_id` validation;
