@@ -14,8 +14,8 @@ use serde_json::{Map, Value, json};
 pub(crate) const OAUTH_NOTICE: &str = "This command declares OAuth, which this Broker does not support yet; static credentials still work.";
 
 /// `annotations.command`: the action's resource declaration and credential
-/// modes. Discovery's behavioral diff compares annotations, so a change to
-/// either quarantines the accepted action.
+/// modes and audit projection. Discovery's behavioral diff compares annotations,
+/// so any declaration change quarantines the accepted action.
 pub(crate) fn command_annotations(declaration: &ActionDeclaration) -> Value {
     let mut command = Map::new();
     if let Some(resources) = &declaration.resources {
@@ -39,6 +39,9 @@ pub(crate) fn command_annotations(declaration: &ActionDeclaration) -> Value {
     }
     if let Some(listing_of) = &declaration.listing_of {
         command.insert("listingOf".into(), json!(listing_of));
+    }
+    if let Some(audit_inputs) = &declaration.audit_inputs {
+        command.insert("auditInputs".into(), json!(audit_inputs));
     }
     json!({"command": command})
 }
@@ -303,6 +306,7 @@ pub(crate) struct CompiledAction {
     /// Results of `ok: true` responses must validate against it.
     pub output: Option<BoundedImportSchema>,
     pub authority: ImportedActionAuthority,
+    pub audit_inputs: Option<agent_access_provider::AuditInputProjection>,
 }
 
 impl CompiledAction {
@@ -317,10 +321,9 @@ impl CompiledAction {
             .and_then(|annotations| annotations.get("command"))
             .and_then(Value::as_object)
             .ok_or("command action annotations must hold only annotations.command")?;
-        if command
-            .keys()
-            .any(|key| key != "resources" && key != "credentialModes" && key != "listingOf")
-        {
+        if command.keys().any(|key| {
+            !["resources", "credentialModes", "listingOf", "auditInputs"].contains(&key.as_str())
+        }) {
             return Err("annotations.command has unsupported fields".into());
         }
         let resources = command
@@ -360,11 +363,14 @@ impl CompiledAction {
             .as_ref()
             .map(BoundedImportSchema::compile)
             .transpose()?;
+        let audit_inputs =
+            crate::audit_inputs::parse(command.get("auditInputs"), &definition.input_schema)?;
         Ok(Self {
             read_only: definition.read_only,
             download: definition.download,
             input,
             output,
+            audit_inputs,
             authority: ImportedActionAuthority {
                 resources: resources.map(|declaration| ImportedActionResources {
                     resource_type: declaration.resource_type,
@@ -885,3 +891,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mapping/audit_inputs_tests.rs"]
+mod audit_inputs_tests;

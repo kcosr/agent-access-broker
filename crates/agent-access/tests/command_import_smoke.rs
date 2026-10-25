@@ -22,6 +22,10 @@ use std::time::Duration;
 #[path = "command_import_smoke/downloads.rs"]
 mod downloads;
 
+#[cfg(unix)]
+#[path = "command_import_smoke/audit_inputs.rs"]
+mod audit_inputs;
+
 const SERVICE_TOKEN: &str = "svc-smoke-service-token";
 const PERSONAL_TOKEN: &str = "pat-smoke-personal-token";
 const WEBHOOK_SECRET: &str = "s3cr3t-smoke-webhook";

@@ -10,7 +10,7 @@ use agent_access_core::imports::{
     IMPORT_MAX_TOOLS, ImportedCredentialDeclaration, ImportedCredentialKind,
     ImportedCredentialMode, ImportedResourceAttributeDeclaration,
 };
-use agent_access_provider::ResourcePattern;
+use agent_access_provider::{AuditInputProjection, ResourcePattern};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
@@ -77,6 +77,8 @@ pub(crate) struct ActionDeclaration {
     pub resources: Option<ResourceDeclaration>,
     /// Source type ID this action explicitly enumerates live.
     pub listing_of: Option<String>,
+    /// Reviewed original caller inputs to retain in invocation audit.
+    pub audit_inputs: Option<AuditInputProjection>,
 }
 
 /// `resources`: the declared type and, for a Broker-enforced action, the
@@ -453,6 +455,7 @@ fn action(
             "credentialModes",
             "resources",
             "listingOf",
+            "auditInputs",
         ],
         "the action",
     )?;
@@ -515,6 +518,7 @@ fn action(
         .get("listingOf")
         .map(|value| listing_type(value, resources.as_ref()))
         .transpose()?;
+    let audit_inputs = crate::audit_inputs::parse(object.get("auditInputs"), &input_schema)?;
     Ok(ActionDeclaration {
         download,
         description,
@@ -523,6 +527,7 @@ fn action(
         credential_modes,
         resources,
         listing_of,
+        audit_inputs,
     })
 }
 

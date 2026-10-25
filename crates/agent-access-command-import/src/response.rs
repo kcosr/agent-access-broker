@@ -345,6 +345,7 @@ mod tests {
             input: BoundedImportSchema::compile(&json!({"type": "object"})).unwrap(),
             output: output.map(|schema| BoundedImportSchema::compile(&schema).unwrap()),
             authority: ImportedActionAuthority::default(),
+            audit_inputs: None,
         }
     }
 

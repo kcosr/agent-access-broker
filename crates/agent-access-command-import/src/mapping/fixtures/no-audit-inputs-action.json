@@ -1,0 +1,1 @@
+{"action":"issue.search","source":{"name":"issue.search"},"description":"Search synthetic issues.","inputSchema":{"additionalProperties":false,"properties":{"body":{"type":"string"},"other":{"type":"string"},"query":{"pattern":"^accepted$","type":"string"},"secret":{"type":"string","x-agent-access-sensitive":true}},"type":"object"},"annotations":{"command":{}},"readOnly":false}

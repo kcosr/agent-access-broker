@@ -127,7 +127,9 @@ until the setting is restored or those actions are disabled or quarantined.
    `<path> describe` and stores a 15-minute preview showing the command
    version; the credential kind, or none; each resource type with its proposed
    Broker type ID and any type changes; and each action with its proposed
-   action ID, read-only suggestion, download behavior and **Resources checked by**.
+   action ID, read-only suggestion, download behavior, **Resources checked by**
+   and the **Audit inputs** declaration. The latter shows metadata only, never
+   invocation values.
    An invalid action is listed as unsupported with a reason; an invalid manifest
    fails discovery.
 3. Review the action IDs, Broker type IDs and the Read-only / Write-capable
@@ -201,7 +203,11 @@ new actions stay unselected; missing, unsupported or behaviorally changed
 actions are quarantined; grants are retained; and accepting a change that
 affects grants requires confirming them. An action's behavior is its input
 schema, output schema, download behavior, and the resource declaration and
-credential modes the adapter records in its annotations. The manifest `version`
+credential modes and complete `auditInputs` declaration the adapter records in
+its annotations. Adding, removing or changing an audit rule, its label, placement,
+role, kind, shape, bounds or order quarantines the action until accepted again.
+Identical canonical declarations do not change behavior. Failed discovery keeps
+the accepted declaration intact. The manifest `version`
 and `verify` flag take effect on acceptance. An older Broker cannot load a service containing an
 accepted download definition; see [upgrade and rollback](operator-guide.md#upgrade-and-rollback).
 
@@ -549,6 +555,7 @@ must:
 | `.readOnly` | A suggestion; the administrator classifies each action |
 | `.download` | Optional literal `true`; a successful call returns one file and bounded metadata. Omit for JSON actions; `false`, `null` and non-booleans are unsupported |
 | `.listingOf` | Optional declared source type ID, equal to `.resources.type`; requires a JSON command-enforced collection without resource input pointers and administrator acceptance as read-only; forbidden on downloads |
+| `.auditInputs` | Optional nonempty ordered array of reviewed input capture rules; see [audit input declarations](#audit-input-declarations) |
 | `.credentialModes` | Optional subset of `credential.modes`; absent without `credential` |
 | `.resources.type` | A declared type ID; an action has at most one resource type |
 | `.resources.inputs` | 1–4 JSON pointers to required string or string-array inputs; their presence makes the action Broker-enforced |
@@ -579,6 +586,62 @@ For a command-enforced action, `enforcement: "command"` identifies coverage as
 the grants the Broker hands to the command. The command must enforce that
 boundary and filter results itself; the helper does not imply Broker checks of
 the command's output. Broker-enforced resource inputs use `enforcement: "request"`.
+
+#### Audit input declarations
+
+`auditInputs` selects original caller inputs to retain in `requestAudit`. Omit
+the field to capture none; an empty array is invalid. Unlisted inputs are omitted.
+The same strict SDK declaration and preparation rules apply to native actions
+and commands. For example, an action whose schema declares `query`, `limit` and
+`pageToken` can include:
+
+```json
+"auditInputs": [
+  {"key":"query","label":"Requested query","pointer":"/query","display":"primary","role":"fact","kind":"query","capture":"value","shape":"scalar","maxBytes":4096,"overflow":"prefix"},
+  {"key":"limit","label":"Requested limit","pointer":"/limit","display":"detail","role":"fact","kind":"number","capture":"value","shape":"scalar"},
+  {"key":"pageToken","label":"Continuation supplied","pointer":"/pageToken","display":"detail","role":"fact","kind":"boolean","capture":"presence"}
+]
+```
+
+Rules use unique keys and exact JSON pointers into the action's input schema.
+`value` requires `shape: "scalar"` or `"list"` and a formatting kind; it retains
+only matching scalar types. String-bearing kinds require `maxBytes` and
+`overflow`; only `text` and `query` permit `prefix`, while identifiers, paths,
+emails and dates use `omit`. Numeric and boolean kinds reject string options.
+Integer identifiers are exempt from string caps and retain their exact integer
+representation. Lists sample at most 20 positions.
+
+`presence` records whether the property was supplied, without inspecting it.
+`itemCount` counts array items; `utf8ByteCount` counts a string's UTF-8 bytes.
+Their required kinds are `boolean`, `number` and `bytes`, respectively.
+`records` uses kind `records` and explicit relative child rules to retain at
+most 20 object rows. `omit` contains only `key`, `pointer` and `capture`, and
+records no fact. Other modes have a plain-text `label`, a `display` placement
+(`primary`, `detail` or `raw`) and a `role` (`target`, `change` or `fact`).
+
+Discovery rejects invalid rules per action, including unknown fields, duplicate
+or conflicting selectors, missing schema paths and prohibited sensitive-value
+capture. Accepted metadata is checked again when loading and building the
+service. `x-agent-access-sensitive: true` marks sensitive schema values; the
+existing root-header sensitivity rules also apply. No declaration can select credentials, private resource attributes,
+environment, process stdout/stderr or response values: those are not caller
+inputs. A command cannot return a replacement `requestAudit`.
+
+The preview and installed action details expose the reviewed declaration.
+Acceptance approves it as a whole, under the existing manifest/version fences;
+the selection request cannot replace individual rules. Captured data is visible
+to readers allowed to inspect complete audit records. Every string-bearing value
+rule records requested text, which can include arbitrary caller-supplied text;
+it does not certify that the value matched a schema enum or pattern or that the
+text is secret-free. Identifier text is searchable too. Keep body content and
+opaque credentials omitted, or declare only an appropriate presence summary.
+
+The declaration is stored only in `annotations.command.auditInputs`. Commands
+without it keep their existing persisted shape. The format stays
+`agent-access-command/1`, and invoke/verify stdin and stdout are unchanged.
+Older binaries reject accepted annotations containing this field: rollback
+requires a pre-upgrade store state or a version that understands the metadata.
+Do not strip the declaration to make rollback succeed.
 
 #### Patterns
 
@@ -1127,7 +1190,12 @@ boundary. A command-enforced call records
 `{"mode": "command", "resourceType"?, "grants"}`: the grants passed, with
 their IDs, versions, credential modes and boundaries. Both are captured by the
 Broker, so an interrupted call keeps them, with facts not yet known, such as
-the exit status of a killed process, recorded as `null`. Audit never holds inputs, results, attributes or stderr.
+the exit status of a killed process, recorded as `null`. Reviewed
+[`auditInputs`](#audit-input-declarations) rules retain bounded requested facts
+under `requestAudit` after successful invocation preparation. Initial credential
+preparation failures keep ordinary audit without that snapshot; later command
+credential resolution or process failures retain it. Results, private attributes
+and stderr are not input-capture sources.
 A call that passes a personal grant also records `credentialConnection`, the
 imported service ID of the import's credential connection, even when mixed
 modes leave `credentialMode` null; a call passing only service grants omits it.

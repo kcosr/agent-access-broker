@@ -19,6 +19,7 @@
 //! process under a supervisor that holds a permit from the command's budget
 //! until the process group is killed and reaped (`process.rs`,
 //! `supervisor.rs`, `run.rs`). Commands run on Unix only.
+mod audit_inputs;
 mod download;
 mod manifest;
 mod mapping;
@@ -36,9 +37,9 @@ use agent_access_core::imports::{
 };
 use agent_access_core::imports::{ImportedCredentialContract, ImportedCredentialRequirement};
 use agent_access_provider::{
-    BuildContext, ExecutionCredential, MutationReceipt, Provider, ProviderBuildError,
-    ProviderCredentialVerification, ProviderError, ProviderInvocation, ProviderResult, ReasonCode,
-    ScopeRequest, ScopeResolution,
+    AuditInputProjection, BuildContext, ExecutionCredential, MutationReceipt, Provider,
+    ProviderBuildError, ProviderCredentialVerification, ProviderError, ProviderInvocation,
+    ProviderResult, ReasonCode, ScopeRequest, ScopeResolution,
 };
 use async_trait::async_trait;
 use mapping::CompiledAction;
@@ -150,6 +151,12 @@ impl ImportedAdapter for CommandAdapter {
         action: &ImportedActionDefinition,
     ) -> Result<ImportedActionAuthority, String> {
         CompiledAction::new(action).map(|compiled| compiled.authority)
+    }
+    fn action_audit_inputs(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<Option<AuditInputProjection>, String> {
+        CompiledAction::new(action).map(|compiled| compiled.audit_inputs)
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         mapping::source_name(action).map(str::to_owned)

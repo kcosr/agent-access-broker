@@ -35,6 +35,8 @@ changing the Broker's configuration:
                  removed from `project`, leaving `region`
   bare           the default manifest at version 1.4.2 with no attributes on
                  `project`
+  audit          the default manifest with reviewed target/query/summary capture
+                 and presence-only description; invocation stays unchanged
 
 Actions:
 
@@ -144,7 +146,7 @@ MAX_REQUEST_BYTES = 1024 * 1024
 MAX_MESSAGE_BYTES = 1024
 MAX_LIST_PROJECTS = 100
 SUBCOMMANDS = ("describe", "invoke", "verify")
-PROFILES = ("default", "no_credential", "v2", "trimmed", "bare")
+PROFILES = ("default", "no_credential", "v2", "trimmed", "bare", "audit")
 WRITES = ("issue.create", "issue.close", "issue.comment")
 ERROR_CODES = (
     "input_invalid",
@@ -383,6 +385,23 @@ def actions(profile):
             "readOnly": True,
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         })
+    if profile == "audit":
+        for action in listed:
+            rules = []
+            for name in action["inputSchema"].get("properties", {}):
+                if name == "description":
+                    rules.append({"key": name, "label": "Description supplied", "pointer": "/" + name,
+                                  "capture": "presence", "kind": "boolean",
+                                  "display": "detail", "role": "change"})
+                else:
+                    kind = "query" if name == "query" else "text" if name == "summary" else "identifier"
+                    rules.append({"key": name, "label": name.capitalize(), "pointer": "/" + name,
+                                  "capture": "value", "shape": "scalar", "kind": kind,
+                                  "display": "primary", "role": "change" if name == "summary" else "fact" if name == "query" else "target",
+                                  "maxBytes": 4096 if kind == "query" else 1024,
+                                  "overflow": "prefix" if kind in ("query", "text") else "omit"})
+            if rules:
+                action["auditInputs"] = rules
     return listed
 
 

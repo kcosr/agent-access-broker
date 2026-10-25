@@ -152,7 +152,7 @@ def check_manifest(test, manifest):
     for action in manifest["actions"]:
         test.assertLessEqual(len(json.dumps(action).encode()), 256 * 1024)
         test.assertLessEqual(set(action), {"name", "description", "inputSchema", "outputSchema",
-                                           "readOnly", "credentialModes", "resources", "listingOf"})
+                                           "readOnly", "credentialModes", "resources", "listingOf", "auditInputs"})
         test.assertNotIn(action["name"], names)
         names.add(action["name"])
         test.assertLessEqual(len(action["description"].encode()), 16 * 1024)
@@ -183,6 +183,22 @@ def check_manifest(test, manifest):
 
 
 class ManifestTests(unittest.TestCase):
+    def test_audit_profile_adds_only_reviewed_input_metadata(self):
+        before, _ = check_manifest(self, one_document(self, run("describe")))
+        after, _ = check_manifest(self, one_document(self, run("describe", profile="audit")))
+        for name, action in after.items():
+            rules = action.pop("auditInputs", [])
+            self.assertEqual(action, before[name])
+            self.assertEqual([rule["pointer"] for rule in rules],
+                             ["/" + key for key in action["inputSchema"].get("properties", {})])
+            for rule in rules:
+                if rule["key"] == "description":
+                    self.assertEqual(rule["capture"], "presence")
+                    self.assertNotIn("shape", rule)
+                else:
+                    self.assertEqual(rule["capture"], "value")
+                    self.assertEqual(rule["shape"], "scalar")
+
     def test_default_manifest(self):
         manifest = one_document(self, run("describe"))
         actions, types = check_manifest(self, manifest)

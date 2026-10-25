@@ -11,6 +11,7 @@ fn action() -> CompiledAction {
         input: BoundedImportSchema::compile(&json!({"type": "object"})).unwrap(),
         output: None,
         authority: ImportedActionAuthority::default(),
+        audit_inputs: None,
     }
 }
 
