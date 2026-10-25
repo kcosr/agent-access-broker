@@ -98,3 +98,17 @@ fn declaration_rejects_overlap_duplicate_keys_nested_records_and_controls() {
         );
     }
 }
+
+#[test]
+fn explicit_null_options_are_rejected_instead_of_becoming_absence() {
+    for field in [
+        "label", "display", "role", "kind", "shape", "maxBytes", "overflow", "fields",
+    ] {
+        let mut value = serde_json::to_value(AuditInputRule::omit("body", "/body")).unwrap();
+        value[field] = Value::Null;
+        assert!(
+            serde_json::from_value::<AuditInputRule>(value).is_err(),
+            "{field}"
+        );
+    }
+}

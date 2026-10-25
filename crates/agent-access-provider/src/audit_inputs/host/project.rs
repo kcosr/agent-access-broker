@@ -6,6 +6,17 @@ const ENVELOPE_RESERVE: usize = 512;
 const SAMPLE_LIMIT: usize = 20;
 const SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
+#[cfg(test)]
+thread_local! { static CELLS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn reset_cells_visited() {
+    CELLS_VISITED.set(0);
+}
+#[cfg(test)]
+pub(super) fn cells_visited() -> usize {
+    CELLS_VISITED.get()
+}
+
 #[derive(Clone, Copy)]
 enum Presence<'a> {
     Supplied(&'a Value),
@@ -327,7 +338,7 @@ fn collection(
     let mut omitted_count = 0;
     for (index, value) in source.iter().take(SAMPLE_LIMIT).enumerate() {
         let separator = usize::from(retained_count != 0);
-        let remaining = allowance.checked_sub(used + separator).unwrap_or(0);
+        let remaining = allowance.saturating_sub(used + separator);
         if records {
             if let Some(row) = record_row(rule, value, index as u64, remaining) {
                 let length = encoded_len(&row, remaining)?;
@@ -409,6 +420,8 @@ fn record_row(
         .iter()
         .filter(|child| child.rule.capture != AuditCapture::Omit)
     {
+        #[cfg(test)]
+        CELLS_VISITED.set(CELLS_VISITED.get() + 1);
         let separator = usize::from(!row.cells.as_ref().expect("cells").is_empty());
         let key_size = encoded_len(child.rule.key.as_str(), allowance)?;
         let remaining = allowance.checked_sub(used + separator + key_size + 1)?;

@@ -46,7 +46,7 @@ impl<'a> Walker<'a> {
         if !inspect {
             return Ok(());
         }
-        if self.sensitive_header(path, parent) {
+        if self.sensitive_header(path, parent, rule.capture) {
             return Err("auditInputs value/count conflicts with a sensitive root header".into());
         }
         if nodes
@@ -73,17 +73,30 @@ impl<'a> Walker<'a> {
         Ok(())
     }
 
-    fn sensitive_header(&self, path: &[String], parent: Option<&[String]>) -> bool {
+    fn sensitive_header(
+        &self,
+        path: &[String],
+        parent: Option<&[String]>,
+        capture: AuditCapture,
+    ) -> bool {
         let selected = parent.unwrap_or(path);
-        selected.len() >= 2
-            && selected[0] == "headers"
-            && self
-                .root
-                .pointer("/properties/headers/properties")
-                .and_then(Value::as_object)
-                .is_some_and(|properties| {
-                    properties.contains_key(&selected[1]) && sensitive_header_name(&selected[1])
-                })
+        let Some(properties) = self
+            .root
+            .pointer("/properties/headers/properties")
+            .and_then(Value::as_object)
+        else {
+            return false;
+        };
+        if selected.first().map(String::as_str) != Some("headers") {
+            return false;
+        }
+        if selected.len() >= 2 {
+            return properties.contains_key(&selected[1]) && sensitive_header_name(&selected[1]);
+        }
+        // Value/byte-count cannot evade derived sensitive descendants by
+        // supplying a malformed scalar for the headers object.
+        matches!(capture, AuditCapture::Value | AuditCapture::Utf8ByteCount)
+            && properties.keys().any(|name| sensitive_header_name(name))
     }
 
     fn visit(&mut self) -> Result<(), String> {
@@ -180,6 +193,9 @@ impl<'a> Walker<'a> {
     }
 
     fn resolve(&self, reference: &str) -> Result<&'a Value, String> {
+        if reference.contains('%') {
+            return Err("auditInputs percent-encoded reference fragments are unsupported".into());
+        }
         let pointer = reference
             .strip_prefix('#')
             .ok_or("auditInputs remote references are unsupported")?;
@@ -187,6 +203,10 @@ impl<'a> Walker<'a> {
             return Err("auditInputs anchor references are unsupported".into());
         }
         let mut current = self.root;
+        // Property/definition maps are containers, not schema objects: a
+        // literal definition or property named "$id" does not change scope.
+        let mut schema_position = true;
+        let mut schema_container = false;
         if !pointer.is_empty() {
             for encoded in pointer[1..].split('/') {
                 let mut name = String::new();
@@ -207,6 +227,40 @@ impl<'a> Walker<'a> {
                         ch
                     });
                 }
+                let next_container = schema_position
+                    && matches!(
+                        name.as_str(),
+                        "properties"
+                            | "patternProperties"
+                            | "dependentSchemas"
+                            | "dependencies"
+                            | "$defs"
+                            | "definitions"
+                            | "allOf"
+                            | "anyOf"
+                            | "oneOf"
+                            | "prefixItems"
+                    )
+                    || schema_position
+                        && name == "items"
+                        && current.get("items").is_some_and(Value::is_array);
+                let next_schema = schema_container
+                    || schema_position
+                        && matches!(
+                            name.as_str(),
+                            "items"
+                                | "additionalItems"
+                                | "unevaluatedItems"
+                                | "contains"
+                                | "additionalProperties"
+                                | "unevaluatedProperties"
+                                | "if"
+                                | "then"
+                                | "else"
+                                | "not"
+                                | "contentSchema"
+                        )
+                        && !next_container;
                 current = match current {
                     Value::Object(object) => object.get(&name),
                     Value::Array(array) => name
@@ -217,12 +271,17 @@ impl<'a> Walker<'a> {
                     _ => None,
                 }
                 .ok_or("auditInputs unresolved local reference")?;
-                if current.get("$id").is_some() {
+                schema_position = next_schema;
+                schema_container = next_container;
+                if schema_position && current.get("$id").is_some() {
                     return Err(
                         "auditInputs reference target crosses a nested resource scope".into(),
                     );
                 }
             }
+        }
+        if !std::ptr::eq(current, self.root) && current.get("$id").is_some() {
+            return Err("auditInputs reference target has a nested resource scope".into());
         }
         Ok(current)
     }
