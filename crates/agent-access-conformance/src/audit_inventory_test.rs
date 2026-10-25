@@ -61,8 +61,92 @@ fn classified(rules: &[Value], prefix: &str, paths: &mut BTreeMap<String, bool>)
     }
 }
 
+// This inventory walker intentionally supports only the maintained native
+// schema profile. An opaque reviewed terminal owns its whole subtree; elsewhere
+// unfamiliar applicators must stop the coverage check, never hide new fields.
+fn schema_branches(node: &Value) -> Vec<&Value> {
+    let object = node
+        .as_object()
+        .expect("unsupported schema inventory shape");
+    for keyword in [
+        "prefixItems",
+        "patternProperties",
+        "dependentSchemas",
+        "dependencies",
+        "additionalItems",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "contains",
+        "propertyNames",
+        "contentSchema",
+        "$dynamicRef",
+        "$recursiveRef",
+    ] {
+        assert!(
+            !object.contains_key(keyword),
+            "unsupported schema inventory keyword: {keyword}"
+        );
+    }
+    if let Some(additional) = object.get("additionalProperties") {
+        assert_eq!(
+            additional,
+            &Value::Bool(false),
+            "unsupported schema inventory keyword: additionalProperties"
+        );
+    }
+    if let Some(properties) = object.get("properties") {
+        assert!(
+            properties.is_object(),
+            "unsupported schema inventory properties shape"
+        );
+    }
+    if let Some(items) = object.get("items") {
+        assert!(
+            items.is_object(),
+            "unsupported schema inventory items shape"
+        );
+    }
+    if let Some(reference) = object.get("$ref") {
+        assert!(
+            reference.is_string(),
+            "unsupported schema inventory reference shape"
+        );
+    }
+    let mut branches = Vec::new();
+    for keyword in ["allOf", "oneOf", "anyOf"] {
+        if let Some(value) = object.get(keyword) {
+            branches.extend(
+                value
+                    .as_array()
+                    .expect("unsupported schema inventory composition shape"),
+            );
+        }
+    }
+    for keyword in ["if", "then", "else", "not"] {
+        if let Some(branch) = object.get(keyword) {
+            branches.push(branch);
+        }
+    }
+    branches
+}
+
+fn has_input_shape(node: &Value, depth: usize) -> bool {
+    assert!(depth < 128, "schema inventory recursion limit");
+    let branches = schema_branches(node);
+    let mut found = ["properties", "items", "$ref"]
+        .iter()
+        .any(|key| node.get(key).is_some());
+    for branch in branches {
+        // Visit every branch even after finding a shape, so an unsupported
+        // sibling cannot be mistaken for a harmless predicate.
+        found |= has_input_shape(branch, depth + 1);
+    }
+    found
+}
+
 fn named_descendants(root: &Value, node: &Value, depth: usize) -> bool {
     assert!(depth < 128, "schema inventory recursion limit");
+    let branches = schema_branches(node);
     if node
         .get("properties")
         .and_then(Value::as_object)
@@ -78,22 +162,14 @@ fn named_descendants(root: &Value, node: &Value, depth: usize) -> bool {
             return true;
         }
     }
-    for key in ["items", "if", "then", "else"] {
-        if let Some(child) = node.get(key)
-            && named_descendants(root, child, depth + 1)
-        {
-            return true;
-        }
+    if let Some(items) = node.get("items")
+        && named_descendants(root, items, depth + 1)
+    {
+        return true;
     }
-    ["allOf", "oneOf", "anyOf"].iter().any(|key| {
-        node.get(key)
-            .and_then(Value::as_array)
-            .is_some_and(|branches| {
-                branches
-                    .iter()
-                    .any(|branch| named_descendants(root, branch, depth + 1))
-            })
-    })
+    branches
+        .into_iter()
+        .any(|branch| named_descendants(root, branch, depth + 1))
 }
 
 fn schema_leaves(
@@ -113,6 +189,7 @@ fn schema_leaves(
         leaves.insert(path.to_owned());
         return;
     }
+    let branches = schema_branches(node);
     if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
         let referenced = root
             .pointer(reference.strip_prefix('#').expect("local reference"))
@@ -145,26 +222,9 @@ fn schema_leaves(
             depth + 1,
         );
     }
-    for keyword in ["allOf", "oneOf", "anyOf"] {
-        if let Some(branches) = node.get(keyword).and_then(Value::as_array) {
-            for branch in branches {
-                // Predicate-only branches do not introduce input fields.
-                if branch.get("properties").is_some()
-                    || branch.get("$ref").is_some()
-                    || ["allOf", "oneOf", "anyOf"]
-                        .iter()
-                        .any(|key| branch.get(key).is_some())
-                {
-                    has_children = true;
-                    schema_leaves(root, branch, path, terminals, leaves, depth + 1);
-                }
-            }
-        }
-    }
-    for keyword in ["if", "then", "else"] {
-        if let Some(branch) = node.get(keyword)
-            && (branch.get("properties").is_some() || branch.get("$ref").is_some())
-        {
+    for branch in branches {
+        // Predicates alone add no fields; items and nested applicators do.
+        if has_input_shape(branch, depth + 1) {
             has_children = true;
             schema_leaves(root, branch, path, terminals, leaves, depth + 1);
         }
@@ -312,4 +372,106 @@ pub fn assert_sample(action: &ActionDescriptor, inputs: &Value) -> Value {
     }
     walk(&snapshot);
     snapshot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_access_provider::{AuditInputProjection, AuditInputRule, AuditValueKind};
+
+    fn panic_message(operation: impl FnOnce()) -> String {
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+            .expect_err("coverage must fail closed");
+        error
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| error.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+            .unwrap()
+    }
+
+    fn record_action(extra: Value) -> ActionDescriptor {
+        let mut rows = json!({"type":"array","items":{"type":"object","properties":{"known":{"type":"number"}},"additionalProperties":false}});
+        rows.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        ActionDescriptor::new(
+            "example",
+            "Inventory fixture",
+            json!({"type":"object","properties":{"rows":rows},"additionalProperties":false}),
+        )
+        .audit_inputs(AuditInputProjection::new([AuditInputRule::records(
+            "rows",
+            "Rows",
+            "/rows",
+            [AuditInputRule::value("known", "Known", "/known").kind(AuditValueKind::Number)],
+        )]))
+    }
+
+    #[test]
+    fn composed_array_and_conditional_fields_require_classification() {
+        for composition in ["allOf", "oneOf", "anyOf"] {
+            let extra =
+                json!({composition:[{"items":{"properties":{"unreviewed":{"type":"string"}}}}]});
+            let action = record_action(extra.clone());
+            assert!(
+                panic_message(|| assert_coverage(&action))
+                    .contains("unclassified or obsolete input selectors")
+            );
+            for conditional in ["if", "then", "else", "not"] {
+                let action = record_action(json!({conditional:extra}));
+                assert!(
+                    panic_message(|| assert_coverage(&action))
+                        .contains("unclassified or obsolete input selectors")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicate_only_branches_do_not_add_spurious_selectors() {
+        let action = record_action(json!({
+            "allOf":[{"minItems":0},{"not":{"anyOf":[{"maxItems":0}]}}],
+            "if":{"minItems":1},"then":{"allOf":[{"maxItems":20}]}
+        }));
+        assert_coverage(&action);
+    }
+
+    #[test]
+    fn unsupported_applicators_cannot_hide_unclassified_or_value_captured_children() {
+        for extra in [
+            json!({"prefixItems":[{"properties":{"hidden":{}}}]}),
+            json!({"items":[{"properties":{"hidden":{}}}]}),
+            json!({"patternProperties":{".*":{"properties":{"hidden":{}}}}}),
+            json!({"additionalProperties":{"properties":{"hidden":{}}}}),
+            json!({"additionalProperties":true}),
+            json!({"dependentSchemas":{"flag":{"properties":{"hidden":{}}}}}),
+            json!({"dependencies":{"flag":{"properties":{"hidden":{}}}}}),
+            json!({"additionalItems":{"properties":{"hidden":{}}}}),
+            json!({"unevaluatedItems":{"properties":{"hidden":{}}}}),
+            json!({"unevaluatedProperties":{"properties":{"hidden":{}}}}),
+            json!({"contains":{"properties":{"hidden":{}}}}),
+            json!({"propertyNames":{"type":"string"}}),
+            json!({"contentSchema":{"properties":{"hidden":{}}}}),
+            json!({"$dynamicRef":"#dynamic"}),
+            json!({"$recursiveRef":"#"}),
+        ] {
+            for nested in [extra.clone(), json!({"then":{"allOf":[extra]}})] {
+                let schema = json!({"properties":{"value":nested}});
+                for terminals in [BTreeMap::new(), BTreeMap::from([("/value".into(), false)])] {
+                    let error = panic_message(|| {
+                        schema_leaves(&schema, &schema, "", &terminals, &mut BTreeSet::new(), 0);
+                    });
+                    assert!(error.contains("unsupported schema inventory"), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reviewed_opaque_fields_still_own_their_whole_subtree() {
+        let action = ActionDescriptor::new("example", "Opaque fixture", json!({
+            "type":"object","properties":{"opaque":{"type":"object","patternProperties":{".*":{}},"additionalProperties":true}},"additionalProperties":false
+        })).audit_inputs(AuditInputProjection::new([AuditInputRule::presence("opaque", "Payload supplied", "/opaque")]));
+        assert_coverage(&action);
+    }
 }
