@@ -827,10 +827,21 @@ async fn git_through_the_gateway_presents_oauth_access_as_basic_oauth2() {
     }
     assert_eq!(gitlab.refreshes(), 0);
 
-    let records = read_audit_records(&fixture.audit_path)
-        .into_iter()
-        .filter(|record| record["service"] == GATEWAY)
-        .collect::<Vec<_>>();
+    // Client body completion can precede the stream owner's terminal audit.
+    let records = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let records = read_audit_records(&fixture.audit_path)
+                .into_iter()
+                .filter(|record| record["service"] == GATEWAY)
+                .collect::<Vec<_>>();
+            if records.len() >= 6 {
+                break records;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("all three gateway requests must finalize their audit records");
     // A start and a completion record per request.
     assert_eq!(records.len(), 6, "{records:#?}");
     for record in records {

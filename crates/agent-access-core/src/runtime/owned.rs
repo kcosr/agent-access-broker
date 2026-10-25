@@ -754,11 +754,13 @@ mod tests {
                     .is_finalizing()
             );
             let record = audit(&dir);
+            assert!(record["providerAudit"].get("messageLength").is_none());
+            assert_eq!(record["requestAudit"]["fields"][0]["value"], "TEST");
+            assert_eq!(record["requestAudit"]["fields"][1]["value"], true);
             if matches!(mode, FinalizationMode::Success) {
                 assert_eq!(response.status, 200);
                 assert_eq!(response.envelope.result.unwrap()["message"], "hello");
                 assert_eq!(record["decision"], "allow");
-                assert_eq!(record["providerAudit"]["messageLength"], 5);
             } else {
                 assert_eq!(
                     response.envelope.reason_code,
