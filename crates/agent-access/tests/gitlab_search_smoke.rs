@@ -3,6 +3,8 @@
 //! only GitLab's HTTP responses and credentials are synthetic.
 #[path = "gitlab_search_smoke/fixture.rs"]
 mod fixture;
+#[path = "common/request_audit.rs"]
+mod request_audit;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use fixture::{
@@ -317,13 +319,25 @@ async fn project_collections_and_all_six_categories_use_selected_credentials_thr
         let audit = fixture.broker.audit().unwrap();
         for action in ACTIONS {
             audit.require_action("gitlab", action);
+            if action.starts_with("search.") {
+                let expected = if action == "search.code" {
+                    vec![json!(QUERY); 3]
+                } else {
+                    vec![json!(QUERY); 2]
+                };
+                request_audit::assert_captured_values(
+                    &audit.require_action("gitlab", action),
+                    "search",
+                    &expected,
+                );
+            }
         }
         for record in audit.records() {
             assert_no_hidden_ids(&record["objectIds"]);
             assert_no_hidden_ids(&record["providerAudit"]);
+            assert!(!record["providerAudit"].to_string().contains(QUERY));
         }
         assert_private(&audit.text());
-        assert!(!audit.text().contains(QUERY), "raw query reached audit");
         fixture.stop().await;
     }
 }
@@ -500,12 +514,24 @@ async fn confidential_empty_pages_resume_without_losing_hits_and_reject_stale_au
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_projects(&fresh["result"], &[FIRST_PROJECT]);
-    let audit = fixture.broker.audit().unwrap().text();
+    let audit = fixture.broker.audit().unwrap();
+    for response in [&first, &second, &final_page] {
+        request_audit::assert_captured_values(
+            &audit.require_request(
+                response["agentRequestId"].as_str().unwrap(),
+                "gitlab",
+                "search.issues",
+            ),
+            "search",
+            &[json!("empty-page-query")],
+        );
+    }
+    let audit = audit.text();
     assert_private(&audit);
     for private in [
-        "empty-page-query",
         first_token.as_str(),
         second_token.as_str(),
+        tampered.as_str(),
     ] {
         assert!(!audit.contains(private));
     }

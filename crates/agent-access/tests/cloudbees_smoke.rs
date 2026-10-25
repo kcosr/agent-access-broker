@@ -1,5 +1,7 @@
 #[path = "cloudbees_smoke/job_list.rs"]
 mod job_list;
+#[path = "common/request_audit.rs"]
+mod request_audit;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE;
@@ -1363,6 +1365,7 @@ async fn continued_log_read_is_denied_without_upstream_access_after_grant_revoca
 async fn cli_reads_log_and_queue_without_auditing_log_or_other_jobs_queue_details() {
     let controller = MockServer::start().await;
     let log_text = "build output: log-secret-never-audit\n";
+    let search_query = "build output:";
     Mock::given(method("GET"))
         .and(path("/team-ci/job/payments/job/build-api/42/consoleText"))
         .respond_with(
@@ -1424,7 +1427,7 @@ async fn cli_reads_log_and_queue_without_auditing_log_or_other_jobs_queue_detail
             "--mode",
             "search",
             "--query",
-            "log-secret-never-audit",
+            search_query,
             "--max-matches",
             "2",
         ])
@@ -1490,7 +1493,11 @@ async fn cli_reads_log_and_queue_without_auditing_log_or_other_jobs_queue_detail
         }));
     }
     let audit = broker.audit().unwrap();
-    audit.require_action("cloudbees_ci", "build.log.read");
+    request_audit::assert_captured_values(
+        &audit.require_action("cloudbees_ci", "build.log.read"),
+        "query",
+        &[json!(search_query)],
+    );
     audit.require_action("cloudbees_ci", "queue.view");
     let audit = audit.text();
     assert!(audit.contains("\"reasonCode\":\"scope_unresolved\""));
@@ -1805,10 +1812,14 @@ async fn large_log_reads_work_through_http_and_stdio_mcp_with_bounded_wire_outpu
         );
     }
     let audit = broker.audit().unwrap();
-    audit.require_action("cloudbees_ci", "build.log.read");
+    request_audit::assert_captured_values(
+        &audit.require_action("cloudbees_ci", "build.log.read"),
+        "query",
+        &[json!("ERROR:")],
+    );
     let audit = audit.text();
     assert!(!audit.contains("BEGIN123"));
-    assert!(!audit.contains("ERROR:"));
+    assert!(!audit.contains("ERROR: finished"));
     assert!(!audit.contains("basic-secret"));
     stop(broker).await;
 }

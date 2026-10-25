@@ -12,6 +12,8 @@ fn gitlab_service(
 
 #[path = "gitlab_smoke/provisioning.rs"]
 mod provisioning;
+#[path = "common/request_audit.rs"]
+mod request_audit;
 use agent_access_provider::test_support::bearer_credential;
 
 use agent_access_broker_host::test_support::{
@@ -206,7 +208,15 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
             !upload.status.success(),
             "{case} upload unexpectedly succeeded"
         );
-        let value: serde_json::Value = serde_json::from_slice(&upload.stdout).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&upload.stdout).unwrap_or_else(|error| {
+                panic!(
+                    "{case} upload returned invalid JSON: {error}; status={} stdout={} stderr={}",
+                    upload.status,
+                    String::from_utf8_lossy(&upload.stdout),
+                    String::from_utf8_lossy(&upload.stderr),
+                )
+            });
         assert_ne!(value["decision"], "allow", "{case}: {value}");
         assert!(
             backend.uploaded_projects.lock().unwrap().is_empty(),
@@ -1277,22 +1287,37 @@ async fn cli_and_http_cover_gitlab_approval_and_suggestion_workflows() {
         serde_json::json!({"suggestionIds":[456]}),
     );
 
+    let audit = broker.audit().unwrap();
+    let approve_records = audit.require_request(
+        approve_json["agentRequestId"].as_str().unwrap(),
+        "gitlab",
+        "merge_request.approve",
+    );
+    request_audit::assert_captured_values(&approve_records, "iid", &[serde_json::json!(5)]);
+    request_audit::assert_captured_values(
+        &approve_records,
+        "headSha",
+        &[serde_json::json!(TEST_SHA)],
+    );
     let approve_audit = provider_gitlab_audit_for_action(&broker, "merge_request.approve");
-    assert_eq!(approve_audit["mergeRequestIid"], 5);
     assert_eq!(approve_audit["userId"], 3);
     assert_eq!(approve_audit["approved"], true);
-    assert_eq!(approve_audit["expectedHeadSha"], TEST_SHA);
     assert_eq!(approve_audit["provenHeadSha"], TEST_SHA);
     assert_eq!(approve_audit["diffVersionId"], 77);
+    let unapprove_records = audit.require_request(
+        unapprove_json["agentRequestId"].as_str().unwrap(),
+        "gitlab",
+        "merge_request.unapprove",
+    );
+    request_audit::assert_captured_values(&unapprove_records, "iid", &[serde_json::json!(5)]);
     let unapprove_audit = provider_gitlab_audit_for_action(&broker, "merge_request.unapprove");
-    assert_eq!(unapprove_audit["mergeRequestIid"], 5);
     assert_eq!(unapprove_audit["userId"], 3);
     assert_eq!(unapprove_audit["approved"], false);
     for absent in ["expectedHeadSha", "provenHeadSha", "diffVersionId"] {
         assert!(unapprove_audit.get(absent).is_none(), "{unapprove_audit}");
     }
 
-    let audit = broker.audit().unwrap().text();
+    let audit = audit.text();
     assert!(!audit.contains("Apply review suggestion"));
     assert!(!audit.contains("safe_call()"));
     stop(broker).await;
@@ -1523,9 +1548,14 @@ async fn gitlab_fork_suggestions_require_one_covering_grant_and_pin_numeric_sour
                 serde_json::json!(["fork/service", "sip/service"])
             );
             assert_eq!(backend_operation_count(&backend, "apply_suggestions"), 1);
-            let audit = broker.audit().unwrap().text();
+            let audit = broker.audit().unwrap();
+            request_audit::assert_captured_values(
+                &audit.require_action("gitlab", "merge_request.suggestion.apply"),
+                "expectedHeadSha",
+                &[serde_json::json!(TEST_SHA)],
+            );
+            let audit = audit.text();
             assert!(audit.contains("\"sourceProjectId\":141"));
-            assert!(audit.contains(&format!("\"expectedHeadSha\":\"{TEST_SHA}\"")));
             assert!(audit.contains(&format!("\"provenHeadSha\":\"{TEST_SHA}\"")));
         } else {
             assert_eq!(status, reqwest::StatusCode::FORBIDDEN, "{case}: {body}");
@@ -2427,7 +2457,15 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
         assert!(audit.contains(&format!("\"action\":\"{action}\"")));
     }
     let review_audit = provider_gitlab_audit_for_action(&broker, "merge_request.review.submit");
-    assert_eq!(review_audit["mergeRequestIid"], 5);
+    request_audit::assert_captured_values(
+        &broker.audit().unwrap().require_request(
+            reviewed["agentRequestId"].as_str().unwrap(),
+            "gitlab",
+            "merge_request.review.submit",
+        ),
+        "iid",
+        &[serde_json::json!(5)],
+    );
     assert_eq!(review_audit["userId"], 3);
     assert_eq!(review_audit["reviewerState"], "reviewed");
     assert_eq!(review_audit["draftNoteIds"], serde_json::json!([]));
@@ -6143,11 +6181,34 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert!(audit.contains("\"action\":\"merge_request.discussion.note.delete\""));
     assert!(audit.contains("\"action\":\"merge_request.discussion.resolve\""));
     assert!(audit.contains("\"action\":\"merge_request.discussion.reopen\""));
-    assert!(audit.contains("\"requestBody\""));
-    assert!(audit.contains("\"textByteCounts\""));
-    assert!(audit.contains("\"jsonFields\""));
-    assert!(audit.contains("\"contentFormat\":\"markdown\""));
-    assert!(audit.contains("\"contentFormat\":\"plain_text\""));
+    let audit_store = broker.audit().unwrap();
+    for (action, content, format) in [
+        ("issue.create", "issue secret description", "markdown"),
+        (
+            "issue.update",
+            "issue update literal @alice #12 <tag>",
+            "plain_text",
+        ),
+    ] {
+        let records = audit_store.require_action("gitlab", action);
+        request_audit::assert_captured_values(
+            &records,
+            "content",
+            &[serde_json::json!(content.len())],
+        );
+        request_audit::assert_captured_values(
+            &records,
+            "contentFormat",
+            &[serde_json::json!(format)],
+        );
+        for record in records {
+            assert!(
+                record["providerAudit"]["gitlab"]
+                    .get("requestBody")
+                    .is_none()
+            );
+        }
+    }
     assert!(!audit.contains("issue secret description"));
     assert!(!audit.contains("issue secret note"));
     assert!(!audit.contains("issue updated @alice #12 <raw>"));

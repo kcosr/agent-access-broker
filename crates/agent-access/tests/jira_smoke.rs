@@ -4,6 +4,8 @@ mod list_mcp;
 mod project_listing;
 #[path = "jira_smoke/project_view.rs"]
 mod project_view;
+#[path = "common/request_audit.rs"]
+mod request_audit;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -1796,7 +1798,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
             "update",
             "PROJ-1",
             "--summary",
-            "secret issue summary",
+            "requested issue summary",
             "--suppress-notifications",
         ])
         .output()
@@ -1860,7 +1862,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         assert_eq!(issue_updates[0].0, "PROJ-1");
         assert_eq!(
             issue_updates[0].1.summary.as_deref(),
-            Some("secret issue summary")
+            Some("requested issue summary")
         );
         assert!(issue_updates[0].1.description.is_none());
         assert_eq!(issue_updates[0].1.notify_users, Some(false));
@@ -1885,7 +1887,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
             "--issue-type-id",
             "10001",
             "--summary",
-            "secret created summary",
+            "requested created summary",
             "--content-file",
             description_path.to_str().unwrap(),
             "--content-format",
@@ -1904,7 +1906,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         assert_eq!(created_issues.len(), 1);
         assert_eq!(created_issues[0].project, "PROJ");
         assert_eq!(created_issues[0].issue_type_id, "10001");
-        assert_eq!(created_issues[0].summary, "secret created summary");
+        assert_eq!(created_issues[0].summary, "requested created summary");
         assert!(created_issues[0].parent_issue.is_none());
         assert_eq!(
             created_issues[0].description.as_ref().unwrap()["content"][0]["content"][0]["text"],
@@ -1926,7 +1928,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
             "--issue-type-id",
             "10001",
             "--summary",
-            "secret child summary",
+            "requested child summary",
             "--parent",
             "PROJ-1",
             "--content",
@@ -1959,7 +1961,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
             "invoke",
             "jira.issue.child.create",
             "--input-json",
-            r#"{"project":"PROJ","issueTypeId":"10001","summary":"secret child invoke summary","parentIssue":"PROJ-1"}"#,
+            r#"{"project":"PROJ","issueTypeId":"10001","summary":"requested child invoke summary","parentIssue":"PROJ-1"}"#,
         ])
         .output()
         .unwrap();
@@ -1973,7 +1975,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     {
         let created_issues = backend.created_issues.lock().unwrap();
         assert_eq!(created_issues.len(), 3);
-        assert_eq!(created_issues[1].summary, "secret child summary");
+        assert_eq!(created_issues[1].summary, "requested child summary");
         assert_eq!(created_issues[1].parent_issue.as_deref(), Some("PROJ-1"));
         assert_eq!(
             created_issues[1].description.as_ref().unwrap()["content"][0]["content"][0]["text"],
@@ -2595,16 +2597,34 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert_eq!(verify_json["reasonCode"], "verification_mismatch");
     assert_eq!(verify_json["result"]["verification"]["status"], "mismatch");
 
-    let audit = broker.audit().unwrap().text();
+    let audit = broker.audit().unwrap();
+    request_audit::assert_captured_values(
+        &audit.require_action("jira", "issue.create"),
+        "summary",
+        &[serde_json::json!("requested created summary")],
+    );
+    request_audit::assert_captured_values(
+        &audit.require_action("jira", "issue.child.create"),
+        "summary",
+        &[
+            serde_json::json!("requested child summary"),
+            serde_json::json!("requested child invoke summary"),
+        ],
+    );
+    request_audit::assert_captured_values(
+        &audit.require_action("jira", "issue.update"),
+        "summary",
+        &[serde_json::json!("requested issue summary")],
+    );
+    let audit = audit.text();
     assert!(audit.contains("\"action\":\"issue.create\""));
     assert!(audit.contains("\"action\":\"issue.child.create\""));
     assert!(audit.contains("\"action\":\"issue.update\""));
     assert!(audit.contains("\"action\":\"issue.parent.set\""));
+    assert!(!audit.contains("visible summary"));
     assert!(!audit.contains("secret created summary"));
+    assert!(!audit.contains("blocked issue summary"));
     assert!(!audit.contains("secret created description"));
-    assert!(!audit.contains("secret child summary"));
-    assert!(!audit.contains("secret child invoke summary"));
-    assert!(!audit.contains("secret issue summary"));
     assert!(!audit.contains("secret issue description"));
     assert!(!audit.contains("secret comment body"));
     assert!(!audit.contains("existing secret comment body"));
@@ -2836,9 +2856,17 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
         assert_eq!(created_issues.len(), 1);
         assert_eq!(created_issues[0].parent_issue.as_deref(), Some("PROJ-1"));
     }
-    let audit = broker.audit().unwrap().text();
-    assert!(audit.contains("\"action\":\"issue.child.create\""));
-    assert!(!audit.contains("send child summary"));
+    let audit = broker.audit().unwrap();
+    request_audit::assert_captured_values(
+        &audit.require_action("jira", "issue.child.create"),
+        "summary",
+        &[serde_json::json!("send child summary")],
+    );
+    let audit = audit.text();
+    assert!(!audit.contains("parent issue summary"));
+    assert!(!audit.contains("blocking issue summary"));
+    assert!(!audit.contains("blocked issue summary"));
+    assert!(!audit.contains("agent-token"));
 
     stop(broker).await;
 }
