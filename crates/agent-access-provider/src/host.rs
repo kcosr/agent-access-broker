@@ -54,6 +54,8 @@
 //! here returns credential material either. The host keeps the plaintext it
 //! decrypts, and the credentials these ports build present it upstream only
 //! as an [`UpstreamAuthorization`](crate::UpstreamAuthorization).
+pub use crate::audit_inputs::host::{AuditInputPlan, prepare_audit_inputs};
+
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BrokerBodyPartFile, BuildContext,
     ClientProfile, CorrelationContext, CredentialMode, CredentialPlacement, Decision,

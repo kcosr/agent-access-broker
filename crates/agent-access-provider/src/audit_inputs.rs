@@ -9,6 +9,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use unicode_general_category::{GeneralCategory, get_general_category};
 
+pub(crate) mod host;
+
 /// The action's ordered input-audit rules. Absence is represented by `None`
 /// on the descriptor; an explicitly empty declaration is invalid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

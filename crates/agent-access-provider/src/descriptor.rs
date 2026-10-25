@@ -781,6 +781,12 @@ impl ServiceDescriptor {
             } else if let Err(error) = jsonschema::validator_for(&action.input_schema) {
                 errors.push(format!("{service}.{name} input schema is invalid: {error}"));
             }
+            if let Some(projection) = &action.audit_inputs
+                && let Err(error) =
+                    crate::host::prepare_audit_inputs(&action.input_schema, projection)
+            {
+                errors.push(format!("{service}.{name} auditInputs is invalid: {error}"));
+            }
             if action.lookup == LookupRequirement::ScopeResolution
                 && action.resource_scope.is_none()
             {
