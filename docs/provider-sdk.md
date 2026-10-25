@@ -2067,15 +2067,14 @@ use agent_access_provider::deps::reqwest::Response;
 use agent_access_provider::deps::url::Url;
 use agent_access_provider::{
     ActionDescriptor, AuditInputProjection, AuditInputRule, AuditOverflow, AuditValueKind,
-    BackendConfig, BackendRegistration, BodyReadError, BuildContext,
-    ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, Provider,
-    ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
-    ProviderReasonDefinition, ProviderResult, ReasonCode, ResourceScopeCapabilities,
-    ResourceScopes, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, StaticCredentialKind, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    ValidationContext, complete_upstream_trace, module_metadata, parse_backend_config,
-    read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    BackendConfig, BackendRegistration, BodyReadError, BuildContext, ClientProfile,
+    CredentialDescriptor, EgressDeclaration, EgressProxyConfig, Provider, ProviderBuildError,
+    ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderReasonDefinition,
+    ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
+    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StaticCredentialKind,
+    UpstreamCall, UpstreamClient, UpstreamClientSpec, ValidationContext, complete_upstream_trace,
+    module_metadata, parse_backend_config, read_bounded_body, take_upstream_trace,
+    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
