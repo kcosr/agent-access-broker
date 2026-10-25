@@ -266,7 +266,7 @@ fn fts_text(record: &AuditRecord) -> String {
     // Before provider audit, which the cap cuts first.
     for captured in &record.audit_inputs {
         text.push(&captured.label);
-        text.push_leaves(&captured.value, false);
+        text.push_input_leaves(&captured.value);
     }
     if let Some(provider_audit) = &record.provider_audit {
         text.push_leaves(provider_audit, false);
@@ -299,6 +299,15 @@ impl FtsText {
     /// Pushes the string leaves of `value` (and number leaves when
     /// `numbers`), skipping object fields whose names end in `Sha256`.
     fn push_leaves(&mut self, value: &Value, numbers: bool) {
+        self.push_leaves_where(value, numbers, &|key| !key.ends_with("Sha256"));
+    }
+
+    /// Every string leaf of a captured input, whatever its object keys.
+    fn push_input_leaves(&mut self, value: &Value) {
+        self.push_leaves_where(value, false, &|_| true);
+    }
+
+    fn push_leaves_where(&mut self, value: &Value, numbers: bool, field: &dyn Fn(&str) -> bool) {
         if self.is_full() {
             return;
         }
@@ -307,13 +316,13 @@ impl FtsText {
             Value::Number(number) if numbers => self.push(&number.to_string()),
             Value::Array(values) => {
                 for value in values {
-                    self.push_leaves(value, numbers);
+                    self.push_leaves_where(value, numbers, field);
                 }
             }
             Value::Object(fields) => {
                 for (key, value) in fields {
-                    if !key.ends_with("Sha256") {
-                        self.push_leaves(value, numbers);
+                    if field(key) {
+                        self.push_leaves_where(value, numbers, field);
                     }
                 }
             }
@@ -435,7 +444,11 @@ mod tests {
         record.audit_inputs = vec![crate::runtime::AuditInputValue {
             input: "query".into(),
             label: "Search".into(),
-            value: serde_json::json!({"terms": ["zephyr"], "limit": 424242}),
+            value: serde_json::json!({
+                "terms": ["zephyr"],
+                "limit": 424242,
+                "revisionSha256": "capturedigest"
+            }),
             truncated: false,
         }];
         record.provider_audit = Some(serde_json::json!({"note": "providerfact"}));
@@ -444,6 +457,8 @@ mod tests {
         let value = text.find("zephyr").unwrap();
         let provider = text.find("providerfact").unwrap();
         assert!(label < value && value < provider, "{text}");
+        // Captured inputs keep fields the provider-audit rule skips.
+        assert!(text.contains("capturedigest"), "{text}");
         // Neither input names, object keys nor numbers are terms.
         for absent in ["query", "terms", "424242"] {
             assert!(!text.contains(absent), "{absent}: {text}");

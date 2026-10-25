@@ -1113,5 +1113,23 @@ mod tests {
         }
         let longest = audited_view(Some(project(json!("x".repeat(64)))), None);
         assert!(longest.unsupported_reason.is_none(), "{longest:?}");
+        // A sensitive schema root marks every input sensitive.
+        let mut value = crate::manifest::tests::sample();
+        value["actions"][0]["audit"] = issue;
+        value["actions"][0]["inputSchema"]["x-agent-access-sensitive"] = json!(true);
+        let manifest = parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let tool = discovery(
+            &definition(&[ImportedCredentialMode::Service]),
+            "ticketing",
+            &manifest,
+            None,
+            false,
+        )
+        .unwrap()
+        .tools
+        .remove(0);
+        let reason = "audit input issue has a sensitive schema".to_owned();
+        assert_eq!(tool.unsupported_reason.as_ref(), Some(&reason), "{tool:?}");
+        assert_eq!(CompiledAction::new(&tool.definition).err(), Some(reason));
     }
 }

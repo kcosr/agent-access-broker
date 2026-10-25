@@ -558,7 +558,7 @@ must:
 | `.credentialModes` | Optional subset of `credential.modes`; absent without `credential` |
 | `.resources.type` | A declared type ID; an action has at most one resource type |
 | `.resources.inputs` | 1–4 JSON pointers to required string or string-array inputs; their presence makes the action Broker-enforced |
-| `.audit` | Optional ordered list of `{"input", "label"}` objects without other fields, naming the inputs whose supplied values [audit records](#audit-and-logs) keep. Each `input` is a distinct top-level `inputSchema` property whose subschema has no `"x-agent-access-sensitive": true` and no `$ref`, `$dynamicRef` or `$recursiveRef`; each `label` has 1–64 bytes, is not blank and has no control characters. Declare what a call concerns, such as its target or query, never bodies or secrets. An empty list declares none |
+| `.audit` | Optional ordered list of `{"input", "label"}` objects without other fields, naming the inputs whose supplied values [audit records](#audit-and-logs) keep. Each `input` is a distinct top-level `inputSchema` property whose subschema has no `"x-agent-access-sensitive": true` and no `$ref`, `$dynamicRef` or `$recursiveRef`, in an `inputSchema` whose root is not marked sensitive; each `label` has 1–64 bytes, is not blank and has no control characters. Declare what a call concerns, such as its target or query, never bodies or secrets. An empty list declares none |
 | `oauth` | Reserved; see [not supported](#not-supported-in-this-version) |
 
 Other fields are rejected. The [import limits](imported-services.md#limits-and-admission)

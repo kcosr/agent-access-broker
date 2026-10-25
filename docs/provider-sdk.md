@@ -367,7 +367,8 @@ operation. Never declare content bodies, descriptions, comments, messages,
 file contents, credentials or pagination tokens. Descriptor validation rejects
 an input that is not a top-level `input_schema` property, a repeated input, a
 label that is empty, longer than 64 bytes or holds control characters, and an
-input whose schema contains `x-agent-access-sensitive` or a reference.
+input whose schema contains `x-agent-access-sensitive` or a reference, or whose
+whole input schema is marked sensitive.
 
 ### Token-only actions
 

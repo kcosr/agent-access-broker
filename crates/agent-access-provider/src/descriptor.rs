@@ -883,9 +883,16 @@ impl ServiceDescriptor {
                     ));
                     continue;
                 };
-                if schema_has_key(schema, &|key, value| {
-                    key == "x-agent-access-sensitive" && value.as_bool() == Some(true)
-                }) {
+                // A sensitive input schema root marks every input sensitive.
+                if action
+                    .input_schema
+                    .get("x-agent-access-sensitive")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    || schema_has_key(schema, &|key, value| {
+                        key == "x-agent-access-sensitive" && value.as_bool() == Some(true)
+                    })
+                {
                     errors.push(format!(
                         "{service}.{name} audit input {input} has a sensitive schema"
                     ));
@@ -1434,6 +1441,16 @@ mod tests {
                 ["example.item.view audit input project has a sensitive schema"]
             );
         }
+        let mut root_sensitive = action("item.view").audit_input("project", "Project");
+        root_sensitive.input_schema = json!({
+            "type": "object",
+            "x-agent-access-sensitive": true,
+            "properties": {"project": {"type": "string"}}
+        });
+        assert_eq!(
+            errors(vec![root_sensitive]),
+            ["example.item.view audit input project has a sensitive schema"]
+        );
         for referenced in [
             json!({"$ref": "#/$defs/key"}),
             json!({"type": "array", "items": {"$ref": "#/$defs/key"}}),
