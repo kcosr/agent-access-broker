@@ -711,6 +711,148 @@ fn root_header_heuristic_is_exact_and_does_not_generalize_nested_headers() {
     );
 }
 
+fn root_header_schema_variants(headers: Value) -> Vec<(String, Value)> {
+    let root = json!({"properties":{"headers":headers}});
+    let mut variants = vec![
+        (
+            "header reference".into(),
+            json!({"$defs":{"headers":headers},"properties":{"headers":{"$ref":"#/$defs/headers"}}}),
+        ),
+        (
+            "root reference".into(),
+            json!({"$defs":{"input":root},"$ref":"#/$defs/input"}),
+        ),
+    ];
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        variants.push((
+            format!("header {keyword}"),
+            json!({"properties":{"headers":{keyword:[headers]}}}),
+        ));
+        variants.push((format!("root {keyword}"), json!({keyword:[root]})));
+    }
+    for keyword in ["if", "then", "else", "not"] {
+        variants.push((
+            format!("header {keyword}"),
+            json!({"properties":{"headers":{keyword:headers}}}),
+        ));
+    }
+    for keyword in ["dependentSchemas", "dependencies"] {
+        variants.push((
+            format!("header {keyword}"),
+            json!({"properties":{"headers":{keyword:{"condition":headers}}}}),
+        ));
+    }
+    variants
+}
+
+#[test]
+fn root_header_sensitivity_follows_instance_paths_through_refs_and_compositions() {
+    let headers = json!({"properties":{"Authorization":{"properties":{"nested":{}}},"X-Plain":{}}});
+    for (name, schema) in root_header_schema_variants(headers) {
+        for pointer in ["/headers/Authorization", "/headers/Authorization/nested"] {
+            for rule in [
+                text("secret", pointer),
+                AuditInputRule::utf8_byte_count("secret", "Secret bytes", pointer),
+                AuditInputRule::item_count("secret", "Secret count", pointer),
+            ] {
+                let error =
+                    prepare_audit_inputs(&schema, &AuditInputProjection::new([rule])).unwrap_err();
+                assert!(error.contains("sensitive root header"), "{name}: {error}");
+            }
+            for rule in [
+                AuditInputRule::presence("secret", "Secret supplied", pointer),
+                AuditInputRule::omit("secret", pointer),
+            ] {
+                assert!(
+                    prepare_audit_inputs(&schema, &AuditInputProjection::new([rule])).is_ok(),
+                    "{name}: {pointer}"
+                );
+            }
+        }
+        let snapshot = projected(
+            schema,
+            [text("plain", "/headers/X-Plain")],
+            json!({"headers":{"X-Plain":"retained","Authorization":"private"}}),
+        );
+        assert_eq!(snapshot["fields"][0]["value"], "retained", "{name}");
+    }
+}
+
+#[test]
+fn expanded_root_headers_reject_malformed_scalar_value_and_byte_count_capture() {
+    for (name, schema) in
+        root_header_schema_variants(json!({"properties":{"Authorization":{},"X-Plain":{}}}))
+    {
+        for rule in [
+            text("headers", "/headers"),
+            AuditInputRule::utf8_byte_count("headers", "Header bytes", "/headers"),
+        ] {
+            let error =
+                prepare_audit_inputs(&schema, &AuditInputProjection::new([rule])).unwrap_err();
+            assert!(error.contains("sensitive root header"), "{name}: {error}");
+        }
+        let snapshot = projected(
+            schema,
+            [AuditInputRule::presence(
+                "headers",
+                "Headers supplied",
+                "/headers",
+            )],
+            json!({"headers":"malformed_private_header_scalar"}),
+        );
+        assert_eq!(snapshot["fields"][0]["value"], true, "{name}");
+        assert!(
+            !snapshot
+                .to_string()
+                .contains("malformed_private_header_scalar")
+        );
+    }
+}
+
+#[test]
+fn records_preserve_root_header_sensitivity_without_generalizing_item_paths() {
+    let headers = json!({"properties":{"Authorization":{"items":{"properties":{"safe":{}}}}}});
+    for (name, schema) in root_header_schema_variants(headers) {
+        let rule = AuditInputRule::records(
+            "headers",
+            "Header records",
+            "/headers/Authorization",
+            [text("safe", "/safe")],
+        );
+        let error = prepare_audit_inputs(&schema, &AuditInputProjection::new([rule])).unwrap_err();
+        assert!(error.contains("sensitive root header"), "{name}: {error}");
+    }
+    let schema = json!({"$defs":{"headers":{"allOf":[{"properties":{"Authorization":{}}}]}},"properties":{"nested":{"properties":{"headers":{"$ref":"#/$defs/headers"}}},"rows":{"items":{"properties":{"headers":{"$ref":"#/$defs/headers"}}}},"headers":{"properties":{"Authorization":{}},"items":{"properties":{"safe":{}}}}}});
+    let snapshot = projected(
+        schema,
+        [
+            text("nested", "/nested/headers/Authorization"),
+            AuditInputRule::records(
+                "rows",
+                "Rows",
+                "/rows",
+                [text("row_header", "/headers/Authorization")],
+            ),
+            AuditInputRule::records(
+                "headers",
+                "Rows at headers",
+                "/headers",
+                [text("safe", "/safe")],
+            ),
+        ],
+        json!({"nested":{"headers":{"Authorization":"nested field"}},"rows":[{"headers":{"Authorization":"row field"}}],"headers":[{"safe":"safe field"}]}),
+    );
+    assert_eq!(snapshot["fields"][0]["value"], "nested field");
+    assert_eq!(
+        snapshot["fields"][1]["rows"][0]["cells"]["row_header"]["value"],
+        "row field"
+    );
+    assert_eq!(
+        snapshot["fields"][2]["rows"][0]["cells"]["safe"]["value"],
+        "safe field"
+    );
+}
+
 #[test]
 fn digest_is_canonical_but_rules_array_order_and_schema_contract_change_it() {
     let a = prepare_audit_inputs(

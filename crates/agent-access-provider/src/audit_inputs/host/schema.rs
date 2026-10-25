@@ -46,7 +46,7 @@ impl<'a> Walker<'a> {
         if !inspect {
             return Ok(());
         }
-        if self.sensitive_header(path, parent, rule.capture) {
+        if Self::sensitive_header(path, parent, rule.capture, &nodes) {
             return Err("auditInputs value/count conflicts with a sensitive root header".into());
         }
         if nodes
@@ -74,29 +74,33 @@ impl<'a> Walker<'a> {
     }
 
     fn sensitive_header(
-        &self,
         path: &[String],
         parent: Option<&[String]>,
         capture: AuditCapture,
+        nodes: &[Node<'a>],
     ) -> bool {
         let selected = parent.unwrap_or(path);
-        let Some(properties) = self
-            .root
-            .pointer("/properties/headers/properties")
-            .and_then(Value::as_object)
-        else {
-            return false;
-        };
         if selected.first().map(String::as_str) != Some("headers") {
             return false;
         }
         if selected.len() >= 2 {
-            return properties.contains_key(&selected[1]) && sensitive_header_name(&selected[1]);
+            // Structural traversal has proved this instance path exists, even
+            // when its named schema lives behind a reference or applicator.
+            return sensitive_header_name(&selected[1]);
         }
         // Value/byte-count cannot evade derived sensitive descendants by
-        // supplying a malformed scalar for the headers object.
-        matches!(capture, AuditCapture::Value | AuditCapture::Utf8ByteCount)
-            && properties.keys().any(|name| sensitive_header_name(name))
+        // supplying a malformed scalar for the headers object. Record children
+        // cross an item boundary, so they are not this root headers object.
+        parent.is_none()
+            && matches!(capture, AuditCapture::Value | AuditCapture::Utf8ByteCount)
+            && nodes.iter().any(|node| {
+                node.schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .is_some_and(|properties| {
+                        properties.keys().any(|name| sensitive_header_name(name))
+                    })
+            })
     }
 
     fn visit(&mut self) -> Result<(), String> {
