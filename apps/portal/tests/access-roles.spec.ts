@@ -109,7 +109,9 @@ test("Auditor inspects managed grants, principals, tokens and system without adm
   await expect(paths.getByRole("row", { name: /^Identity token/ })).toContainText(/Configured\s*Disabled\s*Read-only\s*1/);
   await expect(paths.getByRole("row", { name: /^retired_namespace\/Alice/ })).toContainText(/Namespace unavailable\s*Enabled\s*Full access\s*3/);
   await expect(paths.getByRole("switch")).toHaveCount(0);
-  for (const name of ["Pause identity access", "Add username binding", "Delete binding retired_namespace/Alice", "Reveal identity token", "Copy identity token", "Save access", "Reset local password", "Disable user", "Save profile"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  for (const name of ["Pause identity access", "Add binding", "Delete binding retired_namespace/Alice", "Reveal identity token", "Copy identity token", "Save access", "Reset local password", "Disable user", "Save profile"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Add username binding", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("form", { name: "Add username binding", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Exact username", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: "Read-only", exact: true })).toHaveCount(0);
   await page.goto(`${baseUrl}/ui/admin/principals/target/tokens`);
@@ -262,15 +264,20 @@ test("username bindings preserve exact names, namespace availability, read-only 
   const paths = identity.getByRole("table", { name: "Access paths", exact: true });
   await expect(paths.getByRole("row")).toHaveCount(2);
   await expect(identity.getByText("No username bindings.", { exact: true })).toBeVisible();
-  await identity.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
-  await identity.getByLabel("Exact username", { exact: true }).fill(" Alice ");
-  await expect(identity.getByRole("button", { name: "Add username binding", exact: true })).toBeDisabled();
-  await expect(identity.getByText("Enter an exact username using the allowed characters; spaces are not removed.", { exact: true })).toBeVisible();
-  await identity.getByLabel("Exact username", { exact: true }).fill(binding.username);
-  const createReadOnly = identity.getByRole("checkbox", { name: "Read-only", exact: true });
+  // The create fields are their own titled form below the table, not settings of the table.
+  await expect(identity.getByRole("heading", { name: "Add username binding", exact: true, level: 4 })).toBeVisible();
+  const create = identity.getByRole("form", { name: "Add username binding", exact: true });
+  await expect(create).toHaveAccessibleDescription("Trusted callers configured with the namespace can then attest this person on HTTP MCP by presenting the exact username.");
+  await expect(create.getByRole("button")).toHaveText(["Add binding"]);
+  await create.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
+  await create.getByLabel("Exact username", { exact: true }).fill(" Alice ");
+  await expect(create.getByRole("button", { name: "Add binding", exact: true })).toBeDisabled();
+  await expect(create.getByText("Enter an exact username using the allowed characters; spaces are not removed.", { exact: true })).toBeVisible();
+  await create.getByLabel("Exact username", { exact: true }).fill(binding.username);
+  const createReadOnly = create.getByRole("checkbox", { name: "Read-only", exact: true });
   await expect(createReadOnly).not.toBeChecked();
   await createReadOnly.check();
-  await identity.getByRole("button", { name: "Add username binding", exact: true }).click();
+  await create.getByRole("button", { name: "Add binding", exact: true }).click();
   const name = `managed_linux/${binding.username}`;
   const row = paths.getByRole("row", { name: new RegExp(`^${name.replace(/[.+]/g, "\\$&")}`) });
   const enabled = row.getByRole("switch", { name: `Binding ${name} enabled`, exact: true });
@@ -278,7 +285,7 @@ test("username bindings preserve exact names, namespace availability, read-only 
   await expect(enabled).toBeChecked();
   await expect(readOnly).toBeChecked();
   await expect(createReadOnly).not.toBeChecked();
-  await expect(identity.getByLabel("Exact username", { exact: true })).toHaveValue("");
+  await expect(create.getByLabel("Exact username", { exact: true })).toHaveValue("");
   // The identity token stays the first row.
   await expect(paths.getByRole("row").nth(1)).toHaveAccessibleName(/^Identity token/);
   await enabled.click();
@@ -314,6 +321,18 @@ test("username bindings preserve exact names, namespace availability, read-only 
     { method: "DELETE", body: null, query: "?expectedVersion=5" },
     { method: "DELETE", body: null, query: "?expectedVersion=6" }
   ]);
+});
+
+test("without configured namespaces the add-binding heading explains why there is no form", async ({ page }) => {
+  await fixture(page, "admin", false);
+  await page.route("**/v1/admin/principals/target/identity-bindings", (route) => route.fulfill({ json: envelope({ bindings: [], configuredNamespaces: [] }) }));
+  await page.goto(`${baseUrl}/ui/admin/principals/target`);
+  const identity = page.getByRole("region", { name: "Identity access", exact: true });
+  await expect(identity.getByRole("heading", { name: "Add username binding", exact: true, level: 4 })).toBeVisible();
+  await expect(identity.getByText("No username identity namespaces are configured. Configure a trusted caller before adding a binding.", { exact: true })).toBeVisible();
+  await expect(identity.getByRole("form", { name: "Add username binding", exact: true })).toHaveCount(0);
+  await expect(identity.getByLabel("Exact username", { exact: true })).toHaveCount(0);
+  await expect(identity.getByRole("button", { name: "Add binding", exact: true })).toHaveCount(0);
 });
 
 test("the identity token is the first, undeletable access path and its toggles send the current revision", async ({ page }) => {
