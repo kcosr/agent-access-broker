@@ -226,6 +226,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **Definitive GitLab write rejections keep their reason.** Approve and
+  unapprove, suggestion apply and batch apply, and draft publish-all and
+  review submit return GitLab's own 4xx, redirect or throttling error without
+  a receipt, instead of `mutation_verification_failed` when the follow-up
+  check also failed. Only uncertain outcomes are still checked and reported as
+  `applied_unverified`. See [GitLab REST](docs/providers-gitlab-rest.md).
+  ([#73](https://github.com/kcosr/agent-access-broker/pull/73))
+
 - **GitLab draft-note view, delete and publish name their merge request.**
   Their input schemas now require `iid`, which the actions always needed;
   callers that followed the published schema were refused as invalid input.
