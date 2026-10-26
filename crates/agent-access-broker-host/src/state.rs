@@ -543,6 +543,23 @@ impl RuntimeSnapshot {
         })
     }
 
+    /// Runs a blocking managed-store write on this snapshot's runtime. The
+    /// write holds the snapshot's state locks until it returns: Tokio shutdown
+    /// can drop every async holder of the snapshot while the write still
+    /// runs, and no other process may take the store meanwhile.
+    fn spawn_store_write<R, F>(&self, operation: F) -> tokio::task::JoinHandle<R>
+    where
+        R: Send + 'static,
+        F: FnOnce(BrokerRuntime) -> R + Send + 'static,
+    {
+        let runtime = self.runtime.clone();
+        let state_locks = Arc::clone(&self.state_locks);
+        tokio::task::spawn_blocking(move || {
+            let _state_locks = state_locks;
+            operation(runtime)
+        })
+    }
+
     pub(crate) async fn new_microsoft_oidc_candidate(
         generation: u64,
         config_hash: String,
@@ -867,8 +884,8 @@ impl ReloadableState {
         let Ok(_guard) = self.policy_mutation_lock.try_lock() else {
             return Err(ManagedStoreError::ReloadInProgress);
         };
-        let runtime = self.current().runtime.clone();
-        tokio::task::spawn_blocking(move || operation(runtime))
+        self.current()
+            .spawn_store_write(operation)
             .await
             .map_err(|error| {
                 ManagedStoreError::Unavailable(format!(
@@ -910,21 +927,14 @@ impl ReloadableState {
             if !Arc::ptr_eq(&state.current(), &snapshot) {
                 return Err(ManagedStoreError::VersionConflict);
             }
-            let runtime = snapshot.runtime.clone();
-            // The write holds the snapshot's state locks until it returns: a
-            // Tokio shutdown can drop this owner while the blocking write
-            // still runs, and no other process may take the store meanwhile.
-            let state_locks = Arc::clone(&snapshot.state_locks);
-            tokio::task::spawn_blocking(move || {
-                let _state_locks = state_locks;
-                operation(runtime)
-            })
-            .await
-            .map_err(|error| {
-                ManagedStoreError::Unavailable(format!(
-                    "managed policy mutation task failed: {error}"
-                ))
-            })?
+            snapshot
+                .spawn_store_write(operation)
+                .await
+                .map_err(|error| {
+                    ManagedStoreError::Unavailable(format!(
+                        "managed policy mutation task failed: {error}"
+                    ))
+                })?
         })
         .await
         .map_err(|error| {
@@ -949,10 +959,8 @@ impl ReloadableState {
             if !Arc::ptr_eq(&state.current(), &snapshot) {
                 return Err(ManagedStoreError::VersionConflict);
             }
-            let runtime = snapshot.runtime.clone();
-            let (runtime, result) = tokio::task::spawn_blocking(move || operation(runtime))
-                .await
-                .map_err(|_| {
+            let (runtime, result) =
+                snapshot.spawn_store_write(operation).await.map_err(|_| {
                     ManagedStoreError::Unavailable("import mutation owner failed".into())
                 })??;
             if snapshot.runtime.shares_import_catalog(&runtime) {

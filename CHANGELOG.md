@@ -234,6 +234,12 @@ All notable changes to this project are documented in this file.
   reported as `applied_unverified`. See [GitLab REST](docs/providers-gitlab-rest.md).
   ([#73](https://github.com/kcosr/agent-access-broker/pull/73))
 
+- **Import and policy writes keep the state locks until they finish.**
+  Managed policy, resource and import mutations hold the Broker's state locks
+  until their store write returns, even when shutdown drops the waiting task,
+  so another Broker process cannot take the same state set mid-write.
+  ([#74](https://github.com/kcosr/agent-access-broker/pull/74))
+
 - **GitLab draft-note view, delete and publish name their merge request.**
   Their input schemas now require `iid`, which the actions always needed;
   callers that followed the published schema were refused as invalid input.

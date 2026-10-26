@@ -1,18 +1,97 @@
-//! `token_store_call_from_snapshot` keeps its snapshot's state locks until
-//! the blocking store write returns, even after the application's Tokio
-//! shutdown drops the write's async owner and every other holder of the
-//! snapshot: no other process may take the state while the write still runs.
+//! Managed-store writes keep their snapshot's state locks until the blocking
+//! write returns, even after the application's Tokio shutdown drops the
+//! write's async owner and every other holder of the snapshot: no other
+//! process may take the state while the write still runs. Each entry point
+//! that runs a blocking store write has its own case.
 use super::{TEST_LOCK_HOLDER, fake_config, temp_path};
 use crate::state::{ReloadableState, RuntimeSnapshot};
 use agent_access_core::{BrokerRuntime, StateLockFailureKind, StateLockSet};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+/// The blocking write: it reports that it started, then waits for release.
+struct BlockedWrite {
+    started: mpsc::Sender<()>,
+    released: mpsc::Receiver<()>,
+}
+
+impl BlockedWrite {
+    fn run(self) {
+        self.started.send(()).unwrap();
+        // A failed test drops the release sender; the write then just ends.
+        let _ = self.released.recv();
+    }
+}
+
+/// Submits `write` through one entry point; the returned future is its owner.
+type Submit = fn(
+    Arc<ReloadableState>,
+    Arc<RuntimeSnapshot>,
+    BlockedWrite,
+) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+
 #[test]
 fn token_store_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_owner() {
-    let config_path = temp_path("state-lock-lifetime.toml");
-    let audit_path = temp_path("state-lock-lifetime.audit.jsonl");
+    assert_write_keeps_the_state_locks("token-store", |state, snapshot, write| {
+        Box::pin(async move {
+            let _ = state
+                .token_store_call_from_snapshot(snapshot, move |_runtime| {
+                    write.run();
+                    Ok(())
+                })
+                .await;
+        })
+    });
+}
+
+#[test]
+fn managed_policy_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_owner() {
+    assert_write_keeps_the_state_locks("managed-policy", |state, snapshot, write| {
+        Box::pin(async move {
+            let _ = state
+                .managed_policy_mutation_from_snapshot(snapshot, move |_runtime| {
+                    write.run();
+                    Ok(())
+                })
+                .await;
+        })
+    });
+}
+
+#[test]
+fn import_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_owner() {
+    assert_write_keeps_the_state_locks("import", |state, snapshot, write| {
+        Box::pin(async move {
+            let _ = state
+                .imported_service_mutation(snapshot, move |runtime| {
+                    write.run();
+                    Ok((runtime, ()))
+                })
+                .await;
+        })
+    });
+}
+
+#[test]
+fn current_policy_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_waiter() {
+    assert_write_keeps_the_state_locks("current-policy", |state, _snapshot, write| {
+        Box::pin(async move {
+            let _ = state
+                .managed_policy_mutation(move |_runtime| {
+                    write.run();
+                    Ok(())
+                })
+                .await;
+        })
+    });
+}
+
+fn assert_write_keeps_the_state_locks(name: &str, submit: Submit) {
+    let config_path = temp_path(&format!("state-lock-lifetime-{name}.toml"));
+    let audit_path = temp_path(&format!("state-lock-lifetime-{name}.audit.jsonl"));
     let config = fake_config(audit_path.to_str().unwrap());
     let acquire =
         || StateLockSet::acquire_for_config(&config, &config_path, &TEST_LOCK_HOLDER, None);
@@ -39,15 +118,7 @@ fn token_store_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_owne
         .enable_all()
         .build()
         .unwrap();
-    tokio.spawn(async move {
-        let _ = state
-            .token_store_call_from_snapshot(snapshot, move |_runtime| {
-                started.send(()).unwrap();
-                released.recv().unwrap();
-                Ok(())
-            })
-            .await;
-    });
+    tokio.spawn(submit(state, snapshot, BlockedWrite { started, released }));
     write_started
         .recv_timeout(Duration::from_secs(30))
         .expect("the blocking write starts");
