@@ -1840,9 +1840,11 @@ write but its final state cannot be proven, the broker returns HTTP 409 with
 `result.retrySafe = false`; the CLI exits 2. Treat it as applied-but-unverified:
 refresh with safe IDs from `result`, then decide whether another mutation is
 needed. A direct or single-item mutation's upstream 5xx after the request uses
-this same 409/error contract and is not a retry signal. Publish-all and
-review-submit re-read drafts and reviewer state and may return an ordinary
-sanitized upstream failure only when they prove no change. Broker attribution
+this same 409/error contract and is not a retry signal. After such an uncertain
+failure, publish-all and review-submit re-read drafts and reviewer state and may
+return an ordinary sanitized upstream failure only when they prove no change. A
+definitive GitLab rejection (a redirect, a 4xx such as 403 or 409, or
+throttling) keeps its ordinary error with no receipt. Broker attribution
 applies to exactly five
 review writes: direct inline add, reply add, draft add, publish-all summary, and
 review-submit summary; it does not apply to draft update. Audit records never

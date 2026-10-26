@@ -961,9 +961,11 @@ using those IDs and inspect upstream state before considering another write.
 The CLI prints this sanitized failure and safe locators to stderr, not as a
 successful rendered result.
 A direct or single-item mutation's upstream 5xx after the request uses this
-same applied-unverified 409 contract and is not a retry signal. Publish-all and
-review-submit re-read drafts and reviewer state and may return an ordinary
-sanitized upstream failure only when they prove no change.
+same applied-unverified 409 contract and is not a retry signal. After such an
+uncertain failure, publish-all and review-submit re-read drafts and reviewer
+state and may return an ordinary sanitized upstream failure only when they
+prove no change. A definitive GitLab rejection (a redirect, a 4xx such as 403
+or 409, or throttling) keeps its ordinary error with no receipt.
 Any GitLab write the Broker proves was never sent (no connection was made)
 fails with `upstream_connection_failed` or `upstream_timeout` and
 `mutationStatus: "not_applied"`, `retrySafe: true`: nothing changed, and the

@@ -3028,18 +3028,14 @@ impl GitlabProvider {
             .await;
         let response = match bulk {
             Ok(response) => response,
-            Err(GitlabBackendError::NotSent { timed_out }) => {
-                return Err(mutation_not_sent(timed_out));
-            }
-            // Delegated access that could not be presented, or that GitLab
-            // rejected, applied nothing: the failure keeps its own reason
-            // rather than reading as unverified when the probe below fails
-            // the same way.
-            Err(GitlabBackendError::Credential(error)) => return Err(error),
-            // A write the Broker could not prepare was never sent: it keeps
-            // its cause's reason whatever the probe below would find.
-            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
-                return Err(gitlab_backend_error(error));
+            // A definitive outcome keeps its own reason without the probe
+            // below, whose failure must not make it read as unverified.
+            Err(error) if !write_outcome_uncertain(&error) => {
+                return Err(mutation_backend_error(
+                    error,
+                    MutationVerificationStage::MutationResponse,
+                    safe,
+                ));
             }
             Err(error) => {
                 let remaining = self
@@ -3508,18 +3504,14 @@ impl GitlabProvider {
             .await;
         let response = match mutation {
             Ok(response) => response,
-            Err(GitlabBackendError::NotSent { timed_out }) => {
-                return Err(mutation_not_sent(timed_out));
-            }
-            // Delegated access that could not be presented, or that GitLab
-            // rejected, applied nothing: the failure keeps its own reason
-            // rather than reading as unverified when the probe below fails
-            // the same way.
-            Err(GitlabBackendError::Credential(error)) => return Err(error),
-            // A write the Broker could not prepare was never sent: it keeps
-            // its cause's reason whatever the probe below would find.
-            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
-                return Err(gitlab_backend_error(error));
+            // A definitive outcome keeps its own reason without the probe
+            // below, whose failure must not make it read as unverified.
+            Err(error) if !write_outcome_uncertain(&error) => {
+                return Err(mutation_backend_error(
+                    error,
+                    MutationVerificationStage::MutationResponse,
+                    safe,
+                ));
             }
             Err(error) => {
                 let unchanged = self
@@ -3700,18 +3692,14 @@ impl GitlabProvider {
             .await;
         let response = match mutation {
             Ok(response) => response,
-            Err(GitlabBackendError::NotSent { timed_out }) => {
-                return Err(mutation_not_sent(timed_out));
-            }
-            // Delegated access that could not be presented, or that GitLab
-            // rejected, applied nothing: the failure keeps its own reason
-            // rather than reading as unverified when the probe below fails
-            // the same way.
-            Err(GitlabBackendError::Credential(error)) => return Err(error),
-            // A write the Broker could not prepare was never sent: it keeps
-            // its cause's reason whatever the probe below would find.
-            Err(error @ GitlabBackendError::RequestUnbuilt(_)) => {
-                return Err(gitlab_backend_error(error));
+            // A definitive outcome keeps its own reason without the probe
+            // below, whose failure must not make it read as unverified.
+            Err(error) if !write_outcome_uncertain(&error) => {
+                return Err(mutation_backend_error(
+                    error,
+                    MutationVerificationStage::MutationResponse,
+                    safe,
+                ));
             }
             Err(error) => {
                 let unchanged = self
@@ -12839,19 +12827,32 @@ fn mutation_backend_error(
         GitlabBackendError::RequestUnbuilt(_) => gitlab_backend_error(error),
         // Only the write itself can be proven unsent.
         GitlabBackendError::NotSent { timed_out } => mutation_not_sent(timed_out),
-        GitlabBackendError::NoResponse { .. }
-        | GitlabBackendError::Transport(_)
-        | GitlabBackendError::Timeout
-        | GitlabBackendError::Protocol(_)
-        | GitlabBackendError::ResponseTooLarge
-        | GitlabBackendError::HttpStatus(500..=599) => {
-            mutation_verification_failed(stage, locators)
-        }
+        error if write_outcome_uncertain(&error) => mutation_verification_failed(stage, locators),
         // A rejection of the write itself, throttling, and delegated access
         // that could not be presented applied nothing: each keeps its own
         // reason, without a receipt.
         error => gitlab_backend_error(error),
     }
+}
+
+/// Whether GitLab may have applied a write whose request failed: it may have
+/// been sent without a response arriving, GitLab or a proxy in front of it
+/// answered 5xx, or a success response stalled, failed, exceeded the byte cap
+/// or did not have the expected shape. Every other failure is definitive: a
+/// write proven unsent or never prepared, a rejection (a redirect or a 4xx),
+/// throttling, and delegated access that could not be presented applied
+/// nothing.
+fn write_outcome_uncertain(error: &GitlabBackendError) -> bool {
+    matches!(
+        error,
+        GitlabBackendError::NoResponse { .. }
+            | GitlabBackendError::Transport(_)
+            | GitlabBackendError::Timeout
+            | GitlabBackendError::Protocol(_)
+            | GitlabBackendError::ResponseTooLarge
+            | GitlabBackendError::DraftPositionShapeInvalid
+            | GitlabBackendError::HttpStatus(500..=599)
+    )
 }
 
 fn ensure_actor_not_formally_approved(

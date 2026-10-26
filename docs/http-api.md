@@ -2790,11 +2790,15 @@ error. CloudBees CI `build.trigger` does the same when its POST may have reached
 the controller without a confirming response (a timeout or transport failure
 after sending, or a 5xx); its `safeLocators` are the `controller` and `job`
 inputs. A trigger proven not to have been sent keeps its ordinary upstream
-error and reports `mutationStatus = "not_applied"`, `retrySafe = true`. `merge_request.draft_note.publish_all` and
+error and reports `mutationStatus = "not_applied"`, `retrySafe = true`. After an
+uncertain failure of their mutation request, such as a timeout or transport
+failure after sending or a 5xx, `merge_request.draft_note.publish_all` and
 `merge_request.review.submit` re-read the owner-draft snapshot and reviewer
 state; they may return an ordinary sanitized upstream failure only when that
 readback proves the operation made no change, and otherwise use this 409
-contract.
+contract. A definitive GitLab rejection of a mutation request, such as a
+redirect, a 4xx or throttling, keeps its ordinary error without a receipt or
+readback.
 
 Verified `merge_request.draft_note.publish` success always includes the input
 `draftNoteId`, `published = true`, and required non-null `discussionId` and

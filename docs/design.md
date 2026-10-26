@@ -2295,10 +2295,12 @@ HTTP 409 with `decision = error`, `mutation_verification_failed`, a closed safe
 locator result, and `retrySafe = false`. Callers refresh that state before
 deciding whether another mutation is needed. Direct and single-item review
 mutations treat an upstream 5xx after the request as applied-unverified.
-Publish-all and review-submit re-read the owner-draft snapshot and reviewer
-state; they may return an ordinary sanitized upstream failure only when that
-readback proves the operation made no change, and otherwise use the 409
-contract.
+After such an uncertain failure, publish-all and review-submit re-read the
+owner-draft snapshot and reviewer state; they may return an ordinary sanitized
+upstream failure only when that readback proves the operation made no change,
+and otherwise use the 409 contract. A definitive GitLab rejection of the
+mutation request (a redirect, a 4xx or throttling) keeps its ordinary error
+without a receipt or readback.
 
 For `merge_request.draft_note.publish`, verified success specifically requires
 and returns the exact resulting `discussionId` and `noteId`. If publication may
