@@ -215,9 +215,23 @@ fn far() -> tokio::time::Instant {
     tokio::time::Instant::now() + Duration::from_secs(60)
 }
 
+/// The outcome of a queued call once its permit is free. The call's command
+/// deadline allows for a slow reload, so this bounds completion on its own:
+/// a lost permit wakeup fails promptly instead of after the command timeout.
+async fn released<T>(phase: &str, call: tokio::task::JoinHandle<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(30), call)
+        .await
+        .unwrap_or_else(|_| panic!("{phase} did not finish after its permit was released"))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn queued_command_calls_take_their_permit_before_the_final_checks() {
-    let imports = Imports::new("clock", &["clock"], "10s", 1);
+    // A call's deadline counts from its admission and includes its wait for
+    // a permit. The queued calls that must reach their final checks wait
+    // out a reload, which a contended host slows far beyond its usual
+    // fraction of a second, so they get the most `timeout` accepts.
+    let imports = Imports::new("clock", &["clock"], "10m", 1);
     let config = imports.config();
     let broker = import_broker(&config).await;
     let app = broker.app();
@@ -239,7 +253,7 @@ async fn queued_command_calls_take_their_permit_before_the_final_checks() {
     });
     broker.reload_config(&changed).await;
     drop(held);
-    let (status, body) = queued.await.unwrap();
+    let (status, body) = released("the fenced call", queued).await;
     assert_not_applied(
         status,
         &body,
@@ -261,7 +275,7 @@ async fn queued_command_calls_take_their_permit_before_the_final_checks() {
     wait_until("the call queues", || registry.waiting("clock") == 1).await;
     broker.reload_config(&changed).await;
     drop(held);
-    let (status, body) = queued.await.unwrap();
+    let (status, body) = released("the unchanged-reload call", queued).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert_eq!(body["reasonCode"], "operation_failed", "{body}");
     assert_eq!(
@@ -271,7 +285,8 @@ async fn queued_command_calls_take_their_permit_before_the_final_checks() {
     assert_eq!(imports.started("invoke").len(), 1);
 
     // A call that gets no permit by its deadline fails upstream_timeout; a
-    // read reports no receipt.
+    // read reports no receipt. The only permit stays held until both calls
+    // have returned, so neither can start however slow the host is.
     let short = Imports::changed(&changed, "clock", |entry| entry.timeout = "1s".into());
     broker.reload_config(&short).await;
     let held = registry.acquire("clock", 1, far()).await.unwrap();
