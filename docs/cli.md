@@ -1335,7 +1335,15 @@ In addition to HTTP-derived codes:
 - Network errors, request timeouts, malformed broker responses, unexpected JSON
   shapes, and output-formatting failures exit `5` (`exit_network_error`,
   `exit_malformed_broker_response`, response-shape validation, and
-  `print_value` formatting).
+  `print_value` formatting). When the Broker refuses an upload after admission,
+  for example by policy or its attachment checks, it reads the rest of the file
+  before closing, so the CLI exits with the refusal's HTTP-derived code and
+  prints its envelope, provided the rest arrives within the Broker's bounds:
+  8 MiB, five seconds, its body cap and receive deadline (see
+  [the HTTP API](http-api.md#public-listener)). A remainder beyond those
+  bounds can still end in a closed connection and exit `5`, as can a failure
+  receiving the body and any refusal before admission, such as authentication,
+  concurrency and rate limits, which never reads the file.
 
 ## Transport security
 

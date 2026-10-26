@@ -226,6 +226,15 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **Refused uploads usually report their reason instead of a network error.**
+  When an admitted upload is refused before its body has been read, the Broker
+  keeps reading and discarding the rest for a bounded amount and time while
+  the denial is delivered, so clients receive the 4xx response instead of a
+  connection reset when the remainder arrives within those bounds. Larger or
+  slower remainders, and uploads refused before admission such as by rate
+  limits, can still end the connection. See [HTTP API](docs/http-api.md).
+  ([#80](https://github.com/kcosr/agent-access-broker/pull/80))
+
 - **Definitive GitLab write rejections keep their reason.** Approve and
   unapprove, suggestion apply and batch apply, and draft publish-all and
   review submit return GitLab's own 4xx or throttling error without a

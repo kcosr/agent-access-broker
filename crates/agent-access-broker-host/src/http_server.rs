@@ -65,6 +65,29 @@ struct Connections {
     dispatch: Dispatch,
 }
 
+/// A request's handle on its server's connection tasks, for work that keeps
+/// its connection busy after the response, such as discarding a refused
+/// request's unread body. Graceful shutdown waits for such work and forced
+/// shutdown cancels it, as for the connections themselves.
+#[derive(Clone)]
+pub(crate) struct ConnectionTasks(Connections);
+
+impl ConnectionTasks {
+    pub(crate) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        self.0.spawn(task);
+    }
+
+    /// Tasks tracked by `tracker` alone, for requests served in process.
+    #[cfg(test)]
+    pub(crate) fn tracked_by(tracker: TaskTracker) -> Self {
+        Self(Connections {
+            tracker,
+            cancel: CancellationToken::new(),
+            dispatch: tracing::dispatcher::get_default(Dispatch::clone),
+        })
+    }
+}
+
 impl Connections {
     fn serve(
         &self,
@@ -75,8 +98,10 @@ impl Connections {
     ) {
         let closed = ConnectionClosed::default();
         let service = TowerToHyperService::new(
-            axum::Extension(closed.clone())
-                .layer(axum::Extension(ConnectInfo(remote)).layer(app.clone())),
+            axum::Extension(closed.clone()).layer(
+                axum::Extension(ConnectInfo(remote))
+                    .layer(axum::Extension(ConnectionTasks(self.clone())).layer(app.clone())),
+            ),
         );
         let builder = Builder::new(self.clone());
         let graceful = graceful.clone();

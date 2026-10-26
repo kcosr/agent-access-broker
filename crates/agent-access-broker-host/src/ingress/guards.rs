@@ -189,6 +189,12 @@ impl IngressGuards {
             .map_err(IngressLimitError::service_detail)
     }
 
+    /// The requests holding a global concurrency permit.
+    #[cfg(test)]
+    pub(crate) fn global_in_flight_requests(&self) -> u32 {
+        *self.global_inflight.lock().unwrap()
+    }
+
     /// A caller-only approximate observation. Does not create or prune keys.
     pub(crate) fn principal_in_flight_requests(&self, principal: &str) -> u32 {
         self.principal_inflight

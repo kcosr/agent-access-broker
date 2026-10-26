@@ -2456,8 +2456,18 @@ configured receive deadline still applies.
 Invocation JSON and streamed files retain the configured transfer cap, while
 multipart JSON metadata is capped at 1 MiB. Invocation and Git bodies use the
 total `request_body_timeout_ms` deadline; public idle timing uses the global
-streaming setting and Git uses its matched gateway setting. HTTP MCP retains its
-independent intake admission. Local-password hashes run outside the managed
+streaming setting and Git uses its matched gateway setting. An admitted
+invocation answered with its body unread, such as an upload refused after its
+metadata, lingers on its HTTP/1.1 connection: one of the server's connection
+tasks discards the rest, stopping once 8 MiB have been read (the received frame
+that crosses 8 MiB is read whole), after five seconds, or at the transfer cap or
+body deadline, so the client can finish sending and read the response instead
+of meeting a reset. The task holds the request's global and per-principal
+concurrency permits until it ends; graceful shutdown waits for it and forced
+shutdown cancels it. A remainder beyond those bounds, or a body that already
+failed, still closes the connection unread. Refusals before admission never read
+the body. HTTP MCP retains its independent intake admission.
+Local-password hashes run outside the managed
 SQLite mutex with two login/change jobs and one reserved administrative job per
 store, plus a fresh account/password-state check before commit.
 

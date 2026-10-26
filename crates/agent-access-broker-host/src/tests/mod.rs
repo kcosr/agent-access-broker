@@ -85,6 +85,7 @@ mod imports_foundation;
 mod imports_mcp;
 mod imports_publication;
 mod invocation_limits;
+mod lingering_close;
 mod local_login_methods;
 mod login_lockout;
 mod management_read_audit;
