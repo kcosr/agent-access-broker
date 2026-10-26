@@ -1089,7 +1089,14 @@ async fn derived_columns_follow_the_record() {
     let mut record = test_audit_record();
     record.service = "broker".to_string();
     record.action = "admin.policy.grants.create".to_string();
-    record.timestamp = "2026-09-26T12:00:00.123456+02:00".to_string();
+    // An offset timestamp within the default retention window, with exact
+    // microseconds, so the derived UTC column can be checked precisely.
+    let stamped_at =
+        chrono::Timelike::with_nanosecond(&(Utc::now() - chrono::Duration::hours(1)), 123_456_000)
+            .unwrap();
+    record.timestamp = stamped_at
+        .with_timezone(&chrono::FixedOffset::east_opt(2 * 3600).unwrap())
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
     record.principal = format!("{}é", "a".repeat(1023));
     record.provider_audit = Some(json!({
         "management": {"targetService": "jira", "phase": "preflight", "target": "grant-7"},
@@ -1142,9 +1149,7 @@ async fn derived_columns_follow_the_record() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    let expected_ts = chrono::DateTime::parse_from_rfc3339("2026-09-26T10:00:00.123456Z")
-        .unwrap()
-        .timestamp_micros();
+    let expected_ts = stamped_at.timestamp_micros();
     assert_eq!(rows[0].0, expected_ts);
     assert_eq!(rows[0].1, "a".repeat(1023));
     assert_eq!(rows[0].2.as_deref(), Some("jira"));
