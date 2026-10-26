@@ -6069,39 +6069,61 @@ async fn webhook_writes_the_allowlist_refuses_are_never_reported_applied() {
     );
 }
 
-/// Approval, draft publication and suggestion application probe their
-/// target after a failed write. A write the upstream allowlist refuses was
-/// never sent: it keeps its own reason without a receipt and without the
-/// probe, even when repeating the probe's read would fail.
-#[tokio::test]
-async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
-    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
-    let project = "/api/v4/projects/sip%2Fservice";
-    let merge_request = "/api/v4/projects/42/merge_requests/5";
-    let approvals = "/api/v4/projects/42/merge_requests/5/approvals";
-    let drafts = "/api/v4/projects/42/merge_requests/5/draft_notes";
-    let discussion = "/api/v4/projects/42/merge_requests/5/discussions/discussion-1";
-    let cases = [
-        (
-            "merge_request.unapprove",
-            json!({ "project": "sip/service", "iid": 5 }),
-            approvals,
-            json!({ "approved_by": [{ "user": { "id": 77, "username": "alice" } }] }),
-        ),
-        (
-            "merge_request.draft_note.publish_all",
-            json!({ "project": "sip/service", "iid": 5 }),
-            drafts,
-            json!([{ "id": 3, "author_id": 77, "merge_request_id": 500 }]),
-        ),
-        (
-            "merge_request.suggestion.apply",
-            json!({
+/// A write that probes its target after a failed write request: approval,
+/// draft publication and suggestion application. `probe` is the read it
+/// repeats to probe, which it also makes once before the write;
+/// `verification_stage` and `safe_locators` are its receipt when that probe
+/// fails after an uncertain write.
+struct ProbingWrite {
+    action: &'static str,
+    inputs: Value,
+    write_method: &'static str,
+    write: &'static str,
+    probe: &'static str,
+    probe_body: Value,
+    verification_stage: &'static str,
+    safe_locators: Value,
+}
+
+const PROBING_WRITE_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+const PROBING_WRITE_PROJECT: &str = "/api/v4/projects/sip%2Fservice";
+const PROBING_WRITE_MERGE_REQUEST: &str = "/api/v4/projects/42/merge_requests/5";
+
+fn probing_writes() -> [ProbingWrite; 3] {
+    const SHA: &str = PROBING_WRITE_SHA;
+    [
+        ProbingWrite {
+            action: "merge_request.unapprove",
+            inputs: json!({ "project": "sip/service", "iid": 5 }),
+            write_method: "POST",
+            write: "/api/v4/projects/42/merge_requests/5/unapprove",
+            probe: "/api/v4/projects/42/merge_requests/5/approvals",
+            probe_body: json!({
+                "approved_by": [{ "user": { "id": 77, "username": "alice" } }]
+            }),
+            verification_stage: "mutation_readback",
+            safe_locators: json!({}),
+        },
+        ProbingWrite {
+            action: "merge_request.draft_note.publish_all",
+            inputs: json!({ "project": "sip/service", "iid": 5 }),
+            write_method: "POST",
+            write: "/api/v4/projects/42/merge_requests/5/draft_notes/bulk_publish",
+            probe: "/api/v4/projects/42/merge_requests/5/draft_notes",
+            probe_body: json!([{ "id": 3, "author_id": 77, "merge_request_id": 500 }]),
+            verification_stage: "bulk_publish_readback",
+            safe_locators: json!({ "draftNoteIds": [3] }),
+        },
+        ProbingWrite {
+            action: "merge_request.suggestion.apply",
+            inputs: json!({
                 "project": "sip/service", "iid": 5, "expectedHeadSha": SHA,
                 "discussionId": "discussion-1", "noteId": 900, "suggestionId": 456,
             }),
-            discussion,
-            json!({
+            write_method: "PUT",
+            write: "/api/v4/suggestions/456/apply",
+            probe: "/api/v4/projects/42/merge_requests/5/discussions/discussion-1",
+            probe_body: json!({
                 "id": "discussion-1",
                 "notes": [{
                     "id": 900,
@@ -6116,58 +6138,97 @@ async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
                     }],
                 }],
             }),
-        ),
-    ];
-    for (action, inputs, probe, body) in cases {
-        let server = MockServer::start().await;
-        for (route, body) in [
-            (
-                project,
-                json!({ "id": 42, "path_with_namespace": "sip/service" }),
-            ),
-            (
-                merge_request,
-                json!({
-                    "id": 500, "iid": 5, "project_id": 42, "source_project_id": 42,
-                    "target_project_id": 42, "sha": SHA,
-                }),
-            ),
-            ("/api/v4/user", json!({ "id": 77, "username": "alice" })),
-        ] {
-            Mock::given(method("GET"))
-                .and(path(route))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
-                .mount(&server)
-                .await;
-        }
-        // The read before the write succeeds; repeating it would fail.
-        Mock::given(method("GET"))
-            .and(path(probe))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(probe))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
-        let mut request = InvocationBuilder::from(test_invocation(action, inputs));
-        if action == "merge_request.suggestion.apply" {
-            request = request.state(ProviderState::new(GitlabSuggestionScopePreflight {
-                target_project_id: 42,
-                source_project_id: 42,
-            }));
-        }
+            verification_stage: "mutation_readback",
+            safe_locators: json!({ "suggestionIds": [456] }),
+        },
+    ]
+}
 
-        let error = allowlisted_server_provider(
-            &server,
-            &[project, merge_request, "/api/v4/user", probe],
-            1024 * 1024,
-        )
+/// Invokes `write` with a static token against a GitLab whose probe read
+/// answers once, before the write, and fails with a 500 after that. GitLab
+/// answers the write request with `write_response`; without one, the write's
+/// route is not allowlisted. Returns the failure and the requests GitLab
+/// received.
+async fn invoke_probing_write(
+    write: &ProbingWrite,
+    write_response: Option<ResponseTemplate>,
+) -> (ProviderError, Vec<String>) {
+    let server = MockServer::start().await;
+    for (route, body) in [
+        (
+            PROBING_WRITE_PROJECT,
+            json!({ "id": 42, "path_with_namespace": "sip/service" }),
+        ),
+        (
+            PROBING_WRITE_MERGE_REQUEST,
+            json!({
+                "id": 500, "iid": 5, "project_id": 42, "source_project_id": 42,
+                "target_project_id": 42, "sha": PROBING_WRITE_SHA,
+            }),
+        ),
+        ("/api/v4/user", json!({ "id": 77, "username": "alice" })),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    // The read before the write succeeds; repeating it would fail.
+    Mock::given(method("GET"))
+        .and(path(write.probe))
+        .respond_with(ResponseTemplate::new(200).set_body_json(write.probe_body.clone()))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(write.probe))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let mut allowed = vec![
+        PROBING_WRITE_PROJECT,
+        PROBING_WRITE_MERGE_REQUEST,
+        "/api/v4/user",
+        write.probe,
+    ];
+    if let Some(response) = write_response {
+        Mock::given(method(write.write_method))
+            .and(path(write.write))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        allowed.push(write.write);
+    }
+    let mut request = InvocationBuilder::from(test_invocation(write.action, write.inputs.clone()));
+    if write.action == "merge_request.suggestion.apply" {
+        request = request.state(ProviderState::new(GitlabSuggestionScopePreflight {
+            target_project_id: 42,
+            source_project_id: 42,
+        }));
+    }
+    let error = allowlisted_server_provider(&server, &allowed, 1024 * 1024)
         .invoke(request.build())
         .await
         .unwrap_err();
+    (error, received_requests(&server).await)
+}
+
+fn count_requests(sent: &[String], method: &str, route: &str) -> usize {
+    let request = format!("{method} {route}");
+    sent.iter().filter(|line| **line == request).count()
+}
+
+/// Approval, draft publication and suggestion application probe their
+/// target only after a write whose outcome is uncertain. A write the
+/// upstream allowlist refuses was never sent: it keeps its own reason
+/// without a receipt and without the probe, even when repeating the probe's
+/// read would fail.
+#[tokio::test]
+async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
+    for write in probing_writes() {
+        let action = write.action;
+        let (error, sent) = invoke_probing_write(&write, None).await;
         assert_eq!(error.decision(), Decision::Error, "{action}");
         assert_eq!(
             error.reason_code(),
@@ -6175,18 +6236,109 @@ async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
             "{action}: {error:?}"
         );
         assert!(error.result.is_none(), "{action}: {error:?}");
-        let sent = received_requests(&server).await;
         assert!(
             sent.iter().all(|line| line.starts_with("GET ")),
             "{action}: {sent:?}"
         );
         assert_eq!(
-            sent.iter()
-                .filter(|line| **line == format!("GET {probe}"))
-                .count(),
+            count_requests(&sent, "GET", write.probe),
             1,
             "{action}: {sent:?}"
         );
+    }
+}
+
+/// GitLab definitively rejected the write: a 4xx or throttling applied
+/// nothing. The action keeps the rejection's own reason without a mutation
+/// receipt and does not probe, so a probe that would fail cannot turn the
+/// rejection into an unverified write.
+#[tokio::test]
+async fn definitive_write_rejections_skip_the_probe_and_carry_no_receipt() {
+    for write in probing_writes() {
+        let action = write.action;
+        for (status, decision, reason) in [
+            (403, Decision::Error, ReasonCode::UpstreamForbidden),
+            (404, Decision::Deny, ReasonCode::ScopeUnresolved),
+            (409, Decision::Error, ReasonCode::UpstreamFailed),
+            (429, Decision::Error, ReasonCode::UpstreamRateLimited),
+        ] {
+            let response = ResponseTemplate::new(status);
+            let (error, sent) = invoke_probing_write(&write, Some(response)).await;
+            assert_eq!(error.decision(), decision, "{action} {status}: {error:?}");
+            assert_eq!(error.reason_code(), reason, "{action} {status}: {error:?}");
+            assert!(
+                error
+                    .result
+                    .as_deref()
+                    .is_none_or(|result| result.get("mutationStatus").is_none()),
+                "{action} {status}: {error:?}"
+            );
+            assert_eq!(
+                count_requests(&sent, write.write_method, write.write),
+                1,
+                "{action} {status}: {sent:?}"
+            );
+            assert_eq!(
+                count_requests(&sent, "GET", write.probe),
+                1,
+                "{action} {status}: {sent:?}"
+            );
+        }
+    }
+}
+
+/// A write GitLab may have applied, answered 5xx, with a redirect (which can
+/// describe a processed write, such as a 303 after a POST) or with a success
+/// response that cannot be used, is probed; when the probe also fails, the
+/// write is `applied_unverified` at the action's readback stage.
+#[tokio::test]
+async fn uncertain_write_failures_probe_and_stay_unverified_when_the_probe_fails() {
+    for write in probing_writes() {
+        let action = write.action;
+        for (case, response) in [
+            ("502", ResponseTemplate::new(502)),
+            (
+                "302",
+                ResponseTemplate::new(302).insert_header("location", "/users/sign_in"),
+            ),
+            (
+                "303",
+                ResponseTemplate::new(303)
+                    .insert_header("location", "/api/v4/projects/42/merge_requests/5"),
+            ),
+            (
+                "unusable success",
+                ResponseTemplate::new(200).set_body_string("not json"),
+            ),
+        ] {
+            let (error, sent) = invoke_probing_write(&write, Some(response)).await;
+            assert_eq!(error.decision(), Decision::Error, "{action} {case}");
+            assert_eq!(
+                error.reason_code(),
+                ReasonCode::MutationVerificationFailed,
+                "{action} {case}: {error:?}"
+            );
+            assert_eq!(
+                error.result.as_deref(),
+                Some(&json!({
+                    "mutationStatus": "applied_unverified",
+                    "retrySafe": false,
+                    "verificationStage": write.verification_stage,
+                    "safeLocators": write.safe_locators,
+                })),
+                "{action} {case}"
+            );
+            assert_eq!(
+                count_requests(&sent, write.write_method, write.write),
+                1,
+                "{action} {case}: {sent:?}"
+            );
+            assert_eq!(
+                count_requests(&sent, "GET", write.probe),
+                2,
+                "{action} {case}: {sent:?}"
+            );
+        }
     }
 }
 

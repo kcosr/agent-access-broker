@@ -1030,9 +1030,11 @@ the write but readback cannot prove it, `send` exits 2 and preserves HTTP 409,
 `verificationStage`, and only proven safe locator IDs. Do not blindly retry:
 refresh by those IDs and current MR/draft/reviewer state first.
 A direct or single-item mutation's upstream 5xx uses this applied-unverified 409
-contract and is not a retry signal. Publish-all and review-submit re-read drafts
-and reviewer state and may return an ordinary
-sanitized upstream failure only when they prove no change.
+contract and is not a retry signal. After such an uncertain failure, or a
+redirect, publish-all and review-submit re-read drafts and reviewer state and
+may return an ordinary sanitized upstream failure only when they prove no
+change. A definitive GitLab rejection (a 4xx such as 403 or 409, or throttling)
+keeps its ordinary error with no receipt.
 Suggestion success relies on scoped discussion/note reread rather than the
 possibly stale immediate `applied` flag. It contains no commit ID/SHA and does
 not imply thread resolution.
