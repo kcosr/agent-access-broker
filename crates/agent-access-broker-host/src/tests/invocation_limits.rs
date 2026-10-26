@@ -63,7 +63,7 @@ pub(super) async fn limit_fixture(configure: impl FnOnce(&mut BrokerConfig)) -> 
     let clock = ManualClock::new();
     let broker = TestBroker::start_with(
         TestBroker::config_builder(&config)
-            .reload_timeout(Duration::from_secs(5))
+            .reload_timeout(TestBroker::RELOAD_TIMEOUT)
             .shutdown_timeout(Duration::from_secs(5))
             .invocation_limiter(InvocationLimiter::with_clock(clock.clone())),
     )

@@ -202,11 +202,15 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
             ])
             .output()
             .unwrap();
-        assert!(
-            !upload.status.success(),
-            "{case} upload unexpectedly succeeded"
+        let report = format!(
+            "{case} upload: {} stdout={} stderr={}",
+            upload.status,
+            String::from_utf8_lossy(&upload.stdout),
+            String::from_utf8_lossy(&upload.stderr)
         );
-        let value: serde_json::Value = serde_json::from_slice(&upload.stdout).unwrap();
+        assert!(!upload.status.success(), "unexpected success: {report}");
+        let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
+            .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
         assert_ne!(value["decision"], "allow", "{case}: {value}");
         assert!(
             backend.uploaded_projects.lock().unwrap().is_empty(),

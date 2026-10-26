@@ -827,6 +827,13 @@ async fn git_through_the_gateway_presents_oauth_access_as_basic_oauth2() {
     }
     assert_eq!(gitlab.refreshes(), 0);
 
+    // Each completion record is queued for the audit writer before its
+    // response body ends, and written later. Drain the writer before counting.
+    fixture
+        .runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
     let records = read_audit_records(&fixture.audit_path)
         .into_iter()
         .filter(|record| record["service"] == GATEWAY)
@@ -1214,15 +1221,6 @@ async fn a_service_account_token_on_the_connection_is_presented_as_basic() {
         gitlab.requests()[0].authorization.as_deref(),
         Some(basic("oauth2", "robot-token").as_str())
     );
-    let record = read_audit_records(&fixture.audit_path)
-        .into_iter()
-        .rfind(|record| record["agentRequestId"] == "gitlab-git-robot")
-        .unwrap();
-    assert_eq!(record["credentialConnection"], CONNECTION);
-    assert_eq!(
-        record["providerAudit"]["gateway"]["credentialMethod"],
-        "token"
-    );
 
     gitlab.state().accepted.remove("robot-token");
     let answer = fixture
@@ -1232,6 +1230,23 @@ async fn a_service_account_token_on_the_connection_is_presented_as_basic() {
     assert_eq!(
         gitlab.routes_since(0),
         [git_route(Git::Discovery), git_route(Git::Discovery)]
+    );
+
+    // Drain the queued completion records so the last record of the
+    // accepted request is its completion, not its start.
+    fixture
+        .runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let record = read_audit_records(&fixture.audit_path)
+        .into_iter()
+        .rfind(|record| record["agentRequestId"] == "gitlab-git-robot")
+        .unwrap();
+    assert_eq!(record["credentialConnection"], CONNECTION);
+    assert_eq!(
+        record["providerAudit"]["gateway"]["credentialMethod"],
+        "token"
     );
 }
 
