@@ -484,24 +484,6 @@ pub(super) fn agent_token_list_query(
     Ok(query)
 }
 
-pub(super) async fn run_managed_store_blocking<T, F>(
-    operation: F,
-) -> Result<T, agent_access_core::ManagedStoreError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, agent_access_core::ManagedStoreError> + Send + 'static,
-{
-    // Keep the store work in the request's span for log correlation.
-    let span = tracing::Span::current();
-    tokio::task::spawn_blocking(move || span.in_scope(operation))
-        .await
-        .map_err(|error| {
-            agent_access_core::ManagedStoreError::Unavailable(format!(
-                "managed store task failed: {error}"
-            ))
-        })?
-}
-
 /// Serialize token reference admission with catalog deletion and configuration reload.
 pub(super) async fn management_token_store_call<T, F>(
     state: &AppState,
@@ -532,7 +514,9 @@ where
         .await
 }
 
-pub(super) async fn management_store_call<T, F>(
+/// Runs a blocking call on the request snapshot's managed store, holding that
+/// snapshot's state locks until it returns.
+pub(crate) async fn management_store_call<T, F>(
     context: &ManagementContext,
     operation: F,
 ) -> Result<T, agent_access_core::ManagedStoreError>
@@ -542,12 +526,7 @@ where
         + Send
         + 'static,
 {
-    let Some(store) = context.snapshot.runtime.managed_store().cloned() else {
-        return Err(agent_access_core::ManagedStoreError::Unavailable(
-            "managed store is not configured".to_string(),
-        ));
-    };
-    run_managed_store_blocking(move || operation(store)).await
+    context.snapshot.managed_store_call(operation).await
 }
 
 pub(crate) fn delegated_policy_management_enabled(config: &BrokerConfig) -> bool {
@@ -560,12 +539,10 @@ pub(crate) async fn effective_management_authority(
     snapshot: &RuntimeSnapshot,
     identity: &agent_access_core::IdentityContext,
 ) -> Result<ManagedManagementAuthority, agent_access_core::ManagedStoreError> {
-    let store = snapshot.runtime.managed_store().cloned().ok_or_else(|| {
-        agent_access_core::ManagedStoreError::Unavailable("managed store is not configured".into())
-    })?;
     let principal = identity.principal.clone();
-    let mut authority =
-        run_managed_store_blocking(move || store.management_authority(&principal)).await?;
+    let mut authority = snapshot
+        .managed_store_call(move |store| store.management_authority(&principal))
+        .await?;
     let configured = snapshot
         .runtime
         .configured_service_capabilities()
@@ -1869,11 +1846,9 @@ async fn audit_target_service(
     if snapshot.runtime.config().policy.authority != "managed" {
         return (None, true);
     }
-    let Some(store) = snapshot.runtime.managed_store().cloned() else {
-        return (None, true);
-    };
     let grant_ref = grant_ref.to_string();
-    let service = run_managed_store_blocking(move || store.policy_grant(&grant_ref))
+    let service = snapshot
+        .managed_store_call(move |store| store.policy_grant(&grant_ref))
         .await
         .ok()
         .map(|grant| grant.service);

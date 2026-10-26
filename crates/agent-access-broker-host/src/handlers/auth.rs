@@ -295,7 +295,7 @@ pub(crate) async fn auth_local_login(
         )
         .await;
     }
-    let Some(store) = snapshot.runtime.managed_store().cloned() else {
+    let Some(store) = snapshot.runtime.managed_store() else {
         return local_login_failure_response(
             response_context,
             body.principal_id,
@@ -358,22 +358,23 @@ pub(crate) async fn auth_local_login(
             .await;
         }
     };
-    let authenticated = match run_store_blocking(move || {
-        let _work = work;
-        store.authenticate_local_password_session(
-            &password_hasher,
-            &token_hasher,
-            LocalPasswordVerifyRequest {
-                principal_id,
-                password,
-                source: login_source,
-                max_failed_attempts,
-                lockout_ttl_seconds,
-            },
-            session_ttl_seconds,
-        )
-    })
-    .await
+    let authenticated = match snapshot
+        .managed_store_call(move |store| {
+            let _work = work;
+            store.authenticate_local_password_session(
+                &password_hasher,
+                &token_hasher,
+                LocalPasswordVerifyRequest {
+                    principal_id,
+                    password,
+                    source: login_source,
+                    max_failed_attempts,
+                    lockout_ttl_seconds,
+                },
+                session_ttl_seconds,
+            )
+        })
+        .await
     {
         Ok(authenticated) => authenticated,
         Err(error) => {
@@ -571,7 +572,7 @@ pub(crate) async fn auth_password_change(
     let principal_id = cookie_identity.identity.principal.clone();
     let current_password = body.current_password;
     let new_password = body.new_password;
-    let store = snapshot.runtime.managed_store().unwrap().clone();
+    let store = snapshot.runtime.managed_store().unwrap();
     let login_source = auth_source_key(&source);
     let session_ttl_seconds =
         parse_ttl_seconds(&snapshot.runtime.config().browser_auth.session_ttl).unwrap_or(8 * 3600);
@@ -595,27 +596,28 @@ pub(crate) async fn auth_password_change(
             .await;
         }
     };
-    let changed = match run_store_blocking(move || {
-        let _work = work;
-        store.change_local_password(
-            &password_hasher,
-            &token_hasher,
-            LocalPasswordChangeRequest {
-                verification: LocalPasswordVerifyRequest {
-                    principal_id: principal_for_change,
-                    password: current_password,
-                    source: login_source,
-                    max_failed_attempts,
-                    lockout_ttl_seconds,
+    let changed = match snapshot
+        .managed_store_call(move |store| {
+            let _work = work;
+            store.change_local_password(
+                &password_hasher,
+                &token_hasher,
+                LocalPasswordChangeRequest {
+                    verification: LocalPasswordVerifyRequest {
+                        principal_id: principal_for_change,
+                        password: current_password,
+                        source: login_source,
+                        max_failed_attempts,
+                        lockout_ttl_seconds,
+                    },
+                    new_password,
+                    min_password_length,
+                    replace_local_session,
+                    session_ttl_seconds,
                 },
-                new_password,
-                min_password_length,
-                replace_local_session,
-                session_ttl_seconds,
-            },
-        )
-    })
-    .await
+            )
+        })
+        .await
     {
         Ok(changed) => changed,
         Err(error) => {
@@ -789,11 +791,11 @@ pub(crate) async fn auth_logout(
     {
         return *response;
     }
-    let store = snapshot.runtime.managed_store().unwrap().clone();
     let token_id = cookie_identity.token_id.clone();
     let actor = cookie_identity.identity.principal.clone();
-    if let Err(error) =
-        run_store_blocking(move || store.revoke_browser_session(&token_id, &actor)).await
+    if let Err(error) = snapshot
+        .managed_store_call(move |store| store.revoke_browser_session(&token_id, &actor))
+        .await
     {
         return auth_error_response(
             response_context,
@@ -1521,11 +1523,11 @@ async fn attach_session_cookie_or_revoke(
         set_session_cookie(snapshot, token, ttl_seconds, response.headers_mut());
         return;
     }
-    if let Some(store) = snapshot.runtime.managed_store().cloned() {
-        let token_id = token_id.to_string();
-        let actor = actor.to_string();
-        let _ = run_store_blocking(move || store.revoke_browser_session(&token_id, &actor)).await;
-    }
+    let token_id = token_id.to_string();
+    let actor = actor.to_string();
+    let _ = snapshot
+        .managed_store_call(move |store| store.revoke_browser_session(&token_id, &actor))
+        .await;
 }
 
 pub(crate) fn set_session_cookie(
@@ -1571,18 +1573,6 @@ fn secure_cookie_suffix(snapshot: &RuntimeSnapshot) -> &'static str {
     } else {
         ""
     }
-}
-
-pub(crate) async fn run_store_blocking<T, F>(operation: F) -> Result<T, ManagedStoreError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, ManagedStoreError> + Send + 'static,
-{
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(|error| {
-            ManagedStoreError::Unavailable(format!("managed store task failed: {error}"))
-        })?
 }
 
 fn auth_success_envelope(

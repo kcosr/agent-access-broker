@@ -10,7 +10,7 @@ use agent_access_core::microsoft_oidc::{
     MicrosoftOidcRuntimeConfig, SystemMicrosoftOidcClock,
 };
 use agent_access_core::{
-    AuditRuntimeRegistry, BackendRegistry, BrokerRuntime, ManagedStoreError,
+    AuditRuntimeRegistry, BackendRegistry, BrokerRuntime, ManagedStore, ManagedStoreError,
     OidcProviderStateReconcileRequest, RuntimeError, StateLockSet,
 };
 use arc_swap::ArcSwap;
@@ -558,6 +558,33 @@ impl RuntimeSnapshot {
             let _state_locks = state_locks;
             operation(runtime)
         })
+    }
+
+    /// Runs a blocking call on this snapshot's managed store, in the caller's
+    /// tracing span. Like every store write, it holds this snapshot's state
+    /// locks until the call returns, and the store it receives is this
+    /// snapshot's, whatever a reload has published since.
+    pub(crate) async fn managed_store_call<T, F>(
+        &self,
+        operation: F,
+    ) -> Result<T, ManagedStoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(ManagedStore) -> Result<T, ManagedStoreError> + Send + 'static,
+    {
+        let span = tracing::Span::current();
+        self.spawn_store_write(move |runtime| {
+            span.in_scope(|| {
+                let store = runtime.managed_store().cloned().ok_or_else(|| {
+                    ManagedStoreError::Unavailable("managed store is not configured".into())
+                })?;
+                operation(store)
+            })
+        })
+        .await
+        .map_err(|error| {
+            ManagedStoreError::Unavailable(format!("managed store task failed: {error}"))
+        })?
     }
 
     pub(crate) async fn new_microsoft_oidc_candidate(

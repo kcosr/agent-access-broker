@@ -964,11 +964,15 @@ async fn gateway_identity(
     }
     let token = basic_broker_token(headers, matched_gateway)?;
     let resolve = |token: String| {
-        let runtime = snapshot.runtime.clone();
+        // Resolution records the token's last use: the blocking worker holds
+        // the snapshot, and with it the state locks, until that write returns.
+        let snapshot = Arc::clone(snapshot);
         let caller_id = admission.caller_id().map(str::to_owned);
         async move {
             tokio::task::spawn_blocking(move || {
-                let mut resolved = runtime.resolve_gateway_basic_broker_token(&token)?;
+                let mut resolved = snapshot
+                    .runtime
+                    .resolve_gateway_basic_broker_token(&token)?;
                 resolved.identity.caller_id = caller_id;
                 Ok(resolved)
             })

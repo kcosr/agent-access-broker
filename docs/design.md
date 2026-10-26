@@ -1263,11 +1263,10 @@ After operations drain, shutdown waits within the remaining budget (at least
 100 ms) for submitted writes and their audit records before the audit store
 closes, and logs `oidc_membership_renewal_unfinished` with the login method and
 phase of each renewal still running, since one that commits afterwards has no
-audit record. Every write through `token_store_call_from_snapshot`, including
-sign-in completion and management writes, holds the snapshot's state locks
-until its blocking store call returns, even when runtime shutdown drops the
-task waiting for it, so no other process can open the store while a write may
-still run.
+audit record. Like every blocking managed-store write, each outcome write
+holds its snapshot's state locks until it returns, even when runtime shutdown
+drops the task waiting for it (see
+[Single-node deployment contract](#single-node-deployment-contract)).
 
 ## Trusted human identity and MCP admission
 
@@ -2545,6 +2544,16 @@ Dynamic reload preserves the same ownership model. Candidate state locks are
 acquired before candidate runtime state is opened or probed. Unchanged lock
 targets reuse the active generation's handles; old snapshots retain their lock
 handles until in-flight requests that cloned those snapshots complete.
+
+The host runs its blocking managed-store calls with the state locks of the
+snapshot whose store they use, held until the call returns. This covers
+token-store, policy and import mutations, management calls, local password
+sign-in and change, browser-session revocation, Microsoft sign-in flow records,
+and identity resolution, which records a broker token's last use. The blocking
+worker owns its own reference to those locks, so a request that a reload has
+left on an older snapshot keeps that snapshot's locks, and Tokio shutdown cannot
+release them by dropping the request or the task waiting for the call. No other
+process can take the state while such a write may still run.
 
 ## Egress proxy model
 
