@@ -6248,10 +6248,10 @@ async fn writes_the_allowlist_refuses_skip_the_probe_and_carry_no_receipt() {
     }
 }
 
-/// GitLab definitively rejected the write: a redirect, a 4xx or throttling
-/// applied nothing. The action keeps the rejection's own reason without a
-/// mutation receipt and does not probe, so a probe that would fail cannot
-/// turn the rejection into an unverified write.
+/// GitLab definitively rejected the write: a 4xx or throttling applied
+/// nothing. The action keeps the rejection's own reason without a mutation
+/// receipt and does not probe, so a probe that would fail cannot turn the
+/// rejection into an unverified write.
 #[tokio::test]
 async fn definitive_write_rejections_skip_the_probe_and_carry_no_receipt() {
     for write in probing_writes() {
@@ -6260,13 +6260,9 @@ async fn definitive_write_rejections_skip_the_probe_and_carry_no_receipt() {
             (403, Decision::Error, ReasonCode::UpstreamForbidden),
             (404, Decision::Deny, ReasonCode::ScopeUnresolved),
             (409, Decision::Error, ReasonCode::UpstreamFailed),
-            (302, Decision::Error, ReasonCode::UpstreamFailed),
             (429, Decision::Error, ReasonCode::UpstreamRateLimited),
         ] {
-            let mut response = ResponseTemplate::new(status);
-            if status == 302 {
-                response = response.insert_header("location", "/users/sign_in");
-            }
+            let response = ResponseTemplate::new(status);
             let (error, sent) = invoke_probing_write(&write, Some(response)).await;
             assert_eq!(error.decision(), decision, "{action} {status}: {error:?}");
             assert_eq!(error.reason_code(), reason, "{action} {status}: {error:?}");
@@ -6291,15 +6287,25 @@ async fn definitive_write_rejections_skip_the_probe_and_carry_no_receipt() {
     }
 }
 
-/// A write GitLab may have applied, answered 5xx or with a success response
-/// that cannot be used, is probed; when the probe also fails, the write is
-/// `applied_unverified` at the action's readback stage.
+/// A write GitLab may have applied, answered 5xx, with a redirect (which can
+/// describe a processed write, such as a 303 after a POST) or with a success
+/// response that cannot be used, is probed; when the probe also fails, the
+/// write is `applied_unverified` at the action's readback stage.
 #[tokio::test]
 async fn uncertain_write_failures_probe_and_stay_unverified_when_the_probe_fails() {
     for write in probing_writes() {
         let action = write.action;
         for (case, response) in [
             ("502", ResponseTemplate::new(502)),
+            (
+                "302",
+                ResponseTemplate::new(302).insert_header("location", "/users/sign_in"),
+            ),
+            (
+                "303",
+                ResponseTemplate::new(303)
+                    .insert_header("location", "/api/v4/projects/42/merge_requests/5"),
+            ),
             (
                 "unusable success",
                 ResponseTemplate::new(200).set_body_string("not json"),

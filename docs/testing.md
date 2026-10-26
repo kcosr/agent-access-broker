@@ -1428,8 +1428,9 @@ review-submit tests also cover their readback branch: an ordinary sanitized
 upstream failure is permitted only when the draft snapshot and reviewer state
 prove unchanged; any possible effect remains applied-unverified. Approval,
 suggestion-apply and publish-all tests also assert that a definitive rejection
-of the write (a redirect, a 4xx or throttling) keeps its ordinary error without
-a receipt or readback, even when that readback would fail.
+of the write (a 4xx or throttling) keeps its ordinary error without a receipt
+or readback, even when that readback would fail, while a redirect, like a 5xx,
+is read back and stays applied-unverified when the readback fails.
 
 ### Per-User Smoke
 

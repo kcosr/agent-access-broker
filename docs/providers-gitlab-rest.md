@@ -1260,13 +1260,13 @@ fixed verification stage, and only proven safe IDs. This outcome is unsafe to
 retry: refresh by those IDs before considering another mutation.
 For direct and single-item review mutations, an upstream 5xx after the mutation
 request is treated as potentially applied and returns this 409
-applied-unverified contract. After such an uncertain failure,
+applied-unverified contract. After such an uncertain failure, or a redirect,
 `draft_note.publish_all` and `review.submit` re-read the owner-draft snapshot
 and reviewer state; they return the 409 contract if any effect may have
 applied, but may surface an ordinary sanitized upstream failure when readback
 proves the operation left both unchanged. A definitive GitLab rejection of the
-mutation request, such as a redirect, a 403 or 409, or throttling, keeps its
-ordinary error without a receipt or readback. A
+mutation request, such as a 403 or 409, or throttling, keeps its ordinary error
+without a receipt or readback. A
 mutation request proven never sent returns `mutationStatus = "not_applied"`
 with `retrySafe = true` instead (see
 [Unsent and unanswered writes](#unsent-and-unanswered-writes)). The
@@ -1623,17 +1623,20 @@ may have done:
   shape, the action returns `mutation_verification_failed`/409 with
   `mutationStatus = "applied_unverified"` and `retrySafe = false`. Approve,
   unapprove, suggestion apply and batch apply, `draft_note.publish_all` and
-  `review.submit` first read their target back, and return the ordinary error
-  instead when that readback proves the target unchanged;
-- when GitLab definitively rejected the request, with a redirect, a 4xx status
-  such as 401, 403, 404, 409 or 422 (provisioning reports 400 and 422 as
-  `input_invalid`), or throttling (`upstream_rate_limited`), the action keeps
-  its ordinary error without a receipt. So does a failure of the person's
-  OAuth connection that stops the request, which applies nothing, and a
-  request the Broker could not prepare, such as one the upstream allowlist
-  refuses, which is never sent: it keeps the reason of its cause, such as
-  `upstream_protocol_failed`. None of these is read back, so a failing
-  readback cannot turn one into `applied_unverified`.
+  `review.submit` treat a redirect, which the Broker never follows and which
+  can describe a write GitLab already processed, the same way. They first
+  read their target back, and return the ordinary error instead when that
+  readback proves the target unchanged;
+- when GitLab definitively rejected the request, with a redirect (except for
+  the actions that read back, above), a 4xx status such as 401, 403, 404, 409
+  or 422 (provisioning reports 400 and 422 as `input_invalid`), or throttling
+  (`upstream_rate_limited`), the action keeps its ordinary error without a
+  receipt. So does a failure of the person's OAuth connection that stops the
+  request, which applies nothing, and a request the Broker could not prepare,
+  such as one the upstream allowlist refuses, which is never sent: it keeps
+  the reason of its cause, such as `upstream_protocol_failed`. None of these
+  is read back, so a failing readback cannot turn one into
+  `applied_unverified`.
 
 Once GitLab has accepted the mutation request, every failure of a later
 readback or verification request also returns the `applied_unverified`

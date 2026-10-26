@@ -883,10 +883,10 @@ applied the write but readback did not prove it: it is HTTP 409/CLI exit 2 with
 Never repeat the mutation blindly; refresh by those IDs and inspect state first.
 A direct or single-item mutation's upstream 5xx after the request uses the same
 applied-unverified 409 contract and is not a retry signal. After such an
-uncertain failure, publish-all and review-submit re-read drafts and reviewer
-state and may return an ordinary sanitized upstream failure only when they
-prove no change. A definitive GitLab rejection (a redirect, a 4xx such as 403
-or 409, or throttling) keeps its ordinary error with no receipt.
+uncertain failure, or a redirect, publish-all and review-submit re-read drafts
+and reviewer state and may return an ordinary sanitized upstream failure only
+when they prove no change. A definitive GitLab rejection (a 4xx such as 403 or
+409, or throttling) keeps its ordinary error with no receipt.
 For suggestion apply, only scoped discussion/note reread proves application;
 the immediate response flag can be stale. A successful result has no commit
 metadata and does not imply discussion resolution.

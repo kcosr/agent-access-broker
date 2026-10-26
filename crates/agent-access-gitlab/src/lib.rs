@@ -3030,7 +3030,7 @@ impl GitlabProvider {
             Ok(response) => response,
             // A definitive outcome keeps its own reason without the probe
             // below, whose failure must not make it read as unverified.
-            Err(error) if !write_outcome_uncertain(&error) => {
+            Err(error) if !write_needs_probe(&error) => {
                 return Err(mutation_backend_error(
                     error,
                     MutationVerificationStage::MutationResponse,
@@ -3506,7 +3506,7 @@ impl GitlabProvider {
             Ok(response) => response,
             // A definitive outcome keeps its own reason without the probe
             // below, whose failure must not make it read as unverified.
-            Err(error) if !write_outcome_uncertain(&error) => {
+            Err(error) if !write_needs_probe(&error) => {
                 return Err(mutation_backend_error(
                     error,
                     MutationVerificationStage::MutationResponse,
@@ -3694,7 +3694,7 @@ impl GitlabProvider {
             Ok(response) => response,
             // A definitive outcome keeps its own reason without the probe
             // below, whose failure must not make it read as unverified.
-            Err(error) if !write_outcome_uncertain(&error) => {
+            Err(error) if !write_needs_probe(&error) => {
                 return Err(mutation_backend_error(
                     error,
                     MutationVerificationStage::MutationResponse,
@@ -12838,10 +12838,11 @@ fn mutation_backend_error(
 /// Whether GitLab may have applied a write whose request failed: it may have
 /// been sent without a response arriving, GitLab or a proxy in front of it
 /// answered 5xx, or a success response stalled, failed, exceeded the byte cap
-/// or did not have the expected shape. Every other failure is definitive: a
-/// write proven unsent or never prepared, a rejection (a redirect or a 4xx),
-/// throttling, and delegated access that could not be presented applied
-/// nothing.
+/// or did not have the expected shape. A write proven unsent or never
+/// prepared, a 4xx rejection, throttling, and delegated access that could not
+/// be presented applied nothing. [`mutation_backend_error`] also reports a
+/// redirect as a rejection; the writes that probe their target read it back
+/// ([`write_needs_probe`]).
 fn write_outcome_uncertain(error: &GitlabBackendError) -> bool {
     matches!(
         error,
@@ -12853,6 +12854,15 @@ fn write_outcome_uncertain(error: &GitlabBackendError) -> bool {
             | GitlabBackendError::DraftPositionShapeInvalid
             | GitlabBackendError::HttpStatus(500..=599)
     )
+}
+
+/// Whether approve/unapprove, suggestion apply and publish-all/review-submit
+/// read their target back after their write request failed: an uncertain
+/// outcome, or a redirect. The Broker never follows a redirect on a write,
+/// and one can describe a write GitLab already processed, such as a 303 after
+/// a POST.
+fn write_needs_probe(error: &GitlabBackendError) -> bool {
+    write_outcome_uncertain(error) || matches!(error, GitlabBackendError::HttpStatus(300..=399))
 }
 
 fn ensure_actor_not_formally_approved(
