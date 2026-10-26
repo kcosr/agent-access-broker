@@ -1,6 +1,4 @@
-use crate::handlers::auth::{
-    auth_request_ids, run_store_blocking, sanitize_return_to, set_session_cookie,
-};
+use crate::handlers::auth::{auth_request_ids, sanitize_return_to, set_session_cookie};
 use crate::ingress::guards::{IngressLimitError, IngressPermit};
 use crate::ingress::source::auth_source_key;
 use crate::observability;
@@ -256,7 +254,7 @@ pub(crate) async fn microsoft_oidc_start(
             .await;
         }
     };
-    let Some(store) = snapshot.runtime.managed_store().cloned() else {
+    if snapshot.runtime.managed_store().is_none() {
         return oidc_direct_error(
             &snapshot,
             &request_id,
@@ -267,7 +265,7 @@ pub(crate) async fn microsoft_oidc_start(
             ReasonCode::OidcUnavailable,
         )
         .await;
-    };
+    }
 
     let state_secret = random_secret();
     let nonce_secret = random_secret();
@@ -304,20 +302,20 @@ pub(crate) async fn microsoft_oidc_start(
         + ChronoDuration::seconds(provider.config().flow_ttl_seconds() as i64))
     .to_rfc3339_opts(SecondsFormat::Secs, true);
     let max_pending_flows = u64::from(provider.config().max_pending_flows());
-    let flow_store = store.clone();
-    let created = run_store_blocking(move || {
-        flow_store.create_oidc_flow(OidcFlowCreateRequest {
-            state_hash,
-            browser_binding_hash: binding_hash,
-            provider_generation,
-            encrypted_payload,
-            encryption_nonce,
-            return_path: return_to,
-            expires_at,
-            max_pending_flows,
+    let created = snapshot
+        .managed_store_call(move |store| {
+            store.create_oidc_flow(OidcFlowCreateRequest {
+                state_hash,
+                browser_binding_hash: binding_hash,
+                provider_generation,
+                encrypted_payload,
+                encryption_nonce,
+                return_path: return_to,
+                expires_at,
+                max_pending_flows,
+            })
         })
-    })
-    .await;
+        .await;
     let created = match created {
         Ok(created) => created,
         Err(_) => {
@@ -377,15 +375,16 @@ pub(crate) async fn microsoft_oidc_start(
     .await
     .is_err()
     {
-        let _ = run_store_blocking(move || {
-            store.claim_oidc_flow(OidcFlowClaimRequest {
-                state_hash: created.state_hash,
-                browser_binding_hash: created.browser_binding_hash,
-                provider_generation,
-                outcome_code: "audit_failed".to_string(),
+        let _ = snapshot
+            .managed_store_call(move |store| {
+                store.claim_oidc_flow(OidcFlowClaimRequest {
+                    state_hash: created.state_hash,
+                    browser_binding_hash: created.browser_binding_hash,
+                    provider_generation,
+                    outcome_code: "audit_failed".to_string(),
+                })
             })
-        })
-        .await;
+            .await;
         return oidc_direct_error_without_audit(
             StatusCode::SERVICE_UNAVAILABLE,
             &request_id,
@@ -483,7 +482,7 @@ pub(crate) async fn microsoft_oidc_callback(
         )
         .await;
     };
-    let Some(store) = snapshot.runtime.managed_store().cloned() else {
+    if snapshot.runtime.managed_store().is_none() {
         return oidc_callback_error(
             &snapshot,
             &request_id,
@@ -494,7 +493,7 @@ pub(crate) async fn microsoft_oidc_callback(
             None,
         )
         .await;
-    };
+    }
     let provider_generation = provider.provider_generation();
     let state_hash = hash_secret(&query.state);
     let binding_hash = hash_secret(&binding_secret);
@@ -503,15 +502,16 @@ pub(crate) async fn microsoft_oidc_callback(
         CallbackOutcome::ProviderError => "provider_error",
     }
     .to_string();
-    let flow = match run_store_blocking(move || {
-        store.claim_oidc_flow(OidcFlowClaimRequest {
-            state_hash,
-            browser_binding_hash: binding_hash,
-            provider_generation,
-            outcome_code,
+    let flow = match snapshot
+        .managed_store_call(move |store| {
+            store.claim_oidc_flow(OidcFlowClaimRequest {
+                state_hash,
+                browser_binding_hash: binding_hash,
+                provider_generation,
+                outcome_code,
+            })
         })
-    })
-    .await
+        .await
     {
         Ok(flow) => flow,
         Err(ManagedStoreError::OidcFlowExpired) => {
@@ -756,22 +756,22 @@ pub(crate) async fn microsoft_oidc_callback(
         MicrosoftGroupClaimClassification::Complete(groups) => groups,
         MicrosoftGroupClaimClassification::Overage
         | MicrosoftGroupClaimClassification::Malformed(_) => {
-            let store = snapshot.runtime.managed_store().unwrap().clone();
             let external_subject = identity.external_subject.clone();
             let observed_at = provider
                 .clock()
                 .now()
                 .to_rfc3339_opts(SecondsFormat::Secs, true);
-            let watermark = run_store_blocking(move || {
-                store.record_trusted_incomplete_oidc_callback(
-                    &external_subject,
-                    flow.flow_sequence,
-                    provider_generation,
-                    &observed_at,
-                    issued_at,
-                )
-            })
-            .await;
+            let watermark = snapshot
+                .managed_store_call(move |store| {
+                    store.record_trusted_incomplete_oidc_callback(
+                        &external_subject,
+                        flow.flow_sequence,
+                        provider_generation,
+                        &observed_at,
+                        issued_at,
+                    )
+                })
+                .await;
             match watermark {
                 Ok(true) => {}
                 Ok(false) => {
@@ -1043,10 +1043,11 @@ pub(crate) async fn microsoft_oidc_callback(
                 policy_group_ids: &result.membership.policy_groups,
             }),
         );
-        let store = snapshot.runtime.managed_store().unwrap().clone();
         let token_id = result.session.record.token_id.clone();
         let actor = result.principal.principal_id.clone();
-        let _ = run_store_blocking(move || store.revoke_browser_session(&token_id, &actor)).await;
+        let _ = snapshot
+            .managed_store_call(move |store| store.revoke_browser_session(&token_id, &actor))
+            .await;
         return oidc_callback_error_without_audit(
             &request_id,
             &broker_request_id,

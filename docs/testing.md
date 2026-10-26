@@ -877,9 +877,12 @@ rechecks identity after a wait; supersedes renewals on sign-in, reload and
 unlink; keeps a renewal running past the request's wait; covers cancellation,
 graceful drain and forced shutdown reporting; asserts with sentinel values that
 logs and audit never carry tokens or Microsoft's error text; and applies group
-changes Microsoft reports. `src/tests/state_lock_lifetime.rs` checks that
-token-store, managed-policy and import writes keep the state locks after
-runtime shutdown drops their owners. Portal Vitest tests (`unit/microsoft-membership.test.ts`) cover the
+changes Microsoft reports. `src/tests/state_lock_lifetime.rs` covers each
+entry point that runs a blocking managed-store write: token-store,
+managed-policy, current-policy, import, management, and the snapshot store call
+that local password, browser-session and OIDC flow writes use. Each write keeps
+its snapshot's state locks after runtime shutdown drops its owner; the snapshot
+store call keeps them even after a reload has published a replacement. Portal Vitest tests (`unit/microsoft-membership.test.ts`) cover the
 administrator status line and the person's own Account line for every renewal
 state.
 

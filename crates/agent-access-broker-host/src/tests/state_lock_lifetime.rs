@@ -4,8 +4,16 @@
 //! process may take the state while the write still runs. Each entry point
 //! that runs a blocking store write has its own case.
 use super::{TEST_LOCK_HOLDER, fake_config, temp_path};
-use crate::state::{ReloadableState, RuntimeSnapshot};
-use agent_access_core::{BrokerRuntime, StateLockFailureKind, StateLockSet};
+use crate::handlers::management::common::{
+    ManagementAccess, management_context, management_store_call,
+};
+use crate::state::{AppState, ReloadableState, RuntimeSnapshot};
+use agent_access_core::{
+    BrokerConfig, BrokerRuntime, IdentityConfig, IdentitySourceConfig, ManagedStoreConfig,
+    ManagementConfig, StateLockFailureKind, StateLockSet, StaticPrincipalConfig,
+};
+use agent_access_provider::REQUEST_ID_HEADER;
+use axum::http::{HeaderMap, HeaderValue};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -76,6 +84,59 @@ fn import_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_owner() {
 }
 
 #[test]
+fn snapshot_store_call_keeps_its_own_state_locks_after_reload_and_runtime_shutdown() {
+    // Local password, browser-session and OIDC flow writes run on the
+    // snapshot their request took, which a reload may replace meanwhile.
+    assert_write_keeps_the_state_locks("snapshot-store", |state, snapshot, write| {
+        Box::pin(async move {
+            state.publish_snapshot(RuntimeSnapshot::new(
+                2,
+                "state-lock-lifetime-replacement".into(),
+                snapshot.runtime.clone(),
+                StateLockSet::empty(),
+            ));
+            drop(state);
+            let _ = snapshot
+                .managed_store_call(move |_store| {
+                    write.run();
+                    Ok(())
+                })
+                .await;
+        })
+    });
+}
+
+#[test]
+fn management_store_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_owner() {
+    assert_write_keeps_the_state_locks("management", |state, _snapshot, write| {
+        Box::pin(async move {
+            let mut headers = HeaderMap::new();
+            headers.insert(ADMIN_TOKEN_HEADER, HeaderValue::from_static(ADMIN_TOKEN));
+            headers.insert(
+                REQUEST_ID_HEADER,
+                HeaderValue::from_static("state-lock-lifetime"),
+            );
+            let Ok(context) = management_context(
+                &AppState { reloadable: state },
+                "127.0.0.1:43210".parse().unwrap(),
+                &headers,
+                "admin.principals.list",
+                ManagementAccess::AdminRead,
+            )
+            .await
+            else {
+                panic!("the management request is admitted");
+            };
+            let _ = management_store_call(&context, move |_store| {
+                write.run();
+                Ok(())
+            })
+            .await;
+        })
+    });
+}
+
+#[test]
 fn current_policy_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_waiter() {
     assert_write_keeps_the_state_locks("current-policy", |state, _snapshot, write| {
         Box::pin(async move {
@@ -89,10 +150,51 @@ fn current_policy_write_keeps_the_state_locks_after_runtime_shutdown_drops_its_w
     });
 }
 
+const ADMIN_TOKEN_HEADER: &str = "X-Agent-Access-Identity-Token";
+const ADMIN_TOKEN: &str = "state-lock-lifetime-admin-token";
+
+/// Audit, upload spool and managed store state, and a configured
+/// administrator for management requests.
+fn lock_lifetime_config(name: &str) -> BrokerConfig {
+    let audit_path = temp_path(&format!("state-lock-lifetime-{name}.audit.jsonl"));
+    let store_path = temp_path(&format!("state-lock-lifetime-{name}.sqlite"));
+    let admin_token = temp_path(&format!("state-lock-lifetime-{name}.admin-token"));
+    std::fs::write(&admin_token, ADMIN_TOKEN).unwrap();
+    let mut config = fake_config(audit_path.to_str().unwrap());
+    config.identity = IdentityConfig {
+        trusted_callers: Default::default(),
+        mode: "required".into(),
+        authority: "toml".into(),
+        sources: vec![IdentitySourceConfig {
+            name: "bootstrap-admin".into(),
+            kind: "static_principals".into(),
+            header: ADMIN_TOKEN_HEADER.into(),
+            scheme: "raw".into(),
+            principals: vec![StaticPrincipalConfig {
+                principal: "admin".into(),
+                token_refs: vec![format!("file:{}", admin_token.display())],
+            }],
+        }],
+        groups: vec![],
+    };
+    config.managed_store = Some(ManagedStoreConfig {
+        kind: "sqlite".into(),
+        path: store_path.display().to_string(),
+        require_registered_principal_for_invocation: false,
+        auto_migrate: true,
+    });
+    config.management = ManagementConfig {
+        enabled: true,
+        admin_principals: vec!["admin".into()],
+        allow_classless_admin_identities: true,
+        ..ManagementConfig::default()
+    };
+    config
+}
+
 fn assert_write_keeps_the_state_locks(name: &str, submit: Submit) {
     let config_path = temp_path(&format!("state-lock-lifetime-{name}.toml"));
-    let audit_path = temp_path(&format!("state-lock-lifetime-{name}.audit.jsonl"));
-    let config = fake_config(audit_path.to_str().unwrap());
+    let config = lock_lifetime_config(name);
     let acquire =
         || StateLockSet::acquire_for_config(&config, &config_path, &TEST_LOCK_HOLDER, None);
     let locks = acquire().unwrap();
