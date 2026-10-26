@@ -349,11 +349,23 @@ node scripts/release.mjs --qualification /absolute/external/path/qualification.j
 The publisher verifies the receipt's full SHA, version, and required gates. It
 requires a clean `main` matching freshly fetched `origin/main` and that qualified
 SHA. It creates an annotated tag at the qualified commit and pushes only the
-tag, then creates and publishes a GitHub draft using the prepared version notes.
-It does not edit source, commit, push `main`, or reopen the changelog after tagging.
+tag, then creates a GitHub draft using the prepared version notes. It waits up to
+about 15 seconds for the draft to appear in GitHub's release list, verifies it,
+and publishes it. It does not edit source, commit, push `main`, or reopen the
+changelog after tagging.
 
 If publication fails, matching tags and drafts are preserved. Retry with the same
 qualification only when the existing tag and draft metadata match the same SHA,
-version, and notes. Existing published releases are never overwritten. See the
-[release procedure](../AGENTS.md#release-procedure). Preparation, qualification,
-and publication do not deploy or restart a service.
+version, and notes. Existing published releases are never overwritten.
+
+After publication, rerun the [downstream consumer check](#required-check-scope)
+from the same clean checkout with `--source canonical` and a new evidence
+directory to qualify the canonical remote pin:
+
+```bash
+node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
+  --evidence-dir /absolute/external/downstream-canonical --source canonical
+```
+
+See the [release procedure](../AGENTS.md#release-procedure). Preparation,
+qualification, and publication do not deploy or restart a service.

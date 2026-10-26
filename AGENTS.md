@@ -842,12 +842,23 @@ node scripts/release.mjs --qualification /absolute/external/path/qualification.j
 The publisher verifies the receipt's full SHA, version, and required gates, and
 requires clean `main` to match freshly fetched `origin/main` and the qualified
 SHA. It creates an annotated tag at that SHA, pushes only the tag, creates a
-GitHub draft from the prepared release notes, then publishes the draft. It does
-not edit source, create commits, push `main`, or make a post-tag changelog commit.
+GitHub draft from the prepared release notes, waits up to about 15 seconds for
+the draft to appear in GitHub's release list, verifies it, then publishes it. It
+does not edit source, create commits, push `main`, or make a post-tag changelog
+commit.
 
 A failed publication preserves a matching tag or draft. Retry with the same
 qualification only when the existing tag and draft metadata match the same
 SHA, version, and notes. Existing published releases are never overwritten.
+
+After publication, rerun the downstream consumer check from the same clean
+checkout with `--source canonical` and a new evidence directory to qualify the
+canonical remote pin:
+
+```bash
+node scripts/verify-downstream-consumer.mjs --commit "$(git rev-parse HEAD)" \
+  --evidence-dir /absolute/external/downstream-canonical --source canonical
+```
 
 ### Standalone provenance check
 

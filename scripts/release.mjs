@@ -12,6 +12,10 @@ import { assertNoGitOverrides } from "./release-environment.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const USAGE = "Usage: node scripts/release.mjs --qualification FILE";
+// GitHub's release list can briefly omit a just-created draft, so the lookup
+// after creation retries with these waits (15 seconds in total).
+const DRAFT_LOOKUP_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+const sleepSync = (milliseconds) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); };
 
 export function parsePublishArguments(args) {
   if (args.length !== 2 || args[0] !== "--qualification" || !args[1] || args[1].startsWith("--")) throw new Error(USAGE);
@@ -40,6 +44,17 @@ function releaseQuery(run, repository, tag) {
   return matches[0];
 }
 
+// Only absence is retried; read failures and multiple matches still fail at once.
+function createdDraft(run, repository, tag, sleep) {
+  for (const delay of [0, ...DRAFT_LOOKUP_DELAYS_MS]) {
+    if (delay) sleep(delay);
+    const draft = releaseQuery(run, repository, tag);
+    if (draft) return draft;
+  }
+  const seconds = DRAFT_LOOKUP_DELAYS_MS.reduce((total, delay) => total + delay, 0) / 1_000;
+  throw new Error(`GitHub draft ${tag} was not found after creation in ${DRAFT_LOOKUP_DELAYS_MS.length + 1} lookups over ${seconds} seconds`);
+}
+
 function matchingDraft(draft, release, commit, prerelease) {
   if (!draft.draft) throw new Error(`GitHub release ${release.tag} is already published; existing releases are never overwritten`);
   if (draft.tag_name !== release.tag || draft.target_commitish !== commit
@@ -53,6 +68,7 @@ export function publishRelease({
   root = ROOT,
   env = process.env,
   run = (command, args) => execFileSync(command, args, { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }),
+  sleep = sleepSync,
 }) {
   if (!qualificationPath) throw new Error(USAGE);
   assertNoGitOverrides(env);
@@ -101,8 +117,7 @@ export function publishRelease({
         run("gh", ["release", "create", release.tag, "--repo", repository, "--draft", "--verify-tag", "--target", commit,
           "--title", release.tag, "--notes-file", notesFile, ...(prerelease ? ["--prerelease"] : [])]);
       } finally { rmSync(directory, { recursive: true, force: true }); }
-      draft = releaseQuery(run, repository, release.tag);
-      if (!draft) throw new Error("GitHub draft was not found after creation");
+      draft = createdDraft(run, repository, release.tag, sleep);
       matchingDraft(draft, release, commit, prerelease);
     }
     // This is the final write. A tag or matching draft can remain on failure;
