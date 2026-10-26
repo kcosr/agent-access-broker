@@ -1736,7 +1736,7 @@ async fn inherited_network_settings_follow_the_trust_mode() {
 async fn broker_with_shutdown(config: &BrokerConfig, shutdown: Duration) -> TestBroker {
     TestBroker::start_with(
         TestBroker::config_builder(config)
-            .reload_timeout(Duration::from_secs(5))
+            .reload_timeout(TestBroker::RELOAD_TIMEOUT)
             .shutdown_timeout(shutdown),
     )
     .await

@@ -572,9 +572,7 @@ async fn webhook_destination_reload_denies_introduction_but_preserves_existing_m
     let broker = TestBroker::start_with(
         TestBroker::builder_at(config_path.clone())
             .body_hard_cap(10_485_760)
-            // This tests policy after reload, not reload latency. Candidate
-            // admission uses real filesystem and worker threads on a shared host.
-            .reload_timeout(Duration::from_secs(10))
+            .reload_timeout(TestBroker::RELOAD_TIMEOUT)
             .shutdown_timeout(Duration::from_secs(1)),
     )
     .await;
