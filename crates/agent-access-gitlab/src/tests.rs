@@ -112,7 +112,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     let mut config = config();
     config.attachments.media_types.push("text/html".to_string());
     let (inputs, part) = upload_fixture();
-    let (_, metadata) = parse_project_upload_inputs(&inputs, &config).unwrap();
+    let (_, metadata) = parse_admitted_project_upload_inputs(&inputs, &config).unwrap();
     assert!(prepare_project_upload(&metadata, std::slice::from_ref(&part)).is_ok());
     assert!(prepare_project_upload(&metadata, &[]).is_err());
     assert!(prepare_project_upload(&metadata, &[part.clone(), part.clone()]).is_err());
@@ -143,10 +143,17 @@ fn project_upload_validates_metadata_and_file_integrity() {
         let mut invalid = inputs.clone();
         invalid["attachments"][0][field] = value;
         assert_eq!(
-            parse_project_upload_inputs(&invalid, &config)
+            parse_admitted_project_upload_inputs(&invalid, &config)
                 .unwrap_err()
                 .reason_code(),
             reason
+        );
+        // Scope resolution's shape-only parse leaves the attachment policy
+        // to the hooks that run after authorization.
+        assert_eq!(
+            parse_project_upload_inputs(&invalid, &config).is_ok(),
+            reason != ReasonCode::InputInvalid,
+            "{field}"
         );
     }
     let mut changed = part.clone();
@@ -199,7 +206,7 @@ fn project_upload_validates_metadata_and_file_integrity() {
     );
     config.attachments.max_total_bytes = 1;
     assert_eq!(
-        parse_project_upload_inputs(&by_url, &config)
+        parse_admitted_project_upload_inputs(&by_url, &config)
             .unwrap_err()
             .reason_code(),
         ReasonCode::AttachmentSizeDenied
@@ -210,13 +217,13 @@ fn project_upload_validates_metadata_and_file_integrity() {
 fn project_upload_default_media_types_allow_html_and_reject_invalid_mime() {
     let config = config();
     let (inputs, _) = upload_fixture();
-    assert!(parse_project_upload_inputs(&inputs, &config).is_ok());
+    assert!(parse_admitted_project_upload_inputs(&inputs, &config).is_ok());
     assert!(project_upload_schema(&config.attachments)["properties"]["attachments"]["items"]["properties"]["contentType"].get("enum").is_none());
     for content_type in ["invalid", "text/html\r\nInjected: yes", ""] {
         let mut invalid = inputs.clone();
         invalid["attachments"][0]["contentType"] = json!(content_type);
         assert_eq!(
-            parse_project_upload_inputs(&invalid, &config)
+            parse_admitted_project_upload_inputs(&invalid, &config)
                 .unwrap_err()
                 .reason_code(),
             ReasonCode::AttachmentMediaTypeDenied
@@ -492,6 +499,102 @@ async fn project_upload_rechecks_authorized_repository_before_accepting_or_sendi
         provider.invoke(request).await.unwrap_err().reason_code(),
         ReasonCode::ScopeUnresolved
     );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET")
+    );
+}
+
+/// Scope resolution names an upload's project whatever file it declares: a
+/// size or media-type refusal raised there would reach the caller only as the
+/// concealed `scope_unresolved`. Body admission, which runs after
+/// authorization and before the host reads the file part, refuses the file
+/// with its attachment reason, and invocation checks it again.
+#[tokio::test]
+async fn project_upload_attachment_refusals_follow_scope_resolution() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/sip%2Fservice"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "id": 42, "path_with_namespace": "sip/service" })),
+        )
+        .mount(&server)
+        .await;
+    let (inputs, part) = upload_fixture();
+    let mut oversized = config();
+    oversized.attachments.max_bytes = part.size() - 1;
+    let mut over_total = config();
+    over_total.attachments.max_total_bytes = part.size() - 1;
+    let mut disallowed_type = config();
+    disallowed_type.attachments.media_types = vec!["text/plain".to_string()];
+    let mut malformed_type = inputs.clone();
+    malformed_type["attachments"][0]["contentType"] = json!("text/html\r\nInjected: yes");
+    let admission = agent_access_provider::host::hook_context(
+        "gitlab",
+        "project.upload",
+        agent_access_provider::HookPhase::BodyAdmission,
+        crate::GITLAB_BACKEND.domain_reasons(),
+    );
+    for (case, config, inputs, reason) in [
+        (
+            "per-file cap",
+            oversized,
+            inputs.clone(),
+            ReasonCode::AttachmentSizeDenied,
+        ),
+        (
+            "aggregate cap",
+            over_total,
+            inputs.clone(),
+            ReasonCode::AttachmentSizeDenied,
+        ),
+        (
+            "media type allowlist",
+            disallowed_type,
+            inputs.clone(),
+            ReasonCode::AttachmentMediaTypeDenied,
+        ),
+        (
+            "malformed media type",
+            config(),
+            malformed_type,
+            ReasonCode::AttachmentMediaTypeDenied,
+        ),
+    ] {
+        let provider = GitlabProvider::with_backend(config, Arc::new(http_backend(&server)));
+        let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+            "gitlab",
+            "project.upload",
+            inputs.clone(),
+        )
+        .lookup_credential(test_credential());
+        let (scopes, _) = provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_or_else(|error| panic!("{case}: scope resolution refused: {error:?}"))
+            .into_parts();
+        assert_eq!(scopes, repository_scopes_from_path("sip/service"), "{case}");
+
+        let request = test_invocation("project.upload", inputs);
+        let error = provider
+            .authorize_body_parts(request.admitted(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.decision(), Decision::Deny, "{case}");
+        assert_eq!(error.reason_code(), reason, "{case}");
+        assert_eq!(admission.check_failure(&error), Ok(()), "{case}");
+
+        let request = InvocationBuilder::from(request)
+            .body_part(part.clone())
+            .build();
+        let error = provider.invoke(request).await.unwrap_err();
+        assert_eq!(error.reason_code(), reason, "{case}");
+    }
     assert!(
         server
             .received_requests()

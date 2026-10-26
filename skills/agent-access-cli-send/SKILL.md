@@ -1065,8 +1065,10 @@ files; generic invoke accepts JSON inputs and cannot carry file parts.
 
 Use `result.upload.markdown` in a separately authorized note/issue/MR write;
 `url` and `fullPath` are GitLab's returned attachment paths. Files default to a
-10 MiB cap and explicit MIME allowlists must permit `text/html`. Attachment
-visibility follows the project, even inside confidential issues. Treat upload
+10 MiB cap and explicit MIME allowlists must permit `text/html`. A file over the
+cap returns `attachment_size_denied` and a type outside the allowlist
+`attachment_media_type_denied`. Attachment visibility follows the project, even
+inside confidential issues. Treat upload
 links as sensitive and avoid blindly retrying an uncertain write.
 
 ## GitLab bot provisioning

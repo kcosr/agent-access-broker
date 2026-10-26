@@ -82,13 +82,27 @@ async fn project_upload_catalog_and_transport_are_filtered_by_token_actions() {
 }
 
 async fn denied_upload(app: Router, token: &str, project: &str) -> axum::response::Response {
+    metadata_refused_upload(app, token, project, "text/html", 1).await
+}
+
+/// The upload size cap of the attachment-refusal fixture.
+const UPLOAD_CAP: u64 = 1024;
+
+async fn metadata_refused_upload(
+    app: Router,
+    token: &str,
+    project: &str,
+    content_type: &str,
+    size: u64,
+) -> axum::response::Response {
     let boundary = "gitlab-upload-denial";
     let metadata = json!({"inputs": {"project": project, "attachments": [{
-        "field": "file0", "filename": "session.html", "contentType": "text/html",
-        "size": 1, "sha256": "0".repeat(64)
+        "field": "file0", "filename": "session.html", "contentType": content_type,
+        "size": size, "sha256": "0".repeat(64)
     }]}});
-    // The file part deliberately has no field name: policy/token rejection must
-    // precede inspecting it and must never become a multipart validation error.
+    // The file part deliberately has no field name: policy, token and
+    // attachment refusals must precede inspecting it and must never become a
+    // multipart validation error.
     let body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"request\"\r\nContent-Type: application/json\r\n\r\n{metadata}\r\n--{boundary}\r\nContent-Disposition: form-data; filename=\"session.html\"\r\nContent-Type: text/html\r\n\r\nx\r\n--{boundary}--\r\n"
     );
@@ -129,6 +143,12 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
             }
             assert!(uri.path().starts_with("/api/v4/projects/"));
             lookups.fetch_add(1, Ordering::SeqCst);
+            if uri.path().ends_with("%2Fmissing") {
+                return (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(json!({"message": "404 Project Not Found"})),
+                );
+            }
             (
                 StatusCode::OK,
                 axum::Json(json!({"id": 1, "path_with_namespace": "sip/service"})),
@@ -203,7 +223,11 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
             web_base_url: upstream_url.clone(),
             allowed_upstream_hosts: vec![format!("{upstream_url}/api/v4/**")],
             egress_proxy: None,
-            attachments: Default::default(),
+            attachments: agent_access_gitlab::GitlabUploadLimitsConfig {
+                max_bytes: UPLOAD_CAP,
+                media_types: vec!["text/html".to_string()],
+                ..Default::default()
+            },
             content: Default::default(),
             search: Default::default(),
             webhooks: Default::default(),
@@ -263,6 +287,56 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
     );
     assert_eq!(response["resourceScopes"], json!({}));
     assert!(lookups.load(Ordering::SeqCst) > 0);
+    // The attachment policy is checked after authorization. A caller the
+    // token does not admit to the project, or one naming a project that does
+    // not exist, gets only the concealed denial whatever file it declares.
+    for (token, project) in [
+        (&issued.token, "sip/service"),
+        (&allowed.token, "sip/missing"),
+    ] {
+        for (content_type, size) in [("text/html", UPLOAD_CAP + 1), ("text/plain", 1)] {
+            let case = format!("{project} {content_type} {size}");
+            let response =
+                metadata_refused_upload(app.clone(), token, project, content_type, size).await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{case}");
+            let response = response_json(response).await;
+            assert_eq!(response["reasonCode"], "scope_unresolved", "{case}");
+            assert_eq!(
+                response["reason"], "resource scope is not authorized or unavailable",
+                "{case}"
+            );
+            assert_eq!(response["resourceScopes"], json!({}), "{case}");
+        }
+    }
+    // An authorized caller learns which attachment limit to fix, before the
+    // file part is inspected.
+    for (content_type, size, status, reason) in [
+        (
+            "text/html",
+            UPLOAD_CAP + 1,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "attachment_size_denied",
+        ),
+        (
+            "text/plain",
+            1,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment_media_type_denied",
+        ),
+    ] {
+        let response = metadata_refused_upload(
+            app.clone(),
+            &allowed.token,
+            "sip/service",
+            content_type,
+            size,
+        )
+        .await;
+        assert_eq!(response.status(), status, "{reason}");
+        let response = response_json(response).await;
+        assert_eq!(response["decision"], "deny", "{reason}");
+        assert_eq!(response["reasonCode"], reason);
+    }
     // With only the token repository restriction changed, the same grant and
     // request authorize successfully and reach malformed file-part validation.
     let control = denied_upload(app, &allowed.token, "sip/service").await;
