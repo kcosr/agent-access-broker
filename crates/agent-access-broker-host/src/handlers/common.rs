@@ -493,6 +493,10 @@ pub(crate) async fn resolve_identity_pending_pinned(
 /// configured identity header and has one, or from its identity headers.
 pub(crate) struct RequestIdentity {
     pub(crate) identity: agent_access_core::IdentityContext,
+    /// The portal session the request's cookie resolved to; `None` for an
+    /// identity from headers. This, not the identity's source fields,
+    /// identifies a browser session.
+    pub(crate) browser_session: Option<crate::handlers::auth::BrowserSession>,
     /// The browser session must change its password first.
     pub(crate) password_change_required: bool,
 }
@@ -515,6 +519,7 @@ pub(crate) async fn resolve_request_identity_pending(
         .await?
     {
         return Ok(cookie.map(|cookie| RequestIdentity {
+            browser_session: Some(cookie.browser_session()),
             identity: cookie.identity,
             password_change_required: cookie.password_change_required,
         }));
@@ -523,6 +528,7 @@ pub(crate) async fn resolve_request_identity_pending(
         .await?
         .map(|identity| RequestIdentity {
             identity,
+            browser_session: None,
             password_change_required: false,
         }))
 }

@@ -1,4 +1,4 @@
-use crate::handlers::auth::csrf_header_valid;
+use crate::handlers::auth::{BrowserSession, csrf_header_valid};
 use crate::handlers::common::{
     CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
     check_auth_source_rate_guard, envelope_response, request_id_from_headers,
@@ -44,6 +44,8 @@ pub(crate) struct ManagementContext {
     pub(crate) request_id: String,
     pub(crate) broker_request_id: String,
     pub(crate) identity: agent_access_core::IdentityContext,
+    /// The portal session that authenticated the request, if a cookie did.
+    pub(crate) browser_session: Option<BrowserSession>,
     pub(crate) source: SourceContext,
     pub(crate) policy_management_scope: Option<PolicyReadScope>,
     pub(crate) policy_write_scope: Option<PolicyWriteScope>,
@@ -728,12 +730,8 @@ pub(crate) async fn management_context(
         Err(failure) => return Err(identity_failure(Some(failure)).await),
     };
     let browser_password_change_required = resolved.password_change_required;
+    let browser_session = resolved.browser_session;
     let identity = resolved.identity;
-    let browser_session_token_id = identity
-        .source
-        .as_ref()
-        .filter(|source| source.name == "browser-session")
-        .and_then(|source| source.token_id.clone());
     let token_class = identity
         .source
         .as_ref()
@@ -756,7 +754,7 @@ pub(crate) async fn management_context(
         ManagementAccess::AdminRead | ManagementAccess::AdminWrite => {
             matches!(token_class, Some(BrokerTokenClass::Admin))
                 || (matches!(token_class, Some(BrokerTokenClass::UserManage))
-                    && browser_session_token_id.is_some())
+                    && browser_session.is_some())
                 || (token_class.is_none() && config.management.allow_classless_admin_identities)
         }
         ManagementAccess::PolicyRead | ManagementAccess::PolicyWrite => {
@@ -876,7 +874,7 @@ pub(crate) async fn management_context(
             .await,
         ));
     }
-    if browser_session_token_id.is_some() && browser_password_change_required {
+    if browser_session.is_some() && browser_password_change_required {
         return Err(Box::new(
             management_pre_context_error_response(ManagementPreContextError {
                 snapshot: &snapshot,
@@ -892,9 +890,9 @@ pub(crate) async fn management_context(
             .await,
         ));
     }
-    if let Some(token_id) = browser_session_token_id.as_deref()
+    if let Some(session) = &browser_session
         && management_cookie_csrf_required(operation)
-        && !csrf_header_valid(&snapshot, headers, token_id)
+        && !csrf_header_valid(&snapshot, headers, session.token_id())
     {
         return Err(Box::new(
             management_pre_context_error_response(ManagementPreContextError {
@@ -916,6 +914,7 @@ pub(crate) async fn management_context(
         request_id,
         broker_request_id,
         identity,
+        browser_session,
         source,
         policy_management_scope,
         policy_write_scope,
@@ -933,6 +932,9 @@ pub(crate) async fn management_context(
     })
 }
 
+/// Whether a browser-session request for `operation` must carry the CSRF
+/// header: every management operation except those of `GET` routes. `POST`
+/// reads (previews, validation, verification and reveal) still require it.
 fn management_cookie_csrf_required(operation: &str) -> bool {
     !matches!(
         operation,
@@ -947,6 +949,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "credentials.targets"
             | "tokens.list"
             | "tokens.inspect"
+            | "tokens.options"
             | "admin.store.status"
             | "config.status"
             | "admin.policy.status"
@@ -955,11 +958,20 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "admin.policy.grants.inspect"
             | "admin.policy.grants.export"
             | "admin.policy.service_managers.list"
+            | "admin.policy.resources.list"
+            | "admin.policy.resources.get"
+            | "admin.policy.resources.used_by"
+            | "admin.policy.resource_groups.list"
+            | "admin.policy.resource_groups.get"
+            | "admin.policy.resource_groups.used_by"
             | "admin.principals.list"
             | "admin.principals.inspect"
             | "admin.principals.services"
             | "admin.principals.service_limits.list"
             | "admin.principals.login_methods.list"
+            | "admin.principals.identity_token.inspect"
+            | "admin.principals.identity_access.inspect"
+            | "admin.principals.identity_bindings.list"
             | "admin.groups.list"
             | "admin.groups.inspect"
             | "admin.groups.members.list"
@@ -969,6 +981,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "admin.tokens.inspect"
             | "admin.tokens.list_principal_agent"
             | "admin.tokens.inspect_principal_agent"
+            | "admin.tokens.options_principal_agent"
             | "admin.credentials.list"
             | "admin.credentials.list_principal"
             | "admin.credentials.inspect"
@@ -2656,6 +2669,44 @@ upload_spool_dir = "upload-spool"
                     .iter()
                     .any(|route| route.method == "POST" && route.operation == *operation),
                 "{operation} is not a catalog POST operation"
+            );
+        }
+    }
+
+    #[test]
+    fn browser_csrf_is_required_exactly_for_non_get_management_routes() {
+        use agent_access_core::ResponseKind;
+
+        let registry = crate::backend_registry();
+        let routes = agent_access_core::http_route_specs(registry.resource_types());
+        let mut mismatched = Vec::new();
+        let mut reads = 0;
+        for route in routes
+            .iter()
+            .filter(|route| route.response_kind == ResponseKind::ManagementEnvelope)
+        {
+            let operation = handler_operation(&route.operation);
+            let read = route.method == "GET";
+            reads += usize::from(read);
+            if management_cookie_csrf_required(operation) == read {
+                mismatched.push(format!("{} {} ({operation})", route.method, route.route));
+            }
+        }
+        assert!(mismatched.is_empty(), "{mismatched:#?}");
+        // The sweep is not vacuous.
+        assert!(reads > 40, "{reads} management GET routes");
+        for operation in [
+            "admin.principals.identity_token.inspect",
+            "admin.principals.identity_access.inspect",
+            "admin.principals.identity_bindings.list",
+        ] {
+            assert!(!management_cookie_csrf_required(operation), "{operation}");
+        }
+        // Reads by `POST` keep the header, like every write.
+        for operation in READ_ONLY_POST_CATALOG_OPERATIONS {
+            assert!(
+                management_cookie_csrf_required(handler_operation(operation)),
+                "{operation}"
             );
         }
     }

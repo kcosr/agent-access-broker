@@ -577,6 +577,89 @@ async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in
 }
 
 #[tokio::test]
+async fn identity_management_browser_reads_need_no_csrf() {
+    let fixture = browser_rate_fixture(test_limits()).await;
+    fixture
+        .state
+        .current()
+        .runtime
+        .managed_store()
+        .unwrap()
+        .patch_principal_access(PrincipalAccessPatchRequest {
+            principal_id: "alice".into(),
+            role: Some(PrincipalRole::Admin),
+            self_service_enabled: None,
+            actor: "admin".into(),
+        })
+        .unwrap();
+    let request = |method: Method, uri: &str, body: Option<&str>, csrf: Option<&str>| {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .extension(ConnectInfo(
+                "127.0.0.1:43100".parse::<SocketAddr>().unwrap(),
+            ))
+            .header(REQUEST_ID_HEADER, "identity-browser-read")
+            .header("Cookie", &fixture.cookie)
+            .header("Host", "localhost")
+            .header("Origin", "http://localhost")
+            .header("Content-Type", "application/json");
+        if let Some(csrf) = csrf {
+            request = request.header("X-Agent-Access-CSRF", csrf);
+        }
+        let request = request
+            .body(body.map_or_else(Body::empty, |body| Body::from(body.to_owned())))
+            .unwrap();
+        let app = fixture.app.clone();
+        async move {
+            let response = app.oneshot(request).await.unwrap();
+            (response.status(), response_json(response).await)
+        }
+    };
+    for (uri, operation) in [
+        (GATE, "admin.principals.identity_access.inspect"),
+        (BINDINGS, "admin.principals.identity_bindings.list"),
+        (TOKEN, "admin.principals.identity_token.inspect"),
+    ] {
+        let (status, body) = request(Method::GET, uri, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert_eq!(body["operation"], operation, "{uri}: {body}");
+    }
+
+    // Writes and reveal on the same routes still need the header.
+    for (method, uri, body) in [
+        (
+            Method::PATCH,
+            GATE,
+            r#"{"paused":true,"expectedVersion":1}"#,
+        ),
+        (Method::POST, BINDINGS, CREATE),
+        (
+            Method::POST,
+            "/v1/admin/principals/alice/identity-token/generate",
+            "{}",
+        ),
+        (
+            Method::POST,
+            "/v1/admin/principals/alice/identity-token/reveal",
+            "{}",
+        ),
+    ] {
+        let (status, response) = request(method.clone(), uri, Some(body), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {response}");
+        assert_eq!(response["reasonCode"], "csrf_invalid", "{method} {uri}");
+    }
+    let (status, body) = request(
+        Method::PATCH,
+        GATE,
+        Some(r#"{"paused":true,"expectedVersion":1}"#),
+        Some(&fixture.csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
 async fn identity_management_committed_write_keeps_success_when_completion_audit_fails() {
     let fixture = fixture().await;
     let mutation_guard = fixture.state.policy_mutation_lock.lock().await;

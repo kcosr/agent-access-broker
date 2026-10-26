@@ -240,6 +240,16 @@ All notable changes to this project are documented in this file.
   so another Broker process cannot take the same state set mid-write.
   ([#74](https://github.com/kcosr/agent-access-broker/pull/74))
 
+- **Portal sessions are recognized only by their sign-in cookie.** An
+  identity source can no longer obtain portal-session privileges by being
+  named `browser-session`: administration with a `user_manage` session and
+  the browser-only OAuth connection routes now require an actual portal
+  sign-in. Configuration rejects an identity source named `browser-session`;
+  rename such a source before upgrading. Portal sessions no longer need the
+  CSRF header for management reads; every other management request still does.
+  See [identity sources](docs/configuration.md).
+  ([#76](https://github.com/kcosr/agent-access-broker/pull/76))
+
 - **GitLab draft-note view, delete and publish name their merge request.**
   Their input schemas now require `iid`, which the actions always needed;
   callers that followed the published schema were refused as invalid input.

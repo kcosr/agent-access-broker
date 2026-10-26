@@ -1903,6 +1903,40 @@ fn execution_context_header_is_reserved_for_identity_sources() {
 }
 
 #[test]
+fn browser_session_name_is_reserved_for_identity_sources() {
+    for name in ["browser-session", "Browser-Session"] {
+        let mut config = sample_broker();
+        config.identity.mode = "required".to_string();
+        config.identity.authority = "managed".to_string();
+        config.identity.sources = vec![IdentitySourceConfig {
+            name: name.to_string(),
+            kind: "broker_tokens".to_string(),
+            header: "Authorization".to_string(),
+            scheme: "Bearer".to_string(),
+            principals: vec![],
+        }];
+        let errors = validation_errors(validate_broker_config(&config));
+        assert_contains(
+            &errors,
+            &format!(
+                "identity.sources.{name}.name browser-session is reserved for portal browser sessions"
+            ),
+        );
+    }
+
+    let mut config = sample_broker();
+    config.identity.mode = "required".to_string();
+    config.identity.sources = vec![static_source(
+        "browser-sessions",
+        "Authorization",
+        "Bearer",
+        "alice",
+        vec!["file:/run/agent-access/alice.token".to_string()],
+    )];
+    assert!(validate_broker_config(&config).is_ok());
+}
+
+#[test]
 fn toml_grant_context_omission_is_compatibility_only() {
     let parsed = parse_test_config(
         r#"

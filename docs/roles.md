@@ -81,8 +81,10 @@ finish.
 ## Credential classes
 
 Browser sessions use the account role for administration and the flag for
-self-service. An `admin` bearer may be issued to a human administrator or auditor;
-the holder's current role limits its powers and it cannot call personal routes.
+self-service. Only a request the portal sign-in cookie authenticated is a browser
+session; an issued `user_manage` bearer is never one. An `admin` bearer may be
+issued to a human administrator or auditor; the holder's current role limits its
+powers and it cannot call personal routes.
 A `user_manage` bearer supports personal routes when self-service is enabled,
 global policy/audit reads for admins and auditors, and scoped policy reads/writes
 for managers. It does not open general administrator metadata or mutation

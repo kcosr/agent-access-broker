@@ -310,6 +310,7 @@ set; it does not consult policy.
   `jira`, `confluence`, `gitlab`, and `cloudbees_ci`; Git gateway services and the test-only
   `fake` provider use the same grammar.
 - **Identity source names** match `^[A-Za-z0-9._-]{1,128}$` and must be unique.
+  `browser-session` is reserved in any letter case for portal sign-in sessions.
 - **Policy subjects** are `user:<principal>` or `group:<group>`;
   `user:anonymous` and `group:anonymous` are ordinary subjects with no special
   treatment.
@@ -1858,8 +1859,12 @@ CSRF protection. Browser sessions for active principals with DB role `admin`
 may change broker state; sessions for `admin` or `auditor` may read administrative
 metadata and safe previews. Sessions with current service policy
 management scope may call the policy and admin audit query routes for assigned
-services. State-changing calls require CSRF. Browser sessions cannot invoke
-provider actions directly.
+services. Management calls other than `GET` reads require CSRF, including the
+read-only `POST` previews, validation, verification and reveal. Browser sessions
+cannot invoke provider actions directly. A request is a browser session only when
+the sign-in cookie authenticated it: an issued `user_manage` token never gains the
+session's administration, browser-only OAuth routes, CSRF check or forced password
+change, whatever its identity source.
 
 Microsoft login uses authorization code flow with PKCE and nonce verification.
 The broker persists encrypted, expiring authorization-flow state, binds it to a
@@ -2000,9 +2005,10 @@ records written earlier, such as rate-limit, body and identity rejections, have
 none. The field is absent when there are no values.
 
 `identitySource` carries name, type, header, scheme, plus `tokenClass` and
-`tokenId`; attested identities add `readOnlyAccess`. `token_scopes` is
-`serde(skip)` and is never serialized into audit; raw token values are never
-logged.
+`tokenId`; attested identities add `readOnlyAccess`. Portal sign-in sessions
+record name `browser-session`, type `broker_tokens`, header `Cookie` and scheme
+`cookie`. `token_scopes` is `serde(skip)` and is never serialized into audit; raw
+token values are never logged.
 
 **Outcome records.** Normal operations write one record per outcome. An allow is
 recorded at status 200; a deny or error is recorded at its reason's HTTP

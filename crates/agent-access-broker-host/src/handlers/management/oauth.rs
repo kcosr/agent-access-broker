@@ -46,11 +46,9 @@ async fn error(context: &ManagementContext, operation: &str, failure: OAuthError
 
 fn session(context: &ManagementContext) -> Option<&str> {
     context
-        .identity
-        .source
+        .browser_session
         .as_ref()
-        .filter(|s| s.name == "browser-session")
-        .and_then(|s| s.token_id.as_deref())
+        .map(crate::handlers::auth::BrowserSession::token_id)
 }
 
 async fn browser_context(

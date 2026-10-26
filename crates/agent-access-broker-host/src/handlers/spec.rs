@@ -1,3 +1,4 @@
+use crate::handlers::auth::BrowserSession;
 use crate::handlers::common::{
     CallerAdmission, acquire_caller_guard, acquire_global_concurrency_guard,
     check_auth_source_rate_guard, discovery_unavailable_envelope, envelope_response,
@@ -39,6 +40,8 @@ struct SpecContext {
     snapshot: Arc<RuntimeSnapshot>,
     request_id: String,
     identity: IdentityContext,
+    /// The portal session that authenticated the request, if a cookie did.
+    browser_session: Option<BrowserSession>,
     source: SourceContext,
     execution_context: Option<ExecutionContext>,
     _permits: RequestPermits,
@@ -333,11 +336,11 @@ async fn spec_context(
     )
     .await
     .map_err(|response| Box::new(envelope_response(*response).into_response()))?;
-    let identity = match pending.admit(state, &snapshot, headers).await {
+    let resolved = match pending.admit(state, &snapshot, headers).await {
         Ok(resolved) if resolved.password_change_required => {
             return Err(password_change_required(request_id));
         }
-        Ok(resolved) => resolved.identity,
+        Ok(resolved) => resolved,
         Err(failure) => {
             return Err(spec_identity_failure(
                 state,
@@ -354,7 +357,8 @@ async fn spec_context(
     Ok(SpecContext {
         snapshot,
         request_id,
-        identity,
+        identity: resolved.identity,
+        browser_session: resolved.browser_session,
         source,
         execution_context: None,
         _permits: RequestPermits {
@@ -388,11 +392,7 @@ async fn spec_access(
     let enabled = context.snapshot.runtime.config().management.enabled;
     let config = &context.snapshot.runtime.config().management;
     let class = token_class(context);
-    let browser = context
-        .identity
-        .source
-        .as_ref()
-        .is_some_and(|s| s.name == "browser-session" && s.token_id.is_some());
+    let browser = context.browser_session.is_some();
     let classless_admin = class.is_none()
         && config.allow_classless_admin_identities
         && management_admin_authorized(context.snapshot.runtime.config(), &context.identity);
@@ -512,12 +512,7 @@ fn route_visible(context: &SpecContext, access: &SpecAccess, route_access: Route
                 .registrations
                 .is_empty()
                 && (access.visibility_all
-                    || (access.can_user_management
-                        && context
-                            .identity
-                            .source
-                            .as_ref()
-                            .is_some_and(|s| s.name == "browser-session")))
+                    || (access.can_user_management && context.browser_session.is_some()))
         }
         RouteAccess::UserManagement => access.visibility_all || access.can_user_management,
         RouteAccess::UserTokenManagement => {

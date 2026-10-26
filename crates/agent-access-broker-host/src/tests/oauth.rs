@@ -19,6 +19,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 pub(super) mod atlassian_dialect;
 #[path = "oauth/atlassian_products.rs"]
 mod atlassian_products;
+#[path = "oauth/browser_session_identity.rs"]
+mod browser_session_identity;
 #[path = "oauth/cloudbees_listing.rs"]
 mod cloudbees_listing;
 #[path = "oauth/delegated_lookups.rs"]
