@@ -234,11 +234,12 @@ All notable changes to this project are documented in this file.
   reported as `applied_unverified`. See [GitLab REST](docs/providers-gitlab-rest.md).
   ([#73](https://github.com/kcosr/agent-access-broker/pull/73))
 
-- **Import and policy writes keep the state locks until they finish.**
-  Managed policy, resource and import mutations hold the Broker's state locks
-  until their store write returns, even when shutdown drops the waiting task,
-  so another Broker process cannot take the same state set mid-write.
-  ([#74](https://github.com/kcosr/agent-access-broker/pull/74))
+- **Store writes keep the state locks until they finish.** Sign-in,
+  password change, session revocation, Microsoft sign-in, management, managed
+  policy, resource and import store calls hold the Broker's state locks until
+  their store write returns, even when shutdown drops the waiting task, so
+  another Broker process cannot take the same state set mid-write.
+  ([#74](https://github.com/kcosr/agent-access-broker/pull/74), [#78](https://github.com/kcosr/agent-access-broker/pull/78))
 
 - **Portal sessions are recognized only by their sign-in cookie.** An
   identity source can no longer obtain portal-session privileges by being
