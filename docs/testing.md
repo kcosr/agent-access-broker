@@ -71,9 +71,14 @@ lifetime tests cover handler and streaming-response drops. Real local connection
 verify HTTP/1 close detection and that resetting one HTTP/2 stream cancels only
 its request. Host `tests::lingering_close` covers uploads refused after
 admission: over real connections, a client that writes a multi-MiB body first
-still reads the denial and reuses the connection, and a remainder over the
-lingering cap closes it; through the router, rate-limited uploads still never
-read their bodies. These tests do not use live upstream services.
+still reads the denial and reuses the connection, a remainder over the
+lingering cap closes it, graceful shutdown waits for a lingering body to finish
+and closes the connection in order, and forced shutdown ends the lingering task
+before its timeout and releases its permits; through the router, lingering
+bodies hold their global and per-principal slots until they finish or time out,
+and rate-limited uploads still never read their bodies. Unit tests fix the
+8 MiB allowance, including the frame that crosses it. These tests do not use
+live upstream services.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.

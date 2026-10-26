@@ -703,9 +703,12 @@ that tool's schema:
 The adapter snapshots each file and derives its size, digest, and multipart
 metadata from the snapshot before sending. Optional `filename` and, for actions
 that allow it, `contentType` are supported. Provider limits still apply. A
-refusal after Broker admission returns its denial envelope; authentication,
-concurrency and rate-limit refusals do not read the file, so for a large file
-they can instead fail as a closed connection.
+refusal after Broker admission returns its denial envelope when the rest of the
+file reaches the Broker within its bounds (8 MiB, five seconds, its body cap and
+receive deadline; see [the HTTP API](http-api.md#public-listener)). A larger or
+slower remainder, a failure receiving the body, and refusals before admission
+(authentication, concurrency and rate limits, which never read the file) can
+instead fail as a closed connection.
 
 Download tools require `outputPath` with an absolute local destination. The
 adapter streams into a private temporary file, verifies the advertised length

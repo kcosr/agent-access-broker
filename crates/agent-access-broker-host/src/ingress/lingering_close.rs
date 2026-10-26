@@ -10,7 +10,13 @@
 //! [`LINGER_TIMEOUT`], and never past the request's own deadline or the
 //! ingress body cap, which keep applying to the body read here. A body that
 //! ends within those bounds leaves the connection reusable; otherwise Hyper
-//! closes it as before.
+//! closes it as before. A body that already failed, for example past the
+//! ingress cap or receive deadline, is not read again.
+//!
+//! The discarding task holds the admitted request's concurrency permits, so a
+//! lingering connection still counts against the global and per-principal
+//! limits until it is done. It runs among its server's connection tasks:
+//! graceful shutdown waits for it and forced shutdown cancels it.
 //!
 //! Refusals before admission, including rate and queue limits, never reach
 //! this: their bodies stay unread.
@@ -28,8 +34,11 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// The most request-body bytes discarded after the response. Enough for the
+/// The request-body allowance discarded after the response. Enough for the
 /// remainder of a typical refused upload; larger remainders still close.
+/// Discarding stops once the allowance is used up. A received frame is read
+/// whole, so the frame that crosses the allowance is the last one read and the
+/// total exceeds it by less than that frame.
 pub(crate) const LINGER_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// The longest the connection keeps discarding after the response.
 pub(crate) const LINGER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,9 +89,11 @@ pub(crate) fn track(request: Request) -> (Request, UnreadBody) {
 impl UnreadBody {
     /// Returns `response` unchanged. If the handler left the body unfinished,
     /// the connection discards the rest, within the bounds above, while the
-    /// response is sent. A client that asked to continue and was answered
-    /// before any body was read has not sent the body, so nothing waits for it.
-    pub(crate) fn linger(self, response: Response) -> Response {
+    /// response is sent, and `permits`, the admitted request's concurrency
+    /// permits, are released only once that ends; otherwise they are released
+    /// now. A client that asked to continue and was answered before any body
+    /// was read has not sent the body, so nothing waits for it.
+    pub(crate) fn linger<P: Send + 'static>(self, response: Response, permits: P) -> Response {
         let left = self.left.lock().unwrap().take();
         if let (Some(left), Some(tasks)) = (left, self.tasks)
             && (left.polled || !self.expects_continue)
@@ -93,7 +104,10 @@ impl UnreadBody {
                     .deadline()
                     .map(|deadline| deadline.at),
             );
-            tasks.spawn(discard(left.body, deadline));
+            tasks.spawn(async move {
+                discard(left.body, deadline).await;
+                drop(permits);
+            });
         }
         response
     }
@@ -105,17 +119,18 @@ fn linger_deadline(now: Instant, request_deadline: Option<Instant>) -> Instant {
     request_deadline.map_or(linger, |deadline| deadline.min(linger))
 }
 
-/// Reads and drops `body` until it ends or fails, more than
-/// [`LINGER_MAX_BYTES`] have been read, or `deadline` passes.
+/// Reads and drops `body` until it ends or fails, the [`LINGER_MAX_BYTES`]
+/// allowance is used up, or `deadline` passes. No frame is polled once the
+/// allowance is used up.
 async fn discard(mut body: Body, deadline: Instant) {
-    let mut remaining = LINGER_MAX_BYTES;
+    let mut allowance = LINGER_MAX_BYTES;
     let _ = tokio::time::timeout_at(deadline, async {
-        while let Some(Ok(frame)) = body.frame().await {
+        while allowance > 0 {
+            let Some(Ok(frame)) = body.frame().await else {
+                break;
+            };
             let read = frame.data_ref().map_or(0, |data| data.len() as u64);
-            match remaining.checked_sub(read) {
-                Some(left) => remaining = left,
-                None => break,
-            }
+            allowance = allowance.saturating_sub(read);
         }
     })
     .await;
@@ -181,15 +196,13 @@ mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use tokio_util::task::TaskTracker;
 
-    const CHUNK: usize = 64 * 1024;
-
-    /// An endless body of `CHUNK`-byte frames counting the bytes it yields.
-    fn endless_body() -> (Body, Arc<AtomicU64>) {
+    /// An endless body of `frame`-byte frames counting the bytes it yields.
+    fn endless_body(frame: usize) -> (Body, Arc<AtomicU64>) {
         let yielded = Arc::new(AtomicU64::new(0));
         let counter = yielded.clone();
         let body = Body::from_stream(stream::repeat_with(move || {
-            counter.fetch_add(CHUNK as u64, Ordering::SeqCst);
-            Ok::<_, std::io::Error>(Bytes::from(vec![0_u8; CHUNK]))
+            counter.fetch_add(frame as u64, Ordering::SeqCst);
+            Ok::<_, std::io::Error>(Bytes::from(vec![0_u8; frame]))
         }));
         (body, yielded)
     }
@@ -231,41 +244,72 @@ mod tests {
         body.frame().await.unwrap().unwrap();
     }
 
+    /// Stands in for the admitted request's permits: held while it has clones.
+    fn permits() -> Arc<()> {
+        Arc::new(())
+    }
+
+    fn held(permits: &Arc<()>) -> bool {
+        Arc::strong_count(permits) > 1
+    }
+
     #[tokio::test]
-    async fn an_unfinished_body_is_discarded_after_the_response() {
+    async fn an_unfinished_body_is_discarded_after_the_response_holding_the_permits() {
         let tracker = TaskTracker::new();
         let tasks = ConnectionTasks::tracked_by(tracker.clone());
-        let (body, polls) = counted_body(100);
-        let request = builder(&tasks).body(body).unwrap();
-        let (request, unread) = track(request);
+        // The first frame, then whatever the client sends later.
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
+        sender.send(Bytes::from_static(b"metadata")).unwrap();
+        let read = Arc::new(AtomicUsize::new(0));
+        let counter = read.clone();
+        let body = Body::from_stream(stream::unfold(receiver, move |mut receiver| {
+            let counter = counter.clone();
+            async move {
+                let frame = receiver.recv().await;
+                counter.fetch_add(1, Ordering::SeqCst);
+                frame.map(|frame| (Ok::<_, std::io::Error>(frame), receiver))
+            }
+        }));
+        let (request, unread) = track(builder(&tasks).body(body).unwrap());
         refuse_after_first_frame(request).await;
-        assert_eq!(polls.load(Ordering::SeqCst), 1);
-        let response = unread.linger(Response::new(Body::from("refused")));
+        let permits = permits();
+        let response = unread.linger(Response::new(Body::from("refused")), permits.clone());
         assert_eq!(
             axum::body::to_bytes(response.into_body(), 64)
                 .await
                 .unwrap(),
             "refused"
         );
+        // The rest has not arrived: the connection still waits for it.
+        tokio::task::yield_now().await;
+        assert!(held(&permits));
+        for _ in 0..100 {
+            sender.send(Bytes::from_static(b"x")).unwrap();
+        }
+        drop(sender);
         settle(&tracker).await;
-        // Every remaining frame and the end of the body were read.
-        assert_eq!(polls.load(Ordering::SeqCst), 101);
+        // The first frame, every remaining frame and the end of the body.
+        assert_eq!(read.load(Ordering::SeqCst), 102);
+        assert!(!held(&permits));
     }
 
     #[tokio::test]
     async fn finished_failed_unpolled_continue_and_http2_bodies_do_not_linger() {
         let tracker = TaskTracker::new();
         let tasks = ConnectionTasks::tracked_by(tracker.clone());
+        let permits = permits();
 
         // A body read to its end leaves nothing behind.
         let (body, polls) = counted_body(2);
         let (request, unread) = track(builder(&tasks).body(body).unwrap());
         axum::body::to_bytes(request.into_body(), 64).await.unwrap();
-        unread.linger(Response::new(Body::empty()));
+        unread.linger(Response::new(Body::empty()), permits.clone());
+        assert!(!held(&permits));
         settle(&tracker).await;
         assert_eq!(polls.load(Ordering::SeqCst), 3);
 
-        // A failed body, such as one over the ingress cap, is not read again.
+        // A failed body, such as one over the ingress cap or past its receive
+        // deadline, is not read again.
         let polled = Arc::new(AtomicUsize::new(0));
         let counter = polled.clone();
         let failing = Body::from_stream(stream::poll_fn(move |_| {
@@ -274,7 +318,8 @@ mod tests {
         }));
         let (request, unread) = track(builder(&tasks).body(failing).unwrap());
         assert!(request.into_body().frame().await.unwrap().is_err());
-        unread.linger(Response::new(Body::empty()));
+        unread.linger(Response::new(Body::empty()), permits.clone());
+        assert!(!held(&permits));
         settle(&tracker).await;
         assert_eq!(polled.load(Ordering::SeqCst), 1);
 
@@ -288,7 +333,8 @@ mod tests {
                 .unwrap(),
         );
         drop(request);
-        unread.linger(Response::new(Body::empty()));
+        unread.linger(Response::new(Body::empty()), permits.clone());
+        assert!(!held(&permits));
         settle(&tracker).await;
         assert_eq!(polls.load(Ordering::SeqCst), 0);
 
@@ -301,15 +347,17 @@ mod tests {
                 .unwrap(),
         );
         refuse_after_first_frame(request).await;
-        unread.linger(Response::new(Body::empty()));
+        unread.linger(Response::new(Body::empty()), permits.clone());
         settle(&tracker).await;
         assert_eq!(polls.load(Ordering::SeqCst), 3);
+        assert!(!held(&permits));
 
         // HTTP/2 refuses a stream's remaining body itself.
         let (body, polls) = counted_body(2);
         let (request, unread) = track(builder(&tasks).version(Version::HTTP_2).body(body).unwrap());
         refuse_after_first_frame(request).await;
-        unread.linger(Response::new(Body::empty()));
+        unread.linger(Response::new(Body::empty()), permits.clone());
+        assert!(!held(&permits));
         settle(&tracker).await;
         assert_eq!(polls.load(Ordering::SeqCst), 1);
 
@@ -318,23 +366,39 @@ mod tests {
         let (body, polls) = counted_body(2);
         let (request, unread) = track(Request::builder().body(body).unwrap());
         refuse_after_first_frame(request).await;
-        unread.linger(Response::new(Body::empty()));
+        unread.linger(Response::new(Body::empty()), permits.clone());
+        assert!(!held(&permits));
         tokio::task::yield_now().await;
         assert_eq!(polls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn discarding_stops_after_the_byte_cap() {
-        let (body, yielded) = endless_body();
+    async fn discarding_stops_once_the_allowance_is_used_up() {
+        // Frames that divide the allowance: no frame is read past it.
+        let (body, yielded) = endless_body(64 * 1024);
         tokio::time::timeout(
             LINGER_TIMEOUT,
             discard(body, Instant::now() + LINGER_TIMEOUT),
         )
         .await
-        .expect("an endless body stops at the byte cap, not the deadline");
+        .expect("an endless body stops at the allowance, not the deadline");
+        assert_eq!(yielded.load(Ordering::SeqCst), LINGER_MAX_BYTES);
+    }
+
+    #[tokio::test]
+    async fn the_frame_crossing_the_allowance_is_the_last_one_read() {
+        // Three-MiB frames: the third crosses 8 MiB, is read whole, and ends it.
+        let frame = 3 * 1024 * 1024;
+        let (body, yielded) = endless_body(frame);
+        tokio::time::timeout(
+            LINGER_TIMEOUT,
+            discard(body, Instant::now() + LINGER_TIMEOUT),
+        )
+        .await
+        .expect("an endless body stops at the allowance, not the deadline");
         let read = yielded.load(Ordering::SeqCst);
-        assert!(read > LINGER_MAX_BYTES, "{read}");
-        assert!(read <= LINGER_MAX_BYTES + CHUNK as u64, "{read}");
+        assert_eq!(read, 3 * frame as u64);
+        assert!(read > LINGER_MAX_BYTES && read < LINGER_MAX_BYTES + frame as u64);
     }
 
     #[tokio::test(start_paused = true)]

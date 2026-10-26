@@ -1,10 +1,11 @@
-//! Uploads refused while their body is still unread, over real connections:
-//! the client finishes sending and reads the denial, within the lingering
-//! bounds, and refusals before admission still never read the body.
-use super::invocation_limits::{ALICE, assert_limited, limit_fixture, set_fake_limit};
+//! Uploads refused while their body is still unread: over real connections,
+//! the client finishes sending and reads the denial within the lingering
+//! bounds, lingering keeps the request's concurrency permits and follows the
+//! server's shutdown, and refusals before admission still never read the body.
+use super::invocation_limits::{ALICE, BOB, assert_limited, limit_fixture, set_fake_limit};
 use super::*;
 use crate::http_server::ConnectionTasks;
-use crate::ingress::lingering_close::LINGER_MAX_BYTES;
+use crate::ingress::lingering_close::{LINGER_MAX_BYTES, LINGER_TIMEOUT};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedReadHalf;
@@ -219,7 +220,12 @@ fn finish_upload(sender: tokio::sync::mpsc::UnboundedSender<Bytes>, frames: usiz
     frames + 3
 }
 
-fn upload_request(request_id: &str, body: Body, tasks: &ConnectionTasks) -> Request<Body> {
+fn upload_request(
+    request_id: &str,
+    token: &str,
+    body: Body,
+    tasks: &ConnectionTasks,
+) -> Request<Body> {
     Request::builder()
         .method(Method::POST)
         .uri("/v1/invoke/fake/echo")
@@ -228,7 +234,7 @@ fn upload_request(request_id: &str, body: Body, tasks: &ConnectionTasks) -> Requ
         ))
         .extension(tasks.clone())
         .header(REQUEST_ID_HEADER, request_id)
-        .header(AUTHORIZATION, format!("Bearer {ALICE}"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
         .header(
             CONTENT_TYPE,
             format!("multipart/form-data; boundary={BOUNDARY}"),
@@ -257,7 +263,7 @@ async fn only_refusals_after_admission_read_the_rest_of_the_body() {
     let response = fixture
         .app
         .clone()
-        .oneshot(upload_request("lingering-admitted", body, &tasks))
+        .oneshot(upload_request("lingering-admitted", ALICE, body, &tasks))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -274,11 +280,189 @@ async fn only_refusals_after_admission_read_the_rest_of_the_body() {
     let response = fixture
         .app
         .clone()
-        .oneshot(upload_request("lingering-limited", body, &tasks))
+        .oneshot(upload_request("lingering-limited", ALICE, body, &tasks))
         .await
         .unwrap();
     assert_limited(response, 1).await;
     finish_upload(sender, 64);
     settle(&tracker).await;
     assert_eq!(read.load(Ordering::SeqCst), 0);
+}
+
+async fn assert_concurrency_limited(response: axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response_json(response).await["reasonCode"],
+        "concurrency_limited"
+    );
+}
+
+async fn wait_until(mut done: impl FnMut() -> bool) {
+    tokio::time::timeout(STEP, async {
+        while !done() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the condition holds in time");
+}
+
+#[tokio::test]
+async fn lingering_keeps_the_request_permits_within_the_concurrency_limits() {
+    let fixture = limit_fixture(|config| {
+        config.limits.max_concurrent_requests = 2;
+        config.limits.max_concurrent_requests_per_principal = 1;
+    })
+    .await;
+    let guards = fixture.state.shared_ingress.clone();
+    let tracker = TaskTracker::new();
+    let tasks = ConnectionTasks::tracked_by(tracker.clone());
+    let refuse = |request_id: &'static str, token: &'static str| {
+        let (body, rest, _) = streamed_upload("OTHER");
+        let response = fixture
+            .app
+            .clone()
+            .oneshot(upload_request(request_id, token, body, &tasks));
+        async move {
+            let response = response.await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response_json(response).await["reasonCode"],
+                "service_action_denied"
+            );
+            rest
+        }
+    };
+
+    // Alice's refused upload lingers for the rest of its body, holding her
+    // only request slot.
+    let alice_rest = refuse("permits-alice-refused", ALICE).await;
+    assert_eq!(guards.principal_in_flight_requests("alice"), 1);
+    assert_eq!(guards.global_in_flight_requests(), 1);
+    assert_concurrency_limited(fixture.invoke("permits-alice-limited", ALICE).await).await;
+
+    // Bob's lingers too, and together they fill the global capacity.
+    let bob_rest = refuse("permits-bob-refused", BOB).await;
+    assert_eq!(guards.global_in_flight_requests(), 2);
+    assert_concurrency_limited(fixture.invoke("permits-bob-limited", BOB).await).await;
+
+    // Alice's body finishes: her lingering ends and her next request runs.
+    finish_upload(alice_rest, 4);
+    wait_until(|| guards.principal_in_flight_requests("alice") == 0).await;
+    assert_eq!(guards.global_in_flight_requests(), 1);
+    assert_eq!(
+        fixture
+            .invoke("permits-alice-released", ALICE)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    // Bob's never does: his lingering times out, then his request runs.
+    settle(&tracker).await;
+    assert_eq!(guards.global_in_flight_requests(), 0);
+    assert_eq!(guards.principal_in_flight_requests("bob"), 0);
+    assert_eq!(
+        fixture.invoke("permits-bob-released", BOB).await.status(),
+        StatusCode::OK
+    );
+    drop(bob_rest);
+}
+
+const SHUTDOWN_FILE_BYTES: usize = 1024 * 1024;
+
+/// Starts a broker with `shutdown_timeout`, and on one connection an upload
+/// refused after the first 64 KiB of its declared [`SHUTDOWN_FILE_BYTES`]
+/// file, which then lingers. Returns the broker, its ingress guards and the
+/// connection.
+async fn lingering_broker(
+    shutdown_timeout: Duration,
+) -> (
+    TestBroker,
+    Arc<crate::ingress::guards::IngressGuards>,
+    BufReader<OwnedReadHalf>,
+    tokio::net::tcp::OwnedWriteHalf,
+) {
+    let broker = TestBroker::start_with(
+        TestBroker::config_builder(&fake_config("")).shutdown_timeout(shutdown_timeout),
+    )
+    .await;
+    let guards = broker.state().shared_ingress.clone();
+    let (mut reader, mut writer) = connect(&broker).await;
+    writer
+        .write_all(upload_head("lingering-shutdown", "OTHER", SHUTDOWN_FILE_BYTES).as_bytes())
+        .await
+        .unwrap();
+    writer
+        .write_all(upload_prefix("OTHER").as_bytes())
+        .await
+        .unwrap();
+    writer.write_all(&[b'x'; 64 * 1024]).await.unwrap();
+    let (status, body) = tokio::time::timeout(STEP, read_response(&mut reader))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, 403);
+    assert_eq!(denial_reason(&body), "service_action_denied");
+    // The discarding task holds the request's permits while it waits.
+    assert_eq!(guards.global_in_flight_requests(), 1);
+    assert_eq!(guards.principal_in_flight_requests("anonymous"), 1);
+    (broker, guards, reader, writer)
+}
+
+#[tokio::test]
+async fn graceful_shutdown_waits_for_a_lingering_body_to_finish() {
+    let (broker, guards, mut reader, mut writer) = lingering_broker(STEP).await;
+    let stopping = tokio::spawn(broker.stop());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !stopping.is_finished(),
+        "graceful shutdown waits for the lingering body"
+    );
+    assert_eq!(guards.global_in_flight_requests(), 1);
+
+    // The rest arrives: discarding reads it to its end, and shutdown finishes
+    // without being forced.
+    let mut rest = vec![b'x'; SHUTDOWN_FILE_BYTES - 64 * 1024];
+    rest.extend_from_slice(upload_suffix().as_bytes());
+    writer
+        .write_all(&rest)
+        .await
+        .expect("the stopping Broker still reads the lingering body");
+    let report = tokio::time::timeout(STEP, stopping)
+        .await
+        .expect("shutdown finishes once the lingering body has")
+        .unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(guards.global_in_flight_requests(), 0);
+    assert_eq!(guards.principal_in_flight_requests("anonymous"), 0);
+    // Nothing was left unread, so the connection closes in order.
+    let mut tail = Vec::new();
+    let closed = tokio::time::timeout(STEP, reader.read_to_end(&mut tail))
+        .await
+        .unwrap()
+        .expect("the connection closes without a reset");
+    assert_eq!(closed, 0, "{}", String::from_utf8_lossy(&tail));
+}
+
+#[tokio::test]
+async fn forced_shutdown_cancels_a_lingering_body() {
+    let (broker, guards, mut reader, _writer) = lingering_broker(Duration::from_millis(500)).await;
+    let lingering = std::time::Instant::now();
+    let report = tokio::time::timeout(LINGER_TIMEOUT, broker.stop())
+        .await
+        .expect("forced shutdown does not wait out the lingering timeout");
+    assert!(report.was_forced(), "{report:?}");
+    // The discarding task ended with its connection, before its own timeout,
+    // and released the request's permits.
+    assert!(lingering.elapsed() < LINGER_TIMEOUT);
+    assert_eq!(guards.global_in_flight_requests(), 0);
+    assert_eq!(guards.principal_in_flight_requests("anonymous"), 0);
+    let mut tail = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(1), reader.read_to_end(&mut tail))
+        .await
+        .expect("the connection is closed");
+    if let Ok(read) = closed {
+        assert_eq!(read, 0, "{}", String::from_utf8_lossy(&tail));
+    }
 }

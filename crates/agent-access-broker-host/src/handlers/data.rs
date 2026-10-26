@@ -1481,9 +1481,12 @@ pub(crate) async fn invoke(
         };
     // A later refusal can leave the body unread, as for an upload refused
     // after its metadata part; the connection lingers so the client reads it.
+    // Lingering keeps the admitted request's permits, so it stays within the
+    // global and per-principal concurrency limits.
     let (request, unread) = crate::ingress::lingering_close::track(request);
+    let permits = admitted.permits.clone();
     let response = invoke_admitted(&state, admitted, &headers, request).await;
-    unread.linger(response)
+    unread.linger(response, permits)
 }
 
 async fn invoke_admitted(
