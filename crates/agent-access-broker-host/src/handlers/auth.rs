@@ -76,6 +76,33 @@ pub(crate) struct BrowserCookieIdentity {
     pub(crate) password_change_required: bool,
 }
 
+impl BrowserCookieIdentity {
+    /// The signed-in portal session this cookie resolved to.
+    pub(crate) fn browser_session(&self) -> BrowserSession {
+        BrowserSession {
+            token_id: self.token_id.clone(),
+        }
+    }
+}
+
+/// A request authenticated by its portal sign-in cookie. Only the browser
+/// cookie resolver produces one, so a configured identity source cannot,
+/// whatever its name, header or scheme. Administration with the session's
+/// `user_manage` class, the browser-only OAuth connection routes, the cookie
+/// CSRF check and the forced password change apply only to requests that
+/// carry one.
+#[derive(Debug, Clone)]
+pub(crate) struct BrowserSession {
+    token_id: String,
+}
+
+impl BrowserSession {
+    /// The session's broker-token ID, from which its CSRF token derives.
+    pub(crate) fn token_id(&self) -> &str {
+        &self.token_id
+    }
+}
+
 enum BrowserCookieResolutionError {
     Identity(IdentityFailure),
     Store(ReasonCode),
@@ -1098,7 +1125,7 @@ fn cookie_identity_from_session(
             read_only_access: None,
             namespace: None,
             binding_id: None,
-            name: "browser-session".to_string(),
+            name: agent_access_core::BROWSER_SESSION_IDENTITY_SOURCE.to_string(),
             kind: "broker_tokens".to_string(),
             token_header: "Cookie".to_string(),
             token_scheme: "cookie".to_string(),

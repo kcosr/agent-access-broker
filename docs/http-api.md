@@ -1496,8 +1496,8 @@ managed policy authority, an active account with role `service_policy_manager`
 presenting an ordinary `user_manage` token or browser session may also use these
 routes for directly assigned configured services. Groups never supply management
 assignments. An `agent_invoke` token cannot call them. Read-only
-policy status, catalog, grant list, and grant inspect routes do not require CSRF;
-mutating browser-session requests do.
+policy `GET` routes do not require CSRF; mutating browser-session requests and
+the read-only `POST` previews and grant validation do.
 
 A scoped manager sees only assigned services and grants. Status counts and the
 catalog are filtered and status includes `managementScope` as either
@@ -3313,10 +3313,14 @@ Cookie-authenticated browser sessions are accepted for read-only discovery,
 personal management when self-service is enabled, and administrative routes
 authorized by the current account role. Administrators may change broker state,
 auditors may read metadata and safe previews, and directly assigned service
-policy managers may read and change policy for their services. State-changing cookie-authenticated
-management requests must include the configured CSRF header returned by
-`/v1/auth/session` or `/v1/auth/local/login`; missing or mismatched values
-return HTTP 403 with `reasonCode = csrf_invalid`. Sessions with
+policy managers may read and change policy for their services. Cookie-authenticated
+management requests other than `GET` must include the configured CSRF header
+returned by `/v1/auth/session` or `/v1/auth/local/login`: every state change, and
+also the read-only `POST` previews, grant validation, credential verification and
+secret reveal. Management `GET` reads need no CSRF header. Missing or mismatched
+values return HTTP 403 with `reasonCode = csrf_invalid`. A request is a browser
+session only when the sign-in cookie authenticated it; an issued `user_manage`
+token is never one, whatever its identity source. Sessions with
 `passwordChangeRequired = true` return HTTP 403 with
 `reasonCode = password_change_required` for discovery and management routes
 until `/v1/auth/local/password/change` succeeds.
@@ -3498,9 +3502,9 @@ for exact actions, grant boundaries, reconciliation, and downstream use.
 ## Administrator identity access and bindings
 
 Metadata reads permit administrators and auditors with an `admin` Broker token
-or browser session. Mutations and secret reveal require the administrator role,
-with CSRF for cookie-authenticated requests. Trusted username and fingerprint
-identities never authorize management. Responses use the management envelope and
+or browser session, and need no CSRF header. Mutations and secret reveal require
+the administrator role, with CSRF for cookie-authenticated requests. Trusted
+username and fingerprint identities never authorize management. Responses use the management envelope and
 `Cache-Control: no-store`; mutations require audit preflight and safe completion
 audit. Successful metadata reads are [unaudited reads](#management-audit).
 

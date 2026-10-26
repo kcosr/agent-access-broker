@@ -333,7 +333,7 @@ Each entry in `[[identity.sources]]` carries these common fields:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `name` | yes | Unique, matches `^[A-Za-z0-9._-]{1,128}$` |
+| `name` | yes | Unique, matches `^[A-Za-z0-9._-]{1,128}$`; `browser-session` is reserved |
 | `type` | yes | `static_principals` \| `broker_tokens` |
 | `header` | yes | Valid HTTP header name |
 | `scheme` | default `raw` | `raw` or `Bearer` |
@@ -342,7 +342,9 @@ A single header cannot be configured with two different schemes across sources.
 `static_principals` and `broker_tokens` may repeat a header/scheme pair within
 their respective authority modes. Any other `type` value is rejected.
 `X-Agent-Access-Context` is also rejected because it is reserved for trusted
-ingress attestation.
+ingress attestation. The name `browser-session` is rejected in any letter case:
+portal sign-in sessions record it as their identity source in audit. The broker
+recognizes a browser session by its sign-in cookie, never by a source name.
 
 #### `static_principals`
 

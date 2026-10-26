@@ -78,6 +78,10 @@ pub const EXECUTION_CONTEXT_HEADER: &str = "X-Agent-Access-Context";
 pub const DEFAULT_EXECUTION_CONTEXT: &str = "default";
 pub const EXECUTION_CONTEXT_MAX_VALUES: usize = 64;
 pub const EXECUTION_CONTEXT_MAX_LENGTH: usize = 64;
+/// The identity-source name a portal sign-in session records in its
+/// identity and audit. Configured identity sources cannot use it, in any
+/// letter case.
+pub const BROWSER_SESSION_IDENTITY_SOURCE: &str = "browser-session";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExecutionContext(String);
@@ -2075,6 +2079,14 @@ fn validate_identity(
         if !is_safe_identifier(&source.name) {
             errors.push(format!(
                 "identity.sources.{source_label}.name must match ^[A-Za-z0-9._-]{{1,128}}$"
+            ));
+        }
+        if source
+            .name
+            .eq_ignore_ascii_case(BROWSER_SESSION_IDENTITY_SOURCE)
+        {
+            errors.push(format!(
+                "identity.sources.{source_label}.name {BROWSER_SESSION_IDENTITY_SOURCE} is reserved for portal browser sessions"
             ));
         }
         if !source_names.insert(source.name.clone()) {
