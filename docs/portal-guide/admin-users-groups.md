@@ -148,10 +148,11 @@ row has **Enabled** and **Read-only** toggles. A disabled row stops that path
 only; a disabled identity token keeps its secret. A read-only row can list and
 call only actions classified as reads, within the person's grants. A toggle
 change is checked against the row's current version or revision; a conflict
-requires refreshing the record before retrying. Create a binding only in a
-configured namespace, and select **Read-only** in the create form for a
-read-only binding. Disabling keeps the name reserved; delete/create to rename or
-reassign. Auditors see the same table without controls.
+requires refreshing the record before retrying. To create a binding, use the
+**Add username binding** form below the table: pick a configured namespace,
+enter the exact username, select **Read-only** for a read-only binding, and
+choose **Add binding**. Disabling keeps the name reserved; delete/create to
+rename or reassign. Auditors see the same table without controls or the form.
 
 **Identity token** retains reveal/copy, set, generate and remove controls. Removing
 inventory disables fingerprint access but leaves username bindings, shared pause

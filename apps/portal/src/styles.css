@@ -618,6 +618,9 @@
 /* Identity access paths: the path name over its kind; exact names wrap only when wider than the column. */
 .pt-identity-path > span { display: block; }
 .pt-identity-path-name { color: var(--wb-fg); overflow-wrap: anywhere; }
+/* The add-binding form under the table: its own heading, then settings rows separated like a section's. */
+.pt-binding-add-title { margin: 24px 0 4px; }
+.pt-binding-add > fieldset > .wb-settings-row:first-of-type { border-top: 0; }
 
 /* Grants tab: the add-to-existing-grant form under the references table. */
 .pt-ref-add {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiError, brokerApi } from "../../api";
 import { useSession } from "../../app/session";
@@ -74,6 +74,8 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
   const toast = useToast();
   const tokenQuery = useIdentityToken(principalId);
   const bindingsQuery = useIdentityBindings(principalId);
+  const addHeading = useId();
+  const addDescription = useId();
   const [namespace, setNamespace] = useState("");
   const [username, setUsername] = useState("");
   const [readOnly, setReadOnly] = useState(false);
@@ -207,8 +209,10 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
           </div>
           {!data.bindings.length ? <p className="pt-prose mt-2">No username bindings.</p> : null}
           <AdminOnly>
+            <h4 id={addHeading} className="pt-section-title pt-binding-add-title">Add username binding</h4>
             {data.configuredNamespaces.length ? (
-              <AdminForm className="mt-4" onSubmit={(event) => { event.preventDefault(); if (namespaceAvailable && validIdentityUsername(username) && pending === null) void mutateBinding("create"); }}>
+              <AdminForm className="pt-binding-add" aria-labelledby={addHeading} aria-describedby={addDescription} onSubmit={(event) => { event.preventDefault(); if (namespaceAvailable && validIdentityUsername(username) && pending === null) void mutateBinding("create"); }}>
+                <p id={addDescription} className="pt-prose">Trusted callers configured with the namespace can then attest this person on HTTP MCP by presenting the exact username.</p>
                 <SettingsRow label="Identity namespace" help="Namespaces are configured by trusted callers on the broker.">
                   <Select value={namespace} onChange={(event) => setNamespace(event.target.value)} disabled={pending !== null} options={[
                     { value: "", label: "Choose a namespace" },
@@ -222,9 +226,9 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
                   <Checkbox checked={readOnly} onChange={(event) => setReadOnly(event.target.checked)} disabled={pending !== null} />
                 </SettingsRow>
                 <FormError error={usernameInvalid ? "Enter an exact username using the allowed characters; spaces are not removed." : null} />
-                <div className="wb-settings-actions"><AdminButton type="submit" pending={pending === "create"} disabled={!namespaceAvailable || !validIdentityUsername(username) || busy}>Add username binding</AdminButton></div>
+                <div className="wb-settings-actions"><AdminButton type="submit" icon="plus" pending={pending === "create"} disabled={!namespaceAvailable || !validIdentityUsername(username) || busy}>Add binding</AdminButton></div>
               </AdminForm>
-            ) : <p className="pt-prose mt-4">No username identity namespaces are configured. Configure a trusted caller before adding a binding.</p>}
+            ) : <p className="pt-prose">No username identity namespaces are configured. Configure a trusted caller before adding a binding.</p>}
           </AdminOnly>
           <FormError error={error} />
         </>

@@ -243,7 +243,8 @@ administrator token to a user or put a setup token in an agent's environment.
 ## Configure trusted human identity
 
 For managed HTTP MCP clients, open the human's **Identity access** section and
-create an exact username binding in a namespace configured by the operator.
+use its **Add username binding** form to create an exact username binding in a
+namespace configured by the operator.
 The caller's credential selects the namespace; the user cannot select it in a
 request. Several names can map to one human and share its permissions and quotas.
 Disabled bindings reserve their names; rename or reassign with delete/create.

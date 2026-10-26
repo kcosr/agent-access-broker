@@ -1144,16 +1144,17 @@ test("local browser login supports administration, self-service credentials, tok
     await tokenEnabled.click();
     await expect(tokenEnabled).toBeChecked();
 
-    await identityAccess.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
-    await identityAccess.getByLabel("Exact username", { exact: true }).fill("Alice+Portal");
-    await identityAccess.getByRole("checkbox", { name: "Read-only", exact: true }).check();
-    await identityAccess.getByRole("button", { name: "Add username binding", exact: true }).click();
+    const createBinding = identityAccess.getByRole("form", { name: "Add username binding", exact: true });
+    await createBinding.getByLabel("Identity namespace", { exact: true }).selectOption("managed_linux");
+    await createBinding.getByLabel("Exact username", { exact: true }).fill("Alice+Portal");
+    await createBinding.getByRole("checkbox", { name: "Read-only", exact: true }).check();
+    await createBinding.getByRole("button", { name: "Add binding", exact: true }).click();
     const bindingRow = accessPaths.getByRole("row", { name: /^managed_linux\/Alice\+Portal/ });
     const bindingEnabled = bindingRow.getByRole("switch", { name: "Binding managed_linux/Alice+Portal enabled", exact: true });
     const bindingReadOnly = bindingRow.getByRole("switch", { name: "Binding managed_linux/Alice+Portal read-only", exact: true });
     await expect(bindingEnabled).toBeChecked();
     await expect(bindingReadOnly).toBeChecked();
-    await expect(identityAccess.getByRole("checkbox", { name: "Read-only", exact: true })).not.toBeChecked();
+    await expect(createBinding.getByRole("checkbox", { name: "Read-only", exact: true })).not.toBeChecked();
     await bindingEnabled.click();
     await expect(bindingEnabled).not.toBeChecked();
     await bindingEnabled.click();
