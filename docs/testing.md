@@ -69,7 +69,11 @@ capacity, exposes only the
 caller's nonmutating snapshot, and fails closed on observation errors. Request
 lifetime tests cover handler and streaming-response drops. Real local connections
 verify HTTP/1 close detection and that resetting one HTTP/2 stream cancels only
-its request. These tests do not use live upstream services.
+its request. Host `tests::lingering_close` covers uploads refused after
+admission: over real connections, a client that writes a multi-MiB body first
+still reads the denial and reuses the connection, and a remainder over the
+lingering cap closes it; through the router, rate-limited uploads still never
+read their bodies. These tests do not use live upstream services.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.
@@ -566,8 +570,9 @@ is no live CloudBees CI smoke without a configured tenant.
 GitLab project-upload coverage includes real CLI typed/JSON-send HTML transfers,
 HTTP multipart to a stub upstream, canonical repository/action/token denials,
 caller-filtered catalog/OpenAPI/send metadata, file count/integrity and configured
-byte/MIME bounds, and audit/error redaction of contents, credentials and upload
-link secrets. No live upload is performed by the deterministic suite.
+byte/MIME bounds, audit/error redaction of contents, credentials and upload
+link secrets, and repeated 4 MiB uploads whose denial envelope the CLI must
+receive every time. No live upload is performed by the deterministic suite.
 The hermetic GitLab core, Broker, and CLI suites cover the webhook vertical
 surface: all ten action routes and typed wrappers, caller-filtered catalog/
 OpenAPI/send parity, default-deny and allowed destination policy, existing

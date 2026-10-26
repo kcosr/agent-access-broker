@@ -71,7 +71,15 @@ inline content. Auth and other control-plane bodies have five- and fifteen-secon
 receive ceilings, including fifteen seconds for document uploads; a smaller
 configured deadline still applies. Their timeouts
 return HTTP 408 with a deadline message. Invocation timeouts retain
-`body_malformed` with `request body receive deadline exceeded`. Management responses
+`body_malformed` with `request body receive deadline exceeded`. When the Broker
+answers an admitted invocation before reading all of its body, such as an upload
+refused after its metadata part, an HTTP/1.1 connection keeps reading and
+discarding the rest after the response: at most 8 MiB, for at most five seconds,
+and never past the body cap or receive deadline. A client still sending can then
+read the response, and the connection stays open if the body ends within those
+bounds. Refusals before admission, including authentication, concurrency and
+rate limits, never read the body; a large one can end in a closed connection
+before the client reads the response. Management responses
 include `Cache-Control: no-store`; internal store diagnostics stay in server logs.
 MCP additionally
 bounds streamed request intake and serialized protocol responses directly around

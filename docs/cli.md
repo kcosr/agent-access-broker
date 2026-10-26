@@ -1335,7 +1335,11 @@ In addition to HTTP-derived codes:
 - Network errors, request timeouts, malformed broker responses, unexpected JSON
   shapes, and output-formatting failures exit `5` (`exit_network_error`,
   `exit_malformed_broker_response`, response-shape validation, and
-  `print_value` formatting).
+  `print_value` formatting). An upload the Broker refuses after admission, for
+  example by policy or its attachment checks, still exits with its HTTP-derived
+  code and prints the envelope. Authentication, concurrency and rate-limit
+  refusals precede reading the file, so for a large file they can instead end
+  in a closed connection and exit `5`.
 
 ## Transport security
 

@@ -226,6 +226,58 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
     std::fs::remove_dir_all(upload_path.parent().unwrap()).unwrap();
 }
 
+/// The Broker refuses this upload after its metadata part, with most of the
+/// file unsent. The CLI must still receive the denial, not a reset
+/// connection, on every attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_gitlab_project_upload_receives_the_denial_of_a_large_file() {
+    const ATTEMPTS: usize = 8;
+    let upload_path = temp_path("large-session.html");
+    std::fs::write(&upload_path, vec![b'x'; 4 * 1024 * 1024]).unwrap();
+    let backend = stub_backend();
+    let mut document = gitlab_per_user_document();
+    for grant in &mut document.grants {
+        grant.credential_mode = "service".to_string();
+        grant.actions.retain(|action| action != "project.upload");
+    }
+    let broker = start_broker(
+        &document,
+        gitlab_service(gitlab_provider_config(2), backend.clone()),
+    )
+    .await;
+    let base_url = broker.public_url();
+    for attempt in 0..ATTEMPTS {
+        let upload = gitlab_cli(&base_url)
+            .args([
+                "gitlab",
+                "project",
+                "upload",
+                "sip/service",
+                "--file",
+                upload_path.to_str().unwrap(),
+                "--content-type",
+                "text/html",
+            ])
+            .output()
+            .unwrap();
+        let report = format!(
+            "attempt {attempt}: {} stdout={} stderr={}",
+            upload.status,
+            String::from_utf8_lossy(&upload.stdout),
+            String::from_utf8_lossy(&upload.stderr)
+        );
+        // HTTP 403.
+        assert_eq!(upload.status.code(), Some(2), "{report}");
+        let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
+            .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
+        assert_eq!(value["decision"], "deny", "{report}");
+        assert_eq!(value["reasonCode"], "scope_unresolved", "{report}");
+    }
+    assert!(backend.uploaded_projects.lock().unwrap().is_empty());
+    stop(broker).await;
+    std::fs::remove_dir_all(upload_path.parent().unwrap()).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     let backend = stub_backend();

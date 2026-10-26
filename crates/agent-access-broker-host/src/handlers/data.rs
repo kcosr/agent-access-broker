@@ -1469,15 +1469,30 @@ pub(crate) async fn invoke(
     Path((service, action)): Path<(String, String)>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     request: Request<Body>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let headers = request.headers().clone();
-    let raw_result_requested = accepts_raw_result(&headers);
     let snapshot = state.reloadable.current();
+    // Refusals before admission, including rate and queue limits, never read
+    // the body.
     let admitted =
         match admit_invoke(&state, snapshot, remote_addr, &headers, service, action).await {
             Ok(admitted) => admitted,
             Err(response) => return *response,
         };
+    // A later refusal can leave the body unread, as for an upload refused
+    // after its metadata part; the connection lingers so the client reads it.
+    let (request, unread) = crate::ingress::lingering_close::track(request);
+    let response = invoke_admitted(&state, admitted, &headers, request).await;
+    unread.linger(response)
+}
+
+async fn invoke_admitted(
+    state: &AppState,
+    admitted: AdmittedInvocation,
+    headers: &HeaderMap,
+    request: Request<Body>,
+) -> axum::response::Response {
+    let raw_result_requested = accepts_raw_result(headers);
     let AdmittedInvocation {
         snapshot,
         context,
@@ -1518,7 +1533,7 @@ pub(crate) async fn invoke(
             .await;
         return envelope_response(response).into_response();
     }
-    if raw_result_action && request_is_multipart(&headers) {
+    if raw_result_action && request_is_multipart(headers) {
         let response = snapshot
             .runtime
             .governed_operation_error_response(
@@ -1532,7 +1547,7 @@ pub(crate) async fn invoke(
         return envelope_response(response).into_response();
     }
 
-    let parsed = match parse_invoke_request(request, &state, &snapshot).await {
+    let parsed = match parse_invoke_request(request, state, &snapshot).await {
         Ok(parsed) => parsed,
         Err(error) => {
             let response = snapshot
@@ -1551,7 +1566,7 @@ pub(crate) async fn invoke(
                 .is_some()
             {
                 let (response, permits) = crate::operations::invoke(
-                    &state,
+                    state,
                     AdmittedInvocation {
                         snapshot,
                         context,
@@ -1571,7 +1586,7 @@ pub(crate) async fn invoke(
         }
         ParsedInvokeRequest::Json(request) => {
             let response = invoke_admitted_json(
-                &state,
+                state,
                 AdmittedInvocation {
                     snapshot,
                     context,
@@ -1584,7 +1599,7 @@ pub(crate) async fn invoke(
             return json_invoke_response(response, exports_secrets);
         }
         ParsedInvokeRequest::Multipart(request) => {
-            invoke_multipart_after_metadata(&state, &snapshot, context, request).await
+            invoke_multipart_after_metadata(state, &snapshot, context, request).await
         }
     };
     if raw_result_requested {
