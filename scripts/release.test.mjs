@@ -30,7 +30,10 @@ function fixture(t) {
   };
   writeFileSync(qualificationPath, JSON.stringify(report));
   const calls = [];
-  const state = { remoteMain: commit, remoteObject: undefined, remoteCommit: undefined, draft: undefined, notesFile: undefined, fail: undefined };
+  // listingLag: release-list lookups after creation that still omit the new draft.
+  const state = { remoteMain: commit, remoteObject: undefined, remoteCommit: undefined, draft: undefined, notesFile: undefined, fail: undefined,
+    listingLag: 0, hiddenLookups: 0, onSleep: undefined };
+  const sleeps = [];
   const run = (command, args) => {
     calls.push([command, ...args]);
     if (state.fail?.(command, args)) throw new Error("injected command failure");
@@ -50,7 +53,10 @@ function fixture(t) {
       return git(...args);
     }
     assert.equal(command, "gh");
-    if (args[0] === "api") return JSON.stringify([[...(state.draft ? [state.draft] : [])]]);
+    if (args[0] === "api") {
+      if (state.hiddenLookups > 0) { state.hiddenLookups -= 1; return JSON.stringify([[]]); }
+      return JSON.stringify([[...(state.draft ? [state.draft] : [])]]);
+    }
     if (args[0] === "repo") {
       assert.deepEqual(args, ["repo", "view", "github.com/example/broker", "--json", "nameWithOwner"]);
       return "";
@@ -63,6 +69,7 @@ function fixture(t) {
       assert.ok(args.includes("--verify-tag"));
       state.notesFile = args[args.indexOf("--notes-file") + 1];
       state.draft = { tag_name: "v0.1.0", target_commitish: args[args.indexOf("--target") + 1], name: "v0.1.0", body: readFileSync(state.notesFile, "utf8"), draft: true, prerelease: false };
+      state.hiddenLookups = state.listingLag;
       return "";
     }
     assert.deepEqual(args, ["release", "edit", "v0.1.0", "--repo", "github.com/example/broker", "--draft=false"]);
@@ -70,12 +77,15 @@ function fixture(t) {
     state.draft.draft = false;
     return "";
   };
-  const publish = () => publishRelease({ root, qualificationPath, run });
-  return { root, git, report, qualificationPath, commit, calls, state, run, publish };
+  const sleep = (milliseconds) => { sleeps.push(milliseconds); state.onSleep?.(); };
+  const publish = () => publishRelease({ root, qualificationPath, run, sleep });
+  return { root, git, report, qualificationPath, commit, calls, state, sleeps, run, publish };
 }
 
 const writes = (calls) => calls.filter(([command, operation, ...args]) =>
   (command === "git" && (operation === "push" || operation === "tag")) || (command === "gh" && operation === "release" && ["create", "edit"].includes(args[0])));
+const lookups = (calls) => calls.filter(([command, operation]) => command === "gh" && operation === "api").length;
+const writeNames = (calls) => writes(calls).map(([command, operation, next]) => `${command} ${operation}${command === "gh" ? ` ${next}` : ""}`);
 
 test("publication accepts only a qualification file argument", () => {
   assert.deepEqual(parsePublishArguments(["--qualification", "receipt.json"]), { qualificationPath: "receipt.json" });
@@ -90,7 +100,7 @@ test("publication tags the exact qualified commit, pushes only that tag and publ
   assert.equal(f.git("rev-parse", "refs/tags/v0.1.0^{commit}").trim(), f.commit);
   assert.equal(f.git("rev-parse", "HEAD").trim(), f.commit);
   assert.equal(f.git("status", "--porcelain"), "");
-  assert.deepEqual(writes(f.calls).map(([command, operation, next]) => `${command} ${operation}${command === "gh" ? ` ${next}` : ""}`), ["git tag", "git push", "gh release create", "gh release edit"]);
+  assert.deepEqual(writeNames(f.calls), ["git tag", "git push", "gh release create", "gh release edit"]);
   assert.deepEqual(f.calls.at(-1), ["gh", "release", "edit", "v0.1.0", "--repo", "github.com/example/broker", "--draft=false"]);
   assert.equal(f.state.draft.body, "### Added\n\n- Qualified release.", "empty note headings are not published");
   assert.equal(f.state.draft.draft, false);
@@ -154,6 +164,42 @@ test("a failed final publish retains the exact tag and matching draft and safely
   assert.deepEqual(writes(f.calls), []);
 });
 
+test("a draft that appears late in the release list is verified and published without another create", (t) => {
+  for (const [lag, waits] of [[1, [1_000]], [2, [1_000, 2_000]]]) {
+    const f = fixture(t);
+    f.state.listingLag = lag;
+    f.publish();
+    assert.deepEqual(f.sleeps, waits);
+    assert.equal(lookups(f.calls), 1 + lag + 1, "one preflight lookup, then lookups until the draft appears");
+    assert.deepEqual(writeNames(f.calls), ["git tag", "git push", "gh release create", "gh release edit"]);
+    assert.equal(f.state.draft.draft, false);
+  }
+  // A late draft is still verified against the qualified commit and notes.
+  const f = fixture(t);
+  f.state.listingLag = 1;
+  f.state.onSleep = () => { f.state.draft.target_commitish = "c".repeat(40); };
+  assert.throws(f.publish, /matching tag or draft may remain.*does not match the qualified commit/);
+  assert.deepEqual(writeNames(f.calls), ["git tag", "git push", "gh release create"]);
+  assert.equal(f.state.draft.draft, true);
+});
+
+test("a created draft that never appears fails after bounded lookups and a rerun publishes the retained draft", (t) => {
+  const f = fixture(t);
+  f.state.listingLag = Number.POSITIVE_INFINITY;
+  assert.throws(f.publish, /matching tag or draft may remain; rerun with the same qualification.*GitHub draft v0\.1\.0 was not found after creation in 5 lookups over 15 seconds/);
+  assert.deepEqual(f.sleeps, [1_000, 2_000, 4_000, 8_000]);
+  assert.equal(lookups(f.calls), 1 + 5);
+  assert.deepEqual(writeNames(f.calls), ["git tag", "git push", "gh release create"]);
+  assert.equal(f.state.remoteCommit, f.commit);
+  assert.equal(f.state.draft.draft, true);
+  f.state.listingLag = 0;
+  f.state.hiddenLookups = 0;
+  f.calls.length = 0;
+  f.publish();
+  assert.deepEqual(writeNames(f.calls), ["gh release edit"]);
+  assert.equal(f.state.draft.draft, false);
+});
+
 test("wrong or lightweight existing tags are rejected without moving or deleting them", (t) => {
   const f = fixture(t);
   f.git("tag", "v0.1.0");
@@ -178,6 +224,12 @@ test("GitHub read failures are not treated as an absent release", (t) => {
   f.state.fail = (command, args) => command === "gh" && args[0] === "api";
   assert.throws(f.publish, /injected command failure/);
   assert.deepEqual(writes(f.calls), []);
+  // After creation, a failed read is not retried as though the draft were absent.
+  const created = fixture(t);
+  created.state.fail = (command, args) => command === "gh" && args[0] === "api" && created.state.draft !== undefined;
+  assert.throws(created.publish, /matching tag or draft may remain.*injected command failure/);
+  assert.deepEqual(created.sleeps, []);
+  assert.deepEqual(writeNames(created.calls), ["git tag", "git push", "gh release create"]);
 });
 
 test("publication rejects inherited Git overrides before commands and binds the actual repository root", (t) => {
