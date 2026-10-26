@@ -2154,6 +2154,22 @@ fn lookup_scope_errors_preserve_safe_local_validation_only() {
         assert_eq!(validation.message, "safe local body validation");
     }
 
+    // A provider may derive attachment refusals from the resource it looked
+    // up, so lookup concealment hides them too. Upload providers check their
+    // attachment policy in body admission, after authorization.
+    for reason_code in [
+        ReasonCode::AttachmentSizeDenied,
+        ReasonCode::AttachmentMediaTypeDenied,
+    ] {
+        let hidden =
+            public_lookup_scope_error(ProviderError::deny(reason_code, "attachment detail"));
+        assert_eq!(hidden.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(
+            hidden.message,
+            "resource scope is not authorized or unavailable"
+        );
+    }
+
     for reason_code in [
         ReasonCode::ScopeUnresolved,
         ReasonCode::UpstreamFailed,

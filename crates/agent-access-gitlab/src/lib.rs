@@ -563,7 +563,7 @@ impl Provider for GitlabProvider {
                 "GitLab action does not accept multipart body parts",
             ));
         }
-        let (_, metadata) = parse_project_upload_inputs(request.inputs(), &self.config)?;
+        let (_, metadata) = parse_admitted_project_upload_inputs(request.inputs(), &self.config)?;
         self.lookup_project_for_invoke(request).await?;
         Ok(BodyAdmission::new(vec![metadata], StateDisposition::Keep))
     }
@@ -795,7 +795,7 @@ impl GitlabProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
-        let (_, metadata) = parse_project_upload_inputs(request.inputs(), &self.config)?;
+        let (_, metadata) = parse_admitted_project_upload_inputs(request.inputs(), &self.config)?;
         let upload = prepare_project_upload(&metadata, request.body_parts())?;
         // Spooling can take time; re-confirm the project immediately before the
         // write rather than trusting the pre-spool lookup across that interval.
@@ -7516,6 +7516,11 @@ struct GitlabUploadMetadata {
     sha256: String,
 }
 
+/// The project and the one declared file of a `project.upload` request,
+/// checked for shape only. Scope resolution parses the project with it, so it
+/// never applies the attachment policy: before policy, lookup concealment
+/// would report that refusal as `scope_unresolved`. The hooks that run after
+/// authorization use [`parse_admitted_project_upload_inputs`].
 fn parse_project_upload_inputs(
     inputs: &Value,
     config: &GitlabProviderConfig,
@@ -7556,6 +7561,31 @@ fn parse_project_upload_inputs(
     {
         return Err(invalid());
     }
+    let mut locator = object.clone();
+    locator.remove("attachments");
+    let locator = parse_project_locator(&Value::Object(locator), config)?;
+    Ok((
+        locator,
+        BrokerBodyPartSpec::new(
+            metadata.field,
+            metadata.filename,
+            metadata.content_type,
+            metadata.size,
+            metadata.sha256,
+        ),
+    ))
+}
+
+/// [`parse_project_upload_inputs`] with the configured attachment policy
+/// applied to the declared file: both byte caps and the media type allowlist.
+/// Body admission refuses here, after authorization and before the host reads
+/// the file part, so the caller learns which limit to fix; invocation checks
+/// again.
+fn parse_admitted_project_upload_inputs(
+    inputs: &Value,
+    config: &GitlabProviderConfig,
+) -> Result<(ProjectLocator, BrokerBodyPartSpec), ProviderError> {
+    let (locator, metadata) = parse_project_upload_inputs(inputs, config)?;
     if metadata.size == 0
         || metadata.size > config.attachments.max_bytes
         || metadata.size > config.attachments.max_total_bytes
@@ -7581,19 +7611,7 @@ fn parse_project_upload_inputs(
             "GitLab upload content type is not allowed",
         ));
     }
-    let mut locator = object.clone();
-    locator.remove("attachments");
-    let locator = parse_project_locator(&Value::Object(locator), config)?;
-    Ok((
-        locator,
-        BrokerBodyPartSpec::new(
-            metadata.field,
-            metadata.filename,
-            metadata.content_type,
-            metadata.size,
-            metadata.sha256,
-        ),
-    ))
+    Ok((locator, metadata))
 }
 
 fn ensure_admitted_project(

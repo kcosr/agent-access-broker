@@ -2323,8 +2323,14 @@ carry a `Retry-After` header with that value (see [rate limits](#rate-limits)).
 
 Broker-local `body_malformed` and `body_format_unsupported` failures remain
 actionable even when an action performs metadata lookup before authorization;
-they are not normalized to `scope_unresolved`. For an already-authorized Jira,
-Confluence, or GitLab REST mutation, a provider HTTP 400 or 422 response may
+they are not normalized to `scope_unresolved`. Jira, Confluence and GitLab
+uploads check each declared file's size and media type after authorization and
+before reading file parts: an authorized caller receives
+`attachment_size_denied` or `attachment_media_type_denied`, and a caller
+refused for the resource receives that authorization refusal instead.
+
+For an already-authorized Jira, Confluence, or GitLab REST mutation, a provider
+HTTP 400 or 422 response may
 produce a bounded, sanitized `error.message` only when its JSON matches the
 provider's structured validation schema and its field or error code is on the
 action's allowlist. The broker does not return the raw upstream body. It does

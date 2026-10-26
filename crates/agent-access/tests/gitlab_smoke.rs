@@ -166,7 +166,14 @@ async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
 async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
     let upload_path = temp_path("session.html");
     std::fs::write(&upload_path, b"<html>private-agent-session-content</html>").unwrap();
-    for case in ["repository", "action", "size", "media_type"] {
+    // A caller without the project or the action gets the concealed denial;
+    // an authorized caller learns which file limit to fix.
+    for (case, reason) in [
+        ("repository", "scope_unresolved"),
+        ("action", "scope_unresolved"),
+        ("size", "attachment_size_denied"),
+        ("media_type", "attachment_media_type_denied"),
+    ] {
         let backend = stub_backend();
         let mut document = gitlab_document();
         let mut provider_config = gitlab_provider_config(2);
@@ -208,10 +215,12 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
             String::from_utf8_lossy(&upload.stdout),
             String::from_utf8_lossy(&upload.stderr)
         );
-        assert!(!upload.status.success(), "unexpected success: {report}");
+        // HTTP 403, 413 or 415.
+        assert_eq!(upload.status.code(), Some(2), "{report}");
         let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
             .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
-        assert_ne!(value["decision"], "allow", "{case}: {value}");
+        assert_eq!(value["decision"], "deny", "{report}");
+        assert_eq!(value["reasonCode"], reason, "{report}");
         assert!(
             backend.uploaded_projects.lock().unwrap().is_empty(),
             "{case} reached upstream upload"
@@ -227,54 +236,64 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
 }
 
 /// The Broker refuses this upload after its metadata part, with most of the
-/// file unsent. The CLI must still receive the denial, not a reset
-/// connection, on every attempt.
+/// file unsent: in scope resolution for a caller without the action, and in
+/// body admission for a file over the size cap. The CLI must still receive
+/// the denial, not a reset connection, on every attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_gitlab_project_upload_receives_the_denial_of_a_large_file() {
     const ATTEMPTS: usize = 8;
     let upload_path = temp_path("large-session.html");
     std::fs::write(&upload_path, vec![b'x'; 4 * 1024 * 1024]).unwrap();
-    let backend = stub_backend();
-    let mut document = gitlab_per_user_document();
-    for grant in &mut document.grants {
-        grant.credential_mode = "service".to_string();
-        grant.actions.retain(|action| action != "project.upload");
+    for (case, reason) in [
+        ("action", "scope_unresolved"),
+        ("size", "attachment_size_denied"),
+    ] {
+        let backend = stub_backend();
+        let mut document = gitlab_per_user_document();
+        let mut provider_config = gitlab_provider_config(2);
+        for grant in &mut document.grants {
+            grant.credential_mode = "service".to_string();
+            if case == "action" {
+                grant.actions.retain(|action| action != "project.upload");
+            }
+        }
+        if case == "size" {
+            provider_config.attachments.max_bytes = 1024 * 1024;
+        }
+        document.provider = provider_config.clone();
+        let broker =
+            start_broker(&document, gitlab_service(provider_config, backend.clone())).await;
+        let base_url = broker.public_url();
+        for attempt in 0..ATTEMPTS {
+            let upload = gitlab_cli(&base_url)
+                .args([
+                    "gitlab",
+                    "project",
+                    "upload",
+                    "sip/service",
+                    "--file",
+                    upload_path.to_str().unwrap(),
+                    "--content-type",
+                    "text/html",
+                ])
+                .output()
+                .unwrap();
+            let report = format!(
+                "{case} attempt {attempt}: {} stdout={} stderr={}",
+                upload.status,
+                String::from_utf8_lossy(&upload.stdout),
+                String::from_utf8_lossy(&upload.stderr)
+            );
+            // HTTP 403 or 413.
+            assert_eq!(upload.status.code(), Some(2), "{report}");
+            let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
+                .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
+            assert_eq!(value["decision"], "deny", "{report}");
+            assert_eq!(value["reasonCode"], reason, "{report}");
+        }
+        assert!(backend.uploaded_projects.lock().unwrap().is_empty());
+        stop(broker).await;
     }
-    let broker = start_broker(
-        &document,
-        gitlab_service(gitlab_provider_config(2), backend.clone()),
-    )
-    .await;
-    let base_url = broker.public_url();
-    for attempt in 0..ATTEMPTS {
-        let upload = gitlab_cli(&base_url)
-            .args([
-                "gitlab",
-                "project",
-                "upload",
-                "sip/service",
-                "--file",
-                upload_path.to_str().unwrap(),
-                "--content-type",
-                "text/html",
-            ])
-            .output()
-            .unwrap();
-        let report = format!(
-            "attempt {attempt}: {} stdout={} stderr={}",
-            upload.status,
-            String::from_utf8_lossy(&upload.stdout),
-            String::from_utf8_lossy(&upload.stderr)
-        );
-        // HTTP 403.
-        assert_eq!(upload.status.code(), Some(2), "{report}");
-        let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
-            .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
-        assert_eq!(value["decision"], "deny", "{report}");
-        assert_eq!(value["reasonCode"], "scope_unresolved", "{report}");
-    }
-    assert!(backend.uploaded_projects.lock().unwrap().is_empty());
-    stop(broker).await;
     std::fs::remove_dir_all(upload_path.parent().unwrap()).unwrap();
 }
 

@@ -391,8 +391,14 @@ Direct HTTP uses `POST /v1/invoke/gitlab/project.upload` with multipart fields:
 the first part is `request` (`application/json`) containing
 `{"inputs":{"project":"team/project","attachments":[{"field":"file0","filename":"session.html","contentType":"text/html","size":123,"sha256":"<64 lowercase hexadecimal characters>"}]}}`;
 the second part is `file0`, with matching filename, MIME type, actual byte count
-and SHA-256. Metadata is authorized before file parts are read. The Broker
-spools bounded bytes privately and removes the temporary file after invocation.
+and SHA-256. Metadata is authorized before file parts are read: the Broker
+first authorizes the project, then checks the declared size and MIME type
+against `providers.gitlab.attachments`. A file over either cap is refused with
+`attachment_size_denied` (HTTP 413) and a MIME type outside the allowlist with
+`attachment_media_type_denied` (HTTP 415). A caller who may not use the
+project, or names one that does not exist, receives the concealed
+`scope_unresolved` whatever file it declares. The Broker spools bounded bytes
+privately and removes the temporary file after invocation.
 Plain JSON cannot supply the file contents.
 
 The JSON response includes `result.upload` with `alt`, `url`, `fullPath`,

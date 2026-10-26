@@ -572,6 +572,13 @@ and SHA-256. At invocation the provider still checks that each part matches the
 metadata it admitted. The default `authorize_body_parts` denies every multipart
 request with `body_malformed`.
 
+Check configured file limits (`attachment_size_denied`,
+`attachment_media_type_denied`) in body admission, which runs after
+authorization, not in scope resolution. When an action looks up its resources
+before policy, the host reports every scope resolution failure other than an
+input, body, locator, credential or lease failure as the concealed
+`scope_unresolved`, so a limit checked there never reaches the caller.
+
 ## Authority and credentials
 
 ### The admitted request

@@ -226,6 +226,13 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **GitLab upload refusals name the file limit.** A `project.upload` file over
+  the size cap or outside the media type allowlist now returns
+  `attachment_size_denied` or `attachment_media_type_denied` to an authorized
+  caller instead of `scope_unresolved`. Callers refused for the project still
+  receive the concealed reason.
+  ([#81](https://github.com/kcosr/agent-access-broker/pull/81))
+
 - **Refused uploads usually report their reason instead of a network error.**
   When an admitted upload is refused before its body has been read, the Broker
   keeps reading and discarding the rest for a bounded amount and time while
