@@ -2464,13 +2464,17 @@ on its HTTP/1.1 connection: one of the server's connection tasks discards the
 rest without parsing or forwarding it, stopping once 8 MiB have been read (the
 received frame that crosses 8 MiB is read whole), after five seconds, or at the
 invocation transfer cap or body deadline, so the client can finish sending and
-read the response instead of meeting a reset. A body still held when the
-response is ready, such as a pack an upstream request that answered early or
+read the response instead of meeting a reset. After an unsuccessful response, a
+body still held, such as a pack an upstream request that refused it early or
 failed is still sending, is awaited within the same deadline and discarded
 once that holder drops it unfinished; one that ends while held releases the
-wait at once. The task holds the request's global and per-principal
-concurrency permits until it ends, never past that deadline; graceful shutdown
-waits for it and forced shutdown cancels it. A remainder beyond those bounds,
+wait at once, and one still held at the deadline is stopped there, so its
+holder reads and forwards nothing more. A successful response leaves a held
+body to its holder, as for an upstream that answers before it has read the
+whole pack; that response keeps the request's permits until it ends. The task
+holds the request's global and per-principal concurrency permits until it
+ends, never past that deadline; graceful shutdown waits for it and forced
+shutdown cancels it. A remainder beyond those bounds,
 or a body that already failed, still closes the connection unread. Refusals
 before admission never read the body. HTTP MCP retains its independent intake admission.
 Local-password hashes run outside the managed

@@ -240,16 +240,19 @@ updates (`git_pkt_line_malformed`).
 
 When the broker answers an admitted pack POST before reading all of its body,
 such as a push refused after its command prefix, by policy or by a read-only
-path, or one whose upstream request failed or answered before the whole pack
+path, or one whose upstream request failed or refused it before the whole pack
 was sent, an HTTP/1.1 connection keeps reading and discarding the rest of the
 body after the response. When the upstream request still holds the pack at
 that point, the connection waits for it to let go, within the same bounds,
-and then discards the rest. The discarded bytes are never parsed or forwarded.
+and then discards the rest; at the five-second limit it stops that request,
+which forwards nothing more. The discarded bytes are never parsed or forwarded.
 Discarding stops once 8 MiB have been read (the received frame that crosses
 8 MiB is read whole), five seconds after the response or at the body deadline,
 whichever comes first, and the request keeps its global and per-principal
-concurrency slots until then. When the rest of the body arrives
-within those bounds, a Git client still sending its pack, or an HTTP
+concurrency slots until then. An upstream that answers successfully before it
+has read the whole pack keeps receiving it until the push completes, and the
+request keeps its slots until its response ends. When the rest of the body
+arrives within those bounds, a Git client still sending its pack, or an HTTP
 intermediary relaying it, reads the refusal instead of meeting a reset, and the
 connection stays open. Otherwise the connection closes with the body unread, and
 such a client can still see a transport error instead of the response. Refusals
