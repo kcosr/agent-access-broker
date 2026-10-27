@@ -1111,3 +1111,90 @@ async fn a_push_accepted_early_upstream_is_forwarded_whole_past_the_lingering_de
     wait_until(|| guards.global_in_flight_requests() == 0).await;
     assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
 }
+
+/// Starts a push to an origin that refuses it early and keeps reading, and
+/// sends nothing after the command prefix and the start of the pack, keeping
+/// the connection open. Returns once the client has read the refusal.
+async fn push_refused_early_then_left_unsent(
+    fixture: &GatewayRouterFixture,
+) -> (
+    BufReader<OwnedReadHalf>,
+    tokio::net::tcp::OwnedWriteHalf,
+    Instant,
+) {
+    let address = fixture._broker.running().gateway_addr().unwrap();
+    let pack_bytes = 16 * RESUMED_CHUNK;
+    let request = push_request_bytes(
+        "refs/heads/feature",
+        &gateway_basic(&fixture.agent_token),
+        pack_bytes,
+    );
+    let sent = request.len() - pack_bytes + 2 * RESUMED_CHUNK;
+    let (mut reader, mut writer) = connect_to(address).await;
+    writer.write_all(&request[..sent]).await.unwrap();
+    let (status, _, _) = tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("the client reads the origin's early refusal");
+    assert_eq!(status, 413);
+    (reader, writer, Instant::now())
+}
+
+/// A client that stops sending after an early refusal leaves the upstream
+/// request waiting for a frame that never comes. At the lingering deadline
+/// that wait ends with an error: the upstream request gives the body up, the
+/// client's connection ends and the request's permits are released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_push_the_client_stops_sending_is_given_up_at_the_lingering_deadline() {
+    let origin = EarlyOrigin::start(EarlyAnswer::RefuseThenRead);
+    let fixture = early_origin_gateway(&origin).await;
+    let guards = fixture._broker.state().shared_ingress.clone();
+    let (mut reader, _writer, answered) = push_refused_early_then_left_unsent(&fixture).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(guards.global_in_flight_requests(), 1);
+    assert!(!origin.ended());
+
+    // The connection ends at about the deadline, though the client sent
+    // nothing and closed nothing.
+    let mut tail = [0_u8; 64];
+    let ended = tokio::time::timeout(
+        (LINGER_TIMEOUT + Duration::from_secs(2)).saturating_sub(answered.elapsed()),
+        reader.read(&mut tail),
+    )
+    .await
+    .expect("the client's connection ends at the lingering deadline");
+    assert!(matches!(ended, Ok(0) | Err(_)), "{ended:?}");
+    let ended = answered.elapsed();
+    assert!(ended > LINGER_TIMEOUT - Duration::from_secs(1), "{ended:?}");
+    wait_until(|| origin.ended()).await;
+    assert_eq!(guards.global_in_flight_requests(), 0);
+    assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+}
+
+/// Graceful shutdown waits for a lingering refusal no longer than its
+/// deadline, even when the client sends nothing more and the upstream
+/// request still holds the body.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graceful_shutdown_does_not_wait_past_the_lingering_deadline_for_a_held_push() {
+    let origin = EarlyOrigin::start(EarlyAnswer::RefuseThenRead);
+    let fixture = early_origin_gateway(&origin).await;
+    let guards = fixture._broker.state().shared_ingress.clone();
+    let (_reader, _writer, answered) = push_refused_early_then_left_unsent(&fixture).await;
+    let GatewayRouterFixture {
+        _broker: broker,
+        app,
+        ..
+    } = fixture;
+    drop(app);
+    let report = tokio::time::timeout(LINGER_TIMEOUT + Duration::from_secs(3), broker.stop())
+        .await
+        .expect("graceful shutdown finishes at about the lingering deadline");
+    assert!(report.is_clean(), "{report:?}");
+    let stopped = answered.elapsed();
+    assert!(
+        stopped > LINGER_TIMEOUT - Duration::from_secs(1),
+        "{stopped:?}"
+    );
+    assert_eq!(guards.global_in_flight_requests(), 0);
+    wait_until(|| origin.ended()).await;
+}
